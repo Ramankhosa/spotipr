@@ -42,10 +42,12 @@ export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedOb
 
   const input = [
     `Invention digest:\n${renderDigest(ctx.digest)}`,
-    basis.length ? `\nRelevant specification basis (cite the ¶ tags):\n${renderContextBlock(basis)}` : '',
+    // The blocks are labelled with internal ¶ anchors; the reply must cite them
+    // the way a filing does — "paragraph [0007]" — never with the ¶ marker.
+    basis.length ? `\nRelevant specification basis (cite these paragraphs as [0007], dropping the ¶):\n${renderContextBlock(basis)}` : '',
     (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',
     `\nObjection (${objection.canonicalCode}, ${objection.localBasis || ''}):\n"${objection.examinerText}"`,
-    `\nDraft the objection-wise reply for this single objection following the jurisdiction doctrine. Return JSON { heading, bodyText }. Cite ¶ tags for any specification support. Do not fabricate quotes or authorities.`
+    `\nDraft the objection-wise reply for this single objection following the jurisdiction doctrine. Return JSON { heading, bodyText }. Cite specification support as paragraph numbers in square brackets, e.g. "paragraph [0007]" or "[0021]–[0022]" — never write the ¶ character. Do not fabricate quotes or authorities.`
   ].filter(Boolean).join('\n')
 
   const res = await runOaStage<{ heading?: string; bodyText?: string }>(

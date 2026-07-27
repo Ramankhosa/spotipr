@@ -139,7 +139,7 @@ function InstitutionalAccessContent() {
         </div>
 
         {!isInvited && (
-          <div className="bg-gradient-to-r from-ai-blue-900/30 to-purple-900/30 border border-ai-blue-700/30 rounded-lg p-4">
+          <div className="bg-gradient-to-r from-ai-blue-900/30 to-lamp-900/30 border border-ai-blue-700/30 rounded-lg p-4">
             <p className="text-sm text-ai-graphite-600 text-center mb-3">
               Don&apos;t have an access code? Start with a paid plan:
             </p>

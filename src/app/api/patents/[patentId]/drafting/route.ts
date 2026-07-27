@@ -25,6 +25,7 @@ import {
 } from '@/lib/patent-search';
 import { getPatentCountry, normalizeCountryCode } from '@/lib/patent-search/patent-countries';
 import {
+  RELATED_ART_BATCH_CONCURRENCY,
   RelatedArtReviewRequestSchema,
   buildRelatedArtClaimsContext,
   buildRelatedArtReviewPrompt,
@@ -66,6 +67,11 @@ import {
   stripTrailingClaimDependencyLabel,
   stripTrailingClaimDependencyLabelsFromHtml,
 } from '@/lib/draft-claims-parser';
+import {
+  diffStreamingClaims,
+  extractStreamingClaims,
+  type StreamingClaim,
+} from '@/lib/draft-claims-stream';
 import {
   getAuthoritativeClaims,
   getEditableClaims,
@@ -141,6 +147,7 @@ import {
   regenerateManagedFigure,
   semanticChecksum,
 } from '@/lib/patent-diagrams/pipeline'
+import { DIAGRAM_KINDS, figureSetPlanSchema } from '@/lib/patent-diagrams/types'
 import { saveRawPlantUmlOverride } from '@/lib/patent-diagrams/raw-source'
 import { translateAllPatentDiagrams, translatePatentDiagram } from '@/lib/patent-diagrams/translation'
 import { diagramFactsForDownstream, summarizeDiagramPlan } from '@/lib/patent-diagrams/facts'
@@ -1082,6 +1089,9 @@ export async function POST(
       case 'plan_figures_llm':
         return await handlePlanFiguresManaged(authResult.user, patentId, data, requestHeaders);
 
+      case 'save_figure_plan':
+        return await handleSaveFigurePlanManaged(authResult.user, patentId, data);
+
       case 'generate_diagrams_llm':
         return await handleGenerateDiagramsManaged(authResult.user, patentId, data, requestHeaders);
 
@@ -1197,6 +1207,9 @@ export async function POST(
       // Claims generation and management (Stage 1)
       case 'generate_claims':
         return await handleGenerateClaims(authResult.user, patentId, data, requestHeaders);
+
+      case 'generate_claims_stream':
+        return handleGenerateClaimsStream(authResult.user, patentId, data, requestHeaders);
 
       case 'save_claims':
         return await handleSaveClaims(authResult.user, patentId, data);
@@ -2106,7 +2119,12 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
 
   const request = { headers: requestHeaders || {} }
   const allDecisions: RelatedArtReviewDecision[] = []
-  const totalBatches = Math.max(1, Math.ceil(candidates.length / batchSize))
+
+  const batches: RelatedArtReviewCandidate[][] = []
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    batches.push(candidates.slice(i, i + batchSize))
+  }
+  const totalBatches = Math.max(1, batches.length)
 
   await emitRelatedArtReviewProgress(onProgress, {
     type: 'start',
@@ -2116,13 +2134,21 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
     message: `Starting AI analysis for ${candidates.length} patents`
   })
 
-  for (let i = 0; i < candidates.length; i += batchSize) {
-    const batch = candidates.slice(i, i + batchSize)
-    const batchNumber = Math.floor(i / batchSize) + 1
+  // Batches are independent LLM calls, so run up to RELATED_ART_BATCH_CONCURRENCY
+  // of them at once. `processedCount` is cumulative-on-completion so progress
+  // stays monotonic even though batches finish out of order; decisions are
+  // collected per-batch-index so the final order matches the candidate order.
+  const decisionsByBatch: RelatedArtReviewDecision[][] = new Array(batches.length)
+  let processedCount = 0
+  let nextBatchIndex = 0
+
+  const processBatch = async (batchIndex: number) => {
+    const batch = batches[batchIndex]
+    const batchNumber = batchIndex + 1
 
     await emitRelatedArtReviewProgress(onProgress, {
       type: 'batch_started',
-      processed: i,
+      processed: processedCount,
       total: candidates.length,
       batch: batchNumber,
       totalBatches,
@@ -2172,17 +2198,30 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
 
     batchDecisions.push(...unresolved.map(candidate => unknownRelatedArtDecision(candidate, lastFailure)))
     const byNumber = new Map(batchDecisions.map(decision => [canonicalizeRelatedArtPatentNumber(decision.pn), decision]))
-    allDecisions.push(...batch.map(candidate => byNumber.get(canonicalizeRelatedArtPatentNumber(candidate.pn)) || unknownRelatedArtDecision(candidate, lastFailure)))
+    decisionsByBatch[batchIndex] = batch.map(candidate => byNumber.get(canonicalizeRelatedArtPatentNumber(candidate.pn)) || unknownRelatedArtDecision(candidate, lastFailure))
 
+    processedCount += batch.length
     await emitRelatedArtReviewProgress(onProgress, {
       type: 'batch_completed',
-      processed: Math.min(i + batch.length, candidates.length),
+      processed: processedCount,
       total: candidates.length,
       batch: batchNumber,
       totalBatches,
-      message: `Analyzed ${Math.min(i + batch.length, candidates.length)} of ${candidates.length} patents`
+      message: `Analyzed ${processedCount} of ${candidates.length} patents`
     })
   }
+
+  const workerCount = Math.min(RELATED_ART_BATCH_CONCURRENCY, batches.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const batchIndex = nextBatchIndex
+      nextBatchIndex += 1
+      if (batchIndex >= batches.length) break
+      await processBatch(batchIndex)
+    }
+  }))
+
+  allDecisions.push(...decisionsByBatch.flat())
 
   /* Legacy fabricated fallback processing removed. The validated batch parser
      above now owns all decision construction.
@@ -4594,7 +4633,82 @@ function applyGeneratedClaimLimit(params: {
   }
 }
 
-async function handleGenerateClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+// Progress sink for streamed claim generation. Every event reflects work that has
+// actually happened server-side — there is no simulated progress.
+type ClaimGenerationProgressSink = (event: Record<string, any>) => void
+
+const CLAIM_SCOPE_STYLE_LABELS: Record<string, string> = {
+  broad: 'Broad',
+  default: 'Balanced',
+  narrow: 'Narrow',
+}
+
+/**
+ * Streaming variant of `generate_claims`: same handler, same result payload, delivered as
+ * NDJSON so the UI can show claim text as the model writes it instead of waiting for the
+ * whole call. Falls back gracefully — a provider without a streaming path simply produces
+ * no `claims_delta` events and the terminal `complete` event still carries everything.
+ */
+function handleGenerateClaimsStream(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let closed = false
+      const send = (payload: any) => {
+        if (closed) return
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`))
+        } catch {
+          closed = true // client disconnected; generation still completes and saves
+        }
+      }
+
+      try {
+        const response = await handleGenerateClaims(user, patentId, data, requestHeaders, send)
+        const text = await response.text()
+        let payload: any = {}
+        try {
+          payload = text ? JSON.parse(text) : {}
+        } catch {
+          payload = { raw: text }
+        }
+
+        if (!response.ok) {
+          send({ type: 'error', error: payload?.error || 'Failed to generate claims.', code: payload?.code, ...payload })
+        } else {
+          send({ type: 'complete', ...payload })
+        }
+      } catch (error) {
+        console.error('[Claims] Stream failed:', error)
+        send({ type: 'error', error: error instanceof Error ? error.message : 'Failed to generate claims.' })
+      } finally {
+        closed = true
+        controller.close()
+      }
+    }
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no'
+    }
+  })
+}
+
+// Minimum gap between claim snapshots pushed to the client. Fast enough to read as live
+// typing, slow enough that a token-per-frame stream does not flood the connection.
+const CLAIM_STREAM_FLUSH_MS = 90
+
+async function handleGenerateClaims(
+  user: any,
+  patentId: string,
+  data: any,
+  requestHeaders: Record<string, string>,
+  onProgress?: ClaimGenerationProgressSink
+) {
   const {
     sessionId,
     jurisdiction,
@@ -4624,7 +4738,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
   // Check if claims are already frozen
   const existingNormalized = (session.ideaRecord?.normalizedData as any) || {}
   if (existingNormalized.claimsApprovedAt) {
-    return NextResponse.json({ error: 'Claims are frozen. Unfreeze to regenerate.' }, { status: 400 })
+    return NextResponse.json({ error: 'Claims are locked. Unlock them to regenerate.' }, { status: 400 })
   }
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle ?? existingNormalized.claimScopeStyle)
   const maxClaims = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks)
@@ -4654,6 +4768,12 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     })
   }
   console.log(`[handleGenerateClaims] Using stored patent type: ${patentTypePrimary}`)
+  onProgress?.({
+    type: 'stage',
+    key: 'reading',
+    label: 'Invention record read',
+    detail: `${patentTypePrimary} claim form · ${(components || []).length} component${(components || []).length === 1 ? '' : 's'}`
+  })
 
   const preferencePatch: Record<string, any> = {}
   if (userClaimRemarks !== undefined) {
@@ -4738,6 +4858,12 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     }
 
     const claimRules = claimRulesRaw || {}
+    onProgress?.({
+      type: 'stage',
+      key: 'rules',
+      label: `${activeJurisdiction} claim rules loaded`,
+      detail: countryProfile?.profileData?.meta?.office || `${activeJurisdiction} patent office conventions`
+    })
 
     const personaConfig = await resolveEffectivePersonaConfig(user, session, {
       usePersonaStyle: usePersonaStyleFromData,
@@ -4904,6 +5030,31 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       noveltyGuidanceBlock: buildNoveltyGuidanceBlock((session as any).noveltyHandoff?.claimGuidance),
     })
 
+    onProgress?.({
+      type: 'stage',
+      key: 'drafting',
+      label: 'Drafting claim language',
+      detail: `${CLAIM_SCOPE_STYLE_LABELS[normalizedClaimScopeStyle]} scope${usePersonaStyle && personaSelection?.primaryPersonaName ? ` · ${personaSelection.primaryPersonaName} style` : ''}`
+    })
+
+    // Relay claim text to the client as the model writes it. Snapshots are throttled and
+    // diffed so only claims that changed since the last flush go over the wire.
+    let streamedRaw = ''
+    let emittedClaims: StreamingClaim[] = []
+    let lastFlushAt = 0
+
+    const flushStreamedClaims = (force: boolean) => {
+      const now = Date.now()
+      if (!force && now - lastFlushAt < CLAIM_STREAM_FLUSH_MS) return
+      lastFlushAt = now
+
+      const snapshot = extractStreamingClaims(streamedRaw)
+      const changed = diffStreamingClaims(emittedClaims, snapshot)
+      if (changed.length === 0) return
+      emittedClaims = snapshot
+      onProgress?.({ type: 'claims_delta', claims: changed, total: snapshot.length })
+    }
+
     // Call LLM to generate claims using the proper gateway API
     const request = { headers: requestHeaders || {} }
     const llmResult = await llmGateway.executeLLMOperation(request, {
@@ -4917,8 +5068,24 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
         jurisdiction: activeJurisdiction,
         sessionId,
         claimScopeStyle: normalizedClaimScopeStyle
-      }
+      },
+      ...(onProgress ? {
+        stream: {
+          onDelta: (_delta: string, accumulated: string) => {
+            // `accumulated` is authoritative: a provider retry restarts it from empty,
+            // and the client must drop the partial claims from the abandoned attempt.
+            if (accumulated.length < streamedRaw.length) {
+              emittedClaims = []
+              onProgress({ type: 'claims_reset' })
+            }
+            streamedRaw = accumulated
+            flushStreamedClaims(false)
+          }
+        }
+      } : {})
     })
+
+    flushStreamedClaims(true)
 
     if (!llmResult.success || !llmResult.response) {
       console.error('Claims generation LLM error:', llmResult.error)
@@ -4927,6 +5094,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
         details: llmResult.error?.message || 'LLM operation failed'
       }, { status: 500 })
     }
+
+    onProgress?.({ type: 'stage', key: 'checking', label: 'Checking numbering and dependencies' })
 
     // Parse the LLM response. Do not silently save an empty claim set:
     // LLMs sometimes wrap valid claims in markdown/prose or return numbered text instead of JSON.
@@ -4985,6 +5154,13 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       claimsGeneratedAt: new Date().toISOString()
     }
 
+    onProgress?.({
+      type: 'stage',
+      key: 'saving',
+      label: 'Saving claim set',
+      detail: `${generatedClaims.length} claim${generatedClaims.length === 1 ? '' : 's'}`
+    })
+
     await prisma.ideaRecord.update({
       where: { sessionId },
       data: { normalizedData: updatedNormalized }
@@ -5032,7 +5208,7 @@ async function handleSaveClaims(user: any, patentId: string, data: any) {
   // Check if claims are frozen
   const existingNormalized = (session.ideaRecord?.normalizedData as any) || {}
   if (existingNormalized.claimsApprovedAt) {
-    return NextResponse.json({ error: 'Claims are frozen. Unfreeze to edit.' }, { status: 400 })
+    return NextResponse.json({ error: 'Claims are locked. Unlock them to edit.' }, { status: 400 })
   }
 
   // Update claims in normalizedData
@@ -5215,6 +5391,11 @@ function queueDDEvidenceSelectionBestEffort(
 
 async function handleFreezeClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const { sessionId, claims, claimsStructured, jurisdiction, skipPriorArt, useInitialClaimsForDrafting } = data
+  // Two separable things used to happen together here: recording WHICH claim set drafting
+  // will use (claimsFinal), and LOCKING it against further edits (claimsApprovedAt).
+  // Only the first is needed downstream, so callers can opt out of the lock. Defaults to
+  // locking so existing callers keep their behaviour.
+  const lockClaims = data?.lock !== false
 
   if (!sessionId) {
     return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
@@ -5241,16 +5422,24 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
     return NextResponse.json({ error: 'Cannot freeze empty claims' }, { status: 400 })
   }
 
-  // Freeze claims
+  // Settle the claim set (and lock it, unless the caller opted out)
   const now = new Date().toISOString()
   const effectiveStructured = claimsStructured || existingNormalized.claimsStructured || existingNormalized.claimsStructuredFinal || existingNormalized.claimsStructuredProvisional
   const updatedNormalized: Record<string, any> = {
     ...existingNormalized,
     claims: claimsContent,
     claimsStructured: effectiveStructured,
-    claimsApprovedAt: now,
-    claimsApprovedBy: user.id,
     claimsJurisdiction: jurisdiction || existingNormalized.claimsJurisdiction || session.activeJurisdiction || 'US'
+  }
+
+  if (lockClaims) {
+    updatedNormalized.claimsApprovedAt = now
+    updatedNormalized.claimsApprovedBy = user.id
+  } else {
+    // An unlocked finalize must clear any earlier lock, otherwise the claims stay
+    // read-only and the caller's intent is silently inverted.
+    delete updatedNormalized.claimsApprovedAt
+    delete updatedNormalized.claimsApprovedBy
   }
 
   // Preserve provisional copies
@@ -5282,7 +5471,7 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
   })
 
   // Freeze patent type alongside claims (locked together)
-  if (patentTypePrimary) {
+  if (patentTypePrimary && lockClaims) {
     await prisma.draftingSession.update({
       where: { id: sessionId },
       data: {
@@ -5302,7 +5491,9 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
 
   return NextResponse.json({
     success: true,
-    frozenAt: updatedNormalized.claimsApprovedAt,
+    locked: lockClaims,
+    frozenAt: updatedNormalized.claimsApprovedAt ?? null,
+    finalizedAt: now,
     jurisdiction: updatedNormalized.claimsJurisdiction,
     patentType: patentTypePrimary, // Return frozen patent type
     ddEvidenceSelection: {
@@ -6389,8 +6580,10 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
     }
   }
 
-  // Freeze preliminary claims as final when skipping claim refinement
-  // This ensures preliminary claims are locked as the final claims for drafting
+  // Promote preliminary claims to the final claim set when skipping claim refinement.
+  // This records WHICH claims drafting will use; it deliberately does not set
+  // claimsApprovedAt, because locking is optional and would make the claims read-only
+  // for a user who only wanted to move on.
   if (stage === 'COMPONENT_PLANNER' && data.freezePreliminaryClaims && data.claimRefinementSkipped) {
     const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
     const claimsSnapshot = getWorkingClaims(normalized)
@@ -6402,8 +6595,6 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
         claimsStructured: claimsSnapshot.structured,
         claimsFinal: claimsSnapshot.html,
         claimsStructuredFinal: claimsSnapshot.structured,
-        claimsApprovedAt: now,
-        claimsApprovedBy: user.id,
         claimsJurisdiction: normalized.claimsJurisdiction || session.activeJurisdiction || 'US',
         claimsRefinementSource: {
           mode: 'SKIPPED_REFINEMENT',
@@ -6431,7 +6622,8 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
     }
   }
 
-  // If user opted to skip prior art/refinement, freeze provisional claims as final and mark config
+  // If user opted to skip prior art/refinement, promote provisional claims to final and
+  // mark config. As above, no claimsApprovedAt: proceeding is not the same as locking.
   if (stage === 'COMPONENT_PLANNER' && (skipPriorArt || useInitialClaimsForDrafting)) {
     const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
     const claimsSnapshot = getWorkingClaims(normalized)
@@ -6447,8 +6639,6 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
       claimsStructuredProvisional: normalized.claimsStructuredProvisional || claimsSnapshot.structured,
       claimsFinal: claimsSnapshot.html,
       claimsStructuredFinal: claimsSnapshot.structured,
-      claimsApprovedAt: now,
-      claimsApprovedBy: user.id,
       claimsJurisdiction: normalized.claimsJurisdiction || session.activeJurisdiction || 'US',
       claimsRefinementSource: {
         mode: 'SKIPPED',
@@ -7816,6 +8006,73 @@ async function handlePlanFiguresManaged(user: any, patentId: string, data: any, 
   try {
     const plan = await planManagedFigureSet(managedPipelineInput(user, patentId, data, requestHeaders))
     return NextResponse.json({ success: true, plan: compatiblePlan(plan), message: `Planned ${plan.figures.length} managed diagrams` })
+  } catch (error) {
+    return patentDiagramPipelineError(error)
+  }
+}
+
+// Applies the attorney's plan-review edits onto the plan the planner already
+// stored for this session. Only the three human-editable fields (title, purpose,
+// kind) plus ordering and removals are taken from the client — componentIds and
+// the rest of the semantic payload stay server-side, so a tampered or merely
+// stale request can't point a figure at components that don't exist.
+async function handleSaveFigurePlanManaged(user: any, patentId: string, data: any) {
+  const sessionId = String(data.sessionId || '')
+  if (!sessionId) return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  if (!Array.isArray(data.figures) || data.figures.length === 0) {
+    return NextResponse.json({ error: 'At least one figure is required' }, { status: 400 })
+  }
+
+  try {
+    const session = await prisma.draftingSession.findFirst({
+      where: { id: sessionId, patent: { id: patentId, project: { userId: user.id } } },
+      select: { id: true, aiAnalysisData: true },
+    })
+    if (!session) return NextResponse.json({ error: 'Drafting session not found' }, { status: 404 })
+
+    const previousAnalysis = session.aiAnalysisData && typeof session.aiAnalysisData === 'object'
+      ? session.aiAnalysisData as Record<string, unknown>
+      : {}
+    const storedPlan = figureSetPlanSchema.safeParse((previousAnalysis as any).figurePlan)
+    if (!storedPlan.success) {
+      return NextResponse.json({
+        error: 'No figure plan to update. Plan your figures again before approving.',
+        code: 'PLAN_NOT_FOUND',
+      }, { status: 409 })
+    }
+
+    const byKey = new Map(storedPlan.data.figures.map(figure => [figure.key, figure]))
+    const seen = new Set<string>()
+    const figures: typeof storedPlan.data.figures = []
+    for (const edit of data.figures) {
+      const key = String(edit?.key || '')
+      const original = byKey.get(key)
+      // Unknown or duplicated keys are dropped rather than 400'd: a plan the user
+      // is mid-edit on shouldn't fail to save because one row went stale.
+      if (!original || seen.has(key)) continue
+      seen.add(key)
+      const title = typeof edit.title === 'string' ? edit.title.trim() : ''
+      const purpose = typeof edit.purpose === 'string' ? edit.purpose.trim() : ''
+      const kind = typeof edit.kind === 'string' && (DIAGRAM_KINDS as readonly string[]).includes(edit.kind)
+        ? edit.kind as typeof original.kind
+        : original.kind
+      figures.push({
+        ...original,
+        kind,
+        title: title || original.title,
+        purpose: purpose || original.purpose,
+      })
+    }
+    if (figures.length === 0) {
+      return NextResponse.json({ error: 'The edited plan has no recognisable figures' }, { status: 400 })
+    }
+
+    const plan = figureSetPlanSchema.parse({ ...storedPlan.data, figures })
+    await prisma.draftingSession.update({
+      where: { id: sessionId },
+      data: { aiAnalysisData: { ...previousAnalysis, figurePlan: plan } as any },
+    })
+    return NextResponse.json({ success: true, plan: compatiblePlan(plan) })
   } catch (error) {
     return patentDiagramPipelineError(error)
   }
@@ -11261,23 +11518,25 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
   const effectiveSections = filterDrawingSectionKeys(session, sections)
   const skippedDrawingSections = sections.filter((section: string) => !effectiveSections.includes(section))
 
-  // Check for frozen claims - use them instead of regenerating
+  // Reuse the claims the user already has instead of drafting a competing set. Freezing
+  // is optional, so any saved claim set counts — otherwise a user who never locked their
+  // claims would silently get them overwritten here.
   const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
   const frozenClaimsSnapshot = getAuthoritativeClaims(normalizedData)
   const frozenClaimsText = frozenClaimsSnapshot.html
   const frozenClaimsStructured = frozenClaimsSnapshot.structured
-  const claimsFrozen = !!(normalizedData.claimsApprovedAt || normalizedData.claimsFinal)
+  const hasExistingClaims = frozenClaimsText.replace(/<[^>]*>/g, '').trim().length > 0
+    || frozenClaimsStructured.length > 0
   const claimsJurisdiction = normalizedData.claimsJurisdiction || effectiveJurisdiction
 
-  // If claims are frozen and user is trying to generate claims, use frozen claims instead
   let sectionsToGenerate = [...effectiveSections]
   let frozenClaimsUsed = false
 
-  if (claimsFrozen && effectiveSections.includes('claims')) {
-    // Remove 'claims' from sections to generate - we'll use frozen claims
+  if (hasExistingClaims && effectiveSections.includes('claims')) {
+    // Remove 'claims' from sections to generate - we'll use the existing claim set
     sectionsToGenerate = effectiveSections.filter((s: string) => s !== 'claims')
     frozenClaimsUsed = true
-    console.log(`[generateSections] Using frozen claims from Stage 1 (frozen at: ${normalizedData.claimsApprovedAt})`)
+    console.log(`[generateSections] Using existing Stage 1 claims (locked: ${!!normalizedData.claimsApprovedAt})`)
   }
 
   let personaConfig: { enabled: boolean; selection?: PersonaSelection } = { enabled: false, selection: undefined }

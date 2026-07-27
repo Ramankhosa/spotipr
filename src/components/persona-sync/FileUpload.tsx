@@ -276,7 +276,7 @@ export default function FileUpload({ onFilesSelected, accept = "*", maxFiles = 6
       <div
         className={`
           border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors
-          ${isDragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}
+          ${isDragOver ? 'border-lamp-500 bg-lamp-50' : 'border-gray-300 hover:border-gray-400'}
           ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
         `}
         onDrop={handleDrop}
@@ -286,12 +286,12 @@ export default function FileUpload({ onFilesSelected, accept = "*", maxFiles = 6
       >
         <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
         <div className="text-sm text-gray-600">
-          <span className="font-medium text-blue-600">Click to select files</span> or drag and drop
+          <span className="font-medium text-lamp-600">Click to select files</span> or drag and drop
         </div>
         <div className="text-xs text-gray-500 mt-1">
           {accept === "*" ? "Any file type" : accept} (max {maxFiles} file{maxFiles > 1 ? 's' : ''})
           {maxFiles > 1 && selectedFiles.length === 0 && (
-            <div className="text-xs text-blue-600 mt-1">💡 Select multiple files at once, or drag & drop additional files to add them</div>
+            <div className="text-xs text-lamp-600 mt-1">💡 Select multiple files at once, or drag & drop additional files to add them</div>
           )}
           {maxFiles > 1 && selectedFiles.length > 0 && (
             <div className="text-xs text-green-600 mt-1">✅ {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''} selected. Drag & drop more to add them!</div>
@@ -323,7 +323,7 @@ export default function FileUpload({ onFilesSelected, accept = "*", maxFiles = 6
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-medium">
               Uploaded Files ({selectedFiles.length})
-              {isAnalyzing && <span className="text-blue-600 ml-2">Analyzing...</span>}
+              {isAnalyzing && <span className="text-lamp-600 ml-2">Analyzing...</span>}
             </h4>
             <Button variant="outline" size="sm" onClick={clearAll}>
               Clear All

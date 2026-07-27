@@ -67,7 +67,7 @@ export default function ProjectsPage() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'DRAFT': return 'bg-amber-500/10 text-amber-600 border-amber-500/20'
-      case 'IN_PROGRESS': return 'bg-blue-500/10 text-blue-600 border-blue-500/20'
+      case 'IN_PROGRESS': return 'bg-lamp-500/10 text-lamp-600 border-lamp-500/20'
       case 'COMPLETED': return 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
       default: return 'bg-slate-500/10 text-slate-600 border-slate-500/20'
     }
@@ -140,7 +140,7 @@ export default function ProjectsPage() {
             {/* Animated background elements */}
             <div className="absolute inset-0 overflow-hidden">
               <div className="absolute -top-24 -right-24 w-96 h-96 bg-ai-blue-500/20 rounded-full blur-3xl" />
-              <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-purple-500/15 rounded-full blur-3xl" />
+              <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-lamp-500/15 rounded-full blur-3xl" />
               <div 
                 className="absolute inset-0 opacity-20" 
                 style={{ 
@@ -223,7 +223,7 @@ export default function ProjectsPage() {
               >
                 <div className="group relative bg-white rounded-2xl border border-slate-200 hover:border-ai-blue-500/40 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden">
                   {/* Top accent bar */}
-                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-ai-blue-500 via-purple-500 to-ai-blue-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-ai-blue-500 via-lamp-500 to-ai-blue-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                   
                   <div className="p-6">
                     {/* Header */}

@@ -428,7 +428,7 @@ export default function PersonasPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -445,13 +445,13 @@ export default function PersonasPage() {
             <p className="mt-2 text-gray-600 dark:text-gray-400">
               Create reusable writing styles for different patent types (CSE, Bio, Mechanical, etc.)
             </p>
-            <p className="mt-1 text-sm text-blue-600 dark:text-blue-400">
+            <p className="mt-1 text-sm text-lamp-600 dark:text-lamp-400">
               💡 Tip: Select a persona when drafting to have the AI mimic your writing style
             </p>
           </div>
           <button
             onClick={() => setShowCreateForm(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            className="px-4 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 font-medium"
           >
             + New Persona
           </button>
@@ -478,7 +478,7 @@ export default function PersonasPage() {
                   <p>No personas yet</p>
                   <button
                     onClick={() => setShowCreateForm(true)}
-                    className="mt-2 text-blue-600 dark:text-blue-400 hover:underline text-sm"
+                    className="mt-2 text-lamp-600 dark:text-lamp-400 hover:underline text-sm"
                   >
                     Create your first persona
                   </button>
@@ -490,7 +490,7 @@ export default function PersonasPage() {
                       key={persona.id}
                       onClick={() => openPersonaEditor(persona)}
                       className={`p-4 bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer transition-all hover:shadow-md ${
-                        editingPersona?.id === persona.id ? 'ring-2 ring-blue-500' : ''
+                        editingPersona?.id === persona.id ? 'ring-2 ring-lamp-500' : ''
                       }`}
                     >
                       <div className="flex justify-between items-start">
@@ -504,7 +504,7 @@ export default function PersonasPage() {
                               {persona.sampleCount} samples
                             </span>
                             {persona.visibility === 'ORGANIZATION' && (
-                              <span className="text-xs px-2 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded">
+                              <span className="text-xs px-2 py-0.5 bg-lamp-100 dark:bg-lamp-900/30 text-lamp-700 dark:text-lamp-300 rounded">
                                 Shared
                               </span>
                             )}
@@ -538,7 +538,7 @@ export default function PersonasPage() {
                       key={persona.id}
                       onClick={() => openPersonaEditor(persona)}
                       className={`p-4 bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer transition-all hover:shadow-md ${
-                        editingPersona?.id === persona.id ? 'ring-2 ring-blue-500' : ''
+                        editingPersona?.id === persona.id ? 'ring-2 ring-lamp-500' : ''
                       }`}
                     >
                       <div className="flex justify-between items-start">
@@ -602,7 +602,7 @@ export default function PersonasPage() {
                         onClick={() => setActiveJurisdiction(j.code)}
                         className={`px-3 py-1.5 text-sm rounded-lg whitespace-nowrap flex items-center gap-1.5 ${
                           activeJurisdiction === j.code
-                            ? 'bg-blue-600 text-white'
+                            ? 'bg-lamp-600 text-white'
                             : hasSamples
                               ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50'
                               : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
@@ -633,7 +633,7 @@ export default function PersonasPage() {
 
                 {loadingSamples || loadingSections ? (
                   <div className="flex justify-center py-8">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-lamp-600"></div>
                   </div>
                 ) : sections.length === 0 ? (
                   <div className="text-center py-8 text-gray-500 dark:text-gray-400">
@@ -699,7 +699,7 @@ export default function PersonasPage() {
                                   <button
                                     onClick={() => handleSaveSample(section.key, editingSample.text)}
                                     disabled={saving || !editingSample.text.trim() || editingSample.text.trim().split(/\s+/).filter(w => w).length < 3}
-                                    className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                                    className="px-3 py-1 text-sm bg-lamp-600 text-white rounded hover:bg-lamp-700 disabled:opacity-50"
                                   >
                                     {saving ? 'Saving...' : 'Save'}
                                   </button>
@@ -713,7 +713,7 @@ export default function PersonasPage() {
                               </p>
                               <button
                                 onClick={() => setEditingSample({ sectionKey: section.key, text: sample.sampleText })}
-                                className="mt-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                className="mt-2 text-xs text-lamp-600 dark:text-lamp-400 hover:underline"
                               >
                                 Edit sample
                               </button>
@@ -721,7 +721,7 @@ export default function PersonasPage() {
                           ) : (
                             <button
                               onClick={() => setEditingSample({ sectionKey: section.key, text: '' })}
-                              className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                              className="text-sm text-lamp-600 dark:text-lamp-400 hover:underline"
                             >
                               + Add sample
                             </button>
@@ -815,7 +815,7 @@ export default function PersonasPage() {
                 <button
                   onClick={handleCreate}
                   disabled={saving || !newName.trim()}
-                  className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 text-sm bg-lamp-600 text-white rounded-lg disabled:opacity-50"
                 >
                   {saving ? 'Creating...' : 'Create Persona'}
                 </button>

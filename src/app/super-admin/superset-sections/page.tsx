@@ -208,7 +208,7 @@ export default function SuperAdminSupersetSectionsPage() {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin h-8 w-8 border-4 border-violet-500 border-t-transparent rounded-full mx-auto mb-4" />
+          <div className="animate-spin h-8 w-8 border-4 border-lamp-500 border-t-transparent rounded-full mx-auto mb-4" />
           <p className="text-slate-400">Loading superset sections...</p>
         </div>
       </div>
@@ -235,7 +235,7 @@ export default function SuperAdminSupersetSectionsPage() {
             </p>
           </div>
           <a 
-            href="/super-admin"
+            href="/dashboard"
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm"
           >
             ← Back to Admin
@@ -243,8 +243,8 @@ export default function SuperAdminSupersetSectionsPage() {
         </div>
 
         {/* Info box */}
-        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-6">
-          <p className="text-blue-200 text-sm">
+        <div className="bg-lamp-500/10 border border-lamp-500/30 rounded-lg p-4 mb-6">
+          <p className="text-lamp-200 text-sm">
             <strong>Aliases</strong> allow different jurisdictions to use their own section IDs 
             that map to the same canonical section. For example, India uses <code className="bg-slate-800 px-1 rounded">"objects"</code> which 
             maps to the canonical <code className="bg-slate-800 px-1 rounded">"objectsOfInvention"</code>.
@@ -252,9 +252,9 @@ export default function SuperAdminSupersetSectionsPage() {
         </div>
 
         {/* Context Injection Legend */}
-        <div className="bg-violet-500/10 border border-violet-500/30 rounded-lg p-4 mb-6">
-          <p className="text-violet-200 text-sm font-medium mb-2">📊 Context Injection Flags</p>
-          <p className="text-violet-200/80 text-sm mb-2">
+        <div className="bg-lamp-500/10 border border-lamp-500/30 rounded-lg p-4 mb-6">
+          <p className="text-lamp-200 text-sm font-medium mb-2">📊 Context Injection Flags</p>
+          <p className="text-lamp-200/80 text-sm mb-2">
             These checkboxes control what data gets injected into section prompts during draft generation:
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
@@ -263,7 +263,7 @@ export default function SuperAdminSupersetSectionsPage() {
               <span className="text-slate-300"><strong>Prior Art</strong> - Patent references for Background</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded bg-cyan-500"></span>
+              <span className="w-3 h-3 rounded bg-lamp-500"></span>
               <span className="text-slate-300"><strong>Figures</strong> - Figure list for drawings sections</span>
             </div>
             <div className="flex items-center gap-2">
@@ -286,7 +286,7 @@ export default function SuperAdminSupersetSectionsPage() {
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-400">Section Key</th>
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-400">Label</th>
                 <th className="px-3 py-3 text-center text-sm font-medium text-slate-400" colSpan={4}>
-                  <span className="text-violet-400">Context Injection</span>
+                  <span className="text-lamp-400">Context Injection</span>
                 </th>
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-400">Aliases</th>
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-400">Status</th>
@@ -297,7 +297,7 @@ export default function SuperAdminSupersetSectionsPage() {
                 <th></th>
                 <th></th>
                 <th className="px-2 py-1 text-center text-rose-400" title="Inject Prior Art references">🔴 Prior Art</th>
-                <th className="px-2 py-1 text-center text-cyan-400" title="Inject Figure list">🔵 Figures</th>
+                <th className="px-2 py-1 text-center text-lamp-400" title="Inject Figure list">🔵 Figures</th>
                 <th className="px-2 py-1 text-center text-amber-400" title="Claim 1 Anchoring - align section terminology with Claim 1">🟡 C1 Anchor</th>
                 <th className="px-2 py-1 text-center text-emerald-400" title="Inject Component numerals">🟢 Components</th>
                 <th></th>
@@ -310,7 +310,7 @@ export default function SuperAdminSupersetSectionsPage() {
                 <tr key={section.id} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-3 py-3 text-sm text-slate-500">{section.displayOrder}</td>
                   <td className="px-3 py-3">
-                    <code className="text-violet-400 bg-slate-800 px-2 py-1 rounded text-sm">
+                    <code className="text-lamp-400 bg-slate-800 px-2 py-1 rounded text-sm">
                       {section.sectionKey}
                     </code>
                   </td>
@@ -335,8 +335,8 @@ export default function SuperAdminSupersetSectionsPage() {
                       onClick={() => handleToggleContextFlag(section, 'requiresFigures')}
                       className={`w-6 h-6 rounded border-2 flex items-center justify-center transition-colors ${
                         section.requiresFigures 
-                          ? 'bg-cyan-500 border-cyan-500 text-white' 
-                          : 'border-slate-600 hover:border-cyan-400'
+                          ? 'bg-lamp-500 border-lamp-500 text-white' 
+                          : 'border-slate-600 hover:border-lamp-400'
                       }`}
                       title={`${section.requiresFigures ? 'Disable' : 'Enable'} Figures injection`}
                     >
@@ -396,7 +396,7 @@ export default function SuperAdminSupersetSectionsPage() {
                   <td className="px-3 py-3 text-center">
                     <button
                       onClick={() => setEditingSection(section)}
-                      className="px-2 py-1 bg-violet-600 hover:bg-violet-500 rounded text-xs mr-1"
+                      className="px-2 py-1 bg-lamp-600 hover:bg-lamp-500 rounded text-xs mr-1"
                     >
                       Aliases
                     </button>
@@ -436,9 +436,9 @@ export default function SuperAdminSupersetSectionsPage() {
             <p className="text-rose-400 text-xs">🔴 Prior Art</p>
             <p className="text-2xl font-bold text-rose-400">{sections.filter(s => s.requiresPriorArt).length}</p>
           </div>
-          <div className="bg-slate-900 rounded-lg px-4 py-3 border border-cyan-500/30">
-            <p className="text-cyan-400 text-xs">🔵 Figures</p>
-            <p className="text-2xl font-bold text-cyan-400">{sections.filter(s => s.requiresFigures).length}</p>
+          <div className="bg-slate-900 rounded-lg px-4 py-3 border border-lamp-500/30">
+            <p className="text-lamp-400 text-xs">🔵 Figures</p>
+            <p className="text-2xl font-bold text-lamp-400">{sections.filter(s => s.requiresFigures).length}</p>
           </div>
           <div className="bg-slate-900 rounded-lg px-4 py-3 border border-amber-500/30">
             <p className="text-amber-400 text-xs">🟡 C1 Anchor</p>
@@ -457,7 +457,7 @@ export default function SuperAdminSupersetSectionsPage() {
           <div className="bg-slate-900 rounded-xl border border-slate-700 max-w-lg w-full p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold">
-                Edit Aliases for <code className="text-violet-400">{editingSection.sectionKey}</code>
+                Edit Aliases for <code className="text-lamp-400">{editingSection.sectionKey}</code>
               </h2>
               <button
                 onClick={() => setEditingSection(null)}
@@ -509,13 +509,13 @@ export default function SuperAdminSupersetSectionsPage() {
                   value={newAlias}
                   onChange={(e) => setNewAlias(e.target.value)}
                   placeholder="e.g. objects_of_invention"
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-lamp-500"
                   onKeyDown={(e) => e.key === 'Enter' && handleAddAlias()}
                 />
                 <button
                   onClick={handleAddAlias}
                   disabled={!newAlias.trim()}
-                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg text-sm"
+                  className="px-4 py-2 bg-lamp-600 hover:bg-lamp-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg text-sm"
                 >
                   Add
                 </button>

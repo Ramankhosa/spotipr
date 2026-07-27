@@ -995,7 +995,7 @@ export default function NoveltySearchSubmission(props: {
           >
             <FlaskConical className="h-4 w-4" />
             Prior-Art Studio
-            <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+            <span className="rounded-full bg-lamp-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-lamp-700">
               Advanced
             </span>
             <ArrowUpRight className="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
@@ -1042,7 +1042,7 @@ export default function NoveltySearchSubmission(props: {
             <div className="mx-auto max-w-xl text-center">
               <div className="relative mx-auto flex h-16 w-16 items-center justify-center">
                 <span className="absolute inset-0 animate-ping rounded-full bg-ai-blue-400/30" />
-                <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-ai-blue-500 to-violet-600 text-white shadow-lg">
+                <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-ai-blue-500 to-lamp-600 text-white shadow-lg">
                   <Sparkles className="h-7 w-7" />
                 </span>
               </div>
@@ -1059,7 +1059,7 @@ export default function NoveltySearchSubmission(props: {
                 </div>
                 <p className="mt-1.5 pl-6 text-sm leading-5 text-slate-600">{preparationStage.detail}</p>
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200">
-                  <div className="h-full rounded-full bg-gradient-to-r from-ai-blue-500 to-violet-500 transition-all duration-700 ease-out" style={{ width: `${preparationProgress}%` }} />
+                  <div className="h-full rounded-full bg-gradient-to-r from-ai-blue-500 to-lamp-500 transition-all duration-700 ease-out" style={{ width: `${preparationProgress}%` }} />
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {queryPreparationStages.map((stage, index) => (
@@ -1158,7 +1158,7 @@ export default function NoveltySearchSubmission(props: {
         {!isPreparing && view === 'review' && review && (
           <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
             <div className="flex items-start gap-3 border-b border-slate-100 pb-5">
-              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-ai-blue-500 to-violet-600 text-white shadow-sm"><Sparkles className="h-5 w-5" /></span>
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-ai-blue-500 to-lamp-600 text-white shadow-sm"><Sparkles className="h-5 w-5" /></span>
               <div className="min-w-0">
                 <h2 className="text-lg font-semibold text-slate-900">Review your search plan</h2>
                 <p className="mt-1 max-w-prose text-sm text-slate-600">These terms drive prior-art retrieval and the feature-by-feature comparison. Edit anything, then approve.</p>
@@ -1215,7 +1215,7 @@ export default function NoveltySearchSubmission(props: {
               </div>
               {editedFeatures.map((feature, index) => (
                 <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors focus-within:border-ai-blue-300 focus-within:ring-2 focus-within:ring-ai-blue-500/10">
-                  <span className="mt-0.5 flex h-7 shrink-0 items-center rounded-lg bg-gradient-to-br from-ai-blue-500 to-violet-600 px-2 text-xs font-semibold text-white shadow-sm">KF{index + 1}</span>
+                  <span className="mt-0.5 flex h-7 shrink-0 items-center rounded-lg bg-gradient-to-br from-ai-blue-500 to-lamp-600 px-2 text-xs font-semibold text-white shadow-sm">KF{index + 1}</span>
                   <textarea value={feature} onChange={event => updateFeature(index, event.target.value)} rows={2} className="min-h-11 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-5 text-slate-800 outline-none" />
                   <button type="button" onClick={() => setEditedFeatures(current => current.filter((_, featureIndex) => featureIndex !== index))} aria-label={`Remove feature ${index + 1}`} className="mt-0.5 rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600">
                     <Trash2 className="h-4 w-4" />

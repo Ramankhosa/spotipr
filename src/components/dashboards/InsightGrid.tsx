@@ -81,8 +81,8 @@ export default function InsightGrid({ projectsCount, draftsCount, ideaStats, nov
       value: noveltyHistory.length.toString(),
       label: noveltyHistory.length === 1 ? 'Report' : 'Reports',
       description: latestNovelty ? `Latest: ${latestNovelty.patentCount} citations found` : 'No searches yet',
-      color: 'text-purple-600',
-      bgColor: 'bg-purple-50',
+      color: 'text-lamp-600',
+      bgColor: 'bg-lamp-50',
       navigateTo: '/novelty-search/history'
     }
   ]

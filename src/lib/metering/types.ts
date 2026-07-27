@@ -53,6 +53,13 @@ export interface MultimodalContent {
   parts: ContentPart[]
 }
 
+// Incremental delivery of provider output. Set by callers that render tokens as they
+// arrive; providers without a streaming path ignore it and return the full output at the
+// end, so every caller still gets the same final LLMResponse.
+export interface LLMStreamOptions {
+  onDelta: (delta: string, accumulated: string) => void
+}
+
 export interface LLMRequest {
   taskCode: TaskCode
   prompt?: string
@@ -62,6 +69,7 @@ export interface LLMRequest {
   parameters?: Record<string, any>
   idempotencyKey?: string
   metadata?: Record<string, any>
+  stream?: LLMStreamOptions
 }
 
 export interface LLMResponse {

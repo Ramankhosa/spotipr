@@ -50,6 +50,22 @@ function padId(n: number): string {
 }
 
 /**
+ * Render internal paragraph anchors the way a filing does.
+ *
+ * ¶0007 is an internal anchor — it is what the retrieval blocks label chunks
+ * with and what the s.59 basis check resolves against. It must never reach the
+ * examiner: an Indian reply cites "paragraph [0007]". Apply this at display and
+ * export time only; the stored text keeps the anchors so basis stays verifiable.
+ */
+export function formatParagraphRefs(text: string): string {
+  return (text || '')
+    // Already bracketed — "[¶0007; ¶0021–¶0022]" — just drop the markers, or the
+    // next pass would nest a second pair of brackets inside the first.
+    .replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => `[${inner.replace(/¶\s?/g, '')}]`)
+    .replace(/¶\s?(\d{1,6})/g, '[$1]')
+}
+
+/**
  * Split text into stable numbered paragraphs. Honors existing patent paragraph
  * markers ([0001], [0038]) when present; otherwise numbers blank-line-separated
  * blocks sequentially. IDs are 1-based and stable for a given input.

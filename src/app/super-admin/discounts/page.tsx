@@ -223,7 +223,7 @@ export default function AdminDiscountsPage() {
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${
                         discount.discountType === 'PERCENTAGE'
-                          ? 'bg-purple-500/20 text-purple-400'
+                          ? 'bg-lamp-500/20 text-lamp-400'
                           : 'bg-green-500/20 text-green-400'
                       }`}>
                         {discount.discountType === 'PERCENTAGE' ? (

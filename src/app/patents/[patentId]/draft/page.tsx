@@ -587,7 +587,7 @@ export default function PatentDraftingPage() {
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={() => { setFatalError(null); loadData(); }}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-lamp-600 hover:bg-lamp-700"
             >
               Retry
             </button>
@@ -786,7 +786,7 @@ export default function PatentDraftingPage() {
 
                 <button
                   onClick={resumeSession}
-                  className="inline-flex items-center px-2.5 sm:px-3 py-1.5 border border-indigo-600/20 text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                  className="inline-flex items-center px-2.5 sm:px-3 py-1.5 border border-lamp-600/20 text-xs font-medium rounded-md text-lamp-700 bg-lamp-50 hover:bg-lamp-100 transition-colors"
                   title="Resume the latest drafting session"
                 >
                   <svg className="w-3 h-3 sm:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -803,14 +803,14 @@ export default function PatentDraftingPage() {
         <main className="w-full mx-auto py-3 px-2 sm:py-6 sm:px-6 lg:px-8">
           {navNotice && (
             <div className="max-w-[98%] mx-auto mb-3">
-              <div className="flex items-start gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              <div className="flex items-start gap-2 rounded-md border border-lamp-100 bg-lamp-50 px-3 py-2 text-xs text-lamp-800">
                 <svg className="w-4 h-4 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm0-9a1 1 0 01.894.553l2.5 5A1 1 0 0112.5 16h-5a1 1 0 01-.894-1.447l2.5-5A1 1 0 0110 9zm0-4a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
                 </svg>
                 <div className="flex-1 leading-relaxed">{navNotice}</div>
                 <button
                   onClick={() => setNavNotice(null)}
-                  className="text-blue-600 hover:text-blue-800 transition-colors"
+                  className="text-lamp-600 hover:text-lamp-800 transition-colors"
                   aria-label="Dismiss notice"
                 >
                   ×
@@ -832,9 +832,9 @@ export default function PatentDraftingPage() {
             ) : (
               <div className="p-12 text-center flex flex-col items-center justify-center h-64">
                 <div className="animate-pulse flex space-x-2 mb-4">
-                   <div className="h-2 w-2 bg-indigo-400 rounded-full"></div>
-                   <div className="h-2 w-2 bg-indigo-400 rounded-full animation-delay-200"></div>
-                   <div className="h-2 w-2 bg-indigo-400 rounded-full animation-delay-400"></div>
+                   <div className="h-2 w-2 bg-lamp-400 rounded-full"></div>
+                   <div className="h-2 w-2 bg-lamp-400 rounded-full animation-delay-200"></div>
+                   <div className="h-2 w-2 bg-lamp-400 rounded-full animation-delay-400"></div>
                 </div>
                 <div className="text-sm font-medium text-gray-500">Loading drafting workspace...</div>
               </div>

@@ -6,6 +6,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { PROVIDER_TIMEOUTS } from './provider-timeouts'
+import { emitStreamDelta } from './streaming'
 
 // Adaptive thinking spends part of the output-token budget on internal reasoning.
 // A budget sized only for the visible answer can get consumed by thinking, so floor
@@ -179,7 +180,11 @@ export class AnthropicProvider implements LLMProvider {
         requestBody.temperature = request.parameters?.temperature ?? 0.7
       }
 
-      const response = await this.client.messages.create(requestBody)
+      // Streaming and buffered calls resolve the same final Message; streaming just
+      // surfaces text_delta events to the caller as they arrive.
+      const response = request.stream
+        ? await this.collectStream(requestBody, request)
+        : await this.client.messages.create(requestBody)
 
       const outputText = response.content
         .filter((block: any) => block.type === 'text')
@@ -208,6 +213,23 @@ export class AnthropicProvider implements LLMProvider {
       // IMPORTANT: Throw error instead of swallowing it, so fallback routing can work
       throw new Error(`Anthropic API error: ${error.message || 'Unknown error'}`)
     }
+  }
+
+  /**
+   * Run the request through the SDK's streaming helper, emitting visible text deltas,
+   * and resolve the final accumulated Message (content blocks + usage).
+   */
+  private async collectStream(requestBody: any, request: LLMRequest): Promise<any> {
+    const stream = this.client.messages.stream(requestBody)
+    let accumulated = ''
+
+    stream.on('text', (delta: string) => {
+      if (!delta) return
+      accumulated += delta
+      emitStreamDelta(request, delta, accumulated)
+    })
+
+    return await stream.finalMessage()
   }
 
   getTokenLimits(modelName: string): { input: number; output: number } {

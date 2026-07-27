@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
 export const RELATED_ART_BATCH_SIZE = 6
+// Batches are independent LLM calls, so up to this many run concurrently.
+// The gateway imposes no per-session concurrency cap; provider rate limits
+// are absorbed by the per-batch retry.
+export const RELATED_ART_BATCH_CONCURRENCY = 6
 export const RELATED_ART_MAX_CANDIDATES = 100
 export const RELATED_ART_CLAIMS_BUDGET = 12_000
 

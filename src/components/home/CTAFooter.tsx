@@ -13,7 +13,7 @@ export default function CTAFooter() {
       
       {/* Glowing Portal Background */}
       <div className="absolute inset-0 flex items-center justify-center">
-        <div className="w-[800px] h-[800px] bg-gradient-to-br from-ai-blue-600/20 to-purple-600/20 rounded-full blur-[120px] animate-pulse" />
+        <div className="w-[800px] h-[800px] bg-gradient-to-br from-ai-blue-600/20 to-lamp-600/20 rounded-full blur-[120px] animate-pulse" />
       </div>
 
       <motion.div 

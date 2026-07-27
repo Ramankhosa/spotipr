@@ -59,7 +59,7 @@ const MenuButton = ({
     title={title}
     className={`p-1.5 rounded transition-colors ${
       isActive
-        ? 'bg-indigo-100 text-indigo-700'
+        ? 'bg-lamp-100 text-lamp-700'
         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
     } disabled:opacity-50 disabled:cursor-not-allowed`}
   >
@@ -284,7 +284,7 @@ const RichTextEditor = forwardRef<RichTextEditorRef, RichTextEditorProps>(
         className={`${
           isNormalizedStyle
             ? `text-sm text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-100 ${disabled ? 'bg-gray-100 opacity-75' : ''}`
-            : `border border-gray-300 rounded-lg overflow-hidden bg-white transition-colors focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 ${
+            : `border border-gray-300 rounded-lg overflow-hidden bg-white transition-colors focus-within:ring-2 focus-within:ring-lamp-500 focus-within:border-lamp-500 ${
                 disabled ? 'bg-gray-50 opacity-75' : ''
               }`
         } ${className}`}

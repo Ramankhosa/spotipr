@@ -33,7 +33,7 @@ export default function PatentApiDeveloperPage() {
     <main className="min-h-screen bg-slate-950 px-6 py-14 text-slate-100">
       <div className="mx-auto max-w-4xl space-y-10">
         <header className="space-y-3">
-          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-400">PatentNest Developer API</p>
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-lamp-400">PatentNest Developer API</p>
           <h1 className="text-4xl font-semibold tracking-tight">Patent Intelligence API v1.1</h1>
           <p className="max-w-2xl text-lg text-slate-300">
             Hybrid semantic search, publication lookup, and AI novelty analysis over the Indian patent corpus — as REST
@@ -44,7 +44,7 @@ export default function PatentApiDeveloperPage() {
         <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="text-xl font-semibold">Authentication</h2>
           <p className="mt-2 text-slate-300">Send the API key in the bearer authorization header. Keys must not be embedded in browser or mobile client code.</p>
-          <code className="mt-4 block rounded-lg bg-slate-950 p-4 text-sm text-cyan-300">Authorization: Bearer pn_live_your_key</code>
+          <code className="mt-4 block rounded-lg bg-slate-950 p-4 text-sm text-lamp-300">Authorization: Bearer pn_live_your_key</code>
         </section>
 
         <section className="space-y-4">
@@ -116,7 +116,7 @@ export default function PatentApiDeveloperPage() {
             Confidentiality: submitted disclosures are processed to produce the response and are not used to train
             models. Request logs store hashes and metadata, never disclosure text.
           </p>
-          <Link href="/api/v1/openapi.json" className="mt-5 inline-flex rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 hover:bg-cyan-400">OpenAPI 3.1 document</Link>
+          <Link href="/api/v1/openapi.json" className="mt-5 inline-flex rounded-lg bg-lamp-500 px-4 py-2 font-semibold text-slate-950 hover:bg-lamp-400">OpenAPI 3.1 document</Link>
         </section>
       </div>
     </main>

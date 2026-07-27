@@ -327,7 +327,7 @@ export default function SuperAdminDashboard() {
         <div className="flex items-center justify-between h-16 px-4 border-b border-slate-700/50">
           {(!sidebarCollapsed || mobileNavOpen) && (
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-lamp-500 to-lamp-500 flex items-center justify-center">
                 <span className="text-white font-bold text-sm">SA</span>
               </div>
               <span className="font-semibold text-white">Super Admin</span>
@@ -417,7 +417,7 @@ export default function SuperAdminDashboard() {
                               <span className="text-sm">{item.label}</span>
                             </span>
                             {item.badge && (
-                              <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white">
+                              <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gradient-to-r from-lamp-500 to-lamp-500 text-white">
                                 {item.badge}
                               </span>
                             )}
@@ -452,7 +452,7 @@ export default function SuperAdminDashboard() {
               onClick={() => setShowUserMenu(!showUserMenu)}
               className={`w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-800 transition-colors ${sidebarCollapsed ? 'justify-center' : ''}`}
             >
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white font-semibold">
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-lamp-500 to-lamp-500 flex items-center justify-center text-white font-semibold">
                 {user?.email?.charAt(0)?.toUpperCase() || 'S'}
               </div>
               {!sidebarCollapsed && (
@@ -516,7 +516,7 @@ export default function SuperAdminDashboard() {
             <div className="flex items-center gap-2 sm:gap-3">
               <button
                 onClick={() => router.push('/super-admin/patent-corpus')}
-                className="flex items-center gap-2 px-2.5 sm:px-4 py-2 rounded-lg bg-violet-500 text-white hover:bg-violet-600 border border-violet-400/60 transition-colors"
+                className="flex items-center gap-2 px-2.5 sm:px-4 py-2 rounded-lg bg-lamp-500 text-white hover:bg-lamp-600 border border-lamp-400/60 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
@@ -547,14 +547,14 @@ export default function SuperAdminDashboard() {
           {/* Stats Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Total Tenants */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-500/10 to-blue-600/5 border border-blue-500/20 p-5">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-lamp-500/10 to-lamp-600/5 border border-lamp-500/20 p-5">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-lamp-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
               <div className="relative">
                 <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-xl bg-lamp-500/20 flex items-center justify-center">
                     <span className="text-xl">🏢</span>
                   </div>
-                  <span className="text-sm font-medium text-blue-300">Total Tenants</span>
+                  <span className="text-sm font-medium text-lamp-300">Total Tenants</span>
                 </div>
                 <div className="text-3xl font-bold text-white">{tenants.length}</div>
                 <div className="text-sm text-slate-400 mt-1">Organizations registered</div>
@@ -577,14 +577,14 @@ export default function SuperAdminDashboard() {
             </div>
 
             {/* ATI Tokens */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500/10 to-violet-600/5 border border-violet-500/20 p-5">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-lamp-500/10 to-lamp-600/5 border border-lamp-500/20 p-5">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-lamp-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
               <div className="relative">
                 <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-violet-500/20 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-xl bg-lamp-500/20 flex items-center justify-center">
                     <span className="text-xl">🎟️</span>
                   </div>
-                  <span className="text-sm font-medium text-violet-300">ATI Tokens</span>
+                  <span className="text-sm font-medium text-lamp-300">ATI Tokens</span>
                 </div>
                 <div className="text-3xl font-bold text-white">{totalTokens}</div>
                 <div className="text-sm text-slate-400 mt-1">Access tokens issued</div>
@@ -607,10 +607,10 @@ export default function SuperAdminDashboard() {
             </div>
           </div>
 
-          <div className="rounded-2xl bg-slate-800/50 border border-violet-500/30 overflow-hidden">
+          <div className="rounded-2xl bg-slate-800/50 border border-lamp-500/30 overflow-hidden">
             <div className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-violet-200">
+                <div className="w-12 h-12 rounded-xl bg-lamp-500/20 border border-lamp-500/30 flex items-center justify-center text-lamp-200">
                   <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
                   </svg>
@@ -624,7 +624,7 @@ export default function SuperAdminDashboard() {
               </div>
               <button
                 onClick={() => router.push('/super-admin/patent-corpus')}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-600 transition-colors"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-lamp-500 px-4 py-2 text-sm font-medium text-white hover:bg-lamp-600 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h15" />
@@ -686,7 +686,7 @@ export default function SuperAdminDashboard() {
           <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-lamp-500/20 flex items-center justify-center">
                   <span className="text-xl">🏢</span>
                 </div>
                 <div>
@@ -707,7 +707,7 @@ export default function SuperAdminDashboard() {
 
             {isLoading ? (
               <div className="flex items-center justify-center py-16">
-                <div className="animate-spin rounded-full h-10 w-10 border-2 border-violet-500 border-t-transparent"></div>
+                <div className="animate-spin rounded-full h-10 w-10 border-2 border-lamp-500 border-t-transparent"></div>
               </div>
             ) : tenants.length === 0 ? (
               <div className="text-center py-16">
@@ -718,7 +718,7 @@ export default function SuperAdminDashboard() {
                 <p className="text-slate-400 mb-4">Create your first tenant to get started</p>
                 <button
                   onClick={() => setShowCreateTenant(true)}
-                  className="px-6 py-2.5 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-medium hover:from-violet-600 hover:to-fuchsia-600 transition-all"
+                  className="px-6 py-2.5 rounded-lg bg-gradient-to-r from-lamp-500 to-lamp-500 text-white font-medium hover:from-lamp-600 hover:to-lamp-600 transition-all"
                 >
                   Create First Tenant
                 </button>
@@ -728,7 +728,7 @@ export default function SuperAdminDashboard() {
                 {tenants.map((tenant) => (
                   <div key={tenant.id} className="flex items-center justify-between px-6 py-4 hover:bg-slate-800/30 transition-colors">
                     <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-slate-700 flex items-center justify-center">
+                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-lamp-500/20 to-lamp-500/20 border border-slate-700 flex items-center justify-center">
                         <span className="text-lg font-bold text-white">{tenant.name.charAt(0).toUpperCase()}</span>
                       </div>
                       <div>
@@ -793,7 +793,7 @@ export default function SuperAdminDashboard() {
                       type="text"
                       value={newTenant.name}
                       onChange={(e) => setNewTenant(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                      className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-lamp-500 focus:ring-1 focus:ring-lamp-500 transition-colors"
                       placeholder="e.g., Acme Corporation"
                       required
                     />
@@ -804,7 +804,7 @@ export default function SuperAdminDashboard() {
                       type="text"
                       value={newTenant.atiId}
                       onChange={(e) => setNewTenant(prev => ({ ...prev, atiId: e.target.value.toUpperCase() }))}
-                      className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors uppercase"
+                      className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-lamp-500 focus:ring-1 focus:ring-lamp-500 transition-colors uppercase"
                       placeholder="e.g., ACME"
                       required
                     />
@@ -821,13 +821,13 @@ export default function SuperAdminDashboard() {
                     type="checkbox"
                     checked={newTenant.generateInitialToken}
                     onChange={(e) => setNewTenant(prev => ({ ...prev, generateInitialToken: e.target.checked }))}
-                    className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-800"
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-lamp-500 focus:ring-lamp-500 focus:ring-offset-slate-800"
                   />
                   <label htmlFor="generate_token" className="text-sm font-medium text-white">Generate Initial ATI Token</label>
                 </div>
 
                 {newTenant.generateInitialToken && (
-                  <div className="ml-7 pl-4 border-l-2 border-violet-500/30 space-y-4">
+                  <div className="ml-7 pl-4 border-l-2 border-lamp-500/30 space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-300 mb-2">Expiration Date</label>
@@ -835,7 +835,7 @@ export default function SuperAdminDashboard() {
                           type="datetime-local"
                           value={newTenant.expires_at}
                           onChange={(e) => setNewTenant(prev => ({ ...prev, expires_at: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:border-lamp-500 focus:ring-1 focus:ring-lamp-500 transition-colors"
                         />
                       </div>
                       <div>
@@ -844,7 +844,7 @@ export default function SuperAdminDashboard() {
                           type="number"
                           value={newTenant.max_uses}
                           onChange={(e) => setNewTenant(prev => ({ ...prev, max_uses: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-lamp-500 focus:ring-1 focus:ring-lamp-500 transition-colors"
                           placeholder="Unlimited"
                           min="1"
                         />
@@ -854,7 +854,7 @@ export default function SuperAdminDashboard() {
                         <select
                           value={newTenant.plan_tier}
                           onChange={(e) => setNewTenant(prev => ({ ...prev, plan_tier: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:border-lamp-500 focus:ring-1 focus:ring-lamp-500 transition-colors"
                         >
                           <option value="BASIC">Basic</option>
                           <option value="PRO">Pro</option>
@@ -867,7 +867,7 @@ export default function SuperAdminDashboard() {
                           type="text"
                           value={newTenant.notes}
                           onChange={(e) => setNewTenant(prev => ({ ...prev, notes: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-lamp-500 focus:ring-1 focus:ring-lamp-500 transition-colors"
                           placeholder="Optional notes"
                         />
                       </div>
@@ -899,7 +899,7 @@ export default function SuperAdminDashboard() {
                 <button
                   type="submit"
                   disabled={isCreating}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-medium hover:from-violet-600 hover:to-fuchsia-600 disabled:opacity-50 transition-all flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-lamp-500 to-lamp-500 text-white font-medium hover:from-lamp-600 hover:to-lamp-600 disabled:opacity-50 transition-all flex items-center gap-2"
                 >
                   {isCreating ? (
                     <>

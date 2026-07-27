@@ -468,7 +468,7 @@ export default function IdeaBankDashboard() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -485,7 +485,7 @@ export default function IdeaBankDashboard() {
                 <span className="ml-3 text-xl font-light text-slate-400 align-top tracking-widest">INTELLIGENCE</span>
               </h1>
               <p className="text-slate-500 text-lg max-w-2xl font-light leading-relaxed">
-                Curated repository of <span className="font-medium text-cyan-600">AI-generated</span> intellectual property. 
+                Curated repository of <span className="font-medium text-lamp-600">AI-generated</span> intellectual property. 
                 Identify, reserve, and cultivate high-value concepts.
               </p>
             </div>
@@ -596,10 +596,10 @@ export default function IdeaBankDashboard() {
           {stats && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               {[
-                { label: 'TOTAL ASSETS', value: stats.totalIdeas, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100' },
+                { label: 'TOTAL ASSETS', value: stats.totalIdeas, color: 'text-lamp-600', bg: 'bg-lamp-50', border: 'border-lamp-100' },
                 { label: 'AVAILABLE', value: stats.publicIdeas, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
                 { label: 'RESERVED', value: stats.reservedIdeas, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
-                { label: 'MY HOLDINGS', value: stats.userReservations, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-100' },
+                { label: 'MY HOLDINGS', value: stats.userReservations, color: 'text-lamp-600', bg: 'bg-lamp-50', border: 'border-lamp-100' },
               ].map((stat, i) => (
                 <div key={i} className={`bg-white border ${stat.border} p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group`}>
                    <div className={`absolute top-0 right-0 w-24 h-24 ${stat.bg} rounded-full -mr-10 -mt-10 opacity-50 group-hover:scale-110 transition-transform duration-500`}></div>
@@ -614,7 +614,7 @@ export default function IdeaBankDashboard() {
           <div className="flex flex-col md:flex-row gap-4 mb-8 bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
             <div className="flex-1 relative group">
               <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                 <span className="text-slate-400 group-focus-within:text-cyan-500 transition-colors">🔍</span>
+                 <span className="text-slate-400 group-focus-within:text-lamp-500 transition-colors">🔍</span>
               </div>
               <Input
                 placeholder="Search protocols, keywords, or descriptions..."

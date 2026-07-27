@@ -119,7 +119,7 @@ export default function HeroSection() {
           className="flex flex-col sm:flex-row gap-6 items-center justify-center w-full"
         >
           <Link href={user ? '/patents/draft/new' : '/login'} className="group relative w-full sm:w-auto">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-ai-blue-500 to-cyan-500 rounded-lg blur opacity-30 group-hover:opacity-70 transition duration-200"></div>
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-ai-blue-500 to-lamp-500 rounded-lg blur opacity-30 group-hover:opacity-70 transition duration-200"></div>
             <button className="relative w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 bg-ai-graphite-900 border border-ai-blue-500/50 rounded-lg text-white font-medium hover:bg-ai-graphite-800 transition-all duration-200">
               <FileText className="w-5 h-5" />
               Start Drafting
@@ -151,7 +151,7 @@ export default function HeroSection() {
             AI Core Active
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '1s' }} />
+            <span className="w-2 h-2 bg-lamp-500 rounded-full animate-pulse" style={{ animationDelay: '1s' }} />
             Global DB Connected
           </div>
         </motion.div>

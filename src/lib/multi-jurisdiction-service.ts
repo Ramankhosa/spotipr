@@ -1759,14 +1759,8 @@ ${componentContextSources.map((c: any) => {
     
     if (gatedSections.length > 0) {
       // Build specific error messages for each gated section
-      const gateErrors = gatedSections.map(key => {
-        const hasClaim = isClaim1Available(normalizedData)
-        if (!hasClaim) {
-          return `"${key}" requires claims to be generated first`
-        }
-        return `"${key}" requires claims to be frozen`
-      })
-      const gateError = `Cannot generate sections: ${gateErrors.join('; ')}. Please complete CLAIM_REFINEMENT stage and freeze claims first.`
+      const gateErrors = gatedSections.map(key => `"${key}" requires claims to be generated first`)
+      const gateError = `Cannot generate sections: ${gateErrors.join('; ')}. Please generate claims in the Preliminary Claims stage first.`
       console.error(`[generateReferenceDraft] GATED: ${gateError}`)
       return {
         success: false,

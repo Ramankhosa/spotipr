@@ -795,9 +795,13 @@ function getIdeaComponents(session: any) {
   return []
 }
 
-function hasFrozenClaims(session: any) {
+// Drafting needs a claim set to exist, not a user-applied lock. Freezing is optional.
+function hasDraftableClaims(session: any) {
   const normalized = getNormalizedData(session)
-  return !!(normalized.claimsApprovedAt || normalized.claimsFinal)
+  const html = normalized.claimsFinal || normalized.claims || normalized.claimsProvisional
+  const structured = normalized.claimsStructuredFinal || normalized.claimsStructured || normalized.claimsStructuredProvisional
+  return (typeof html === 'string' && html.replace(/<[^>]*>/g, '').trim().length > 0)
+    || (Array.isArray(structured) && structured.length > 0)
 }
 
 function draftToSectionMap(draft: any) {
@@ -1392,7 +1396,7 @@ async function runPipeline(job: any, workerId: string) {
     session = await loadSession(sessionId)
   }
 
-  if (!hasFrozenClaims(session)) {
+  if (!hasDraftableClaims(session)) {
     await setStep(job.id, workerId, 'CLAIMS')
     const claimRemarks = [
       normalizeText(payload.claimRemarks),
@@ -1427,6 +1431,9 @@ async function runPipeline(job: any, workerId: string) {
       claimsHtml = claims.json?.claimsHtml
     }
 
+    // Lock the automated claim set. Drafting no longer requires the lock, but this run
+    // is fully unattended so there is nobody to edit the claims mid-draft, and freezing
+    // records the "prior art skipped" provenance downstream reads.
     await invokeDraftingAction({
       user,
       patentId: job.patentId,
@@ -1440,8 +1447,8 @@ async function runPipeline(job: any, workerId: string) {
       },
     })
     session = await loadSession(sessionId)
-    if (!hasFrozenClaims(session)) {
-      throw new Error('Claims were generated but could not be frozen for drafting.')
+    if (!hasDraftableClaims(session)) {
+      throw new Error('Claims could not be generated for drafting.')
     }
   }
 

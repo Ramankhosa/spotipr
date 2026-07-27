@@ -3,8 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
-  Bot, 
-  User, 
+  User,
   Sparkles, 
   Upload, 
   FileText, 
@@ -40,7 +39,8 @@ import {
   Lightbulb,
   Link2,
   Plus,
-  ChevronRight
+  ChevronRight,
+  MoreHorizontal
 } from 'lucide-react'
 
 // DnD Kit imports
@@ -145,32 +145,6 @@ function normalizeDiagramImageAnalysisStatus(value: unknown): DiagramImageAnalys
     : null
 }
 
-function diagramImageAnalysisLabel(status: DiagramImageAnalysisStatus) {
-  switch (status) {
-    case 'QUEUED':
-      return 'Queued'
-    case 'PROCESSING':
-      return 'Analyzing'
-    case 'COMPLETED':
-      return 'Analyzed'
-    case 'FAILED':
-      return 'Failed'
-  }
-}
-
-function diagramImageAnalysisBadgeClass(status: DiagramImageAnalysisStatus) {
-  switch (status) {
-    case 'QUEUED':
-      return 'border-slate-200 bg-slate-50 text-slate-600'
-    case 'PROCESSING':
-      return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
-    case 'COMPLETED':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    case 'FAILED':
-      return 'border-red-200 bg-red-50 text-red-700'
-  }
-}
-
 // Helper function to normalize page sizes from country profiles
 // IMPORTANT: This must be defined before the component to avoid TDZ (Temporal Dead Zone) errors
 function normalizePageSizes(input: any): string[] {
@@ -183,6 +157,35 @@ function normalizePageSizes(input: any): string[] {
   if (typeof input === 'object') return Object.values(input).flatMap((val) => normalizePageSizes(val))
   return []
 }
+
+// The planner's diagram kinds, in the words an attorney uses. The stored value
+// is the DIAGRAM_KINDS enum from the pipeline; only the label differs.
+const FIGURE_KIND_LABELS: Record<string, string> = {
+  COMPONENT: 'Parts & connections',
+  PROCESS: 'Step-by-step process',
+  SEQUENCE: 'Interaction over time',
+  CONSTITUENT: "What it's made of"
+}
+const FIGURE_KIND_ORDER = ['COMPONENT', 'PROCESS', 'SEQUENCE', 'CONSTITUENT'] as const
+
+type PlanFigure = {
+  key: string
+  title: string
+  purpose: string
+  kind: string
+  detailLevel?: string
+  componentIds?: string[]
+  claimCriticalComponentIds?: string[]
+}
+
+// Phases shown while the planner runs. Planning is the fast half of the
+// pipeline, so these advance quicker than the drawing messages below.
+const FIGURE_PLANNING_MESSAGES = [
+  'Reading your specification...',
+  'Identifying the components to illustrate...',
+  'Deciding which figures your claims need...',
+  'Writing the figure plan...'
+]
 
 // Plain-language progress messages shown while figures generate.
 // They describe the phases of the real pipeline in order, but advance on a
@@ -346,8 +349,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [rendering, setRendering] = useState<Record<string, boolean>>({})
   const [renderPreview, setRenderPreview] = useState<Record<string, string | null>>({})
   const [expandedFigNo, setExpandedFigNo] = useState<number | null>(null)
-  const [overrideCount, setOverrideCount] = useState(0)
-  const [overrideInputs, setOverrideInputs] = useState<string[]>([])
+  // Manual mode: figures are added one at a time rather than asking for a count
+  // up front and rendering that many blank boxes. `kind` empty means the AI
+  // picks the diagram type, which is the default.
+  const [manualFigures, setManualFigures] = useState<Array<{ id: string; text: string; kind: string }>>(
+    () => [{ id: `manual-fig-${Date.now()}`, text: '', kind: '' }]
+  )
+  const manualFiguresReady = manualFigures.filter(f => f.text.trim().length > 0)
   const [stateInitialized, setStateInitialized] = useState(false)
 
   // UI Mode state
@@ -404,6 +412,27 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
   // === FIGURE PLANNER TAB STATE ===
   const [activeTab, setActiveTab] = useState<'diagrams' | 'sketches' | 'arrange'>('diagrams')
+
+  // === PLAN REVIEW STATE ===
+  // The figure plan is approved before anything is drawn, so a wrong figure is
+  // caught before it costs a render. `planFigures` holds the attorney's edits;
+  // the server keeps the authoritative plan (component ids and the rest).
+  const [planFigures, setPlanFigures] = useState<PlanFigure[] | null>(null)
+  const [isPlanning, setIsPlanning] = useState(false)
+  const [planningSeconds, setPlanningSeconds] = useState(0)
+  const [planError, setPlanError] = useState<string | null>(null)
+  const [planDirty, setPlanDirty] = useState(false)
+  const planningMessageIndex = Math.min(
+    Math.floor(planningSeconds / 5),
+    FIGURE_PLANNING_MESSAGES.length - 1
+  )
+  const planningElapsedLabel = `${Math.floor(planningSeconds / 60)}:${String(planningSeconds % 60).padStart(2, '0')}`
+
+  useEffect(() => {
+    if (!isPlanning) { setPlanningSeconds(0); return }
+    const interval = setInterval(() => setPlanningSeconds(prev => prev + 1), 1000)
+    return () => clearInterval(interval)
+  }, [isPlanning])
   
   // === ARRANGE TAB STATE ===
   const [arrangedFigures, setArrangedFigures] = useState<any[]>([])
@@ -753,14 +782,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   }
 
   // Animated dots component for waiting states
-  const AnimatedDots = () => (
-    <span className="inline-flex">
-      <span className="animate-pulse">.</span>
-      <span className="animate-pulse" style={{ animationDelay: '0.2s' }}>.</span>
-      <span className="animate-pulse" style={{ animationDelay: '0.4s' }}>.</span>
-    </span>
-  )
-
   // Handle upload button click with scroll and animation
   const handleUploadToggle = () => {
     const newShowManual = !showManual
@@ -1731,6 +1752,137 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     reader.readAsDataURL(file)
   }
 
+  // Step 1 of the two-step flow: ask the planner what it intends to draw.
+  // Nothing is rendered yet, so this returns in seconds and costs a fraction of
+  // a full generation.
+  const handlePlanFigures = async () => {
+    try {
+      setIsPlanning(true)
+      setPlanError(null)
+      setError(null)
+      setGenerationFailure(null)
+      setGenerationWarning(null)
+
+      const res = await onComplete({
+        action: 'plan_figures_llm',
+        sessionId: session?.id,
+        ...(diagramCount ? { figureCount: diagramCount } : {})
+      })
+
+      if (!res) throw new Error('Planning failed — no response received')
+      if (res.error) throw Object.assign(new Error(res.error), { diagramFailure: res })
+
+      const figures = Array.isArray(res.plan?.figures) ? res.plan.figures : []
+      if (figures.length === 0) throw new Error('The planner did not return any figures')
+
+      setPlanFigures(figures.map((figure: any) => ({
+        key: String(figure.key || ''),
+        title: sanitizeFigureLabel(figure.title) || 'Untitled figure',
+        purpose: String(figure.purpose || ''),
+        kind: String(figure.kind || 'COMPONENT'),
+        detailLevel: figure.detailLevel,
+        componentIds: figure.componentIds,
+        claimCriticalComponentIds: figure.claimCriticalComponentIds
+      })))
+      setPlanDirty(false)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Planning failed'
+      setPlanError(message)
+      setGenerationFailure({
+        message,
+        details: describeDiagramFailure((e as any)?.diagramFailure),
+        retry: () => { void handlePlanFigures() }
+      })
+    } finally {
+      setIsPlanning(false)
+    }
+  }
+
+  const updatePlanFigure = (key: string, patch: Partial<PlanFigure>) => {
+    setPlanFigures(prev => prev ? prev.map(f => f.key === key ? { ...f, ...patch } : f) : prev)
+    setPlanDirty(true)
+  }
+
+  const removePlanFigure = (key: string) => {
+    setPlanFigures(prev => {
+      if (!prev || prev.length <= 1) return prev
+      return prev.filter(f => f.key !== key)
+    })
+    setPlanDirty(true)
+  }
+
+  const movePlanFigure = (key: string, direction: -1 | 1) => {
+    setPlanFigures(prev => {
+      if (!prev) return prev
+      const index = prev.findIndex(f => f.key === key)
+      const target = index + direction
+      if (index === -1 || target < 0 || target >= prev.length) return prev
+      const next = [...prev]
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved)
+      return next
+    })
+    setPlanDirty(true)
+  }
+
+  // Step 2: persist whatever the attorney approved, then draw exactly that.
+  // `figureCount` is sent deliberately — it marks the count as a user decision,
+  // which stops the auto-mode ceiling from silently trimming an approved plan.
+  const handleApprovePlan = async () => {
+    if (!planFigures || planFigures.length === 0) return
+    const approvedCount = planFigures.length
+
+    try {
+      setIsGenerating(true)
+      setPlanError(null)
+      setError(null)
+      setGenerationFailure(null)
+      setGenerationWarning(null)
+
+      const saved = await onComplete({
+        action: 'save_figure_plan',
+        sessionId: session?.id,
+        figures: planFigures.map(f => ({
+          key: f.key,
+          title: f.title,
+          purpose: f.purpose,
+          kind: f.kind
+        }))
+      })
+      if (!saved) throw new Error('Could not save your figure plan')
+      if (saved.error) throw Object.assign(new Error(saved.error), { diagramFailure: saved })
+
+      const res = await onComplete({
+        action: 'generate_diagrams_llm',
+        sessionId: session?.id,
+        usePlan: true,
+        figureCount: approvedCount,
+        replaceExisting: replaceExistingDiagrams
+      })
+
+      if (!res) throw new Error('Figure generation failed — no response received')
+      if (res.error) throw Object.assign(new Error(res.error), { diagramFailure: res })
+      if (!res.success) throw new Error(res.message || 'Figure generation failed')
+
+      setGenerationWarning(formatDiagramGenerationWarnings(res))
+      // Drawing succeeded, so the plan-review screen has served its purpose and
+      // the figures themselves become the subject of the page.
+      setPlanFigures(null)
+      setPlanDirty(false)
+      setFigures([])
+      await onRefresh()
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Generation failed'
+      setGenerationFailure({
+        message,
+        details: describeDiagramFailure((e as any)?.diagramFailure),
+        retry: () => { void handleApprovePlan() }
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
   const handleGenerateFromLLM = async () => {
     try {
       setIsGenerating(true)
@@ -1738,15 +1890,21 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setGenerationWarning(null)
       setGenerationFailure(null)
 
-      // If user chose to decide and provided an override list, generate exactly those figures instead of auto list
-      const overrideList = overrideInputs.filter(Boolean)
-      if (mode === 'manual' && overrideCount > 0 && overrideList.length > 0) {
+      // Manual mode draws exactly the figures the attorney described — the
+      // chosen diagram type rides along in the instruction text so the planner
+      // honours it without needing a separate field.
+      if (mode === 'manual' && manualFiguresReady.length > 0) {
+        const instructions = manualFiguresReady.map(figure => {
+          const text = figure.text.trim()
+          const label = figure.kind ? FIGURE_KIND_LABELS[figure.kind] : ''
+          return label ? `${text} (draw this as: ${label.toLowerCase()})` : text
+        })
         const manualResp = await onComplete({
           action: 'generate_diagrams_llm',
           sessionId: session?.id,
           mode: 'manual',
-          figureInstructions: overrideList,
-          figureCount: overrideList.length,
+          figureInstructions: instructions,
+          figureCount: instructions.length,
           includeExistingFigures,
           replaceExisting: false
         })
@@ -1755,8 +1913,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           throw Object.assign(new Error(manualResp.error), { diagramFailure: manualResp })
         }
         setGenerationWarning(formatDiagramGenerationWarnings(manualResp))
-        setOverrideCount(0)
-        setOverrideInputs([])
+        setManualFigures([{ id: `manual-fig-${Date.now()}`, text: '', kind: '' }])
         await onRefresh()
         return
       }
@@ -2397,31 +2554,32 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       animate={{ opacity: 1, y: 0 }}
       className="p-3 sm:p-8 max-w-[1800px] mx-auto space-y-6 sm:space-y-8"
     >
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
         <div>
-          <h2 className="text-3xl font-bold text-ai-graphite-900 tracking-tight flex items-center gap-3">
-            <div className="p-2 bg-ai-blue-100 rounded-lg">
+          <h2 className="text-2xl sm:text-3xl font-bold text-ai-graphite-900 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-ai-blue-50 rounded-lg">
               <LayoutGrid className="w-6 h-6 text-ai-blue-600" />
             </div>
             Figure Planner
             <Hint
               title="What happens here"
-              text="This is where your patent's drawings are created — block diagrams, flowcharts, and sketches. They're generated from your specification and reuse its reference numerals, so figures and text stay consistent."
+              text="This is where your patent's drawings are created — block diagrams, flowcharts, and illustrations. They're generated from your specification and reuse its reference numerals, so figures and text stay consistent."
             />
           </h2>
-          <p className="text-ai-graphite-500 mt-2 text-lg">Create the drawings your application will file with.</p>
+          <p className="text-ai-graphite-500 mt-2">Create the drawings your application will file with.</p>
         </div>
 
+        {/* An escape hatch, not a competing call to action — it used to be an
+            amber button beside the primary flow. */}
         {!figuresSkipped && (
-          <Button
-            variant="outline"
+          <button
+            type="button"
             onClick={handleSkipFigures}
             disabled={isSkippingFigures}
-            className="border-amber-300 text-amber-800 hover:bg-amber-50"
+            className="text-sm text-ai-graphite-500 hover:text-ai-graphite-800 underline underline-offset-4 decoration-paper-400 disabled:opacity-50 shrink-0 py-2"
           >
-            {isSkippingFigures ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
-            Continue without figures
-          </Button>
+            {isSkippingFigures ? 'Switching…' : 'Continue without figures'}
+          </button>
         )}
       </div>
 
@@ -2446,58 +2604,87 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         </Alert>
       )}
 
-      {/* Main Tab Bar: Diagrams vs Sketches */}
-      <div className="border-b border-paper-300 flex items-center justify-between">
-        <nav className="flex space-x-8" aria-label="Figure Planner Tabs">
-          <button
-            onClick={() => setActiveTab('diagrams')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
-              activeTab === 'diagrams'
-                ? 'border-ai-blue-600 text-ai-blue-600'
-                : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
-            }`}
-          >
-            <Code className="w-4 h-4" />
-            Diagrams
-            {diagramSources.length > 0 && (
-              <Badge variant="secondary" className="ml-1">{diagramSources.length}</Badge>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('sketches')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
-              activeTab === 'sketches'
-                ? 'border-ai-blue-600 text-ai-blue-600'
-                : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
-            }`}
-          >
-            <Pencil className="w-4 h-4" />
-            Sketches
-            {sketches.filter(s => s.status === 'SUCCESS').length > 0 && (
-              <Badge variant="secondary" className="ml-1">{sketches.filter(s => s.status === 'SUCCESS').length}</Badge>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('arrange')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
-              activeTab === 'arrange'
-                ? 'border-ai-blue-600 text-ai-blue-600'
-                : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            Arrange
-            {isSequenceFinalized && (
-              <Lock className="w-3 h-3 text-green-600" />
-            )}
-          </button>
-        </nav>
-        <Hint
-          title="Diagrams, Sketches, Arrange"
-          text="Diagrams are structured drawings (block diagrams, flowcharts) generated from your specification. Sketches are AI line-art illustrations. Arrange sets the final figure order for filing."
-          className="pr-1"
-        />
-      </div>
+      {/* Numbered steps. The three panels are a sequence with one optional step,
+          not three equal places to browse, so each carries its position, its
+          purpose in one line, and a live status. */}
+      <nav className="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-label="Figure Planner steps">
+        {([
+          {
+            id: 'diagrams' as const,
+            n: 1,
+            name: 'Diagrams',
+            desc: 'Flowcharts & block diagrams from your specification',
+            status: isPlanning
+              ? { text: 'Planning…', tone: 'busy' as const }
+              : planFigures
+                ? { text: `${planFigures.length} planned · awaiting approval`, tone: 'busy' as const }
+                : diagramSources.length > 0
+                  ? { text: `${diagramSources.length} figure${diagramSources.length === 1 ? '' : 's'}`, tone: 'ready' as const }
+                  : { text: 'Not started', tone: 'idle' as const }
+          },
+          {
+            id: 'sketches' as const,
+            n: 2,
+            name: 'Illustrations',
+            desc: 'Line-art views of the physical product — optional',
+            status: (() => {
+              const done = sketches.filter(s => s.status === 'SUCCESS').length
+              return done > 0
+                ? { text: `${done} added`, tone: 'ready' as const }
+                : { text: 'Optional', tone: 'idle' as const }
+            })()
+          },
+          {
+            id: 'arrange' as const,
+            n: 3,
+            name: 'Final set',
+            desc: 'Order and lock the figures for filing',
+            status: isSequenceFinalized
+              ? { text: 'Finalized', tone: 'done' as const }
+              : { text: 'Not finalized', tone: 'idle' as const }
+          }
+        ]).map(step => {
+          const selected = activeTab === step.id
+          return (
+            <button
+              key={step.id}
+              onClick={() => setActiveTab(step.id)}
+              aria-current={selected ? 'step' : undefined}
+              className={`relative text-left rounded-lg border p-4 transition-colors ${
+                selected
+                  ? 'border-ai-blue-600 bg-white'
+                  : 'border-paper-300 bg-white hover:border-paper-400'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <span className={`w-5 h-5 rounded-md border text-[11px] font-semibold flex items-center justify-center shrink-0 ${
+                  selected ? 'bg-ai-blue-50 text-ai-blue-700 border-transparent' : 'bg-paper-100 text-ai-graphite-500 border-paper-300'
+                }`}>
+                  {step.n}
+                </span>
+                <span className="font-semibold text-sm text-ai-graphite-900">{step.name}</span>
+              </span>
+              <span className="hidden sm:block text-xs text-ai-graphite-500 mt-1 ml-7">{step.desc}</span>
+              <span className="block mt-2 ml-7">
+                <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                  step.status.tone === 'done'
+                    ? 'border-transparent bg-emerald-50 text-emerald-700'
+                    : 'border-paper-300 bg-paper-100 text-ai-graphite-600'
+                }`}>
+                  {step.status.tone === 'busy'
+                    ? <Loader2 className="w-2.5 h-2.5 animate-spin text-ai-blue-600" />
+                    : <span className={`w-1.5 h-1.5 rounded-full ${
+                        step.status.tone === 'done' ? 'bg-emerald-600'
+                          : step.status.tone === 'ready' ? 'bg-ai-blue-600'
+                          : 'bg-ai-graphite-400'
+                      }`} />}
+                  {step.status.text}
+                </span>
+              </span>
+            </button>
+          )
+        })}
+      </nav>
 
       {/* Errors are shown here so they're visible from any tab */}
       {error && (
@@ -2553,347 +2740,386 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       {/* TAB CONTENT */}
       {activeTab === 'diagrams' && (
         <>
-          {/* Diagrams Mode Selector */}
-          <div className="flex items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit">
-            <button
-              onClick={() => setMode('ai')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                mode === 'ai' 
-                  ? 'bg-white text-ai-blue-600 shadow-sm' 
-                  : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-              }`}
-            >
-              <Bot className="w-4 h-4" />
-              Automatic (AI)
-            </button>
-            <button
-              onClick={() => setMode('manual')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                mode === 'manual' 
-                  ? 'bg-white text-ai-blue-600 shadow-sm' 
-                  : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-              }`}
-            >
-              <User className="w-4 h-4" />
-              Manual
-            </button>
-            <Hint
-              title="Automatic vs. Manual"
-              text="Automatic: the AI plans the whole figure set from your specification and draws it. Manual: you describe each figure yourself and the AI draws exactly those."
-              className="ml-1"
-            />
-          </div>
-
-      {/* Mode Selection Cards - Only show if no figures yet */}
-      {figures.length === 0 && diagramSources.length === 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <button
-            className="text-left"
-            onClick={() => setMode('ai')}
-          >
-            <Card
-              className={`cursor-pointer transition-all hover:shadow-md ${mode === 'ai' ? 'ring-2 ring-ai-blue-600 border-ai-blue-100 bg-ai-blue-50/30' : ''}`}
-            >
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-ai-blue-600" />
-                AI-Driven Generation
-              </CardTitle>
-              <CardDescription>
-                Our two-stage AI first plans the optimal figure set, then generates high-quality patent diagrams tailored to your invention.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2 text-sm text-ai-graphite-600">
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> AI determines optimal figure count (or override)</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Claim-aware diagram planning</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Distinct perspectives per figure</li>
-              </ul>
-            </CardContent>
-          </Card>
-          </button>
-
-          <button
-            className="text-left"
-            onClick={() => setMode('manual')}
-          >
-            <Card
-              className={`cursor-pointer transition-all hover:shadow-md ${mode === 'manual' ? 'ring-2 ring-ai-blue-600 border-ai-blue-100 bg-ai-blue-50/30' : ''}`}
-            >
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <User className="w-5 h-5 text-ai-blue-600" />
-                Manual Specification
-              </CardTitle>
-              <CardDescription>
-                You know your invention best. Define exactly how many figures you need and what each one should depict.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2 text-sm text-ai-graphite-600">
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Custom figure counts</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Specific descriptions for each view</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Full control over the output</li>
-              </ul>
-            </CardContent>
-          </Card>
-          </button>
-          </div>
-      )}
-
-      {/* Actions Area */}
-      <AnimatePresence mode="wait">
-        {mode === 'ai' ? (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="space-y-4"
-          >
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="diagram-count" className="text-sm font-medium text-ai-graphite-700">
-                  Number of Figures:
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="diagram-count"
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={diagramCount === null ? '' : diagramCount}
-                    onChange={(e) => {
-                      const val = e.target.value.trim()
-                      if (val === '') {
-                        setDiagramCount(null) // Empty = AI decides
-                      } else {
-                        const num = parseInt(val, 10)
-                        if (!isNaN(num)) {
-                          setDiagramCount(Math.max(1, Math.min(10, num)))
-                        }
-                      }
-                    }}
-                    placeholder="Auto"
-                    className="w-24 text-center"
-                    disabled={isGenerating}
-                  />
+          {/* One entry point for creating figures. The old screen asked the user
+              to pick AI-vs-manual, a count, and a replace/append policy before
+              anything appeared; those are now defaults with an explicit choice
+              only where it changes the outcome. */}
+          {!planFigures && !isPlanning && (
+            <div className="rounded-lg border border-paper-300 bg-white p-5">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                <div>
+                  <h3 className="font-semibold text-ai-graphite-900">
+                    {diagramSources.length === 0 ? 'Create your figures' : 'Add more figures'}
+                  </h3>
+                  <p className="text-sm text-ai-graphite-500 mt-1 max-w-prose">
+                    The AI plans a figure set from your specification and shows you the plan before drawing anything.
+                    You approve it first — nothing is drawn until you do.
+                  </p>
                 </div>
-                <span className="text-xs text-ai-graphite-500">
-                  {diagramCount === null ? '(AI will decide)' : '(1-10)'}
-                </span>
-                <Hint
-                  title="How many figures?"
-                  text="Leave on Auto and the AI picks the count that covers your claims — at most 5. Or set an exact number between 1 and 10."
-                />
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Button
+                    onClick={handlePlanFigures}
+                    disabled={isPlanning || isGenerating}
+                    className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Plan my figures
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => setMode(mode === 'manual' ? 'ai' : 'manual')}
+                    disabled={isPlanning || isGenerating}
+                  >
+                    {mode === 'manual' ? 'Hide manual entry' : 'Describe figures myself'}
+                  </Button>
+                  <Button variant="ghost" onClick={handleUploadToggle} disabled={isPlanning || isGenerating}>
+                    {showManual ? 'Hide uploads' : 'Upload drawings'}
+                  </Button>
+                </div>
+              </div>
+
+              {hasExistingFigures && (
+                <div className="flex items-start gap-2 mt-4 pt-4 border-t border-paper-200">
+                  <Checkbox
+                    id="replace-existing-diagrams"
+                    checked={replaceExistingDiagrams}
+                    onCheckedChange={(checked) => setReplaceExistingDiagrams(checked === true)}
+                    disabled={isGenerating || isPlanning}
+                  />
+                  <div>
+                    <Label htmlFor="replace-existing-diagrams" className="text-sm text-ai-graphite-700">
+                      Replace my existing diagrams
+                    </Label>
+                    <p className="text-xs text-ai-graphite-500 mt-0.5">
+                      Uncheck to keep them and add the new figures after.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Planning is the fast half of the pipeline, but it is still an LLM
+              call — the wait is narrated rather than left as a dead button. */}
+          {isPlanning && (
+            <div className="rounded-lg border border-ai-blue-100 bg-ai-blue-50/40 p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-full bg-ai-blue-100 flex items-center justify-center shrink-0">
+                  <Loader2 className="w-4 h-4 text-ai-blue-600 animate-spin" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-ai-blue-900">
+                    Planning your figures — {planningElapsedLabel}
+                  </p>
+                  <p className="text-sm text-ai-blue-700 mt-0.5">
+                    {FIGURE_PLANNING_MESSAGES[planningMessageIndex]}
+                  </p>
+                  <p className="text-xs text-ai-graphite-500 mt-2">
+                    Nothing is drawn yet. You will see the plan and can change it before any figure is created.
+                  </p>
+                </div>
               </div>
             </div>
-            {hasExistingFigures && (
-              <div className="flex items-start gap-2">
+          )}
+
+          {/* PLAN REVIEW — the approval gate. Drawing is the slow, expensive
+              step, so a wrong figure is caught here rather than after a render. */}
+          {planFigures && !isPlanning && (
+            <div className="rounded-lg border border-paper-300 bg-white overflow-hidden">
+              <div className="p-5 border-b border-paper-200">
+                <h3 className="font-semibold text-ai-graphite-900 flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  Your figure plan is ready
+                </h3>
+                <p className="text-sm text-ai-graphite-500 mt-1 max-w-prose">
+                  {planFigures.length} figure{planFigures.length === 1 ? '' : 's'} planned from your specification — nothing has been drawn yet.
+                  Edit any title or description, change a figure&rsquo;s type, reorder or remove figures, then approve to start drawing.
+                </p>
+              </div>
+
+              {planError && (
+                <div className="px-5 pt-4">
+                  <Alert variant="destructive">
+                    <AlertDescription>{planError}</AlertDescription>
+                  </Alert>
+                </div>
+              )}
+
+              <ul className="divide-y divide-paper-200">
+                {planFigures.map((figure, index) => (
+                  <li key={figure.key} className="p-4 sm:p-5">
+                    <div className="flex items-start gap-3">
+                      <span className="font-mono text-xs font-semibold text-ai-graphite-700 pt-2.5 w-14 shrink-0 tabular-nums">
+                        FIG. {index + 1}
+                      </span>
+                      <div className="flex-1 min-w-0 space-y-3">
+                        <Input
+                          value={figure.title}
+                          onChange={(e) => updatePlanFigure(figure.key, { title: e.target.value })}
+                          disabled={isGenerating}
+                          aria-label={`Title for figure ${index + 1}`}
+                          className="font-medium"
+                        />
+
+                        <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Diagram type for figure ${index + 1}`}>
+                          {FIGURE_KIND_ORDER.map(kind => (
+                            <button
+                              key={kind}
+                              type="button"
+                              onClick={() => updatePlanFigure(figure.key, { kind })}
+                              disabled={isGenerating}
+                              aria-pressed={figure.kind === kind}
+                              className={`inline-flex items-center px-3 min-h-[40px] sm:min-h-0 sm:px-2.5 sm:py-1 rounded-full border text-xs font-medium transition-colors ${
+                                figure.kind === kind
+                                  ? 'border-transparent bg-ai-blue-50 text-ai-blue-700'
+                                  : 'border-paper-300 bg-white text-ai-graphite-600 hover:border-paper-400'
+                              }`}
+                            >
+                              {FIGURE_KIND_LABELS[kind]}
+                            </button>
+                          ))}
+                        </div>
+
+                        <Textarea
+                          value={figure.purpose}
+                          onChange={(e) => updatePlanFigure(figure.key, { purpose: e.target.value })}
+                          disabled={isGenerating}
+                          rows={2}
+                          aria-label={`What figure ${index + 1} will show`}
+                          placeholder="What should this figure show?"
+                          className="text-sm resize-y"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => movePlanFigure(figure.key, -1)}
+                          disabled={index === 0 || isGenerating}
+                          aria-label={`Move figure ${index + 1} earlier`}
+                          className="p-3 sm:p-1.5 rounded text-ai-graphite-400 hover:text-ai-graphite-700 hover:bg-paper-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                        >
+                          <ChevronRight className="w-4 h-4 -rotate-90" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => movePlanFigure(figure.key, 1)}
+                          disabled={index === planFigures.length - 1 || isGenerating}
+                          aria-label={`Move figure ${index + 1} later`}
+                          className="p-3 sm:p-1.5 rounded text-ai-graphite-400 hover:text-ai-graphite-700 hover:bg-paper-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                        >
+                          <ChevronRight className="w-4 h-4 rotate-90" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removePlanFigure(figure.key)}
+                          disabled={planFigures.length <= 1 || isGenerating}
+                          aria-label={`Remove figure ${index + 1}`}
+                          className="p-3 sm:p-1.5 rounded text-ai-graphite-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="p-5 border-t border-paper-200 flex flex-col sm:flex-row sm:items-center gap-3">
+                <Button
+                  onClick={handleApprovePlan}
+                  disabled={isGenerating}
+                  className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2 w-full sm:w-auto"
+                >
+                  {isGenerating
+                    ? <><Loader2 className="w-4 h-4 animate-spin" />Drawing your figures — {generationElapsedLabel}</>
+                    : <><Check className="w-4 h-4" />Approve plan &amp; draw {planFigures.length} figure{planFigures.length === 1 ? '' : 's'}</>}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handlePlanFigures}
+                  disabled={isGenerating}
+                  className="w-full sm:w-auto"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Plan again
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => { setPlanFigures(null); setPlanDirty(false) }}
+                  disabled={isGenerating}
+                  className="w-full sm:w-auto"
+                >
+                  Discard plan
+                </Button>
+                <span className="text-xs text-ai-graphite-500 sm:ml-auto">
+                  {planDirty ? 'Your edits will be saved when you approve.' : 'Only approved figures are drawn.'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* MANUAL ENTRY — figures are added one at a time. The old form asked
+              for a count first and then rendered that many blank boxes. */}
+          {mode === 'manual' && !planFigures && !isPlanning && (
+            <div className="rounded-lg border border-paper-300 bg-white p-5 space-y-4">
+              <div>
+                <h3 className="font-semibold text-ai-graphite-900">Describe your figures</h3>
+                <p className="text-sm text-ai-graphite-500 mt-1 max-w-prose">
+                  The AI draws exactly what you describe — it will not add, merge, or remove figures.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {manualFigures.map((figure, index) => (
+                  <div key={figure.id} className="rounded-lg border border-paper-300 p-3">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      <span className="font-mono text-xs font-semibold text-ai-graphite-700 tabular-nums">
+                        FIG. {index + 1}
+                      </span>
+                      <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Diagram type for figure ${index + 1}`}>
+                        {([{ value: '', label: 'Let AI choose' }, ...FIGURE_KIND_ORDER.map(k => ({ value: k as string, label: FIGURE_KIND_LABELS[k] }))]).map(option => (
+                          <button
+                            key={option.value || 'auto'}
+                            type="button"
+                            onClick={() => setManualFigures(prev => prev.map(f => f.id === figure.id ? { ...f, kind: option.value } : f))}
+                            disabled={isGenerating}
+                            aria-pressed={figure.kind === option.value}
+                            className={`inline-flex items-center px-3 min-h-[40px] sm:min-h-0 sm:px-2.5 sm:py-1 rounded-full border text-xs font-medium transition-colors ${
+                              figure.kind === option.value
+                                ? 'border-transparent bg-ai-blue-50 text-ai-blue-700'
+                                : 'border-paper-300 bg-white text-ai-graphite-600 hover:border-paper-400'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                      {manualFigures.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setManualFigures(prev => prev.filter(f => f.id !== figure.id))}
+                          disabled={isGenerating}
+                          aria-label={`Remove figure ${index + 1}`}
+                          className="ml-auto p-3 sm:p-1.5 rounded text-ai-graphite-400 hover:text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    <Textarea
+                      value={figure.text}
+                      onChange={(e) => setManualFigures(prev => prev.map(f => f.id === figure.id ? { ...f, text: e.target.value } : f))}
+                      disabled={isGenerating}
+                      rows={2}
+                      placeholder="What should this figure show?"
+                      aria-label={`Description for figure ${index + 1}`}
+                      className="text-sm resize-y"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setManualFigures(prev => [...prev, { id: `manual-fig-${Date.now()}-${prev.length}`, text: '', kind: '' }])}
+                disabled={isGenerating}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add another figure
+              </Button>
+
+              <p className="text-xs text-ai-graphite-500 max-w-prose">
+                A good description names the parts and the view — &ldquo;Cross-section of the soil probe showing electrodes 302 and seal 304.&rdquo;
+                Plain sentences work; no technical format needed.
+              </p>
+
+              <div className="flex items-center space-x-2">
                 <Checkbox
-                  id="replace-existing-diagrams"
-                  checked={replaceExistingDiagrams}
-                  onCheckedChange={(checked) => setReplaceExistingDiagrams(checked === true)}
+                  id="include-existing"
+                  checked={includeExistingFigures}
+                  onCheckedChange={(checked) => setIncludeExistingFigures(checked === true)}
                   disabled={isGenerating}
                 />
-                <div className="space-y-1">
-                  <Label htmlFor="replace-existing-diagrams" className="text-sm text-ai-graphite-700">
-                    Replace existing diagrams
-                  </Label>
-                  <p className="text-xs text-ai-graphite-500">
-                    If unchecked, new diagrams will be appended after existing figures.
-                  </p>
-                </div>
+                <Label htmlFor="include-existing" className="text-sm text-ai-graphite-700">
+                  Consider my existing figures, so new ones don&rsquo;t duplicate them
+                </Label>
               </div>
-            )}
-            <div className="flex items-center gap-3">
-              <Button 
-                size="lg"
+
+              <Button
                 onClick={handleGenerateFromLLM}
-                disabled={isGenerating}
-                className="w-full md:w-auto bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2 h-12 px-8 text-lg shadow-lg shadow-ai-blue-200"
+                disabled={isGenerating || manualFiguresReady.length === 0}
+                className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2 w-full sm:w-auto"
               >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Generating figures — {generationElapsedLabel}
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-5 h-5" />
-                    {diagramCount === null ? 'Generate figures' : `Generate ${diagramCount} figure${diagramCount > 1 ? 's' : ''}`}
-                  </>
-                )}
+                {isGenerating
+                  ? <><Loader2 className="w-4 h-4 animate-spin" />Drawing your figures — {generationElapsedLabel}</>
+                  : manualFiguresReady.length === 0
+                    ? <>Draw my figures</>
+                    : <>Draw {manualFiguresReady.length} figure{manualFiguresReady.length === 1 ? '' : 's'}</>}
               </Button>
             </div>
-            {isGenerating && (
-              <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-xl p-5 border border-ai-blue-100 shadow-sm">
-                {/* Progress steps indicator */}
-                <div className="flex items-center gap-1.5 mb-4">
-                  {FIGURE_GENERATION_MESSAGES.map((_, idx) => (
-                    <div 
-                      key={idx}
-                      className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
-                        idx < generationMessageIndex 
-                          ? 'bg-ai-blue-500' 
-                          : idx === generationMessageIndex 
-                            ? 'bg-ai-blue-400 animate-pulse' 
-                            : 'bg-paper-300'
-                      }`}
-                    />
-                  ))}
-                </div>
-                
-                {/* Current status message */}
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-ai-blue-100 flex items-center justify-center flex-shrink-0">
-                    <Sparkles className="w-5 h-5 text-ai-blue-600 animate-pulse" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-ai-blue-900 mb-1">
-                      Working for {generationElapsedLabel}
-                    </p>
-                    <p className="text-sm text-ai-blue-700 leading-relaxed">
-                      {FIGURE_GENERATION_MESSAGES[generationMessageIndex]}
-                    </p>
-                    {diagramCount && (
-                      <p className="text-xs text-ai-blue-500 mt-2">
-                        Generating {diagramCount} figure{diagramCount > 1 ? 's' : ''} as requested
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Helpful tip */}
-                <div className="mt-4 pt-3 border-t border-ai-blue-100">
-                  <p className="text-xs text-ai-graphite-500 flex items-center gap-1.5">
-                    <Info className="w-3.5 h-3.5" />
-                    Figures reuse the reference numerals from your specification, so drawings and text stay consistent.
-                  </p>
-                </div>
-              </div>
-            )}
-          </motion.div>
-        ) : (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="space-y-4 bg-paper-100 p-6 rounded-xl border border-paper-300"
-          >
-            <div className="flex items-center gap-4 mb-4">
-              <Label className="whitespace-nowrap">Number of Figures:</Label>
-              <Input
-                type="number"
-                min={1}
-                max={20}
-                className="w-24 bg-white"
-                value={overrideCount}
-                onChange={(e) => {
-                  const n = Math.max(0, parseInt(e.target.value || '0', 10))
-                  setOverrideCount(n)
-                  setOverrideInputs(Array.from({ length: n }, (_, i) => overrideInputs[i] || ''))
-                }}
-              />
-            </div>
-
-            <div className="flex items-center space-x-2 mb-4">
-              <Checkbox
-                id="include-existing"
-                checked={includeExistingFigures}
-                onCheckedChange={setIncludeExistingFigures}
-              />
-              <Label htmlFor="include-existing" className="text-sm text-ai-graphite-700">
-                Tell AI about existing figures to avoid duplicates
-              </Label>
-            </div>
-            
-            <div className="space-y-4">
-          {Array.from({ length: overrideCount }).map((_, i) => (
-                <motion.div 
-                  key={i}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="bg-white p-4 rounded-lg border shadow-sm"
-                >
-                  <Label className="mb-2 block text-xs uppercase text-ai-graphite-500 font-semibold">Figure {i + 1} Description</Label>
-                  <Textarea 
-                    placeholder="Describe what this figure should show..."
-                    className="resize-none"
-                    value={overrideInputs[i] || ''}
-                    onChange={(e) => {
-                const arr = [...overrideInputs]
-                arr[i] = e.target.value
-                setOverrideInputs(arr)
-                    }}
-                  />
-                </motion.div>
-          ))}
-        </div>
-            
-            {overrideCount > 0 && (
-              <Button 
-                onClick={handleGenerateFromLLM}
-                disabled={isGenerating}
-                className="w-full md:w-auto bg-ai-blue-600 hover:bg-ai-blue-700"
-              >
-                {isGenerating ? <>Generating<AnimatedDots /></> : `Generate ${overrideCount} Custom Figures`}
-              </Button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+          )}
 
 
       {/* Saved Diagrams Grid */}
-      <div className="mt-12">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-bold text-ai-graphite-900 flex items-center gap-2">
-            <ImageIcon className="w-5 h-5 text-ai-graphite-600" />
-            Project Diagrams
-          </h3>
-          <div className="flex items-center gap-2">
-            {/* Translate All Diagrams Button */}
+      <div className="mt-10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className="text-lg font-semibold text-ai-graphite-900">Your diagrams</h3>
+            {/* A batch summary, so progress reads without scanning every card. */}
+            {diagramSources.length > 0 && (() => {
+              // Counted per figure, never per language variant — a figure with
+              // three translations is still one figure to the attorney.
+              const figureNos = Object.keys(diagramsByFigure).map(Number)
+              const total = figureNos.length
+              const drawing = figureNos.filter(figNo => (diagramsByFigure[figNo] || []).some((d: any) => {
+                const key = getDiagramKey(figNo, d.language || 'en')
+                return !!processingStatus[key] && processingStep[key] !== -1
+              })).length
+              const ready = figureNos.filter(figNo =>
+                (diagramsByFigure[figNo] || []).some((d: any) => d.imageUploadedAt)).length
+              return (
+                <span className="text-sm text-ai-graphite-500 truncate">
+                  {drawing > 0
+                    ? `· Drawing ${drawing} — ${ready} of ${total} ready`
+                    : `· ${total} figure${total === 1 ? '' : 's'}`}
+                </span>
+              )
+            })()}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             {diagramSources.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setTranslateFigureNo(null) // null = translate all
-                  setShowTranslateModal(true)
-                }}
-                className="text-ai-blue-600 border-ai-blue-200 hover:bg-ai-blue-50 hover:border-ai-blue-300"
-              >
-                <Languages className="w-4 h-4 mr-2" />
-                Translate All
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setTranslateFigureNo(null) // null = translate all
+                    setShowTranslateModal(true)
+                  }}
+                >
+                  <Languages className="w-4 h-4 mr-2" />
+                  Translate all
+                </Button>
+                <Hint
+                  title="Translating diagrams"
+                  text="Translation converts the text labels inside each diagram. Reference numerals stay exactly the same, so translated figures still match your specification."
+                />
+              </>
             )}
-            {diagramSources.length > 0 && (
-              <Hint
-                title="Translating diagrams"
-                text="Translation converts the text labels inside each diagram. Reference numerals stay exactly the same, so translated figures still match your specification."
-              />
-            )}
-            <motion.div
-              animate={showManual ? { scale: [1, 1.05, 1] } : {}}
-              transition={{ duration: 0.5, repeat: showManual ? Infinity : 0, repeatDelay: 2 }}
-            >
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleUploadToggle}
-                className={showManual ? 'border-ai-blue-400 text-ai-blue-700' : ''}
-              >
-                {showManual ? 'Hide External Uploads' : 'Upload External Images'}
-              </Button>
-            </motion.div>
           </div>
         </div>
 
         
 {diagramSources.length === 0 ? (
-          <div className="text-center py-12 bg-paper-100 rounded-xl border border-dashed border-paper-300">
-            <ImageIcon className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-ai-graphite-500">No diagrams created yet.</p>
+          <div className="text-center py-12 px-6 bg-paper-100 rounded-xl border border-dashed border-paper-300">
+            <ImageIcon className="w-10 h-10 text-ai-graphite-300 mx-auto mb-3" />
+            <p className="font-medium text-ai-graphite-800">No figures yet</p>
+            <p className="text-sm text-ai-graphite-500 mt-1 max-w-sm mx-auto">
+              Use <span className="font-medium text-ai-graphite-700">Plan my figures</span> above and the AI will
+              propose a figure set from your specification for you to approve.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2930,46 +3156,53 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 return (
               <Card key={`figure_${figNo}`} className="overflow-hidden hover:shadow-lg transition-all duration-300">
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={uploaded[diagramKey] || selectedSource.imageUploadedAt ? 'default' : 'secondary'} className="shrink-0">
-                        Fig. {figNo}
-                      </Badge>
-                      {/* Show translation count if available */}
-                      {diagramTranslations[figNo]?.length > 1 && (
-                        <Badge variant="outline" className="text-xs text-green-600 bg-green-50 border-green-200">
-                          {diagramTranslations[figNo].length - 1} translation{diagramTranslations[figNo].length > 2 ? 's' : ''}
-                        </Badge>
-                      )}
-                      {imageAnalysisStatus && (
-                        <Badge variant="outline" className={`text-xs ${diagramImageAnalysisBadgeClass(imageAnalysisStatus)}`}>
-                          {(imageAnalysisStatus === 'QUEUED' || imageAnalysisStatus === 'PROCESSING') && (
-                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                          )}
-                          {diagramImageAnalysisLabel(imageAnalysisStatus)}
-                        </Badge>
-                      )}
+                  {/* One status, in the attorney's terms. The pipeline's own
+                      states — code generated, image analysed, raw override —
+                      are machine bookkeeping and stay out of the card; the
+                      "Edited" mark survives because it warns that re-rendering
+                      would discard the user's own work. */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-xs font-semibold text-ai-graphite-700 tabular-nums shrink-0">
+                        FIG. {figNo}
+                      </span>
                       {selectedSource.originalImagePath && (
-                        <span title="This figure was manually edited. Re-rendering the PlantUML source will overwrite the manual edits.">
-                          <Badge variant="outline" className="text-xs text-amber-700 bg-amber-50 border-amber-200">
+                        <span title="You edited this figure. Re-drawing it from the diagram source would discard those edits.">
+                          <Badge variant="outline" className="text-xs text-ai-graphite-600 bg-paper-100 border-paper-300">
                             Edited
                           </Badge>
                         </span>
                       )}
-                      {selectedSource.sourceMode === 'RAW_OVERRIDE' && (
-                        <Badge variant="outline" className="text-xs text-amber-700 bg-amber-50 border-amber-200">
-                          Expert override
-                        </Badge>
-                      )}
-                      {plan?.isStale && (
-                        <Badge variant="outline" className="text-xs text-red-700 bg-red-50 border-red-200">
-                          Component plan changed
-                        </Badge>
-                      )}
                     </div>
-                    <Badge variant="outline" className="text-xs text-ai-graphite-500">
-                      {selectedSource.imageUploadedAt ? 'Rendered' : selectedSource.plantumlCode ? 'Code Ready' : 'Pending'}
-                    </Badge>
+                    {(() => {
+                      const isBusy = !!processingStatus[diagramKey] && processingStep[diagramKey] !== -1
+                      const failed = processingStep[diagramKey] === -1
+                      const ready = !!selectedSource.imageUploadedAt && !isBusy && !failed
+                      if (failed) {
+                        return (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 shrink-0">
+                            <AlertCircle className="w-3 h-3" />
+                            Needs a retry
+                          </span>
+                        )
+                      }
+                      if (isBusy) {
+                        return (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-ai-blue-50 px-2 py-0.5 text-[11px] font-medium text-ai-blue-700 shrink-0">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Drawing…
+                          </span>
+                        )
+                      }
+                      return (
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium shrink-0 ${
+                          ready ? 'border-transparent bg-emerald-50 text-emerald-700' : 'border-paper-300 bg-paper-100 text-ai-graphite-600'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${ready ? 'bg-emerald-600' : 'bg-ai-graphite-400'}`} />
+                          {ready ? 'Ready' : 'Waiting'}
+                        </span>
+                      )
+                    })()}
                   </div>
                   {/* Caption (Title) - shown prominently */}
                   <CardTitle className="text-base font-semibold text-ai-graphite-900 mt-2 line-clamp-2">
@@ -3006,7 +3239,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         alt={`Fig ${figNo}`}
                         className="w-full h-64 object-contain bg-white"
                       />
-                      <div className="reveal-scrim absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      {/* On touch screens there is no hover, so these actions
+                          would be unreachable — they stay visible there. */}
+                      <div className="reveal-scrim absolute inset-0 bg-black/50 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-within:opacity-100 transition-opacity flex items-center justify-center gap-2">
                         <Button variant="secondary" size="sm" onClick={() => setExpandedFigNo(figNo)}>
                           <Eye className="w-4 h-4 mr-2" /> Expand
                         </Button>
@@ -3116,84 +3351,76 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   )
                 })()}
 
-                {imageAnalysisStatus && (
-                  <div className={`px-4 py-2 border-t text-xs ${diagramImageAnalysisBadgeClass(imageAnalysisStatus)}`}>
+                {/* Only the failed case is shown: queued/processing/completed
+                    are the pipeline narrating itself, which tells the attorney
+                    nothing they can act on. A failure has a Retry, so it stays. */}
+                {imageAnalysisStatus === 'FAILED' && (
+                  <div className="px-4 py-2 border-t text-xs border-amber-200 bg-amber-50 text-amber-900">
                     <div className="flex items-center justify-between gap-3">
-                      <span>
-                        {imageAnalysisStatus === 'QUEUED' && 'AI will describe this image shortly (queued).'}
-                        {imageAnalysisStatus === 'PROCESSING' && 'AI is reading this image in the background — you can keep working.'}
-                        {imageAnalysisStatus === 'COMPLETED' && 'AI has described this image. You can edit the title or description.'}
-                        {imageAnalysisStatus === 'FAILED' && (selectedSource.imageAnalysisError || 'AI could not read this image.')}
-                      </span>
-                      {imageAnalysisStatus === 'FAILED' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 shrink-0 bg-white text-xs"
-                          onClick={() => handleRetryDiagramImageAnalysis(selectedSource)}
-                          disabled={!!retryingImageAnalysis[selectedSource.id]}
-                        >
-                          {retryingImageAnalysis[selectedSource.id]
-                            ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                            : <RefreshCw className="mr-1 h-3 w-3" />}
-                          Retry
-                        </Button>
-                      )}
+                      <span>{selectedSource.imageAnalysisError || 'This image could not be read automatically.'}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 shrink-0 bg-white text-xs"
+                        onClick={() => handleRetryDiagramImageAnalysis(selectedSource)}
+                        disabled={!!retryingImageAnalysis[selectedSource.id]}
+                      >
+                        {retryingImageAnalysis[selectedSource.id]
+                          ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          : <RefreshCw className="mr-1 h-3 w-3" />}
+                        Retry
+                      </Button>
                     </div>
                   </div>
                 )}
 
-                <div className="p-3 bg-white border-t grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <Button variant="ghost" size="sm" className="w-full" onClick={() => { setModifyFigNo(figNo); setModifyTextSaved('') }}>
-                    <Edit2 className="w-4 h-4 mr-2" /> Modify
-                  </Button>
-                  {/* Translate single diagram button */}
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full text-ai-blue-600 hover:text-ai-blue-700 hover:bg-ai-blue-50"
-                    onClick={() => {
-                      setTranslateFigureNo(figNo)
-                      setShowTranslateModal(true)
-                    }}
-                    title="Translate diagram labels to another language"
-                  >
-                    <Languages className="w-4 h-4 mr-2" /> Translate
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full text-slate-600 hover:text-slate-800 hover:bg-slate-50"
-                    // @ts-ignore
-                    onClick={() => handleDownloadFigureImage(displayUrl, figNo, selectedLang as any)}
-                    disabled={!displayUrl}
-                    title="Download rendered figure image"
-                  >
-                    <Download className="w-4 h-4 mr-2" /> Download
-                  </Button>
-                  <Button variant="ghost" size="sm" className="w-full text-red-600 hover:text-red-700 hover:bg-red-50" 
-                    onClick={async () => {
-                      const langLabel = LANGUAGE_LABELS[selectedLang]?.split(' ')[0] || selectedLang.toUpperCase()
-                      if(!confirm(`Delete Figure ${figNo} (${langLabel})?`)) return
-                      try {
-                        invalidateDiagramOps(figNo, selectedLang)
-                        await onComplete({ action: 'delete_figure', sessionId: session?.id, figureNo: figNo, language: selectedLang })
-                        await onRefresh()
-                        // Clear selected arrange figure if it was the deleted one
-                        if (selectedArrangeFigure?.id === `diagram-${figNo}`) {
-                          setSelectedArrangeFigure(null)
+                {/* One named action the attorney reaches for, with the rest
+                    behind an overflow menu so the card reads at a glance. */}
+                <div className="p-3 bg-white border-t grid grid-cols-1 gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => { setModifyFigNo(figNo); setModifyTextSaved('') }}>
+                      <Edit2 className="w-4 h-4 mr-2" /> Request changes
+                    </Button>
+                    <FigureActionsMenu
+                      label={`More actions for figure ${figNo}`}
+                      items={[
+                        {
+                          label: 'Translate this figure',
+                          icon: <Languages className="w-4 h-4" />,
+                          onSelect: () => { setTranslateFigureNo(figNo); setShowTranslateModal(true) }
+                        },
+                        {
+                          label: 'Download image',
+                          icon: <Download className="w-4 h-4" />,
+                          disabled: !displayUrl,
+                          onSelect: () => handleDownloadFigureImage(displayUrl as any, figNo, selectedLang as any)
+                        },
+                        {
+                          label: 'Delete figure',
+                          icon: <Trash2 className="w-4 h-4" />,
+                          danger: true,
+                          onSelect: async () => {
+                            const langLabel = LANGUAGE_LABELS[selectedLang]?.split(' ')[0] || selectedLang.toUpperCase()
+                            if (!confirm(`Delete Figure ${figNo} (${langLabel})?`)) return
+                            try {
+                              invalidateDiagramOps(figNo, selectedLang)
+                              await onComplete({ action: 'delete_figure', sessionId: session?.id, figureNo: figNo, language: selectedLang })
+                              await onRefresh()
+                              if (selectedArrangeFigure?.id === `diagram-${figNo}`) {
+                                setSelectedArrangeFigure(null)
+                              }
+                              if (arrangedFigures.length > 0) {
+                                await loadCombinedFigures()
+                              }
+                            } catch (e) { setError('Failed to delete') }
+                          }
                         }
-                        // Refresh arrange tab data if it was previously loaded
-                        if (arrangedFigures.length > 0) {
-                          await loadCombinedFigures()
-                        }
-                      } catch (e) { setError('Failed to delete') }
-                    }}>
-                    <Trash2 className="w-4 h-4 mr-2" /> Delete
-                  </Button>
-                  
+                      ]}
+                    />
+                  </div>
+
                   {selectedSource.plantumlCode && (
-                    <div className="col-span-4">
+                    <div>
                         <Button 
                           variant="ghost" 
                           size="sm" 
@@ -3203,7 +3430,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             setPlantUmlDrafts(prev => prev[figNo] === undefined ? ({ ...prev, [figNo]: selectedSource.plantumlCode }) : prev)
                           }}
                         >
-                          {showPlantUML[figNo] ? 'Hide diagram source' : 'Expert PlantUML editor'}
+                          {showPlantUML[figNo] ? 'Hide diagram source' : 'Edit diagram source (advanced)'}
                         </Button>
                         {showPlantUML[figNo] && (
                            <div className="mt-2 space-y-2">
@@ -3257,7 +3484,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                   {/* Modification Panel */}
                 {modifyFigNo === figNo && (
-                    <div className="col-span-4 mt-2 pt-2 border-t">
+                    <div className="mt-2 pt-2 border-t">
                       <Label className="text-xs mb-1 block">Describe changes:</Label>
                       <Textarea 
                         className="text-sm mb-2"
@@ -3767,10 +3994,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Wand2 className="w-5 h-5 text-ai-blue-600" />
-                Generate Patent Sketch
+                Create an illustration
               </CardTitle>
               <CardDescription>
-                Create patent-style black-and-white line art sketches from your invention context.
+                Illustrations are line-art views of the physical product — a device, housing, or mechanical part shown
+                the way it looks, rather than as a diagram. Many filings use diagrams only; add illustrations when a
+                visual view strengthens the application.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -4387,9 +4616,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           </div>
                         )}
 
-                        {/* Hover overlay */}
+                        {/* Hover overlay — stays visible on touch screens,
+                            where there is no hover to reveal it. */}
                         {sketchImageUrl && sketch.status === 'SUCCESS' && (
-                          <div className="reveal-scrim absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                          <div className="reveal-scrim absolute inset-0 bg-black/50 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-within:opacity-100 transition-opacity flex items-center justify-center gap-2">
                             <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); setExpandedSketchId(sketch.id) }}>
                               <Eye className="w-4 h-4" />
                             </Button>
@@ -4701,16 +4931,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           {/* Header with instruction */}
           <div className="border-b border-paper-300 pb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-ai-graphite-600">
-                Combine and order your figures for the final specification.
+              <p className="font-medium text-ai-graphite-900">
+                This is the drawing set that will be filed.
               </p>
-              <p className="text-sm text-ai-graphite-500 mt-1">
-                {isSequenceFinalized 
-                  ? 'Sequence is finalized. Unlock to make changes.'
-                  : 'Drag to reorder. Changes are saved automatically.'}
-              </p>
-              <p className="text-xs text-ai-graphite-500 mt-1">
-                Tip: Click, hold, and drag anywhere on a figure card to reorder.
+              <p className="text-sm text-ai-graphite-500 mt-1 max-w-prose">
+                {isSequenceFinalized
+                  ? 'The order is locked. Unlock it to make changes.'
+                  : 'Drag a figure to reorder — figures are renumbered automatically and every change saves on its own.'}
               </p>
             </div>
             <Button
@@ -5034,6 +5261,84 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         </Button>
       </div>
     </motion.div>
+  )
+}
+
+// === FIGURE OVERFLOW MENU ===
+// A small popover for the per-figure secondary actions. The card used to lay
+// Translate/Download/Delete out as equal-weight buttons, which made every
+// figure look like a control panel; these are occasional actions, so they live
+// one click away and leave the card readable.
+interface FigureActionsMenuProps {
+  label: string
+  items: Array<{
+    label: string
+    icon?: React.ReactNode
+    onSelect: () => void | Promise<void>
+    disabled?: boolean
+    danger?: boolean
+  }>
+}
+
+function FigureActionsMenu({ label, items }: FigureActionsMenuProps) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('touchstart', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('touchstart', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        className="p-2 rounded-md text-ai-graphite-500 hover:text-ai-graphite-900 hover:bg-paper-100 transition-colors"
+      >
+        <MoreHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 z-30 min-w-[13rem] rounded-lg border border-paper-300 bg-white p-1 shadow-lg"
+        >
+          {items.map(item => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              disabled={item.disabled}
+              onClick={() => { setOpen(false); void item.onSelect() }}
+              className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-left transition-colors disabled:opacity-40 disabled:cursor-default ${
+                item.danger
+                  ? 'text-red-600 hover:bg-red-50'
+                  : 'text-ai-graphite-800 hover:bg-paper-100'
+              }`}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

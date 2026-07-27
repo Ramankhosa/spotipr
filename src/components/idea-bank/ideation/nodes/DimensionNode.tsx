@@ -34,7 +34,9 @@ interface DimensionNodeData {
   onCollapse?: () => void
 }
 
-// Compact color palette - just border accents, no gradients
+// Compact color palette - just border accents, no gradients.
+// CATEGORICAL: hash-assigned per dimension family, so these must stay mutually
+// distinguishable AND clear of the brand cobalt (lamp), which means action/AI.
 const FAMILY_COLORS = [
   { border: 'border-l-stone-400', bg: 'bg-white', text: 'text-stone-700', handle: '!bg-stone-400' },
   { border: 'border-l-slate-400', bg: 'bg-white', text: 'text-slate-700', handle: '!bg-slate-400' },
@@ -46,7 +48,7 @@ const FAMILY_COLORS = [
   { border: 'border-l-indigo-500', bg: 'bg-indigo-50/30', text: 'text-indigo-800', handle: '!bg-indigo-500' },
   { border: 'border-l-teal-500', bg: 'bg-teal-50/30', text: 'text-teal-800', handle: '!bg-teal-500' },
   { border: 'border-l-orange-500', bg: 'bg-orange-50/30', text: 'text-orange-800', handle: '!bg-orange-500' },
-  { border: 'border-l-cyan-500', bg: 'bg-cyan-50/30', text: 'text-cyan-800', handle: '!bg-cyan-500' },
+  { border: 'border-l-fuchsia-500', bg: 'bg-fuchsia-50/30', text: 'text-fuchsia-800', handle: '!bg-fuchsia-500' },
   { border: 'border-l-violet-500', bg: 'bg-violet-50/30', text: 'text-violet-800', handle: '!bg-violet-500' },
 ]
 
@@ -72,10 +74,11 @@ function isSuggestedMovePayload(payload: unknown): payload is SuggestedMovePaylo
     typeof p.leadsTo === 'string'
 }
 
-// Labels for the "modifies" field
+// Labels for the "modifies" field. CATEGORICAL — kept off the brand cobalt so
+// a classification chip is never mistaken for something you can act on.
 const MODIFIES_LABELS: Record<string, { label: string; color: string }> = {
-  'BEHAVIOR_OVER_TIME': { label: 'Behavior', color: 'bg-blue-100 text-blue-700' },
-  'ARCHITECTURE_CONTROL_FLOW': { label: 'Architecture', color: 'bg-purple-100 text-purple-700' },
+  'BEHAVIOR_OVER_TIME': { label: 'Behavior', color: 'bg-teal-100 text-teal-700' },
+  'ARCHITECTURE_CONTROL_FLOW': { label: 'Architecture', color: 'bg-violet-100 text-violet-700' },
   'INTERFACE_BOUNDARY': { label: 'Interface', color: 'bg-green-100 text-green-700' },
   'FAILURE_MODE_LIFECYCLE': { label: 'Lifecycle', color: 'bg-orange-100 text-orange-700' },
 }
@@ -146,7 +149,7 @@ function DimensionNode({ data, selected }: NodeProps) {
           group relative rounded-lg
           w-[380px] border-l-4 border border-slate-200
           ${isSelected
-            ? 'bg-blue-50 border-l-blue-500 shadow-md ring-1 ring-blue-300'
+            ? 'bg-lamp-50 border-l-lamp-500 shadow-md ring-1 ring-lamp-300'
             : moveData.challengesPrior
               ? 'bg-amber-50/50 border-l-amber-500'
               : `${familyColor.bg} ${familyColor.border}`
@@ -158,14 +161,14 @@ function DimensionNode({ data, selected }: NodeProps) {
           type="target"
           position={Position.Left}
           className={`!w-2 !h-2 !border !border-white !-left-1 ${
-            isSelected ? '!bg-blue-500' : moveData.challengesPrior ? '!bg-amber-500' : familyColor.handle
+            isSelected ? '!bg-lamp-500' : moveData.challengesPrior ? '!bg-amber-500' : familyColor.handle
           }`}
         />
         <Handle
           type="source"
           position={Position.Right}
           className={`!w-2 !h-2 !border !border-white !-right-1 ${
-            isSelected ? '!bg-blue-500' : moveData.challengesPrior ? '!bg-amber-500' : familyColor.handle
+            isSelected ? '!bg-lamp-500' : moveData.challengesPrior ? '!bg-amber-500' : familyColor.handle
           }`}
         />
 
@@ -183,8 +186,8 @@ function DimensionNode({ data, selected }: NodeProps) {
                 flex items-center justify-center
                 transition-all duration-100
                 ${isSelected 
-                  ? 'bg-blue-500 text-white' 
-                  : 'border-2 border-slate-300 hover:border-blue-400 hover:bg-blue-50'
+                  ? 'bg-lamp-500 text-white' 
+                  : 'border-2 border-slate-300 hover:border-lamp-400 hover:bg-lamp-50'
                 }
               `}
               title="Select this move for idea generation"
@@ -195,7 +198,7 @@ function DimensionNode({ data, selected }: NodeProps) {
             <div className="flex-1 pr-8">
               {/* "What if..." statement - the main move - full text visible */}
               <h4 className={`font-semibold text-[13px] leading-snug ${
-                isSelected ? 'text-blue-800' : moveData.challengesPrior ? 'text-amber-800' : familyColor.text
+                isSelected ? 'text-lamp-800' : moveData.challengesPrior ? 'text-amber-800' : familyColor.text
               }`}>
                 {moveData.move}
               </h4>
@@ -213,9 +216,9 @@ function DimensionNode({ data, selected }: NodeProps) {
           
           {/* Leads to section - full content visible */}
           <div className="mt-1.5 flex items-start gap-1.5">
-            <Zap className="w-3 h-3 text-blue-600 mt-0.5 flex-shrink-0" />
+            <Zap className="w-3 h-3 text-lamp-600 mt-0.5 flex-shrink-0" />
             <div>
-              <span className="text-[10px] font-semibold text-blue-700 uppercase tracking-wide">Leads to:</span>
+              <span className="text-[10px] font-semibold text-lamp-700 uppercase tracking-wide">Leads to:</span>
               <p className="text-[11px] text-slate-600 leading-snug">
                 {moveData.leadsTo}
               </p>
@@ -262,9 +265,9 @@ function DimensionNode({ data, selected }: NodeProps) {
                   onClick={toggleInput}
                   className="
                     w-full flex items-center gap-1.5 px-2 py-1.5
-                    text-[11px] text-blue-600 hover:text-blue-700
-                    bg-blue-50/50 hover:bg-blue-50
-                    rounded-md border border-blue-100 hover:border-blue-200
+                    text-[11px] text-lamp-600 hover:text-lamp-700
+                    bg-lamp-50/50 hover:bg-lamp-50
+                    rounded-md border border-lamp-100 hover:border-lamp-200
                     transition-all duration-150
                   "
                 >
@@ -290,8 +293,8 @@ function DimensionNode({ data, selected }: NodeProps) {
                     placeholder="e.g., Focus on cost-effective approaches, or explore this with magnetic mechanisms..."
                     className="
                       w-full px-2 py-1.5 text-[11px]
-                      bg-white border border-blue-200 rounded-md
-                      focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400
+                      bg-white border border-lamp-200 rounded-md
+                      focus:outline-none focus:ring-1 focus:ring-lamp-400 focus:border-lamp-400
                       placeholder:text-slate-400
                       resize-none
                     "
@@ -306,7 +309,7 @@ function DimensionNode({ data, selected }: NodeProps) {
                       className="
                         flex-1 flex items-center justify-center gap-1
                         px-2 py-1 text-[10px] font-medium
-                        bg-blue-500 hover:bg-blue-600 text-white
+                        bg-lamp-500 hover:bg-lamp-600 text-white
                         rounded transition-colors
                       "
                     >
@@ -339,8 +342,8 @@ function DimensionNode({ data, selected }: NodeProps) {
         {canExpand && (
           <div className="absolute right-2 top-2">
             {isExpanding ? (
-              <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center">
-                <div className="w-3.5 h-3.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <div className="w-7 h-7 rounded-full bg-lamp-100 flex items-center justify-center">
+                <div className="w-3.5 h-3.5 border-2 border-lamp-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : (
               <button
@@ -352,7 +355,7 @@ function DimensionNode({ data, selected }: NodeProps) {
                 }}
                 className="
                   w-7 h-7 rounded-full
-                  bg-blue-500 hover:bg-blue-600
+                  bg-lamp-500 hover:bg-lamp-600
                   text-white
                   flex items-center justify-center
                   shadow-sm hover:shadow
@@ -397,7 +400,7 @@ function DimensionNode({ data, selected }: NodeProps) {
         
         {/* Selected indicator */}
         {isSelected && (
-          <div className="absolute -top-1.5 -left-1.5 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+          <div className="absolute -top-1.5 -left-1.5 w-5 h-5 bg-lamp-500 rounded-full flex items-center justify-center shadow-sm">
             <Check className="w-3 h-3 text-white" />
           </div>
         )}
@@ -416,7 +419,7 @@ function DimensionNode({ data, selected }: NodeProps) {
         group relative rounded-lg
         w-[320px] border-l-4 border border-slate-200
         ${isSelected
-          ? 'bg-blue-50 border-l-blue-500 shadow-md ring-1 ring-blue-300'
+          ? 'bg-lamp-50 border-l-lamp-500 shadow-md ring-1 ring-lamp-300'
           : `${familyColor.bg} ${familyColor.border}`
         }
       `}
@@ -426,14 +429,14 @@ function DimensionNode({ data, selected }: NodeProps) {
           type="target"
           position={Position.Left}
           className={`!w-2 !h-2 !border !border-white !-left-1 ${
-            isSelected ? '!bg-blue-500' : familyColor.handle
+            isSelected ? '!bg-lamp-500' : familyColor.handle
           }`}
         />
         <Handle
           type="source"
           position={Position.Right}
           className={`!w-2 !h-2 !border !border-white !-right-1 ${
-            isSelected ? '!bg-blue-500' : familyColor.handle
+            isSelected ? '!bg-lamp-500' : familyColor.handle
           }`}
         />
 
@@ -452,8 +455,8 @@ function DimensionNode({ data, selected }: NodeProps) {
               flex items-center justify-center
               transition-all duration-100
               ${isSelected 
-                ? 'bg-blue-500 text-white' 
-                : 'border-2 border-slate-300 hover:border-blue-400 hover:bg-blue-50'
+                ? 'bg-lamp-500 text-white' 
+                : 'border-2 border-slate-300 hover:border-lamp-400 hover:bg-lamp-50'
               }
             `}
             title="Select this dimension for idea generation"
@@ -464,7 +467,7 @@ function DimensionNode({ data, selected }: NodeProps) {
           {/* Title - wraps instead of truncates, takes full width */}
           <div className="flex-1 min-w-0 pr-6">
             <h4 className={`font-semibold text-[13px] leading-tight ${
-              isSelected ? 'text-blue-800' : familyColor.text
+              isSelected ? 'text-lamp-800' : familyColor.text
             }`}>
               {nodeData.title}
             </h4>
@@ -493,9 +496,9 @@ function DimensionNode({ data, selected }: NodeProps) {
                 onClick={toggleInput}
                 className="
                   w-full flex items-center gap-1.5 px-2 py-1.5
-                  text-[11px] text-blue-600 hover:text-blue-700
-                  bg-blue-50/50 hover:bg-blue-50
-                  rounded-md border border-blue-100 hover:border-blue-200
+                  text-[11px] text-lamp-600 hover:text-lamp-700
+                  bg-lamp-50/50 hover:bg-lamp-50
+                  rounded-md border border-lamp-100 hover:border-lamp-200
                   transition-all duration-150
                 "
               >
@@ -524,8 +527,8 @@ function DimensionNode({ data, selected }: NodeProps) {
                   }
                   className="
                     w-full px-2 py-1.5 text-[11px]
-                    bg-white border border-blue-200 rounded-md
-                    focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400
+                    bg-white border border-lamp-200 rounded-md
+                    focus:outline-none focus:ring-1 focus:ring-lamp-400 focus:border-lamp-400
                     placeholder:text-slate-400
                     resize-none
                   "
@@ -540,7 +543,7 @@ function DimensionNode({ data, selected }: NodeProps) {
                     className="
                       flex-1 flex items-center justify-center gap-1
                       px-2 py-1 text-[10px] font-medium
-                      bg-blue-500 hover:bg-blue-600 text-white
+                      bg-lamp-500 hover:bg-lamp-600 text-white
                       rounded transition-colors
                     "
                   >
@@ -572,8 +575,8 @@ function DimensionNode({ data, selected }: NodeProps) {
         {canExpand && (
           <div className="absolute right-1.5 top-2">
             {isExpanding ? (
-              <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
-                <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <div className="w-6 h-6 rounded-full bg-lamp-100 flex items-center justify-center">
+                <div className="w-3 h-3 border-2 border-lamp-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : (
               <button
@@ -585,7 +588,7 @@ function DimensionNode({ data, selected }: NodeProps) {
                 }}
                 className="
                   w-6 h-6 rounded-full
-                  bg-blue-500 hover:bg-blue-600
+                  bg-lamp-500 hover:bg-lamp-600
                   text-white
                   flex items-center justify-center
                   shadow-sm hover:shadow
@@ -645,7 +648,7 @@ function DimensionNode({ data, selected }: NodeProps) {
       
       {/* Selected indicator - tiny badge */}
       {isSelected && (
-        <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+        <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-lamp-500 rounded-full flex items-center justify-center shadow-sm">
           <Check className="w-2.5 h-2.5 text-white" />
         </div>
       )}

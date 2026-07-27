@@ -120,7 +120,7 @@ const getStatusIcon = (status: string) => {
     case 'REJECTED':
       return <XCircle className="w-4 h-4 text-rose-500" />
     case 'EXPORTED':
-      return <ExternalLink className="w-4 h-4 text-blue-500" />
+      return <ExternalLink className="w-4 h-4 text-lamp-500" />
     default:
       return <Lightbulb className="w-4 h-4 text-slate-400" />
   }
@@ -360,7 +360,7 @@ function FullscreenIdeaModal({
                     <div className="border-t border-slate-200 pt-4 mt-4">
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-blue-500" />
+                          <Sparkles className="w-4 h-4 text-lamp-500" />
                           Holistic Improvement Directions
                         </h4>
                         <span className="text-xs text-slate-500">
@@ -377,13 +377,13 @@ function FullscreenIdeaModal({
                             onClick={() => onToggleSuggestion(direction)}
                             className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
                               selectedSuggestions.has(direction)
-                                ? 'bg-blue-50 border-blue-200'
+                                ? 'bg-lamp-50 border-lamp-200'
                                 : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                             }`}
                           >
                             <div className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center mt-0.5 ${
                               selectedSuggestions.has(direction)
-                                ? 'bg-blue-500 border-blue-500'
+                                ? 'bg-lamp-500 border-lamp-500'
                                 : 'border-slate-300'
                             }`}>
                               {selectedSuggestions.has(direction) && (
@@ -653,7 +653,7 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
                 {/* Idea Header */}
                 <div
                   className={`p-4 cursor-pointer hover:bg-slate-50 transition-colors ${
-                    selectedForExport.has(idea.id) ? 'bg-blue-50/50' : ''
+                    selectedForExport.has(idea.id) ? 'bg-lamp-50/50' : ''
                   }`}
                   onClick={() => setExpandedId(expandedId === idea.id ? null : idea.id)}
                   onDoubleClick={() => setFullscreenIdea(idea)}
@@ -797,7 +797,7 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
                                 e.stopPropagation()
                                 setFullscreenIdea(idea)
                               }}
-                              className="text-xs text-blue-600 hover:text-blue-800 mt-2"
+                              className="text-xs text-lamp-600 hover:text-lamp-800 mt-2"
                             >
                               View full assessment →
                             </button>

@@ -69,7 +69,7 @@ function SortableRow({ section }: { section: SupersetSectionRow }) {
         <div className="text-sm font-medium text-gray-900">
           {section.label}
           {!section.isActive && <span className="ml-2 text-xs text-red-600">(inactive)</span>}
-          {section.isRequired && <span className="ml-2 text-xs text-blue-600">required</span>}
+          {section.isRequired && <span className="ml-2 text-xs text-lamp-600">required</span>}
         </div>
         <div className="text-xs text-gray-500 font-mono">
           {section.sectionKey}
@@ -179,7 +179,7 @@ export function SupersetSectionsPanel() {
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -192,7 +192,7 @@ export function SupersetSectionsPanel() {
           <p className="text-sm text-gray-600">
             The canonical drafting sequence. Drag to reorder — countries without their own order inherit this.
             Edit prompts, aliases, and flags in{' '}
-            <a href="/super-admin/superset-sections" className="text-blue-600 hover:text-blue-800">Superset Sections</a>.
+            <a href="/super-admin/superset-sections" className="text-lamp-600 hover:text-lamp-800">Superset Sections</a>.
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -200,7 +200,7 @@ export function SupersetSectionsPanel() {
           <button
             onClick={saveOrder}
             disabled={!dirty || saving}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 disabled:opacity-50"
+            className="px-4 py-2 bg-lamp-600 text-white rounded-md text-sm hover:bg-lamp-700 disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save order'}
           </button>

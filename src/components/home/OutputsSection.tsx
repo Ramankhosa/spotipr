@@ -32,7 +32,7 @@ export default function OutputsSection() {
     <section className="relative py-32 bg-ai-graphite-950 overflow-hidden border-t border-ai-graphite-900/70">
       <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-[0.03]" />
       <div className="absolute -left-20 top-24 w-96 h-96 bg-ai-blue-900/10 rounded-full blur-[120px]" />
-      <div className="absolute -right-28 bottom-16 w-[520px] h-[520px] bg-cyan-900/10 rounded-full blur-[140px]" />
+      <div className="absolute -right-28 bottom-16 w-[520px] h-[520px] bg-lamp-900/10 rounded-full blur-[140px]" />
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
@@ -112,7 +112,7 @@ export default function OutputsSection() {
 
         <div className="mt-12">
           <div className="relative rounded-2xl border border-ai-graphite-800/60 bg-ai-graphite-900/25 overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-r from-ai-blue-500/10 via-transparent to-cyan-500/10" />
+            <div className="absolute inset-0 bg-gradient-to-r from-ai-blue-500/10 via-transparent to-lamp-500/10" />
             <img
               src="/illustrations/patentnest-pipeline.svg"
               alt="Pipeline overview"

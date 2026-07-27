@@ -606,7 +606,7 @@ function StatBadge({ label, value, color }: { label: string; value: number; colo
     slate: 'bg-slate-700 text-slate-300',
     amber: 'bg-amber-500/20 text-amber-400',
     emerald: 'bg-emerald-500/20 text-emerald-400',
-    blue: 'bg-blue-500/20 text-blue-400',
+    blue: 'bg-lamp-500/20 text-lamp-400',
     red: 'bg-red-500/20 text-red-400'
   }
   return (

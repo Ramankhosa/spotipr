@@ -239,7 +239,7 @@ export default function JurisdictionStylesPage() {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-900">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-4 border-cyan-500 border-t-transparent mx-auto"></div>
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-lamp-500 border-t-transparent mx-auto"></div>
           <p className="mt-6 text-slate-300 font-medium">Loading jurisdiction styles...</p>
         </div>
       </div>
@@ -266,7 +266,7 @@ export default function JurisdictionStylesPage() {
               <select
                 value={selectedCountry || ''}
                 onChange={(e) => setSelectedCountry(e.target.value || null)}
-                className="px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:border-cyan-500"
+                className="px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:border-lamp-500"
               >
                 <option value="">Select Country</option>
                 {countries.map(code => (
@@ -541,7 +541,7 @@ function DiagramConfigPanel({
               showToast('error', 'Failed to create config')
             }
           }}
-          className="px-6 py-3 bg-cyan-500 text-white rounded-lg font-medium hover:bg-cyan-400"
+          className="px-6 py-3 bg-lamp-500 text-white rounded-lg font-medium hover:bg-lamp-400"
         >
           Create Diagram Config
         </button>
@@ -567,7 +567,7 @@ function DiagramConfigPanel({
           </div>
           <button
             onClick={() => onEdit(config)}
-            className="px-4 py-2 bg-cyan-500 text-white rounded-lg font-medium hover:bg-cyan-400"
+            className="px-4 py-2 bg-lamp-500 text-white rounded-lg font-medium hover:bg-lamp-400"
           >
             ✏️ Edit Config
           </button>
@@ -947,7 +947,7 @@ function LimitBadge({ label, value, severity }: { label: string; value: number; 
   const colors = {
     error: 'bg-red-500/20 text-red-400 border-red-500/30',
     warning: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    info: 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+    info: 'bg-lamp-500/20 text-lamp-400 border-lamp-500/30'
   }
   const color = colors[severity as keyof typeof colors] || colors.warning
   
@@ -1000,7 +1000,7 @@ function CrossValidationPanel({
                     <span className={`text-xs px-2 py-0.5 rounded ${
                       cv.severity === 'error' ? 'bg-red-500/20 text-red-400' :
                       cv.severity === 'warning' ? 'bg-amber-500/20 text-amber-400' :
-                      'bg-blue-500/20 text-blue-400'
+                      'bg-lamp-500/20 text-lamp-400'
                     }`}>
                       {cv.severity}
                     </span>
@@ -1162,7 +1162,7 @@ function DiagramConfigModal({
                 onClick={() => toggleDiagramType(type)}
                 className={`px-3 py-1.5 rounded text-sm ${
                   form.supportedDiagramTypes.includes(type)
-                    ? 'bg-cyan-500 text-white'
+                    ? 'bg-lamp-500 text-white'
                     : 'bg-slate-700 text-slate-400'
                 }`}
               >
@@ -1219,7 +1219,7 @@ function DiagramConfigModal({
           <button onClick={onClose} className="px-4 py-2 text-slate-300 hover:text-white">Cancel</button>
           <button
             onClick={() => onSave({ id: config.id, countryCode, ...form })}
-            className="px-4 py-2 bg-cyan-500 text-white rounded-lg font-medium hover:bg-cyan-400"
+            className="px-4 py-2 bg-lamp-500 text-white rounded-lg font-medium hover:bg-lamp-400"
           >
             Save Changes
           </button>
@@ -1298,7 +1298,7 @@ function DiagramHintModal({
               diagramType, 
               ...form 
             })}
-            className="px-4 py-2 bg-cyan-500 text-white rounded-lg font-medium hover:bg-cyan-400"
+            className="px-4 py-2 bg-lamp-500 text-white rounded-lg font-medium hover:bg-lamp-400"
           >
             {hint ? 'Update' : 'Create'} Hint
           </button>

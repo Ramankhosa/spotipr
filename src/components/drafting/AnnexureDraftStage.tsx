@@ -748,7 +748,7 @@ function ValidationPanel({
         {/* Top Bar - Title & Score */}
         <div className="px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-ai-blue-600 flex items-center justify-center shadow-lg">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lamp-500 to-ai-blue-600 flex items-center justify-center shadow-lg">
               <span className="text-xl">🔬</span>
             </div>
             <div>
@@ -789,7 +789,7 @@ function ValidationPanel({
         {aiSummary?.recommendation && (
           <div className="px-6 py-3 bg-slate-800/30 border-b border-slate-700/50">
             <div className="flex items-start gap-2">
-              <span className="text-violet-400 mt-0.5">💡</span>
+              <span className="text-lamp-400 mt-0.5">💡</span>
               <p className="text-sm text-slate-300 leading-relaxed">{aiSummary.recommendation}</p>
             </div>
           </div>
@@ -904,7 +904,7 @@ function ValidationPanel({
           <button
             onClick={runAIReview}
             disabled={aiLoading}
-            className="flex-1 px-3 py-2.5 bg-gradient-to-r from-violet-600 to-ai-blue-600 text-white rounded-lg font-medium hover:from-violet-500 hover:to-ai-blue-500 disabled:opacity-50 flex items-center justify-center gap-2 text-sm shadow-lg transition-all"
+            className="flex-1 px-3 py-2.5 bg-gradient-to-r from-lamp-600 to-ai-blue-600 text-white rounded-lg font-medium hover:from-lamp-500 hover:to-ai-blue-500 disabled:opacity-50 flex items-center justify-center gap-2 text-sm shadow-lg transition-all"
           >
             {aiLoading ? (
               <><span className="animate-spin">⏳</span> Analyzing...</>
@@ -1019,7 +1019,7 @@ function ValidationPanel({
             {/* Inline diff - highlight changes - MAIN VIEW */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-violet-600 px-2 py-0.5 bg-violet-100 rounded">CHANGES HIGHLIGHTED</span>
+                <span className="text-xs font-semibold text-lamp-600 px-2 py-0.5 bg-lamp-100 rounded">CHANGES HIGHLIGHTED</span>
                 <span className="text-xs text-ai-graphite-500">Added text in green, removed in red • ~300 words visible</span>
               </div>
               <div className="bg-white border border-paper-300 rounded-lg p-5 min-h-[400px] max-h-[500px] overflow-y-auto shadow-inner">
@@ -1117,7 +1117,7 @@ function ValidationPanel({
             {(filterType !== 'all' || filterCategory !== 'all') && (
               <button 
                 onClick={() => { setFilterType('all'); setFilterCategory('all') }}
-                className="text-xs text-violet-600 hover:text-violet-700"
+                className="text-xs text-lamp-600 hover:text-lamp-700"
               >
                 Clear all filters
               </button>
@@ -1131,7 +1131,7 @@ function ValidationPanel({
                 <div className="text-ai-graphite-600 font-medium">No {filterType !== 'all' ? filterType + 's' : 'issues'} to show</div>
                 <button
                   onClick={() => { setFilterType('all'); setFilterCategory('all') }}
-                  className="text-sm text-violet-600 hover:text-violet-700 mt-2"
+                  className="text-sm text-lamp-600 hover:text-lamp-700 mt-2"
                 >
                   Clear filters
                 </button>
@@ -1259,7 +1259,7 @@ function ValidationPanel({
             <button
               onClick={runAIReview}
               disabled={aiLoading}
-              className="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 flex items-center gap-2 text-sm"
+              className="px-4 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 flex items-center gap-2 text-sm"
             >
               🤖 AI Review
             </button>
@@ -4063,7 +4063,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   onClick={() => setShowAllInstructionsModal(true)}
                   className={`p-2 rounded-lg border transition-colors relative ${
                     Object.keys(userInstructions).length > 0
-                      ? 'bg-violet-50 border-violet-200 text-violet-700'
+                      ? 'bg-lamp-50 border-lamp-200 text-lamp-700'
                       : 'bg-white border-paper-300 text-ai-graphite-500 hover:bg-paper-100'
                   }`}
                 >
@@ -4071,7 +4071,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                   </svg>
                   {Object.keys(userInstructions).length > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-violet-500 rounded-full text-[9px] text-white flex items-center justify-center font-medium">
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-lamp-500 rounded-full text-[9px] text-white flex items-center justify-center font-medium">
                       {Object.values(userInstructions).reduce((sum, j) => sum + Object.keys(j).length, 0)}
                     </span>
                   )}
@@ -4460,7 +4460,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                             className={`p-1.5 rounded-lg transition-colors ${
                               hasInstruction
                                 ? isActive
-                                  ? 'text-violet-600 bg-violet-50 hover:bg-violet-100'
+                                  ? 'text-lamp-600 bg-lamp-50 hover:bg-lamp-100'
                                   : 'text-ai-graphite-400 bg-paper-200 hover:bg-paper-300 line-through'
                                 : 'text-ai-graphite-400 hover:text-ai-graphite-600 hover:bg-paper-200'
                             }`}
@@ -4639,7 +4639,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   </div>
                                   <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                                     ddCoveragePreset === 'custom'
-                                      ? 'bg-violet-100 text-violet-700'
+                                      ? 'bg-lamp-100 text-lamp-700'
                                       : 'bg-ai-blue-100 text-ai-blue-700'
                                   }`}>
                                     {DD_EVIDENCE_COVERAGE_STAGES.find(stage => stage.value === ddCoveragePreset)?.label || 'Full'}
@@ -4699,7 +4699,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   </div>
                                 </div>
                                 {ddCoveragePreset === 'custom' && (
-                                  <div className="mt-3 rounded border border-violet-200 bg-white p-3">
+                                  <div className="mt-3 rounded border border-lamp-200 bg-white p-3">
                                     {ddCustomInstructionsOpen ? (
                                       <div className="grid gap-3">
                                         <label className="grid gap-1">
@@ -4709,7 +4709,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             value={ddCustomIncludeDraft}
                                             onChange={(e) => setDdCustomIncludeDraft(e.target.value)}
                                             rows={3}
-                                            className="w-full rounded border border-violet-200 bg-white p-2 text-xs text-slate-800 focus:border-violet-500 focus:ring-violet-500"
+                                            className="w-full rounded border border-lamp-200 bg-white p-2 text-xs text-slate-800 focus:border-lamp-500 focus:ring-lamp-500"
                                             placeholder="Topics, experiments, results, embodiments, source labels, or examples to prioritize..."
                                             disabled={ddEvidenceSaving}
                                           />
@@ -4720,7 +4720,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             value={ddCustomIntegrationDraft}
                                             onChange={(e) => setDdCustomIntegrationDraft(e.target.value)}
                                             rows={3}
-                                            className="w-full rounded border border-violet-200 bg-white p-2 text-xs text-slate-800 focus:border-violet-500 focus:ring-violet-500"
+                                            className="w-full rounded border border-lamp-200 bg-white p-2 text-xs text-slate-800 focus:border-lamp-500 focus:ring-lamp-500"
                                             placeholder="Drafting style, density, emphasis, ordering, or exclusions..."
                                             disabled={ddEvidenceSaving}
                                           />
@@ -4741,7 +4741,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <button
                                             type="button"
                                             onClick={handleClearDDEvidenceCustomInstructions}
-                                            className="rounded border border-violet-200 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50"
+                                            className="rounded border border-lamp-200 px-2 py-1 text-xs text-lamp-700 hover:bg-lamp-50"
                                             disabled={ddEvidenceSaving || (!ddCustomIncludeDraft.trim() && !ddCustomIntegrationDraft.trim() && !ddHasCustomInstructions)}
                                           >
                                             Clear
@@ -4749,7 +4749,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <button
                                             type="button"
                                             onClick={handleSaveDDEvidenceCustomInstructions}
-                                            className="rounded bg-violet-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                                            className="rounded bg-lamp-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
                                             disabled={ddEvidenceSaving}
                                           >
                                             Save custom instructions
@@ -4780,7 +4780,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             setDdCustomIntegrationDraft(ddEvidencePreview?.customIntegrationInstruction || '')
                                             setDdCustomInstructionsOpen(true)
                                           }}
-                                          className="rounded border border-violet-200 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50"
+                                          className="rounded border border-lamp-200 px-2 py-1 text-xs font-medium text-lamp-700 hover:bg-lamp-50"
                                           disabled={ddEvidenceSaving}
                                         >
                                           {ddHasCustomInstructions ? 'Edit instructions' : 'Add instructions'}
@@ -4826,7 +4826,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           {item.role && <span className="text-[11px] px-1.5 py-0.5 rounded bg-ai-blue-100 text-ai-blue-700">{item.role.replace(/_/g, ' ')}</span>}
                                           {item.confidence && <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{item.confidence}</span>}
                                           {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">excluded</span>}
-                                          {item.edited && <span className="text-[11px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">edited</span>}
+                                          {item.edited && <span className="text-[11px] px-1.5 py-0.5 rounded bg-lamp-100 text-lamp-700">edited</span>}
                                           {item.controlsStale && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">stale</span>}
                                         </div>
                                         <div className="mt-1 text-xs text-slate-600">{item.excerpt}</div>
@@ -4860,8 +4860,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-700">{item.injectedText || item.originalInjectedText}</pre>
                                         )}
                                         {ddEvidenceEditingSourceId === item.sourceId && (
-                                          <div className="mt-2 rounded border border-violet-200 bg-violet-50 p-2">
-                                            <div className="mb-1 text-[11px] font-medium text-violet-800">Prompt-only edit. Original source data is unchanged.</div>
+                                          <div className="mt-2 rounded border border-lamp-200 bg-lamp-50 p-2">
+                                            <div className="mb-1 text-[11px] font-medium text-lamp-800">Prompt-only edit. Original source data is unchanged.</div>
                                             <div className="mb-1 text-[11px] text-slate-600">Original source data</div>
                                             <pre className="mb-2 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-600">{item.originalInjectedText}</pre>
                                             <div className="mb-1 text-[11px] text-slate-600">Injected text override</div>
@@ -4869,12 +4869,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                               value={ddEvidenceEditDraft}
                                               onChange={(e) => setDdEvidenceEditDraft(e.target.value)}
                                               rows={5}
-                                              className="w-full rounded border border-violet-300 bg-white p-2 text-xs text-slate-800"
+                                              className="w-full rounded border border-lamp-300 bg-white p-2 text-xs text-slate-800"
                                             />
                                             <div className="mt-2 flex justify-end gap-2">
                                               <button type="button" onClick={() => { setDdEvidenceEditingSourceId(null); setDdEvidenceEditDraft('') }} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700">Cancel</button>
                                               <button type="button" onClick={() => handleResetDDEvidenceOverride(item.sourceId)} className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700">Reset to original</button>
-                                              <button type="button" onClick={handleSaveDDEvidenceOverride} disabled={ddEvidenceSaving} className="rounded bg-violet-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50">Save override</button>
+                                              <button type="button" onClick={handleSaveDDEvidenceOverride} disabled={ddEvidenceSaving} className="rounded bg-lamp-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50">Save override</button>
                                             </div>
                                           </div>
                                         )}
@@ -5323,17 +5323,17 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               2. Claims have actual content (not just empty string)
                               3. Components are available from Component Planner stage */}
                             {keyName === 'claims' && generated?.claims?.trim() && extractComponentsFromReferenceMap((session as any)?.referenceMap).length > 0 && (
-                            <div className="mb-4 p-3 bg-gradient-to-r from-violet-50 to-ai-blue-50 border border-violet-200 rounded-lg">
+                            <div className="mb-4 p-3 bg-gradient-to-r from-lamp-50 to-ai-blue-50 border border-lamp-200 rounded-lg">
                               <div className="flex items-center justify-between gap-4">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center flex-shrink-0">
-                                    <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <div className="w-8 h-8 rounded-full bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                                    <svg className="w-4 h-4 text-lamp-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
                                     </svg>
                                   </div>
                                   <div>
-                                    <p className="text-sm font-medium text-violet-800">Add Component Numbers</p>
-                                    <p className="text-xs text-violet-600">
+                                    <p className="text-sm font-medium text-lamp-800">Add Component Numbers</p>
+                                    <p className="text-xs text-lamp-600">
                                       {componentNumbersAdded 
                                         ? '✓ Component numbers have been added to claims' 
                                         : `Insert reference numerals from ${extractComponentsFromReferenceMap((session as any)?.referenceMap).length} components`
@@ -5346,15 +5346,15 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   disabled={addingComponentNumbers || componentNumbersAdded}
                                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
                                     addingComponentNumbers 
-                                      ? 'bg-violet-200 text-violet-500 cursor-wait'
+                                      ? 'bg-lamp-200 text-lamp-500 cursor-wait'
                                       : componentNumbersAdded
                                         ? 'bg-green-100 text-green-700 cursor-default'
-                                        : 'bg-violet-600 text-white hover:bg-violet-700 shadow-sm'
+                                        : 'bg-lamp-600 text-white hover:bg-lamp-700 shadow-sm'
                                   }`}
                                 >
                                   {addingComponentNumbers ? (
                                     <>
-                                      <span className="animate-spin h-4 w-4 border-2 border-violet-400 border-t-transparent rounded-full"></span>
+                                      <span className="animate-spin h-4 w-4 border-2 border-lamp-400 border-t-transparent rounded-full"></span>
                                       Adding...
                                     </>
                                   ) : componentNumbersAdded ? (
@@ -5644,7 +5644,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-paper-200">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-ai-blue-500 to-violet-600 flex items-center justify-center text-white text-xl">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-ai-blue-500 to-lamp-600 flex items-center justify-center text-white text-xl">
                   🚀
                 </div>
                 <div>

@@ -27,7 +27,7 @@ interface QueryCanvasProps {
 
 function modeClasses(mode: StudioBlockMode, active: boolean): string {
   if (!active) return 'text-muted-foreground hover:bg-muted hover:text-foreground'
-  if (mode === 'EXPAND') return 'bg-blue-600 text-white shadow-sm'
+  if (mode === 'EXPAND') return 'bg-lamp-600 text-white shadow-sm'
   if (mode === 'BOTH') return 'bg-brass-600 text-white shadow-sm'
   // MATCH is the only mode that can remove documents — give it the strongest,
   // most "stop"-like weight so its cost is visible before it is chosen.
@@ -35,7 +35,7 @@ function modeClasses(mode: StudioBlockMode, active: boolean): string {
 }
 
 function blockAccent(mode: StudioBlockMode): string {
-  if (mode === 'EXPAND') return 'border-l-[3px] border-l-blue-500'
+  if (mode === 'EXPAND') return 'border-l-[3px] border-l-lamp-500'
   if (mode === 'BOTH') return 'border-l-[3px] border-l-brass-500'
   return 'border-l-[3px] border-l-foreground'
 }
@@ -43,7 +43,7 @@ function blockAccent(mode: StudioBlockMode): string {
 /** One-word statement of what this mode does to the result set. */
 const MODE_EFFECT: Record<StudioBlockMode, { label: string; classes: string }> = {
   MATCH: { label: 'requires', classes: 'bg-foreground/10 text-foreground' },
-  EXPAND: { label: 'widens', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' },
+  EXPAND: { label: 'widens', classes: 'bg-lamp-100 text-lamp-700 dark:bg-lamp-950/50 dark:text-lamp-300' },
   BOTH: { label: 'widens', classes: 'bg-brass-100 text-brass-800 dark:bg-brass-950/50 dark:text-brass-300' },
 }
 
@@ -95,15 +95,15 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
       return (
         <span
           key={key}
-          className="inline-flex items-center gap-1 rounded-full border border-dashed border-blue-400/60 bg-blue-50 px-2.5 py-0.5 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+          className="inline-flex items-center gap-1 rounded-full border border-dashed border-lamp-400/60 bg-lamp-50 px-2.5 py-0.5 text-xs text-lamp-700 dark:bg-lamp-950/40 dark:text-lamp-300"
           title="Suggested by the query generator — does nothing until you accept it"
         >
           <Sparkles className="h-3 w-3" aria-hidden />
           {term.text}
-          <button type="button" aria-label={`Accept suggestion ${term.text}`} className="ml-0.5 rounded-full p-1 hover:bg-blue-100 dark:hover:bg-blue-900 sm:p-0.5" onClick={onAccept} disabled={disabled}>
+          <button type="button" aria-label={`Accept suggestion ${term.text}`} className="ml-0.5 rounded-full p-1 hover:bg-lamp-100 dark:hover:bg-lamp-900 sm:p-0.5" onClick={onAccept} disabled={disabled}>
             <Check className="h-3 w-3" />
           </button>
-          <button type="button" aria-label={`Reject suggestion ${term.text}`} className="rounded-full p-1 hover:bg-blue-100 dark:hover:bg-blue-900 sm:p-0.5" onClick={onRemove} disabled={disabled}>
+          <button type="button" aria-label={`Reject suggestion ${term.text}`} className="rounded-full p-1 hover:bg-lamp-100 dark:hover:bg-lamp-900 sm:p-0.5" onClick={onRemove} disabled={disabled}>
             <X className="h-3 w-3" />
           </button>
         </span>
@@ -222,7 +222,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
         {suggestionCount > 0 && (
           <button
             type="button"
-            className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300"
+            className="ml-auto inline-flex items-center gap-1 rounded-full bg-lamp-50 px-2.5 py-0.5 text-[11px] font-semibold text-lamp-700 hover:bg-lamp-100 dark:bg-lamp-950/40 dark:text-lamp-300"
             onClick={acceptAll}
             disabled={disabled}
           >

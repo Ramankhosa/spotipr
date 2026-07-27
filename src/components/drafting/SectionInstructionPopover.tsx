@@ -207,8 +207,8 @@ export default function SectionInstructionPopover({
 
       {/* Show if this is a persistent instruction */}
       {existingInstruction?.isPersistent && (
-        <div className="mb-3 p-2 bg-violet-500/10 border border-violet-500/30 rounded-lg">
-          <p className="text-xs text-violet-400 font-medium">
+        <div className="mb-3 p-2 bg-lamp-500/10 border border-lamp-500/30 rounded-lg">
+          <p className="text-xs text-lamp-400 font-medium">
             💾 This is a persistent instruction that applies to all your {existingInstruction.jurisdiction === '*' ? '' : existingInstruction.jurisdiction + ' '}drafts
           </p>
         </div>
@@ -241,7 +241,7 @@ export default function SectionInstructionPopover({
             onClick={() => setScope('jurisdiction')}
             className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
               scope === 'jurisdiction'
-                ? 'bg-violet-600 text-white'
+                ? 'bg-lamp-600 text-white'
                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
             }`}
           >
@@ -267,7 +267,7 @@ export default function SectionInstructionPopover({
             type="checkbox"
             checked={isPersistent}
             onChange={(e) => setIsPersistent(e.target.checked)}
-            className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+            className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-lamp-500 focus:ring-lamp-500 focus:ring-offset-0"
           />
           <span className="text-xs text-slate-300 font-medium">
             💾 Save for all future drafts
@@ -344,7 +344,7 @@ export default function SectionInstructionPopover({
           onChange={(e) => setInstruction(e.target.value)}
           placeholder="E.g., Focus on the mechanical aspects and avoid discussing software implementation..."
           className={`w-full px-3 py-2 bg-slate-800 border rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none resize-none ${
-            isOverLimit ? 'border-red-500 focus:border-red-500' : 'border-slate-700 focus:border-violet-500'
+            isOverLimit ? 'border-red-500 focus:border-red-500' : 'border-slate-700 focus:border-lamp-500'
           }`}
           rows={3}
         />
@@ -368,7 +368,7 @@ export default function SectionInstructionPopover({
               value={emphasis}
               onChange={(e) => setEmphasis(e.target.value)}
               placeholder="E.g., novel technical features, industrial applicability"
-              className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+              className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
             />
           </div>
           <div>
@@ -378,7 +378,7 @@ export default function SectionInstructionPopover({
               value={avoid}
               onChange={(e) => setAvoid(e.target.value)}
               placeholder="E.g., marketing language, specific brand names"
-              className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+              className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
             />
           </div>
           <div className="flex gap-2">
@@ -387,7 +387,7 @@ export default function SectionInstructionPopover({
               <select
                 value={style}
                 onChange={(e) => setStyle(e.target.value)}
-                className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:border-violet-500 focus:outline-none"
+                className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:border-lamp-500 focus:outline-none"
               >
                 <option value="">Default</option>
                 <option value="formal">Formal</option>
@@ -405,7 +405,7 @@ export default function SectionInstructionPopover({
                 placeholder="~500"
                 min={50}
                 max={5000}
-                className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
               />
             </div>
           </div>
@@ -438,7 +438,7 @@ export default function SectionInstructionPopover({
           <button
             onClick={handleSave}
             disabled={saving || !instruction.trim() || isOverLimit}
-            className="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs rounded-lg font-medium disabled:opacity-50"
+            className="px-4 py-1.5 bg-lamp-600 hover:bg-lamp-500 text-white text-xs rounded-lg font-medium disabled:opacity-50"
           >
             {saving ? 'Saving...' : (isPersistent ? 'Save for All Drafts' : 'Save')}
           </button>

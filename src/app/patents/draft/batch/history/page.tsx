@@ -62,7 +62,7 @@ function statusClasses(status: string) {
   if (status === 'COMPLETED') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (status === 'COMPLETED_WITH_ERRORS') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'FAILED' || status === 'CANCELLED') return 'border-rose-200 bg-rose-50 text-rose-700'
-  if (status === 'PAUSED') return 'border-violet-200 bg-violet-50 text-violet-700'
+  if (status === 'PAUSED') return 'border-lamp-200 bg-lamp-50 text-lamp-700'
   if (status === 'PROCESSING') return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
   return 'border-slate-200 bg-slate-50 text-slate-700'
 }
@@ -321,7 +321,7 @@ export default function BatchHistoryPage() {
                           {action === `${batch.id}:download` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} ZIP
                         </button>
                         {['QUEUED', 'PROCESSING'].includes(batch.status) ? (
-                          <button type="button" onClick={() => runBatchAction(batch, 'pause')} disabled={action === `${batch.id}:pause`} className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50">
+                          <button type="button" onClick={() => runBatchAction(batch, 'pause')} disabled={action === `${batch.id}:pause`} className="inline-flex items-center gap-1 rounded border border-lamp-200 bg-lamp-50 px-2 py-1 text-xs font-medium text-lamp-700 hover:bg-lamp-100 disabled:opacity-50">
                             {action === `${batch.id}:pause` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />} Pause
                           </button>
                         ) : null}

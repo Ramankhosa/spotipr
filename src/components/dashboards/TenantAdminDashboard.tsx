@@ -362,7 +362,7 @@ export default function TenantAdminDashboard() {
             <div className="flex items-center gap-4">
               <button
                 onClick={() => window.location.href = '/tenant-admin/analytics'}
-                className="inline-flex items-center gap-2 px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+                className="inline-flex items-center gap-2 px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700 transition-colors"
               >
                 📊 Analytics
               </button>
@@ -479,7 +479,7 @@ export default function TenantAdminDashboard() {
             <div className="p-5">
               <div className="flex items-center">
                 <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                  <div className="w-8 h-8 bg-lamp-500 rounded-full flex items-center justify-center">
                     <span className="text-white text-sm font-bold">U</span>
                   </div>
                 </div>
@@ -561,7 +561,7 @@ export default function TenantAdminDashboard() {
               <h3 className="text-lg leading-6 font-medium text-gray-900">Create ATI Token</h3>
               <button
                 onClick={() => setShowCreateForm(!showCreateForm)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700"
               >
                 {showCreateForm ? 'Cancel' : '+ Generate Token'}
               </button>
@@ -579,7 +579,7 @@ export default function TenantAdminDashboard() {
                       id="expires_at"
                       value={newToken.expires_at}
                       onChange={(e) => setNewToken(prev => ({ ...prev, expires_at: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     />
                   </div>
                   <div>
@@ -591,7 +591,7 @@ export default function TenantAdminDashboard() {
                       id="max_uses"
                       value={newToken.max_uses}
                       onChange={(e) => setNewToken(prev => ({ ...prev, max_uses: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                       placeholder="Unlimited if empty"
                       min="1"
                     />
@@ -607,7 +607,7 @@ export default function TenantAdminDashboard() {
                       id="notes"
                       value={newToken.notes}
                       onChange={(e) => setNewToken(prev => ({ ...prev, notes: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                       placeholder="Purpose or recipient"
                     />
                   </div>
@@ -621,7 +621,7 @@ export default function TenantAdminDashboard() {
                       id="assigned_role"
                       value={newToken.assigned_role}
                       onChange={(e) => setNewToken(prev => ({ ...prev, assigned_role: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     >
                       <option value="">No role override</option>
                       <option value="ADMIN">Admin</option>
@@ -638,7 +638,7 @@ export default function TenantAdminDashboard() {
                       id="assigned_team_id"
                       value={newToken.assigned_team_id}
                       onChange={(e) => setNewToken(prev => ({ ...prev, assigned_team_id: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     >
                       <option value="">Default team</option>
                       {teams.filter(team => team.isActive).map(team => (
@@ -666,7 +666,7 @@ export default function TenantAdminDashboard() {
                   <button
                     type="submit"
                     disabled={isCreating}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700 disabled:opacity-50"
                   >
                     {isCreating ? 'Generating...' : 'Generate Token'}
                   </button>
@@ -702,7 +702,7 @@ export default function TenantAdminDashboard() {
                       id="edit_status"
                       value={editForm.status}
                       onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     >
                       <option value="ACTIVE">Active</option>
                       <option value="INACTIVE">Inactive</option>
@@ -722,7 +722,7 @@ export default function TenantAdminDashboard() {
                       id="edit_expires_at"
                       value={editForm.expires_at}
                       onChange={(e) => setEditForm(prev => ({ ...prev, expires_at: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     />
                   </div>
                 </div>
@@ -736,7 +736,7 @@ export default function TenantAdminDashboard() {
                       id="edit_max_uses"
                       value={editForm.max_uses}
                       onChange={(e) => setEditForm(prev => ({ ...prev, max_uses: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                       placeholder="Unlimited if empty"
                       min="1"
                     />
@@ -751,7 +751,7 @@ export default function TenantAdminDashboard() {
                     id="edit_notes"
                     value={editForm.notes}
                     onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     placeholder="Purpose or recipient"
                   />
                 </div>
@@ -764,7 +764,7 @@ export default function TenantAdminDashboard() {
                       id="edit_assigned_role"
                       value={editForm.assigned_role}
                       onChange={(e) => setEditForm(prev => ({ ...prev, assigned_role: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     >
                       <option value="">No role override</option>
                       <option value="ADMIN">Admin</option>
@@ -781,7 +781,7 @@ export default function TenantAdminDashboard() {
                       id="edit_assigned_team_id"
                       value={editForm.assigned_team_id}
                       onChange={(e) => setEditForm(prev => ({ ...prev, assigned_team_id: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-lamp-500 focus:border-lamp-500 sm:text-sm"
                     >
                       <option value="">Default team</option>
                       {teams.filter(team => team.isActive).map(team => (
@@ -806,7 +806,7 @@ export default function TenantAdminDashboard() {
                   <button
                     type="submit"
                     disabled={isUpdating}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700 disabled:opacity-50"
                   >
                     {isUpdating ? 'Updating...' : 'Update Token'}
                   </button>
@@ -827,7 +827,7 @@ export default function TenantAdminDashboard() {
 
           {isLoading ? (
             <div className="text-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600 mx-auto"></div>
               <p className="mt-2 text-sm text-gray-500">Loading tokens...</p>
             </div>
           ) : tokens.length === 0 ? (
@@ -888,7 +888,7 @@ export default function TenantAdminDashboard() {
                               : token.status === 'SUSPENDED'
                               ? 'bg-orange-100 text-orange-800'
                               : token.status === 'ISSUED'
-                              ? 'bg-blue-100 text-blue-800'
+                              ? 'bg-lamp-100 text-lamp-800'
                               : token.status === 'REVOKED'
                               ? 'bg-red-100 text-red-800'
                               : token.status === 'EXPIRED'

@@ -75,7 +75,7 @@ const PROCESSING_STAGES: Record<string, ProcessingStage> = {
     description: 'Understanding the core entity and identifying implicit assumptions',
     icon: <Brain className="w-8 h-8" />,
     color: 'violet',
-    bgGradient: 'from-violet-500/10 via-purple-500/5 to-indigo-500/10',
+    bgGradient: 'from-lamp-500/10 via-lamp-500/5 to-lamp-500/10',
     thinkingPhrases: [
       'Identifying core entity...',
       'Understanding current approach...',
@@ -189,7 +189,7 @@ const PROCESSING_STAGES: Record<string, ProcessingStage> = {
     description: 'Creating patent ideas with exactly ONE causal mechanism each',
     icon: <Rocket className="w-8 h-8" />,
     color: 'violet',
-    bgGradient: 'from-violet-500/10 via-fuchsia-500/5 to-purple-500/10',
+    bgGradient: 'from-lamp-500/10 via-lamp-500/5 to-lamp-500/10',
     thinkingPhrases: [
       'Generating core mechanism...',
       'Forcing inventive leap...',
@@ -218,7 +218,7 @@ const PROCESSING_STAGES: Record<string, ProcessingStage> = {
     description: 'Assessing conceptual originality and novelty risk',
     icon: <Eye className="w-8 h-8" />,
     color: 'cyan',
-    bgGradient: 'from-cyan-500/10 via-teal-500/5 to-blue-500/10',
+    bgGradient: 'from-lamp-500/10 via-teal-500/5 to-lamp-500/10',
     thinkingPhrases: [
       'Analyzing conceptual originality...',
       'Evaluating novelty risk level...',
@@ -370,7 +370,7 @@ const DNAHelix = () => {
           return (
             <motion.div
               key={i}
-              className="absolute h-1 bg-gradient-to-r from-violet-400 via-fuchsia-400 to-violet-400 rounded-full"
+              className="absolute h-1 bg-gradient-to-r from-lamp-400 via-lamp-400 to-lamp-400 rounded-full"
               style={{
                 top: `${y}%`,
                 left: `${Math.min(x1, x2)}%`,
@@ -411,7 +411,7 @@ const DatabaseSearchViz = ({ recordsSearched, matchesFound }: { recordsSearched?
     <div className="relative h-32 w-full overflow-hidden rounded-xl bg-slate-900/50 border border-slate-700/50">
       {/* Scanning line */}
       <motion.div
-        className="absolute inset-y-0 w-1 bg-gradient-to-b from-transparent via-cyan-400 to-transparent"
+        className="absolute inset-y-0 w-1 bg-gradient-to-b from-transparent via-lamp-400 to-transparent"
         animate={{ x: ['0%', '100%'] }}
         transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
       />
@@ -421,7 +421,7 @@ const DatabaseSearchViz = ({ recordsSearched, matchesFound }: { recordsSearched?
         {Array.from({ length: 100 }, (_, i) => (
           <motion.div
             key={i}
-            className="w-1 h-1 rounded-sm bg-cyan-400"
+            className="w-1 h-1 rounded-sm bg-lamp-400"
             animate={{
               opacity: [0.2, 0.8, 0.2],
               scale: [1, 1.5, 1],
@@ -439,7 +439,7 @@ const DatabaseSearchViz = ({ recordsSearched, matchesFound }: { recordsSearched?
       {/* Stats overlay - SRS: removed "records analyzed" per Section 4.1 */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-2xl font-medium text-cyan-400">
+          <div className="text-2xl font-medium text-lamp-400">
             Analyzing...
           </div>
           <div className="text-xs text-slate-400 mt-1">Evaluating conceptual originality</div>
@@ -497,9 +497,9 @@ const ThinkingWaveform = () => (
 // Streaming idea card
 const StreamingIdeaCard = ({ idea, index }: { idea: StreamingIdea; index: number }) => {
   const statusConfig = {
-    generating: { bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', label: 'Generating...' },
+    generating: { bg: 'bg-lamp-50', border: 'border-lamp-200', text: 'text-lamp-600', label: 'Generating...' },
     ready: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600', label: 'Ready' },
-    checking_novelty: { bg: 'bg-cyan-50', border: 'border-cyan-200', text: 'text-cyan-600', label: 'Verifying novelty...' },
+    checking_novelty: { bg: 'bg-lamp-50', border: 'border-lamp-200', text: 'text-lamp-600', label: 'Verifying novelty...' },
     verified: { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-600', label: 'Verified' },
   }
   
@@ -514,7 +514,7 @@ const StreamingIdeaCard = ({ idea, index }: { idea: StreamingIdea; index: number
     >
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
-          <div className={`w-6 h-6 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold`}>
+          <div className={`w-6 h-6 rounded-lg bg-gradient-to-br from-lamp-500 to-lamp-600 flex items-center justify-center text-white text-xs font-bold`}>
             {index + 1}
           </div>
           <span className={`text-xs font-medium ${config.text} px-2 py-0.5 rounded-full ${config.bg}`}>
@@ -547,7 +547,7 @@ const StreamingIdeaCard = ({ idea, index }: { idea: StreamingIdea; index: number
         <div className="mt-2">
           <div className="h-1 bg-slate-200 rounded-full overflow-hidden">
             <motion.div
-              className="h-full bg-gradient-to-r from-violet-400 to-purple-500"
+              className="h-full bg-gradient-to-r from-lamp-400 to-lamp-500"
               animate={{ width: ['0%', '100%'] }}
               transition={{ duration: 2, repeat: Infinity }}
             />
@@ -727,7 +727,7 @@ export default function IdeationProcessingView({
                 {/* Show assessment progress (LLM-only, no database per SRS) */}
                 {stage === 'assessing' && assessmentProgress && (
                   <div className="mt-4 text-center">
-                    <div className="text-sm text-cyan-600 font-medium">
+                    <div className="text-sm text-lamp-600 font-medium">
                       {assessmentProgress.message}
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
@@ -851,7 +851,7 @@ export default function IdeationProcessingView({
                   key={s}
                   className={`w-3 h-3 rounded-full transition-all ${
                     isActive
-                      ? 'bg-violet-500 animate-pulse'
+                      ? 'bg-lamp-500 animate-pulse'
                       : isComplete
                         ? 'bg-emerald-500'
                         : 'bg-slate-200'
@@ -872,7 +872,7 @@ export default function IdeationProcessingView({
           >
             <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 p-6 h-full">
               <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-lamp-500 to-lamp-600 flex items-center justify-center">
                   <Sparkles className="w-4 h-4 text-white" />
                 </div>
                 <div>

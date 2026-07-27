@@ -54,7 +54,7 @@ export default function EmailDraftDownloadPage({ params }: { params: { token: st
               <div>
                 <div className="text-sm text-slate-400">Request</div>
                 <div className="mt-1 text-lg font-medium text-white">{data?.request?.subject || data?.request?.id}</div>
-                <div className="mt-2 inline-flex rounded-full bg-indigo-500/15 px-3 py-1 text-xs font-medium text-indigo-200">
+                <div className="mt-2 inline-flex rounded-full bg-lamp-500/15 px-3 py-1 text-xs font-medium text-lamp-200">
                   {data?.request?.status || 'UNKNOWN'}
                 </div>
               </div>
@@ -66,13 +66,13 @@ export default function EmailDraftDownloadPage({ params }: { params: { token: st
                     <a
                       key={document.id}
                       href={document.downloadUrl}
-                      className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm hover:border-indigo-500/40 hover:bg-slate-950"
+                      className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm hover:border-lamp-500/40 hover:bg-slate-950"
                     >
                       <div>
                         <div className="font-medium text-white">{document.filename}</div>
                         <div className="text-xs text-slate-500">{document.mimeType || 'Unknown type'}</div>
                       </div>
-                      <span className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white">Download</span>
+                      <span className="rounded-md bg-lamp-600 px-3 py-1.5 text-xs font-medium text-white">Download</span>
                     </a>
                   ))}
                 </div>

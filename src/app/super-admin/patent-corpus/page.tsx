@@ -170,15 +170,15 @@ type UploadRequestError = Error & { status?: number }
 
 const statusClass: Record<string, string> = {
   QUEUED: 'bg-slate-100 text-slate-700',
-  PROCESSING: 'bg-blue-100 text-blue-700',
+  PROCESSING: 'bg-lamp-100 text-lamp-700',
   COMPLETED: 'bg-emerald-100 text-emerald-700',
   COMPLETED_WITH_WARNINGS: 'bg-amber-100 text-amber-800',
   FAILED: 'bg-red-100 text-red-700',
-  FETCHING_LIST: 'bg-blue-100 text-blue-700',
-  DOWNLOADING: 'bg-blue-100 text-blue-700',
-  IMPORTING: 'bg-violet-100 text-violet-700',
+  FETCHING_LIST: 'bg-lamp-100 text-lamp-700',
+  DOWNLOADING: 'bg-lamp-100 text-lamp-700',
+  IMPORTING: 'bg-lamp-100 text-lamp-700',
   PLANNED: 'bg-slate-100 text-slate-700',
-  DOWNLOADED: 'bg-cyan-100 text-cyan-800',
+  DOWNLOADED: 'bg-lamp-100 text-lamp-800',
   SKIPPED_EXISTING: 'bg-amber-100 text-amber-800',
   IMPORTED: 'bg-emerald-100 text-emerald-700',
 }
@@ -921,7 +921,7 @@ export default function PatentCorpusPage() {
               <a
                 href="/super-admin/patent-corpus/ipindia"
                 title="Open persistent IP India Patent Journal archive"
-                className="inline-flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-md border border-lamp-300 bg-lamp-50 px-3 py-2 text-sm font-medium text-lamp-700 hover:bg-lamp-100 disabled:opacity-50"
               >
                 <Download className="h-4 w-4" />
                 IP India Archive
@@ -982,7 +982,7 @@ export default function PatentCorpusPage() {
         )}
 
         {uploadProgress && (
-          <div className="mb-4 rounded-lg border border-blue-200 bg-white p-4 text-sm">
+          <div className="mb-4 rounded-lg border border-lamp-200 bg-white p-4 text-sm">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="font-medium text-slate-900">
@@ -995,7 +995,7 @@ export default function PatentCorpusPage() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="font-semibold text-blue-700">{uploadProgress.percent}%</div>
+                <div className="font-semibold text-lamp-700">{uploadProgress.percent}%</div>
                 <div className="text-xs text-slate-500">
                   {formatFileSize(uploadProgress.uploadedBytes)} / {formatFileSize(uploadProgress.totalBytes)}
                 </div>
@@ -1003,7 +1003,7 @@ export default function PatentCorpusPage() {
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
               <div
-                className="h-full rounded-full bg-blue-600 transition-all duration-150"
+                className="h-full rounded-full bg-lamp-600 transition-all duration-150"
                 style={{ width: `${uploadProgress.percent}%` }}
               />
             </div>
@@ -1011,8 +1011,8 @@ export default function PatentCorpusPage() {
         )}
 
         {visibleJournalJob && (
-          <section className="mb-4 rounded-lg border border-blue-200 bg-white text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 px-4 py-3">
+          <section className="mb-4 rounded-lg border border-lamp-200 bg-white text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-lamp-100 px-4 py-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-semibold text-slate-900">IPO Journal Downloads</h2>
@@ -1042,7 +1042,7 @@ export default function PatentCorpusPage() {
                 </button>
               </div>
             </div>
-            <div className="border-b border-blue-100 p-4">
+            <div className="border-b border-lamp-100 p-4">
               <div className="mb-2 flex items-center justify-between text-xs text-slate-600">
                 <span>
                   {visibleJournalJob.status === 'FETCHING_LIST'
@@ -1051,11 +1051,11 @@ export default function PatentCorpusPage() {
                       ? 'Passing PDFs to extractor'
                       : `${visibleJournalJob.downloadedCount || 0} of ${visibleJournalJob.totalPdfCount || 0} PDF(s) downloaded`}
                 </span>
-                <span className="font-medium text-blue-700">{journalJobProgress(visibleJournalJob)}%</span>
+                <span className="font-medium text-lamp-700">{journalJobProgress(visibleJournalJob)}%</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                 <div
-                  className="h-full rounded-full bg-blue-600 transition-all duration-300"
+                  className="h-full rounded-full bg-lamp-600 transition-all duration-300"
                   style={{ width: `${journalJobProgress(visibleJournalJob)}%` }}
                 />
               </div>

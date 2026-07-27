@@ -16,9 +16,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ACCEPTED_UPLOAD_EXTENSIONS, ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
+import { formatParagraphRefs } from '@/lib/office-action/document-intake'
 import {
   AlertTriangle, ArrowLeft, BookOpen, CheckCircle2, ChevronRight, Clock,
-  Download, FileText, FolderOpen, Loader2, RefreshCw, Sparkles, Upload, X
+  Download, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen,
+  RefreshCw, Sparkles, Upload, X
 } from 'lucide-react'
 
 // ---------- types (API view shapes; Prisma JSON fields stay loose) ----------
@@ -67,16 +69,51 @@ const CODE_LABELS: Record<string, string> = {
   SUFFICIENCY: 'Sufficiency', CLARITY: 'Clarity', UNITY: 'Unity',
   PROCEDURAL_DISCLOSURE: 'Foreign filings (s.8)', FORMALITIES: 'Formalities', OTHER: 'Other requirements'
 }
+// Objection taxonomy — a CATEGORICAL palette, deliberately separate from the
+// brand cobalt (which means action/AI) so a type badge never reads as a button.
+// Hues are chosen to stay mutually distinguishable at the 100/800 pair.
 const CODE_COLORS: Record<string, string> = {
   INVENTIVE_STEP: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
-  NOVELTY: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
+  NOVELTY: 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300',
   ELIGIBILITY: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300',
-  SUFFICIENCY: 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300',
+  SUFFICIENCY: 'bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-950 dark:text-fuchsia-300',
   CLARITY: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
   UNITY: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
   PROCEDURAL_DISCLOSURE: 'bg-stone-100 text-stone-800 dark:bg-stone-800 dark:text-stone-300',
   FORMALITIES: 'bg-stone-100 text-stone-800 dark:bg-stone-800 dark:text-stone-300',
   OTHER: 'bg-secondary text-secondary-foreground'
+}
+
+// ---------- source viewer sizing ----------
+// The docked report panel is the attorney's reading surface, so its width and
+// collapsed state are a preference, not a per-visit accident.
+const SOURCE_PREFS_KEY = 'oa.sourceViewer'
+const SOURCE_DEFAULT_WIDTH = 384          // = the previous fixed w-96
+const SOURCE_MIN_WIDTH = 280
+/**
+ * Never let the panel crowd out the workbench, whatever the window size.
+ * The objection rail and the app nav take ~350px, so reserving 700 leaves the
+ * workbench a readable column at every width the docked layout appears at.
+ */
+const sourceMaxWidth = () => {
+  const vw = typeof window === 'undefined' ? 1440 : window.innerWidth
+  return Math.max(SOURCE_MIN_WIDTH, Math.min(Math.round(vw * 0.7), vw - 700))
+}
+const clampSourceWidth = (px: number) => Math.min(sourceMaxWidth(), Math.max(SOURCE_MIN_WIDTH, Math.round(px)))
+
+function readSourcePrefs(): { collapsed: boolean; width: number } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SOURCE_PREFS_KEY) || '{}')
+    return {
+      collapsed: Boolean(raw.collapsed),
+      width: clampSourceWidth(Number(raw.width) || SOURCE_DEFAULT_WIDTH)
+    }
+  } catch {
+    return { collapsed: false, width: SOURCE_DEFAULT_WIDTH }
+  }
+}
+function writeSourcePrefs(prefs: { collapsed: boolean; width: number }) {
+  try { localStorage.setItem(SOURCE_PREFS_KEY, JSON.stringify(prefs)) } catch { /* private mode — the session default is fine */ }
 }
 
 function daysUntil(iso: string): number {
@@ -111,6 +148,36 @@ export default function OfficeActionWorkspacePage() {
   const [sourceTab, setSourceTab] = useState<string>('FER')
   const [highlight, setHighlight] = useState<string | null>(null)
   const [showSource, setShowSource] = useState(false)       // small screens
+  const [intakeStep, setIntakeStep] = useState<string | null>(null)
+  // Docked source viewer: the attorney sets how much room the report gets, and
+  // both the width and the collapsed state survive a reload (see SOURCE_PREFS).
+  // Saving happens inside the updater rather than in an effect — an effect would
+  // fire once on mount with the pre-hydration defaults and overwrite the file.
+  const [sourcePrefs, setSourcePrefs] = useState({ collapsed: false, width: SOURCE_DEFAULT_WIDTH })
+  const updateSourcePrefs = useCallback((patch: Partial<{ collapsed: boolean; width: number }>) => {
+    setSourcePrefs(prev => {
+      const next = { ...prev, ...patch }
+      writeSourcePrefs(next)
+      return next
+    })
+  }, [])
+  // Width accepts an updater so repeated key nudges compound instead of all
+  // reading the same pre-render value. Clamping lives here, once.
+  const resizeSource = useCallback((next: number | ((prev: number) => number)) => {
+    setSourcePrefs(prev => {
+      const merged = { ...prev, width: clampSourceWidth(typeof next === 'function' ? next(prev.width) : next) }
+      writeSourcePrefs(merged)
+      return merged
+    })
+  }, [])
+
+  useEffect(() => { setSourcePrefs(readSourcePrefs()) }, [])
+  // A width set on a wide monitor must not swallow the workbench on a laptop.
+  useEffect(() => {
+    const onResize = () => setSourcePrefs(prev => ({ ...prev, width: clampSourceWidth(prev.width) }))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   useEffect(() => { if (!isLoading && !user) router.push('/login') }, [user, isLoading, router])
 
@@ -172,6 +239,75 @@ export default function OfficeActionWorkspacePage() {
     } catch (err) {
       toast({ title: 'Could not process the report', description: err instanceof Error ? err.message : undefined, variant: 'error' })
     } finally { setBusy(null) }
+  }
+
+  /**
+   * Open the case from one screen: the invention material goes in first (so the
+   * pipeline has amendment basis the moment objections exist), then the report
+   * is read. Each piece is reported separately — a rejected specification must
+   * not cost the attorney the FER run, and vice versa.
+   */
+  const startCase = async (payload: {
+    fer: { file?: File; text?: string }
+    materials: Array<{ kind: string; file?: File; text?: string; title?: string; intentNote?: string }>
+  }) => {
+    setBusy('ingest')
+    const failures: string[] = []
+    try {
+      for (const m of payload.materials) {
+        setIntakeStep(`Adding the ${MATERIAL_LABELS[m.kind] || 'document'}…`)
+        try {
+          let res: Response
+          if (m.file) {
+            const fd = new FormData()
+            fd.append('file', m.file); fd.append('kind', m.kind)
+            if (m.title) fd.append('title', m.title)
+            if (m.intentNote) fd.append('intentNote', m.intentNote)
+            res = await fetch(`/api/office-actions/${caseId}/case-documents`, { method: 'POST', headers: authHeaders(), body: fd })
+          } else {
+            res = await fetch(`/api/office-actions/${caseId}/case-documents`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify({ kind: m.kind, text: m.text, title: m.title || undefined, intentNote: m.intentNote || undefined })
+            })
+          }
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(data.error || 'Could not add the document')
+          if (data.warning) toast({ title: `${MATERIAL_LABELS[m.kind] || 'Document'} added`, description: data.warning, variant: 'warning' })
+        } catch (err) {
+          failures.push(`${MATERIAL_LABELS[m.kind] || 'Document'}: ${err instanceof Error ? err.message : 'could not be added'}`)
+        }
+      }
+
+      setIntakeStep('Reading the examination report…')
+      let res: Response
+      if (payload.fer.file) {
+        const fd = new FormData(); fd.append('file', payload.fer.file)
+        res = await fetch(`/api/office-actions/${caseId}/documents`, { method: 'POST', headers: authHeaders(), body: fd })
+      } else {
+        res = await fetch(`/api/office-actions/${caseId}/documents`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ rawText: payload.fer.text })
+        })
+      }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not read the report')
+
+      const added = payload.materials.length - failures.length
+      toast({
+        title: `Report read — ${data.objectionCount} objection${data.objectionCount === 1 ? '' : 's'} found`,
+        description: [added ? `${added} case-file document${added === 1 ? '' : 's'} added.` : '', data.warning || '']
+          .filter(Boolean).join(' ') || undefined,
+        variant: data.warning ? 'warning' : 'success'
+      })
+      await load()
+    } catch (err) {
+      toast({ title: 'Could not process the report', description: err instanceof Error ? err.message : undefined, variant: 'error' })
+      await load()   // the material that did land is on file — show it
+    } finally {
+      setBusy(null); setIntakeStep(null)
+      // Anything rejected is reported on its own so it can be fixed in the case file.
+      for (const f of failures) toast({ title: 'One document was not added', description: f, variant: 'error' })
+    }
   }
 
   // Prepare runs as a background job (a real FER is ~3 LLM calls per objection,
@@ -301,6 +437,7 @@ export default function OfficeActionWorkspacePage() {
     setSourceTab(tabId)
     setHighlight(passage || null)
     setShowSource(true)
+    updateSourcePrefs({ collapsed: false })   // a citation jump must never land on a collapsed panel
   }
 
   // ---------- render ----------
@@ -357,7 +494,7 @@ export default function OfficeActionWorkspacePage() {
               </div>
             </div>
           )}
-          <IntakePanel busy={busy === 'ingest'} onIngest={ingestFer} hasInvention={hasInvention}
+          <IntakePanel busy={busy === 'ingest'} step={intakeStep} onStart={startCase} hasInvention={hasInvention}
             onOpenCaseFile={() => setShowCaseFile(true)} />
         </>
       ) : (
@@ -440,6 +577,13 @@ export default function OfficeActionWorkspacePage() {
             highlight={highlight}
             open={showSource}
             onClose={() => setShowSource(false)}
+            collapsed={sourcePrefs.collapsed}
+            // Collapsing from the overlay (a citation jump on a wide screen puts
+            // the panel there) has to dismiss the overlay too, or the button
+            // would appear to do nothing.
+            onToggleCollapsed={() => { updateSourcePrefs({ collapsed: !sourcePrefs.collapsed }); setShowSource(false) }}
+            width={sourcePrefs.width}
+            onResize={resizeSource}
           />
         </div>
       )}
@@ -455,8 +599,7 @@ export default function OfficeActionWorkspacePage() {
               <h2 className="font-semibold">Add another office communication</h2>
               <button onClick={() => setShowAddDocument(false)} aria-label="Close" className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
             </div>
-            <IntakePanel busy={busy === 'ingest'} onIngest={ingestFer} hasInvention={hasInvention}
-              onOpenCaseFile={() => { setShowAddDocument(false); setShowCaseFile(true) }} />
+            <AddCommunicationForm busy={busy === 'ingest'} onIngest={ingestFer} />
           </div>
         </div>
       )}
@@ -559,56 +702,240 @@ function DeadlineStrip(props: {
 // ============================================================================
 // intake (no report yet)
 
+/** One slot of material: an uploaded file OR pasted text, never both. */
+interface MaterialSlot { file: File | null; text: string }
+const EMPTY_SLOT: MaterialSlot = { file: null, text: '' }
+const slotFilled = (s: MaterialSlot) => Boolean(s.file || s.text.trim())
+
+/**
+ * Everything the studio can take at intake, in the order the pipeline wants it.
+ * Kinds match CaseDocumentKind on the server.
+ */
+const MATERIAL_LABELS: Record<string, string> = {
+  SPECIFICATION: 'as-filed specification',
+  CLAIMS: 'as-filed claims',
+  DRAWINGS: 'drawings',
+  SUPPLEMENTARY: 'supporting material'
+}
+
+/** File-or-paste input used for every material in the intake form. */
+function MaterialInput(props: {
+  id: string
+  value: MaterialSlot
+  onChange: (s: MaterialSlot) => void
+  disabled?: boolean
+  placeholder: string
+  rows?: number
+}) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const { value } = props
+  return (
+    <div>
+      <input ref={fileRef} type="file" accept={ACCEPTED_UPLOAD_EXTENSIONS} className="hidden"
+        id={props.id}
+        onChange={e => { const f = e.target.files?.[0]; if (f) props.onChange({ file: f, text: '' }) }} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant={value.file ? 'secondary' : 'outline'} size="sm"
+          disabled={props.disabled} onClick={() => fileRef.current?.click()}>
+          <Upload className="w-3.5 h-3.5 mr-1.5" aria-hidden /> {value.file ? 'Replace file' : 'Choose file'}
+        </Button>
+        {value.file && (
+          <span className="text-xs flex items-center gap-1.5 min-w-0">
+            <FileText className="w-3.5 h-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="truncate max-w-[16rem]">{value.file.name}</span>
+            <button type="button" className="text-muted-foreground hover:text-destructive shrink-0"
+              aria-label={`Remove ${value.file.name}`}
+              onClick={() => { props.onChange(EMPTY_SLOT); if (fileRef.current) fileRef.current.value = '' }}>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </span>
+        )}
+      </div>
+      {!value.file && (
+        <Textarea className="mt-2" rows={props.rows || 4} value={value.text} disabled={props.disabled}
+          placeholder={props.placeholder}
+          onChange={e => props.onChange({ file: null, text: e.target.value })} />
+      )}
+    </div>
+  )
+}
+
+/**
+ * A later communication (SER, hearing notice, further FER) — report only: the
+ * invention is already on file by then, and the case file handles the rest.
+ */
+function AddCommunicationForm(props: { busy: boolean; onIngest: (p: { file?: File; text?: string }) => void }) {
+  const [slot, setSlot] = useState<MaterialSlot>(EMPTY_SLOT)
+  return (
+    <div className="p-5">
+      <p className="text-sm text-muted-foreground mb-3">
+        Upload the communication as issued, or paste its text. Its objections and deadlines join this case.
+      </p>
+      <MaterialInput id="oa-next-communication" value={slot} onChange={setSlot} disabled={props.busy} rows={6}
+        placeholder="Paste the full text of the communication…" />
+      <div className="flex items-center gap-3 mt-3">
+        <Button disabled={props.busy || !slotFilled(slot)}
+          onClick={() => props.onIngest(slot.file ? { file: slot.file } : { text: slot.text })}>
+          {props.busy
+            ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Reading the report…</>
+            : 'Read the communication'}
+        </Button>
+        <span className="text-xs text-muted-foreground">{ACCEPTED_UPLOAD_LABEL}, up to {MAX_OA_UPLOAD_LABEL}.</span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Case intake — everything in one pass.
+ *
+ * The report alone opens a case, but the strategy and amendment stages need the
+ * as-filed specification and claims, and supporting material is what answers an
+ * evidence-based objection. Asking for all of it here saves the attorney a
+ * second trip; anything skipped can still be added later from the case file.
+ */
 function IntakePanel(props: {
   busy: boolean
+  step: string | null
   hasInvention: boolean
-  onIngest: (p: { file?: File; text?: string }) => void
+  onStart: (p: {
+    fer: { file?: File; text?: string }
+    materials: Array<{ kind: string; file?: File; text?: string; title?: string; intentNote?: string }>
+  }) => void
   onOpenCaseFile: () => void
 }) {
-  const [pasted, setPasted] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
+  const [fer, setFer] = useState<MaterialSlot>(EMPTY_SLOT)
+  const [spec, setSpec] = useState<MaterialSlot>(EMPTY_SLOT)
+  const [claims, setClaims] = useState<MaterialSlot>(EMPTY_SLOT)
+  const [supplementary, setSupplementary] = useState<Array<{ key: string; slot: MaterialSlot; title: string; intentNote: string }>>([])
+
+  const addSupplementary = () =>
+    setSupplementary(list => [...list, { key: `s${list.length}-${list.length ? list[list.length - 1].key : 'first'}`, slot: EMPTY_SLOT, title: '', intentNote: '' }])
+  const patchSupplementary = (key: string, patch: Partial<{ slot: MaterialSlot; title: string; intentNote: string }>) =>
+    setSupplementary(list => list.map(s => s.key === key ? { ...s, ...patch } : s))
+
+  const submit = () => {
+    const materials: Array<{ kind: string; file?: File; text?: string; title?: string; intentNote?: string }> = []
+    const push = (kind: string, slot: MaterialSlot, extra?: { title?: string; intentNote?: string }) => {
+      if (!slotFilled(slot)) return
+      materials.push({ kind, ...(slot.file ? { file: slot.file } : { text: slot.text }), ...extra })
+    }
+    push('SPECIFICATION', spec)
+    push('CLAIMS', claims)
+    for (const s of supplementary) push('SUPPLEMENTARY', s.slot, { title: s.title || undefined, intentNote: s.intentNote || undefined })
+    props.onStart({ fer: fer.file ? { file: fer.file } : { text: fer.text }, materials })
+  }
+
+  const optionalCount = [spec, claims].filter(slotFilled).length + supplementary.filter(s => slotFilled(s.slot)).length
+
   return (
     <div className="max-w-2xl mx-auto w-full px-4 py-10">
-      <h2 className="text-lg font-semibold mb-1">Upload the examination report</h2>
-      <p className="text-sm text-muted-foreground mb-5">
-        Upload the FER as issued, or paste its text. The objections, cited documents and the reply
-        deadline are extracted automatically; cited patents are retrieved in the background.
+      <h2 className="text-lg font-semibold mb-1">Open the case</h2>
+      <p className="text-sm text-muted-foreground mb-6">
+        Give the studio everything you have in one go. Only the examination report is required —
+        the rest sharpens the drafted reply, and anything you skip can be added later from the case file.
       </p>
 
-      <div className="border rounded-lg p-4 mb-4">
-        <input ref={fileRef} type="file" accept={ACCEPTED_UPLOAD_EXTENSIONS} className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) props.onIngest({ file: f }) }} />
-        <Button onClick={() => fileRef.current?.click()} disabled={props.busy}>
-          {props.busy ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Reading the report…</> : <><Upload className="w-4 h-4 mr-1.5" aria-hidden /> Upload FER</>}
-        </Button>
-        <p className="text-xs text-muted-foreground mt-2">{ACCEPTED_UPLOAD_LABEL}, up to {MAX_OA_UPLOAD_LABEL}. Scanned reports need OCR first.</p>
-        <div className="mt-4">
-          <div className="text-xs text-muted-foreground mb-1">Or paste the report text:</div>
-          <Textarea rows={6} value={pasted} onChange={e => setPasted(e.target.value)}
-            placeholder="Paste the full text of the First Examination Report…" />
-          <Button variant="outline" size="sm" className="mt-2" disabled={props.busy || !pasted.trim()}
-            onClick={() => props.onIngest({ text: pasted })}>
-            Read the pasted text
-          </Button>
+      {/* 1 — the report (required) */}
+      <section className="border rounded-lg p-4 mb-4">
+        <div className="flex items-baseline justify-between gap-2 mb-1">
+          <h3 className="font-medium">Examination report</h3>
+          <span className="text-[11px] uppercase tracking-wide text-primary font-semibold">Required</span>
         </div>
-      </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          The FER as issued. Objections, cited documents and the reply deadline are extracted from it;
+          cited patents are then retrieved in the background.
+        </p>
+        <MaterialInput id="oa-fer" value={fer} onChange={setFer} disabled={props.busy} rows={6}
+          placeholder="Paste the full text of the First Examination Report…" />
+      </section>
 
-      <div className={`border rounded-lg p-4 ${props.hasInvention ? 'border-emerald-300 dark:border-emerald-900' : 'border-amber-300 dark:border-amber-900'}`}>
-        <div className="flex items-start gap-2">
-          {props.hasInvention
-            ? <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" aria-hidden />
-            : <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />}
-          <div className="text-sm">
-            <span className="font-medium">{props.hasInvention ? 'Invention on file.' : 'Add the invention.'}</span>{' '}
-            <span className="text-muted-foreground">
-              The as-filed specification and claims power the amendment checks and the drafted arguments.
-            </span>{' '}
-            <button className="text-primary underline underline-offset-2" onClick={props.onOpenCaseFile}>
-              Open the case file
-            </button>
+      {/* 2 — the invention as filed */}
+      <section className="border rounded-lg p-4 mb-4">
+        <div className="flex items-baseline justify-between gap-2 mb-1">
+          <h3 className="font-medium">The invention, as filed</h3>
+          <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Recommended</span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Only as-filed text can support a claim amendment (Section 59), so without it the studio can
+          argue but not amend. If your specification already contains the claims, the claims box can stay empty.
+        </p>
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs font-medium block mb-1.5" htmlFor="oa-spec">Complete specification / description</label>
+            <MaterialInput id="oa-spec" value={spec} onChange={setSpec} disabled={props.busy}
+              placeholder="Paste the as-filed description…" />
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1.5" htmlFor="oa-claims">Claims as filed</label>
+            <MaterialInput id="oa-claims" value={claims} onChange={setClaims} disabled={props.busy} rows={3}
+              placeholder="Paste the as-filed claims…" />
           </div>
         </div>
+      </section>
+
+      {/* 3 — supporting material */}
+      <section className="border rounded-lg p-4 mb-5">
+        <div className="flex items-baseline justify-between gap-2 mb-1">
+          <h3 className="font-medium">Supporting material</h3>
+          <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Optional</span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Comparative data, affidavits, publications, prosecution history — anything that answers an
+          evidence-based objection. It is used as argument and never as amendment basis.
+        </p>
+        {supplementary.map(s => (
+          <div key={s.key} className="border rounded-md p-3 mb-2">
+            <div className="flex items-center gap-2 mb-2">
+              <Input className="h-8 text-sm" placeholder="What is it? (e.g. comparative efficacy data)"
+                value={s.title} disabled={props.busy}
+                onChange={e => patchSupplementary(s.key, { title: e.target.value })} />
+              <button type="button" className="text-muted-foreground hover:text-destructive shrink-0"
+                aria-label="Remove this supporting document"
+                onClick={() => setSupplementary(list => list.filter(x => x.key !== s.key))}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <MaterialInput id={`oa-supp-${s.key}`} value={s.slot} rows={3} disabled={props.busy}
+              onChange={slot => patchSupplementary(s.key, { slot })}
+              placeholder="Paste the supporting text…" />
+            <Input className="h-8 text-sm mt-2" placeholder="How should it be used? (optional)"
+              value={s.intentNote} disabled={props.busy}
+              onChange={e => patchSupplementary(s.key, { intentNote: e.target.value })} />
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm" onClick={addSupplementary} disabled={props.busy}>
+          Add supporting document
+        </Button>
+      </section>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button onClick={submit} disabled={props.busy || !slotFilled(fer)}>
+          {props.busy
+            ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> {props.step || 'Working…'}</>
+            : <>Open the case{optionalCount ? ` with ${optionalCount + 1} document${optionalCount ? 's' : ''}` : ''}</>}
+        </Button>
+        {!props.busy && (
+          <span className="text-xs text-muted-foreground">
+            {ACCEPTED_UPLOAD_LABEL}, up to {MAX_OA_UPLOAD_LABEL} each. Scanned files need OCR first.
+          </span>
+        )}
       </div>
+
+      {props.hasInvention && (
+        <div className="mt-5 border rounded-lg p-4 border-emerald-300 dark:border-emerald-900">
+          <div className="flex items-start gap-2 text-sm">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" aria-hidden />
+            <div>
+              <span className="font-medium">The invention is already on file.</span>{' '}
+              <span className="text-muted-foreground">You only need the report above.</span>{' '}
+              <button className="text-primary underline underline-offset-2" onClick={props.onOpenCaseFile}>
+                Review the case file
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -811,7 +1138,8 @@ function ObjectionWorkbench(props: {
                     </div>
                   )}
                   <div className="border rounded-md px-4 py-3 bg-card font-serif text-[15px] leading-relaxed whitespace-pre-wrap">
-                    {reply.bodyText || <span className="text-muted-foreground font-sans text-sm">Empty section.</span>}
+                    {/* Shown as it will be filed: internal ¶ anchors read as [0007]. */}
+                    {formatParagraphRefs(reply.bodyText) || <span className="text-muted-foreground font-sans text-sm">Empty section.</span>}
                   </div>
                   <div className="flex items-center gap-2 mt-3">
                     <Button size="sm" variant="outline" onClick={() => setEditing(true)}>Edit</Button>
@@ -911,6 +1239,9 @@ function EvidenceTab(props: { citations: CitationRow[]; citedDocs: CitedDocView[
 function SourceViewer(props: {
   view: CaseView; activeTab: string; setActiveTab: (t: string) => void
   highlight: string | null; open: boolean; onClose: () => void
+  /** Docked (xl+) only — the small-screen panel is an overlay driven by `open`. */
+  collapsed: boolean; onToggleCollapsed: () => void
+  width: number; onResize: (next: number | ((prev: number) => number)) => void
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   // Show the report actually in play: the most recent successfully parsed one.
@@ -945,11 +1276,96 @@ function SourceViewer(props: {
     return [folded.slice(0, idx), folded.slice(idx, idx + needle.length), folded.slice(idx + needle.length)]
   }, [active, props.highlight])
 
+  // Collapsed only applies to the docked panel; the small-screen overlay is
+  // dismissed with its own close button.
+  const collapsedDocked = props.collapsed && !props.open
+
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const onHandleDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()                                   // no text selection while dragging
+    e.currentTarget.setPointerCapture(e.pointerId)
+    drag.current = { startX: e.clientX, startWidth: props.width }
+    setDragging(true)
+  }
+  const onHandleMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return
+    // The panel is right-anchored, so dragging left makes it wider.
+    props.onResize(drag.current.startWidth + (drag.current.startX - e.clientX))
+  }
+  const onHandleUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    drag.current = null
+    setDragging(false)
+  }
+  const onHandleKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 64 : 16
+    if (e.key === 'ArrowLeft') { e.preventDefault(); props.onResize(w => w + step) }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); props.onResize(w => w - step) }
+    else if (e.key === 'Home') { e.preventDefault(); props.onResize(SOURCE_DEFAULT_WIDTH) }
+  }
+
+  if (collapsedDocked) {
+    return (
+      <aside className="hidden xl:flex w-10 shrink-0 border-l bg-card flex-col items-center gap-3 py-3">
+        <button
+          onClick={props.onToggleCollapsed}
+          aria-label="Show source documents" aria-expanded={false} title="Show source documents"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <PanelRightOpen className="w-4 h-4" aria-hidden />
+        </button>
+        <button
+          onClick={props.onToggleCollapsed}
+          tabIndex={-1}
+          className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground [writing-mode:vertical-rl] rotate-180 whitespace-nowrap"
+        >
+          Source documents
+        </button>
+      </aside>
+    )
+  }
+
+  // At xl the panel is docked, so a citation jump reveals it in place; below xl
+  // there is no room for a column and it comes in as an overlay.
   return (
-    <aside className={`w-96 shrink-0 border-l bg-card flex-col min-h-0 ${props.open ? 'flex fixed right-0 top-0 bottom-0 z-40 shadow-2xl' : 'hidden xl:flex'}`}>
-      <div className="px-3 py-2.5 border-b flex items-center justify-between">
+    <aside
+      style={{ width: props.width, maxWidth: '90vw' }}
+      // No position utility in the base list: `relative` would out-rank the
+      // overlay's `fixed` in the stylesheet regardless of class order.
+      className={`shrink-0 min-w-0 border-l bg-card flex-col min-h-0 ${dragging ? 'select-none' : ''} ${
+        props.open
+          ? 'flex fixed right-0 top-0 bottom-0 z-40 shadow-2xl xl:relative xl:inset-auto xl:z-auto xl:shadow-none'
+          : 'hidden xl:flex relative'}`}
+    >
+      {/* drag-to-resize edge — pointer, or arrow keys once focused */}
+      <div
+        role="separator" aria-orientation="vertical" tabIndex={0}
+        aria-label="Resize the source documents panel"
+        aria-valuenow={props.width} aria-valuemin={SOURCE_MIN_WIDTH} aria-valuemax={sourceMaxWidth()}
+        onPointerDown={onHandleDown}
+        onPointerMove={onHandleMove}
+        onPointerUp={onHandleUp}
+        onPointerCancel={onHandleUp}
+        onKeyDown={onHandleKey}
+        onDoubleClick={() => props.onResize(SOURCE_DEFAULT_WIDTH)}
+        title="Drag to resize · double-click to reset"
+        className={`absolute left-0 top-0 bottom-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize touch-none
+          hover:bg-primary/40 focus-visible:outline-none focus-visible:bg-primary/60 ${dragging ? 'bg-primary/60' : ''}`}
+      />
+      <div className="px-3 py-2.5 border-b flex items-center justify-between gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Source documents</span>
-        <button className="xl:hidden text-muted-foreground" onClick={props.onClose} aria-label="Close sources"><X className="w-4 h-4" /></button>
+        <div className="flex items-center gap-1">
+          <button
+            className="hidden xl:inline-flex text-muted-foreground hover:text-foreground"
+            onClick={props.onToggleCollapsed}
+            aria-label="Hide source documents" aria-expanded={true} title="Hide source documents"
+          >
+            <PanelRightClose className="w-4 h-4" aria-hidden />
+          </button>
+          <button className="xl:hidden text-muted-foreground" onClick={props.onClose} aria-label="Close sources"><X className="w-4 h-4" /></button>
+        </div>
       </div>
       <div className="flex gap-1 px-2 pt-2 flex-wrap">
         {sources.map(s => (

@@ -72,7 +72,7 @@ export default function PricingSection() {
     <section className="relative py-32 bg-ai-graphite-950 border-t border-ai-graphite-900/70 overflow-hidden">
       <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-[0.03]" />
       <div className="absolute -top-40 right-0 w-[420px] h-[420px] bg-ai-blue-900/20 blur-[140px]" />
-      <div className="absolute bottom-0 left-0 w-[380px] h-[380px] bg-cyan-900/20 blur-[140px]" />
+      <div className="absolute bottom-0 left-0 w-[380px] h-[380px] bg-lamp-900/20 blur-[140px]" />
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div

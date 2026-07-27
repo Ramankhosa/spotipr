@@ -52,7 +52,7 @@ export default function EmailDraftRequestPage({ params }: { params: { id: string
               <div>
                 <div className="text-lg font-medium text-white">{data?.request?.subject || data?.request?.id}</div>
                 <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-800">
-                  <div className="h-full rounded-full bg-indigo-500" style={{ width: `${data?.request?.progressPct || 0}%` }} />
+                  <div className="h-full rounded-full bg-lamp-500" style={{ width: `${data?.request?.progressPct || 0}%` }} />
                 </div>
                 <div className="mt-2 text-sm text-slate-400">
                   {data?.request?.status} · {data?.request?.progressPct || 0}% complete

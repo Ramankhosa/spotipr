@@ -87,7 +87,7 @@ export default function TenantAdminAnalyticsPage() {
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -125,7 +125,7 @@ export default function TenantAdminAnalyticsPage() {
 
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-sm font-medium text-gray-600 mb-2">Patents Drafted</h3>
-          <div className="text-2xl font-bold text-purple-600">
+          <div className="text-2xl font-bold text-lamp-600">
             {statsLoading ? '...' : tenantStats?.patentsDrafted || 0}
           </div>
           <p className="text-sm text-gray-500 mt-1">
@@ -135,7 +135,7 @@ export default function TenantAdminAnalyticsPage() {
 
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-sm font-medium text-gray-600 mb-2">Novelty Searches</h3>
-          <div className="text-2xl font-bold text-indigo-600">
+          <div className="text-2xl font-bold text-lamp-600">
             {statsLoading ? '...' : tenantStats?.noveltySearches || 0}
           </div>
           <p className="text-sm text-gray-500 mt-1">
@@ -197,9 +197,9 @@ export default function TenantAdminAnalyticsPage() {
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-lg font-semibold mb-4">Recommendations</h3>
           <div className="space-y-4">
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <h4 className="font-medium text-blue-900">Optimize Token Usage</h4>
-              <p className="text-sm text-blue-700 mt-1">
+            <div className="p-3 bg-lamp-50 rounded-lg">
+              <h4 className="font-medium text-lamp-900">Optimize Token Usage</h4>
+              <p className="text-sm text-lamp-700 mt-1">
                 Consider using shorter prompts for routine tasks. This could save ~$23/month.
               </p>
             </div>

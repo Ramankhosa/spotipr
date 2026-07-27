@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start -p 3005",
     "lint": "next lint",
+    "check:routes": "node scripts/check-routes.mjs",
     "seed:plans": "tsx scripts/seed-plans-v2.ts",
     "seed:plans:dry": "tsx scripts/seed-plans-v2.ts --dry",
     "seed:plans:prod": "node scripts/seed-production-plans.js",

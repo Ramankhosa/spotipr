@@ -7,6 +7,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { PROVIDER_TIMEOUTS } from './provider-timeouts'
+import { createOpenAICompatibleCompletion } from './streaming'
 
 export class DeepSeekProvider implements LLMProvider {
   name = 'deepseek'
@@ -89,12 +90,12 @@ export class DeepSeekProvider implements LLMProvider {
         this.getTokenLimits(modelToUse).output
       )
 
-      const response = await this.client.chat.completions.create({
+      const response = await createOpenAICompatibleCompletion(this.client, {
         model: actualModel,
         messages,
         max_tokens: maxTokens,
         temperature: request.parameters?.temperature ?? 0.7
-      })
+      }, request)
 
       const outputText = response.choices?.[0]?.message?.content || ''
       const inputTokens = response.usage?.prompt_tokens || 0

@@ -42,7 +42,7 @@ export const STATUS_LABELS: Record<AccessRequestStatus, string> = {
 /** Tailwind classes for the status pill — kept next to the labels so they stay in sync. */
 export const STATUS_STYLES: Record<AccessRequestStatus, string> = {
   NEW: 'bg-amber-50 text-amber-800 ring-amber-200',
-  IN_REVIEW: 'bg-blue-50 text-blue-800 ring-blue-200',
+  IN_REVIEW: 'bg-lamp-50 text-lamp-800 ring-lamp-200',
   APPROVED: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
   REJECTED: 'bg-rose-50 text-rose-800 ring-rose-200',
   RESOLVED: 'bg-slate-100 text-slate-700 ring-slate-200',

@@ -17,6 +17,8 @@ interface IdeaNodeData {
 function IdeaNode({ data, selected }: NodeProps) {
   const nodeData = data as unknown as IdeaNodeData
 
+  // Verdict-style statuses keep the semantic ramp; "no status yet" goes quiet
+  // grey rather than borrowing the brand cobalt.
   const getStatusColor = (status?: string) => {
     switch (status) {
       case 'SHORTLISTED':
@@ -24,9 +26,9 @@ function IdeaNode({ data, selected }: NodeProps) {
       case 'REJECTED':
         return 'bg-red-100 text-red-800 border-red-300'
       case 'EXPORTED':
-        return 'bg-blue-100 text-blue-800 border-blue-300'
+        return 'bg-teal-100 text-teal-800 border-teal-300'
       default:
-        return 'bg-purple-100 text-purple-800 border-purple-300'
+        return 'bg-paper-100 text-paper-700 border-paper-300'
     }
   }
   
@@ -36,8 +38,8 @@ function IdeaNode({ data, selected }: NodeProps) {
         px-4 py-3 rounded-2xl shadow-lg border-2 min-w-56 max-w-72
         transition-all duration-200 cursor-pointer
         ${nodeData.selected || selected
-          ? 'bg-gradient-to-br from-purple-50 to-violet-50 border-purple-500 shadow-xl shadow-purple-200/50'
-          : 'bg-gradient-to-br from-white to-purple-50 border-purple-200 hover:border-purple-400 hover:shadow-xl'
+          ? 'bg-gradient-to-br from-lamp-50 to-lamp-50 border-lamp-500 shadow-xl shadow-lamp-200/50'
+          : 'bg-gradient-to-br from-white to-lamp-50 border-lamp-200 hover:border-lamp-400 hover:shadow-xl'
         }
       `}
       onClick={nodeData.onSelect}
@@ -46,11 +48,11 @@ function IdeaNode({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Left}
-        className="!w-3 !h-3 !bg-purple-500 !border-2 !border-white"
+        className="!w-3 !h-3 !bg-lamp-500 !border-2 !border-white"
       />
       
       <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center shadow-sm">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-gradient-to-br from-lamp-400 to-lamp-600 flex items-center justify-center shadow-sm">
           <Lightbulb className="w-5 h-5 text-white" />
         </div>
         <div className="flex-1 min-w-0">

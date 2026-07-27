@@ -76,7 +76,7 @@ function statusClasses(status: string) {
   if (status === 'COMPLETED' || status === 'ACCEPTED') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (status === 'COMPLETED_WITH_ERRORS' || status === 'REVIEWED') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'FAILED' || status === 'CANCELLED' || status === 'REJECTED') return 'border-rose-200 bg-rose-50 text-rose-700'
-  if (status === 'PAUSED') return 'border-violet-200 bg-violet-50 text-violet-700'
+  if (status === 'PAUSED') return 'border-lamp-200 bg-lamp-50 text-lamp-700'
   if (status === 'PROCESSING') return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
   return 'border-slate-200 bg-slate-50 text-slate-700'
 }
@@ -322,7 +322,7 @@ export default function PatentDraftBatchDetailPage() {
               <RefreshCw className="h-4 w-4" /> Refresh
             </button>
             {['QUEUED', 'PROCESSING'].includes(batch.status) ? (
-              <button onClick={() => runBatchAction('pause')} disabled={action === 'pause'} className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60">
+              <button onClick={() => runBatchAction('pause')} disabled={action === 'pause'} className="inline-flex items-center gap-2 rounded-lg border border-lamp-200 bg-lamp-50 px-3 py-2 text-sm font-semibold text-lamp-700 hover:bg-lamp-100 disabled:opacity-60">
                 {action === 'pause' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />} Pause
               </button>
             ) : null}

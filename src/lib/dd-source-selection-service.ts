@@ -541,11 +541,10 @@ export async function ensureDetailedDescriptionSourceSelection(params: EnsurePar
   const jurisdiction = (params.jurisdiction || params.session?.activeJurisdiction || params.session?.draftingJurisdictions?.[0] || 'US').toUpperCase()
   const context = buildEvidenceContext(params.session, jurisdiction)
   const existing = normalizeDetailedDescriptionSourceSelection(context.normalizedData.detailedDescriptionSourceSelection)
-  const hasFrozenClaims = !!(context.normalizedData.claimsApprovedAt || context.normalizedData.claimsFinal)
-
-  if (!hasFrozenClaims || !context.claimsText) {
+  // Freezing is optional: whatever claims are saved right now drive evidence selection.
+  if (!context.claimsText) {
     const selection = buildDeterministicDetailedDescriptionSelection(context.normalizedData, [
-      'Frozen claims are not available; Detailed Description evidence selection was not run.',
+      'No claims are available yet; Detailed Description evidence selection was not run.',
     ])
     selection.jurisdiction = jurisdiction
     selection.inputHash = context.inputHash

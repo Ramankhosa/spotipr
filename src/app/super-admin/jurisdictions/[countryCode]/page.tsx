@@ -102,12 +102,12 @@ function SectionRow({
         <div className="text-sm font-medium text-gray-900 flex items-center flex-wrap gap-2">
           {section.heading}
           {section.isRequired && (
-            <span className="inline-flex px-1.5 py-0.5 text-xs rounded bg-blue-100 text-blue-700">required</span>
+            <span className="inline-flex px-1.5 py-0.5 text-xs rounded bg-lamp-100 text-lamp-700">required</span>
           )}
           {section.prompt ? (
             <a
               href={`/super-admin/section-prompts?country=${countryCode}&section=${section.sectionKey}`}
-              className="inline-flex px-1.5 py-0.5 text-xs rounded bg-purple-100 text-purple-700 hover:bg-purple-200"
+              className="inline-flex px-1.5 py-0.5 text-xs rounded bg-lamp-100 text-lamp-700 hover:bg-lamp-200"
               title={`Top-up prompt v${section.prompt.version}`}
             >
               prompt v{section.prompt.version}
@@ -139,7 +139,7 @@ function SectionRow({
       <div className="flex items-center space-x-3">
         <button
           onClick={() => onEdit(section)}
-          className="text-sm text-blue-600 hover:text-blue-800"
+          className="text-sm text-lamp-600 hover:text-lamp-800"
         >
           Edit
         </button>
@@ -278,7 +278,7 @@ function EditMappingModal({
           <button
             onClick={save}
             disabled={saving}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 disabled:opacity-50"
+            className="px-4 py-2 bg-lamp-600 text-white rounded-md text-sm hover:bg-lamp-700 disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -448,7 +448,7 @@ export default function CountryDetailPage() {
   if (!user || loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -464,7 +464,7 @@ export default function CountryDetailPage() {
   return (
     <div className="container mx-auto px-4 py-8 max-w-5xl">
       <div className="mb-2">
-        <a href="/super-admin/jurisdictions" className="text-sm text-blue-600 hover:text-blue-800">← Jurisdictions</a>
+        <a href="/super-admin/jurisdictions" className="text-sm text-lamp-600 hover:text-lamp-800">← Jurisdictions</a>
       </div>
 
       {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800">{error}</div>}
@@ -522,7 +522,7 @@ export default function CountryDetailPage() {
             <button
               onClick={saveOrder}
               disabled={!orderDirty || saving}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 disabled:opacity-50"
+              className="px-4 py-2 bg-lamp-600 text-white rounded-md text-sm hover:bg-lamp-700 disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save sequence'}
             </button>
@@ -557,7 +557,7 @@ export default function CountryDetailPage() {
         <div>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Readiness</h2>
-            <button onClick={fetchAll} className="text-sm text-blue-600 hover:text-blue-800">Re-check</button>
+            <button onClick={fetchAll} className="text-sm text-lamp-600 hover:text-lamp-800">Re-check</button>
           </div>
           {readiness ? (
             <ReadinessChecklist readiness={readiness} />

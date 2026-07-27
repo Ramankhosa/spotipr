@@ -133,7 +133,7 @@ export default function SuperAdminSectionPromptsPage() {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-lamp-600 mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading prompt hierarchy...</p>
         </div>
       </div>
@@ -141,7 +141,7 @@ export default function SuperAdminSectionPromptsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-lamp-50">
       {/* Header */}
       <div className="bg-white border-b shadow-sm">
         <div className="max-w-[1800px] mx-auto px-6 py-6">
@@ -158,7 +158,7 @@ export default function SuperAdminSectionPromptsPage() {
               onClick={() => setShowHierarchy(!showHierarchy)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
                 showHierarchy
-                  ? 'bg-indigo-100 text-indigo-700'
+                  ? 'bg-lamp-100 text-lamp-700'
                   : 'bg-gray-100 text-gray-600'
               }`}
             >
@@ -171,7 +171,7 @@ export default function SuperAdminSectionPromptsPage() {
       {/* Hierarchy Explainer */}
       {showHierarchy && (
         <div className="max-w-[1800px] mx-auto px-6 py-4">
-          <div className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-xl p-1">
+          <div className="bg-gradient-to-r from-lamp-500 via-lamp-500 to-lamp-500 rounded-xl p-1">
             <div className="bg-white rounded-lg p-6">
               <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                 <span className="text-2xl">🏗️</span>
@@ -201,19 +201,19 @@ export default function SuperAdminSectionPromptsPage() {
                 </div>
 
                 {/* Layer 2 */}
-                <div className="flex-1 bg-blue-50 rounded-lg p-4 border-2 border-blue-300">
+                <div className="flex-1 bg-lamp-50 rounded-lg p-4 border-2 border-lamp-300">
                   <div className="flex items-center gap-2 mb-2">
-                    <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded">L2</span>
-                    <span className="font-semibold text-blue-700">Country Top-Up</span>
+                    <span className="bg-lamp-500 text-white text-xs font-bold px-2 py-1 rounded">L2</span>
+                    <span className="font-semibold text-lamp-700">Country Top-Up</span>
                     <span className="text-xs bg-yellow-200 text-yellow-800 px-2 py-0.5 rounded">EDIT HERE</span>
                   </div>
-                  <p className="text-sm text-blue-600 mb-2">
+                  <p className="text-sm text-lamp-600 mb-2">
                     Jurisdiction-specific additions. <strong>You manage these!</strong>
                   </p>
-                  <div className="text-xs bg-blue-100 rounded p-2 font-mono">
+                  <div className="text-xs bg-lamp-100 rounded p-2 font-mono">
                     DB: country_section_prompts
                   </div>
-                  <div className="mt-2 text-xs text-blue-500">
+                  <div className="mt-2 text-xs text-lamp-500">
                     🗄️ Stored in database (editable below)
                   </div>
                 </div>
@@ -250,8 +250,8 @@ export default function SuperAdminSectionPromptsPage() {
               </div>
               
               {/* Label Hierarchy */}
-              <div className="mt-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
-                <p className="text-sm text-indigo-800 mb-2">
+              <div className="mt-4 p-3 bg-lamp-50 border border-lamp-200 rounded-lg">
+                <p className="text-sm text-lamp-800 mb-2">
                   <strong>📋 Section Labels & Headings:</strong> This page inherits labels from:
                 </p>
                 <div className="flex flex-wrap gap-3 text-xs">
@@ -267,12 +267,12 @@ export default function SuperAdminSectionPromptsPage() {
                   <span className="text-slate-400">— from</span>
                   <a 
                     href="/super-admin/jurisdiction-config"
-                    className="bg-purple-200 text-purple-800 px-2 py-1 rounded hover:bg-purple-300 transition"
+                    className="bg-lamp-200 text-lamp-800 px-2 py-1 rounded hover:bg-lamp-300 transition"
                   >
                     🔧 Jurisdiction Config →
                   </a>
                 </div>
-                <p className="text-xs text-indigo-600 mt-2">
+                <p className="text-xs text-lamp-600 mt-2">
                   Sections with <span className="bg-amber-100 text-amber-700 px-1 rounded">Custom</span> label have country-specific headings defined in Jurisdiction Config.
                 </p>
               </div>
@@ -300,7 +300,7 @@ export default function SuperAdminSectionPromptsPage() {
                       setSelectedSection(null)
                     }}
                     className={`w-full px-4 py-3 text-left flex items-center justify-between hover:bg-gray-50 transition ${
-                      selectedCountry === country.code ? 'bg-indigo-50 border-l-4 border-indigo-500' : ''
+                      selectedCountry === country.code ? 'bg-lamp-50 border-l-4 border-lamp-500' : ''
                     }`}
                   >
                     <div className="flex items-center gap-3">
@@ -311,7 +311,7 @@ export default function SuperAdminSectionPromptsPage() {
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-sm font-semibold text-indigo-600">
+                      <div className="text-sm font-semibold text-lamp-600">
                         {country.prompts.length}
                       </div>
                       <div className="text-xs text-gray-400">prompts</div>
@@ -380,7 +380,7 @@ export default function SuperAdminSectionPromptsPage() {
                           key={section.key}
                           className={`rounded-lg border-2 transition-all ${
                             isSelected 
-                              ? 'border-indigo-400 bg-indigo-50 shadow-md' 
+                              ? 'border-lamp-400 bg-lamp-50 shadow-md' 
                               : isConfigured 
                                 ? 'border-green-200 bg-green-50 hover:border-green-300' 
                                 : 'border-gray-200 bg-gray-50 hover:border-gray-300'
@@ -430,7 +430,7 @@ export default function SuperAdminSectionPromptsPage() {
                                       e.stopPropagation()
                                       setEditingPrompt(prompt)
                                     }}
-                                    className="px-3 py-1 text-sm bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200"
+                                    className="px-3 py-1 text-sm bg-lamp-100 text-lamp-700 rounded hover:bg-lamp-200"
                                   >
                                     ✏️ Edit
                                   </button>
@@ -466,15 +466,15 @@ export default function SuperAdminSectionPromptsPage() {
                                 </div>
 
                                 {/* L2 Country Top-Up (Editable) */}
-                                <div className="bg-blue-50 rounded-lg p-4 border-2 border-blue-200">
+                                <div className="bg-lamp-50 rounded-lg p-4 border-2 border-lamp-200">
                                   <div className="flex items-center justify-between mb-2">
                                     <div className="flex items-center gap-2">
-                                      <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded">L2</span>
-                                      <span className="font-medium text-blue-700">Country Top-Up</span>
+                                      <span className="bg-lamp-500 text-white text-xs font-bold px-2 py-0.5 rounded">L2</span>
+                                      <span className="font-medium text-lamp-700">Country Top-Up</span>
                                     </div>
                                     <button
                                       onClick={() => setEditingPrompt(prompt)}
-                                      className="text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+                                      className="text-xs px-2 py-1 bg-lamp-500 text-white rounded hover:bg-lamp-600"
                                     >
                                       ✏️ Edit
                                     </button>
@@ -482,7 +482,7 @@ export default function SuperAdminSectionPromptsPage() {
                                   
                                   <div className="space-y-3">
                                     <div>
-                                      <label className="text-xs font-medium text-blue-700">Instruction:</label>
+                                      <label className="text-xs font-medium text-lamp-700">Instruction:</label>
                                       <div className="bg-white rounded p-2 text-xs max-h-24 overflow-y-auto border">
                                         {prompt.instruction?.substring(0, 200)}...
                                       </div>
@@ -490,17 +490,17 @@ export default function SuperAdminSectionPromptsPage() {
 
                                     {prompt.constraints?.length > 0 && (
                                       <div>
-                                        <label className="text-xs font-medium text-blue-700">
+                                        <label className="text-xs font-medium text-lamp-700">
                                           Constraints ({prompt.constraints.length}):
                                         </label>
                                         <div className="flex flex-wrap gap-1 mt-1">
                                           {prompt.constraints.slice(0, 3).map((c, i) => (
-                                            <span key={i} className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">
+                                            <span key={i} className="text-xs px-2 py-0.5 bg-lamp-100 text-lamp-700 rounded">
                                               {c.substring(0, 30)}...
                                             </span>
                                           ))}
                                           {prompt.constraints.length > 3 && (
-                                            <span className="text-xs text-blue-500">
+                                            <span className="text-xs text-lamp-500">
                                               +{prompt.constraints.length - 3} more
                                             </span>
                                           )}
@@ -510,7 +510,7 @@ export default function SuperAdminSectionPromptsPage() {
 
                                     {prompt.additions?.length > 0 && (
                                       <div>
-                                        <label className="text-xs font-medium text-blue-700">
+                                        <label className="text-xs font-medium text-lamp-700">
                                           Additions ({prompt.additions.length}):
                                         </label>
                                         <div className="flex flex-wrap gap-1 mt-1">
@@ -527,12 +527,12 @@ export default function SuperAdminSectionPromptsPage() {
                               </div>
 
                               {/* Merged Preview */}
-                              <div className="mt-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-4 border border-purple-200">
+                              <div className="mt-4 bg-gradient-to-r from-lamp-50 to-lamp-50 rounded-lg p-4 border border-lamp-200">
                                 <div className="flex items-center gap-2 mb-2">
                                   <span className="text-lg">🔀</span>
-                                  <span className="font-medium text-purple-700">Merged Result Preview</span>
+                                  <span className="font-medium text-lamp-700">Merged Result Preview</span>
                                 </div>
-                                <p className="text-xs text-purple-600">
+                                <p className="text-xs text-lamp-600">
                                   This is what the LLM receives: L1 base instruction + L2 country guidance + any L3 user overrides
                                 </p>
                               </div>
@@ -657,17 +657,17 @@ function EditPromptModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 text-white">
+        <div className="bg-gradient-to-r from-lamp-600 to-lamp-600 px-6 py-4 text-white">
           <div className="flex justify-between items-start">
             <div>
               <h2 className="text-xl font-bold flex items-center gap-2">
-                <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded">L2</span>
+                <span className="bg-lamp-500 text-white text-xs font-bold px-2 py-1 rounded">L2</span>
                 Edit Country Top-Up Prompt
               </h2>
-              <p className="text-indigo-200 mt-1">
+              <p className="text-lamp-200 mt-1">
                 {countryName} • {sectionLabel}
                 {supersetLabel && supersetLabel !== sectionLabel && (
-                  <span className="ml-2 text-indigo-300 text-xs">(Superset: {supersetLabel})</span>
+                  <span className="ml-2 text-lamp-300 text-xs">(Superset: {supersetLabel})</span>
                 )}
               </p>
             </div>
@@ -697,7 +697,7 @@ function EditPromptModal({
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
               rows={6}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 font-mono text-sm"
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-lamp-500 focus:ring-2 focus:ring-lamp-200 font-mono text-sm"
               placeholder="Per [Country] Patent Act Section X, ensure that..."
             />
             <p className="text-xs text-gray-500 mt-1">
@@ -738,8 +738,8 @@ function EditPromptModal({
             </label>
             <div className="space-y-2 mb-3">
               {constraints.map((c, index) => (
-                <div key={index} className="flex items-start gap-2 bg-blue-50 p-3 rounded-lg">
-                  <span className="text-blue-600 font-bold">•</span>
+                <div key={index} className="flex items-start gap-2 bg-lamp-50 p-3 rounded-lg">
+                  <span className="text-lamp-600 font-bold">•</span>
                   <span className="flex-1 text-sm">{c}</span>
                   <button
                     onClick={() => setConstraints(constraints.filter((_, i) => i !== index))}
@@ -771,7 +771,7 @@ function EditPromptModal({
                     setNewConstraint('')
                   }
                 }}
-                className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                className="px-4 py-2 bg-lamp-100 text-lamp-700 rounded-lg hover:bg-lamp-200"
               >
                 + Add
               </button>
@@ -858,7 +858,7 @@ function EditPromptModal({
             </button>
             <button
               onClick={handleSave}
-              className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              className="px-6 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 disabled:opacity-50"
               disabled={saving || !changeReason.trim()}
             >
               {saving ? 'Saving...' : '💾 Save Changes'}

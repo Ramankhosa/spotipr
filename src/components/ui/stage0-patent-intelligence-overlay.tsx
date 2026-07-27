@@ -171,7 +171,7 @@ function estimateDurationMs(len: number) {
 
 function sizeInfo(len: number) {
   if (len < 1800) return { tag: 'Compact', time: 'under a minute', color: 'text-emerald-600' }
-  if (len < 7500) return { tag: 'Detailed', time: 'about 1 minute', color: 'text-blue-600' }
+  if (len < 7500) return { tag: 'Detailed', time: 'about 1 minute', color: 'text-lamp-600' }
   return { tag: 'Extended', time: '1–2 minutes', color: 'text-amber-600' }
 }
 
@@ -206,7 +206,7 @@ function ProgressRing({
     <div className="relative inline-flex items-center justify-center">
       {/* Soft glow behind the ring */}
       {!reducedMotion && (
-        <div className="absolute inset-[-20%] rounded-full bg-blue-400/[0.06] blur-2xl" />
+        <div className="absolute inset-[-20%] rounded-full bg-lamp-400/[0.06] blur-2xl" />
       )}
 
       <svg
@@ -312,7 +312,7 @@ function ActivityFeed({
             transition={{ duration: 0.3 }}
             className="flex items-center gap-2 text-[13px] text-slate-500"
           >
-            <span className={`inline-block h-1 w-1 rounded-full flex-shrink-0 ${i === 0 ? 'bg-blue-400' : 'bg-slate-300'}`} />
+            <span className={`inline-block h-1 w-1 rounded-full flex-shrink-0 ${i === 0 ? 'bg-lamp-400' : 'bg-slate-300'}`} />
             <span className="truncate">{line}</span>
           </motion.div>
         ))}
@@ -417,7 +417,7 @@ export default function Stage0PatentIntelligenceOverlay({
       {/* Subtle background decoration */}
       {!reduced && (
         <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-          <div className="absolute left-1/2 top-1/3 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-blue-50 via-cyan-50/40 to-transparent blur-3xl" />
+          <div className="absolute left-1/2 top-1/3 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-lamp-50 via-lamp-50/40 to-transparent blur-3xl" />
           <div className="absolute bottom-0 right-1/4 h-[400px] w-[400px] rounded-full bg-gradient-to-tl from-emerald-50/60 to-transparent blur-3xl" />
         </div>
       )}
@@ -432,7 +432,7 @@ export default function Stage0PatentIntelligenceOverlay({
             autoPlayDuration={reduced ? 1 : 4500}
           />
           <div className="text-left">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-600">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-lamp-600">
               Stage 0 · Patent Intelligence
             </p>
             <p className="mt-0.5 text-xs text-slate-400">
@@ -488,9 +488,9 @@ export default function Stage0PatentIntelligenceOverlay({
                 className={[
                   'block rounded-full transition-colors duration-300',
                   done
-                    ? 'h-1.5 w-1.5 bg-blue-500'
+                    ? 'h-1.5 w-1.5 bg-lamp-500'
                     : active
-                      ? 'h-2 w-2 bg-blue-500'
+                      ? 'h-2 w-2 bg-lamp-500'
                       : 'h-1.5 w-1.5 bg-slate-200',
                 ].join(' ')}
                 animate={active && !reduced ? { scale: [1, 1.4, 1] } : {}}
@@ -560,7 +560,7 @@ export default function Stage0PatentIntelligenceOverlay({
                 <div className="mt-4 flex flex-wrap gap-3">
                   <Button
                     onClick={onRetry}
-                    className="bg-blue-600 text-white hover:bg-blue-700"
+                    className="bg-lamp-600 text-white hover:bg-lamp-700"
                   >
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Retry

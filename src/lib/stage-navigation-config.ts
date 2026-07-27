@@ -188,18 +188,8 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
           if (hasClaims) return 'completed'
           return 'pending'
         }
-      },
-      {
-        key: 'claims_freeze',
-        label: 'Freeze Claims',
-        icon: Lock,
-        description: 'Lock claims for downstream drafting',
-        required: false,
-        getStatus: (session) => {
-          const normalized = session?.ideaRecord?.normalizedData || {}
-          return normalized.claimsApprovedAt ? 'completed' : 'pending'
-        }
       }
+      // No freeze sub-stage: the saved claim set feeds downstream drafting directly.
     ]
   },
   {
@@ -326,29 +316,20 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
       },
       {
         key: 'approval',
-        label: 'Freeze Claims',
+        label: 'Finalize Claims',
         icon: Lock,
-        description: 'Lock final claims for drafting',
+        description: 'Settle the claim set drafting will use',
         required: true,
         getStatus: (session) => {
           const config = session?.priorArtConfig || {}
           if (config.skippedClaimRefinement) return 'skipped'
           const normalized = session?.ideaRecord?.normalizedData || {}
-          
-          // Claims must be approved AND claim refinement must have been actually used
-          // (either AI comparison was run or claims were edited/refined)
-          // This prevents Stage One freeze from marking this stage as complete
-          const isApproved = !!normalized.claimsApprovedAt
-          const claimRefinementUsed = !!normalized.claimsRefinementPreview || 
-                                       !!normalized.claimsFinal || 
-                                       !!normalized.claimsRefinementApplied
-          
-          // Only complete if claims are frozen AND refinement was actually performed
-          if (isApproved && claimRefinementUsed) return 'completed'
-          
-          // If approved but refinement wasn't used, it means claims were frozen in Stage One
-          // In this case, show as pending since user hasn't done claim refinement
-          return 'pending'
+
+          // Complete once refinement has actually produced a claim set — either applied
+          // changes or an explicit lock. Freezing on its own is no longer the signal,
+          // since drafting reads the saved claims whether or not they are locked.
+          const refinementApplied = !!normalized.claimsRefinementApplied || !!normalized.claimsFinal
+          return refinementApplied ? 'completed' : 'pending'
         }
       }
     ]

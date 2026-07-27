@@ -33,16 +33,16 @@ export default function IdeaHubPage() {
       label: 'Ideation',
       icon: Sparkles,
       description: 'Generate patent ideas with AI-powered mind mapping',
-      gradient: 'from-violet-500 to-purple-600',
-      bgGradient: 'from-violet-500/10 to-purple-600/10',
+      gradient: 'from-lamp-500 to-lamp-600',
+      bgGradient: 'from-lamp-500/10 to-lamp-600/10',
     },
     {
       id: 'novelty' as const,
       label: 'Novelty',
       icon: Search,
       description: 'Review search terms and run the novelty pipeline',
-      gradient: 'from-cyan-500 to-blue-600',
-      bgGradient: 'from-cyan-500/10 to-blue-600/10',
+      gradient: 'from-lamp-500 to-lamp-600',
+      bgGradient: 'from-lamp-500/10 to-lamp-600/10',
     },
   ]
 
@@ -69,8 +69,8 @@ export default function IdeaHubPage() {
               
               <div className="flex items-center gap-3">
                 <div className="relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-violet-500 to-cyan-500 rounded-xl blur-lg opacity-40" />
-                  <div className="relative bg-gradient-to-r from-violet-500 to-cyan-500 p-2 rounded-xl">
+                  <div className="absolute inset-0 bg-gradient-to-r from-lamp-500 to-lamp-500 rounded-xl blur-lg opacity-40" />
+                  <div className="relative bg-gradient-to-r from-lamp-500 to-lamp-500 p-2 rounded-xl">
                     <Lightbulb className="w-5 h-5 text-white" />
                   </div>
                 </div>

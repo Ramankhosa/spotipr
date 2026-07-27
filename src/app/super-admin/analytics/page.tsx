@@ -49,7 +49,7 @@ export default function SuperAdminAnalyticsPage() {
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -143,7 +143,7 @@ export default function SuperAdminAnalyticsPage() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm">Potential cost savings</span>
-              <span className="text-sm font-medium text-blue-600">$1,247/mo</span>
+              <span className="text-sm font-medium text-lamp-600">$1,247/mo</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm">Underutilized PRO plans</span>
@@ -165,7 +165,7 @@ export default function SuperAdminAnalyticsPage() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm">Active reservations</span>
-              <span className="text-sm font-medium text-blue-600">12</span>
+              <span className="text-sm font-medium text-lamp-600">12</span>
             </div>
           </div>
         </div>

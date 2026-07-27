@@ -37,7 +37,7 @@ export default function IdeaDetailsModal({
     switch (idea.status) {
       case 'PUBLIC': return 'bg-emerald-50 text-emerald-700 border-emerald-200'
       case 'RESERVED': return 'bg-amber-50 text-amber-700 border-amber-200'
-      case 'LICENSED': return 'bg-blue-50 text-blue-700 border-blue-200'
+      case 'LICENSED': return 'bg-lamp-50 text-lamp-700 border-lamp-200'
       case 'ARCHIVED': return 'bg-slate-50 text-slate-600 border-slate-200'
       default: return 'bg-slate-50 text-slate-600 border-slate-200'
     }
@@ -51,7 +51,7 @@ export default function IdeaDetailsModal({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto bg-white border-slate-100 shadow-2xl p-0 gap-0">
         {/* Header with gradient accent */}
-        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500" />
+        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-lamp-500 via-lamp-500 to-lamp-500" />
         
         <DialogHeader className="p-6 pb-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex items-start justify-between gap-4">
@@ -89,7 +89,7 @@ export default function IdeaDetailsModal({
           {/* Core Principle - Main Section */}
           <div className="prose prose-slate max-w-none">
             <div className="flex items-center gap-2 mb-4">
-               <Lightbulb className="w-5 h-5 text-indigo-600" />
+               <Lightbulb className="w-5 h-5 text-lamp-600" />
                <h3 className="text-lg font-bold text-slate-900 m-0">Core Logic</h3>
             </div>
             <div className="text-slate-600 leading-relaxed text-base bg-slate-50 p-6 rounded-xl border border-slate-100">
@@ -127,13 +127,13 @@ export default function IdeaDetailsModal({
                 {idea.keyFeatures.length > 0 && canSeeFullContent && (
                   <div>
                     <div className="flex items-center gap-2 mb-3">
-                      <Microscope className="w-4 h-4 text-blue-600" />
+                      <Microscope className="w-4 h-4 text-lamp-600" />
                       <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Technical Specifications</h3>
                     </div>
                     <div className="space-y-2">
                       {idea.keyFeatures.map((feature, index) => (
                         <div key={index} className="flex items-start gap-3 group">
-                          <span className="flex-shrink-0 w-6 h-6 bg-slate-100 text-slate-500 rounded-full flex items-center justify-center text-xs font-mono mt-0.5 group-hover:bg-blue-50 group-hover:text-blue-600 transition-colors">
+                          <span className="flex-shrink-0 w-6 h-6 bg-slate-100 text-slate-500 rounded-full flex items-center justify-center text-xs font-mono mt-0.5 group-hover:bg-lamp-50 group-hover:text-lamp-600 transition-colors">
                             {index + 1}
                           </span>
                           <div className="text-slate-600 text-sm leading-relaxed">{feature}</div>
@@ -149,7 +149,7 @@ export default function IdeaDetailsModal({
                 {/* Domain & Field */}
                 <div>
                    <div className="flex items-center gap-2 mb-3">
-                      <Layers className="w-4 h-4 text-purple-600" />
+                      <Layers className="w-4 h-4 text-lamp-600" />
                       <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Classification</h3>
                    </div>
                    <div className="bg-slate-50 rounded-lg p-4 border border-slate-100 space-y-4">
@@ -251,7 +251,7 @@ export default function IdeaDetailsModal({
                 >
                   Release Asset
                 </Button>
-                <Button onClick={onSendToSearch} className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-200">
+                <Button onClick={onSendToSearch} className="bg-lamp-600 hover:bg-lamp-700 text-white shadow-sm shadow-lamp-200">
                   Run Novelty Search
                 </Button>
                 <Button onClick={onSendToDrafting} className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-200">

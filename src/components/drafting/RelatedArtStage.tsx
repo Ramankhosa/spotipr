@@ -1,8 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState, Fragment, useRef, memo } from 'react'
-import { Popover, Transition } from '@headlessui/react'
-import { ChevronDownIcon, CheckIcon } from '@heroicons/react/20/solid'
+import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { getAuthoritativeClaims } from '@/lib/claims-context'
 // Pure data module (zero imports) — safe in a client component. Do NOT import
 // from patent-search/index or the providers here: those reach prisma and the
@@ -28,7 +26,7 @@ interface RelatedArtStageProps {
       ipcCodes?: string[]
       inventors?: string[]
       assignees?: string[]
-      runId?: string // Added runId to selection
+      runId?: string
       userNotes?: string
     }>
     ideaRecord?: any
@@ -82,179 +80,119 @@ type AnalysisProgressState = {
   message: string
 }
 
-type ResultSourceFilter = 'all' | 'india' | 'international' | 'google' | 'europe'
-type PatentSearchPrecision = 'broad' | 'refined'
-type PatentSearchConceptGroup = {
-  id?: string
-  label?: string
-  kind?: string
-  terms: string[]
-  required?: boolean
-  excluded?: boolean
+/** One decision per patent: where it will be used downstream. */
+type PatentTags = { background: boolean; claims: boolean }
+
+/** A manually entered reference. Lives in the same list as search results. */
+type ManualRef = { id: string; text: string; background: boolean; claims: boolean }
+
+type Phase = 'idle' | 'searching' | 'assessing'
+
+type ThreatLevel = 'anticipates' | 'obvious' | 'adjacent' | 'remote' | 'unknown'
+
+const THREAT_META: Record<ThreatLevel, { label: string; sub: string; badge: string; card: string; cardActive: string; number: string }> = {
+  anticipates: {
+    label: 'High risk',
+    sub: 'May anticipate',
+    badge: 'bg-red-50 text-red-700 border border-red-200',
+    card: 'border-paper-300 hover:border-red-300',
+    cardActive: 'bg-red-50 border-red-300 ring-1 ring-red-200',
+    number: 'text-red-600'
+  },
+  obvious: {
+    label: 'Obviousness risk',
+    sub: 'May be combinable',
+    badge: 'bg-amber-50 text-amber-700 border border-amber-200',
+    card: 'border-paper-300 hover:border-amber-300',
+    cardActive: 'bg-amber-50 border-amber-300 ring-1 ring-amber-200',
+    number: 'text-amber-600'
+  },
+  adjacent: {
+    label: 'Adjacent',
+    sub: 'Citable context',
+    badge: 'bg-green-50 text-green-700 border border-green-200',
+    card: 'border-paper-300 hover:border-green-300',
+    cardActive: 'bg-green-50 border-green-300 ring-1 ring-green-200',
+    number: 'text-green-600'
+  },
+  remote: {
+    label: 'Remote',
+    sub: 'Loosely related',
+    badge: 'bg-paper-100 text-ai-graphite-600 border border-paper-300',
+    card: 'border-paper-300 hover:border-paper-400',
+    cardActive: 'bg-paper-100 border-ai-graphite-400 ring-1 ring-paper-400',
+    number: 'text-ai-graphite-600'
+  },
+  unknown: {
+    label: 'Not assessed',
+    sub: 'Retry available',
+    badge: 'bg-white text-ai-graphite-500 border border-dashed border-ai-graphite-300',
+    card: 'border-paper-300',
+    cardActive: 'bg-paper-100 border-ai-graphite-400 ring-1 ring-paper-400',
+    number: 'text-ai-graphite-500'
+  }
 }
 
-function normalizeKeywordListForUi(value: any): string[] {
-  const raw = Array.isArray(value)
-    ? value
-    : typeof value === 'string'
-      ? value.split(/[;\n|,]/)
-      : []
-  return Array.from(new Set(raw
-    .map(item => String(item || '').trim().replace(/\s+/g, ' '))
-    .filter(item => item.length >= 3 && item.length <= 120)))
-    .slice(0, 10)
-}
-
-function normalizeConceptGroupsForUi(value: any, fallbackQuery = ''): PatentSearchConceptGroup[] {
-  const groups = Array.isArray(value) ? value : []
-  const normalized = groups
-    .map((item, index) => {
-      const record = item && typeof item === 'object' && !Array.isArray(item) ? item : {}
-      const terms = normalizeKeywordListForUi((record as any).terms || (record as any).keywords || (record as any).phrases).slice(0, 8)
-      if (!terms.length) return null
-      const kind = String((record as any).kind || '').trim().toLowerCase()
-      const excluded = (record as any).excluded === true || kind === 'excluded' || kind === 'exclude'
-      return {
-        id: String((record as any).id || `concept_group_${index + 1}`),
-        label: String((record as any).label || (record as any).name || `Concept group ${index + 1}`),
-        kind: kind || undefined,
-        terms,
-        required: (record as any).required === false ? false : !excluded,
-        excluded,
-      } as PatentSearchConceptGroup
-    })
-    .filter((item): item is PatentSearchConceptGroup => Boolean(item))
-    .slice(0, 6)
-  if (normalized.length > 0) return normalized
-  const fallbackTerms = normalizeKeywordListForUi(fallbackQuery).slice(0, 4)
-  return fallbackTerms.length
-    ? [{ id: 'core_concept', label: 'Core concept', kind: 'core', terms: fallbackTerms, required: true, excluded: false }]
-    : []
-}
-
-function keywordListToText(values: string[]) {
-  return (values || []).join('\n')
+/** Risky references default to claim comparison; safe ones to the background section. */
+function defaultTagsForThreat(threat: string | undefined): PatentTags {
+  if (threat === 'anticipates' || threat === 'obvious') return { background: false, claims: true }
+  if (threat === 'adjacent' || threat === 'remote') return { background: true, claims: false }
+  return { background: false, claims: false }
 }
 
 const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, onComplete, onRefresh }: RelatedArtStageProps) {
-  // DEBUG: Check if component is being remounted
-  console.log('🔄 RelatedArtStage component instance created/rendered')
-
   const idea = session?.ideaRecord || {}
-  const normalizedIdea = idea?.normalizedData || {}
   const searchQuery = idea?.searchQuery || ''
-  const abstract = idea?.abstract || ''
-  const cpcCodes: string[] = Array.isArray(idea?.cpcCodes) ? idea.cpcCodes : []
-  const ipcCodes: string[] = Array.isArray(idea?.ipcCodes) ? idea.ipcCodes : []
 
-  const [busy, setBusy] = useState(false)
-  const [searching, setSearching] = useState(false)
-  const [searchProgress, setSearchProgress] = useState('')
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [phaseMessage, setPhaseMessage] = useState('')
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'warning'; text: string } | null>(null)
+
   const [results, setResults] = useState<ResultItem[]>([])
   const [runId, setRunId] = useState<string | null>(null)
   const [aiAnalysis, setAiAnalysis] = useState<Record<string, AIAnalysisEntry>>({})
-  const [hasLoadedSelections, setHasLoadedSelections] = useState(false)
+  const [patentDetailsMap, setPatentDetailsMap] = useState<Record<string, any>>({})
+  const [detailsLoading, setDetailsLoading] = useState(false)
+
+  // Search scope (all previous "Advanced Settings" preserved here)
+  const [queryText, setQueryText] = useState('')
+  const [scopeOpen, setScopeOpen] = useState(false)
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false)
   const [limit, setLimit] = useState(25)
-  const [afterDate, setAfterDate] = useState('')
-  const [customQuery, setCustomQuery] = useState('')
-  const [showCustomQuery, setShowCustomQuery] = useState(false)
-  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
-  // Corpus scope filters. Empty countries = search every country (no restriction).
   const [filterCountries, setFilterCountries] = useState<string[]>([])
+  const [afterDate, setAfterDate] = useState('')
   const [publicationDateTo, setPublicationDateTo] = useState('')
   const [filingDateFrom, setFilingDateFrom] = useState('')
   const [filingDateTo, setFilingDateTo] = useState('')
-  const [searchPrecision, setSearchPrecision] = useState<PatentSearchPrecision>('broad')
-  const [resultSourceFilter, setResultSourceFilter] = useState<ResultSourceFilter>('all')
 
-  // AI review states
-  const [reviewing, setReviewing] = useState(false)
-  const [reviewInfo, setReviewInfo] = useState<string>('')
-  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressState | null>(null)
-  const [patentDetailsMap, setPatentDetailsMap] = useState<Record<string, any>>({})
-  const [detailsLoading, setDetailsLoading] = useState(false)
-  const [ideaBankOpen, setIdeaBankOpen] = useState(false)
+  // Triage
+  const [tags, setTags] = useState<Record<string, PatentTags>>({})
+  const [manualRefs, setManualRefs] = useState<ManualRef[]>([])
+  const [riskFilter, setRiskFilter] = useState<ThreatLevel | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [addFormOpen, setAddFormOpen] = useState(false)
+  const [manualDraft, setManualDraft] = useState('')
+  const [continuing, setContinuing] = useState(false)
+  const [hasHydrated, setHasHydrated] = useState(false)
+
+  // Idea bank (unchanged behavior)
   const [ideaBank, setIdeaBank] = useState<Array<{ title: string; core_principle: string; expected_advantage: string; tags: string[]; non_obvious_extension: string }>>([])
+  const [ideaBankOpen, setIdeaBankOpen] = useState(false)
   const [hasRestoredFromStorage, setHasRestoredFromStorage] = useState(false)
-  const [ideaBankVersion, setIdeaBankVersion] = useState(0) // Force re-renders
 
-  // ============= MAIN WORKFLOW NAVIGATION =============
-  // Primary tab navigation: search → analyze → select
-  const [mainTab, setMainTab] = useState<'search' | 'analyze' | 'select'>('search')
-
-  // ============= TAB-BASED WORKFLOW STATES =============
-  // Active tab: 'prior-art' = for drafting references, 'claim-refinement' = for claim comparison
-  const [activeWorkflowTab, setActiveWorkflowTab] = useState<'prior-art' | 'claim-refinement'>('prior-art')
-
-  // WORKFLOW A: Prior Art for Patent Drafting
-  // These patents/text will be cited in the patent draft (background, etc.)
-  const [priorArtMode, setPriorArtMode] = useState<'ai' | 'manual' | 'hybrid'>('ai')
-  const [priorArtSelected, setPriorArtSelected] = useState<Record<string, any>>({})
-  const [priorArtManualText, setPriorArtManualText] = useState('')
-
-  // WORKFLOW B: Patents for Claim Refinement
-  // These patents will be compared against claims to ensure novelty
-  const [claimRefMode, setClaimRefMode] = useState<'ai' | 'manual' | 'hybrid'>('ai')
-  const [claimRefSelected, setClaimRefSelected] = useState<Record<string, any>>({})
-  const [claimRefManualText, setClaimRefManualText] = useState('')
-
-  // Skip Claim Refinement option - user confident in their claims
-  const [skipClaimRefinement, setSkipClaimRefinement] = useState(false)
-
-  // Quick View panel states
-  const [showAbstractPanel, setShowAbstractPanel] = useState(false)
-  const [showAIAnalysisPanel, setShowAIAnalysisPanel] = useState(false)
-  const [showRawResultsPanel, setShowRawResultsPanel] = useState(false)
-
-  // Track which patents have expanded details (on-demand loading)
-  const [expandedPatentDetails, setExpandedPatentDetails] = useState<Set<string>>(new Set())
-
-  // Track which sections within expanded patents are visible
-  const [expandedSections, setExpandedSections] = useState<{
-    [patentKey: string]: {
-      metadata: boolean
-      abstract: boolean
-      aiSummary: boolean
-      relevantParts: boolean
-      irrelevantParts: boolean
-      noveltyComparison: boolean
-    }
-  }>({})
-
-  // Legacy state for backward compatibility
-  const [selected, setSelected] = useState<Record<string, { title?: string; snippet?: string; score?: number; tags?: string[]; publication_date?: string; inventors?: any; assignees?: any; aiSummary?: string; noveltyThreat?: string; relevantParts?: string[]; irrelevantParts?: string[]; noveltyComparison?: string }>>({})
-
-  // Legacy manual prior art states (kept for backward compatibility with saved sessions)
-  const [manualPriorArtText, setManualPriorArtText] = useState('')
-  const [isManualPriorArtSaved, setIsManualPriorArtSaved] = useState(false)
-  const [useOnlyManualPriorArt, setUseOnlyManualPriorArt] = useState(false)
-  const [useManualAndAISearch, setUseManualAndAISearch] = useState(false)
-  const [savingManualPriorArt, setSavingManualPriorArt] = useState(false)
-  const [useAutoPriorArt, setUseAutoPriorArt] = useState(true)
-  const [useManualPriorArtToggle, setUseManualPriorArtToggle] = useState(false)
-
-  // Saving states
-  const [savingPriorArt, setSavingPriorArt] = useState(false)
-  const [savingClaimRef, setSavingClaimRef] = useState(false)
-
-  // UI control states
-  const [relevanceFilters, setRelevanceFilters] = useState<string[]>([])
-  const [noveltyThreatFilters, setNoveltyThreatFilters] = useState<string[]>([])
-  const [itemsPerPage, setItemsPerPage] = useState(10)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [autoSelectWarning, setAutoSelectWarning] = useState<string | null>(null)
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'warning'; text: string } | null>(null)
-  // Selection tab filters
-  const [priorArtThreatFilter, setPriorArtThreatFilter] = useState<string | null>(null)
-  const [claimRefThreatFilter, setClaimRefThreatFilter] = useState<string | null>(null)
-
-  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const manualPriorArtRef = useRef<HTMLDivElement | null>(null)
   const lastLoadedRunIdRef = useRef<string | null>(null)
-  // Track the current session ID to detect when it changes (new patent)
   const currentSessionIdRef = useRef<string | null>(null)
+  const hasInitializedRef = useRef(false)
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ---------------------------------------------------------------------------
+  // Patent identity + analysis lookup helpers
+  // ---------------------------------------------------------------------------
   function canonicalizePatentNumber(value: any) {
     if (!value) return ''
     const normalized = String(value).toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -277,15 +215,20 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     ).trim()
   }
 
+  const getPatentKey = (item: any, index?: number) => {
+    const pn = getPatentNumber(item) || 'N/A'
+    const ttl = item.title || (item as any).invention_title || pn || 'Untitled'
+    const idx = typeof index === 'number' ? index : 0
+    return pn !== 'N/A' ? pn : `${ttl}-${idx}`
+  }
+
   function getAnalysisForPatentNumber(patentNumber: any): AIAnalysisEntry | null {
     const pn = String(patentNumber || '').trim()
     if (!pn || pn === 'N/A') return null
     if (aiAnalysis[pn]) return aiAnalysis[pn]
-
     const canonical = canonicalizePatentNumber(pn)
     if (!canonical) return null
     if (aiAnalysis[canonical]) return aiAnalysis[canonical]
-
     const matchedKey = Object.keys(aiAnalysis).find(key => canonicalizePatentNumber(key) === canonical)
     return matchedKey ? aiAnalysis[matchedKey] : null
   }
@@ -308,15 +251,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       return value.map(item => String(item || '').trim()).filter(Boolean)
     }
     if (typeof value === 'string') {
-      return value
-        .split(/[|;,]/)
-        .map(item => item.trim())
-        .filter(Boolean)
+      return value.split(/[|;,]/).map(item => item.trim()).filter(Boolean)
     }
     return []
   }
 
-  function getResultSourceTypes(item: any): Array<Exclude<ResultSourceFilter, 'all'>> {
+  function getResultSourceLabel(item: any) {
     const providerValues = [
       ...(Array.isArray(item?.sourceProviders) ? item.sourceProviders : []),
       item?.sourceProvider,
@@ -324,40 +264,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       item?.provider
     ].map(value => String(value || '').toLowerCase())
     const pn = getPatentNumber(item).toUpperCase()
-    const sources: Array<Exclude<ResultSourceFilter, 'all'>> = []
-    const hasIndianProvider = providerValues.some(value => value === 'indian-corpus' || value === 'indian_corpus')
-    const hasPqaiProvider = providerValues.some(value => value === 'pqai' || value === 'pqai-corpus')
-    const hasGoogleProvider = providerValues.some(value => value === 'google-patents')
-    const hasEpoProvider = providerValues.some(value => value === 'epo-ops' || value === 'epo-ops-corpus')
-
-    if (hasGoogleProvider) sources.push('google')
-    if (hasEpoProvider) sources.push('europe')
-    if (hasIndianProvider) sources.push('india')
-    if (hasPqaiProvider) sources.push('international')
-    if (sources.length > 0) return sources
-
-    const jurisdiction = String(item?.jurisdiction || item?.country || '')
-      .toUpperCase()
-      .replace(/[^A-Z]/g, '')
-    const isIndianJurisdiction = jurisdiction === 'IN' || jurisdiction === 'IND' || jurisdiction === 'INDIA'
-    if (isIndianJurisdiction || pn.startsWith('IN')) return ['india']
-    if (jurisdiction === 'EP' || jurisdiction === 'EPO' || jurisdiction === 'WO' || pn.startsWith('EP') || pn.startsWith('WO')) return ['europe']
-    return ['international']
-  }
-
-  function resultMatchesSourceFilter(item: any, filter: ResultSourceFilter) {
-    if (filter === 'all') return true
-    return getResultSourceTypes(item).includes(filter)
-  }
-
-  function getResultSourceLabel(item: any) {
-    const sources = getResultSourceTypes(item)
-    const labels: string[] = []
-    if (sources.includes('india')) labels.push('Indian patents')
-    if (sources.includes('international')) labels.push('International patents')
-    if (sources.includes('google')) labels.push('Google Patents')
-    if (sources.includes('europe')) labels.push('European patents')
-    return labels.length ? labels.join(' + ') : 'International patents'
+    if (providerValues.some(value => value === 'indian-corpus' || value === 'indian_corpus')) return 'Indian patents'
+    if (providerValues.some(value => value === 'google-patents')) return 'Google Patents'
+    if (providerValues.some(value => value === 'epo-ops' || value === 'epo-ops-corpus')) return 'European patents'
+    const jurisdiction = String(item?.jurisdiction || item?.country || '').toUpperCase().replace(/[^A-Z]/g, '')
+    if (jurisdiction === 'IN' || pn.startsWith('IN')) return 'Indian patents'
+    if (jurisdiction === 'EP' || jurisdiction === 'WO' || pn.startsWith('EP') || pn.startsWith('WO')) return 'European patents'
+    return 'International patents'
   }
 
   function findStoredPatentDetails(item: any) {
@@ -428,295 +341,109 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     return { pn, title, abstract, publicationDate, filingDate, priorityDate, applicationNumber, inventors, assignees, cpcCodes, ipcCodes, score, link, sourceLabel }
   }
 
-  // DEBUG: Log renders
-  console.log('RelatedArtStage render - ideaBank:', ideaBank.length, 'ideaBankOpen:', ideaBankOpen, 'version:', ideaBankVersion)
+  // Claim-aware analysis runs off whatever claims exist. Locking them is optional,
+  // so gating on claimsApprovedAt here would silently downgrade the comparison.
+  const buildClaimsContext = () => {
+    const normalizedData = (session?.ideaRecord?.normalizedData || {}) as any
+    const claimsSnapshot = getAuthoritativeClaims(normalizedData)
+    const structuredClaims = claimsSnapshot.structured
+    const claimsText = claimsSnapshot.html
+    const hasClaims = structuredClaims.length > 0 || claimsText.replace(/<[^>]*>/g, '').trim().length > 0
+    return hasClaims ? {
+      claims: structuredClaims.length > 0 ? structuredClaims : claimsText,
+      jurisdiction: normalizedData.claimsJurisdiction,
+      frozenAt: normalizedData.claimsApprovedAt || null
+    } : null
+  }
 
-  // DEBUG: Check for component mounting
-  useEffect(() => {
-    console.log('🏗️ RelatedArtStage component mounted')
-    return () => {
-      console.log('🏗️ RelatedArtStage component unmounting')
-    }
-  }, [])
-
-  // Restore ideaBank from sessionStorage once session is available
-  useEffect(() => {
-    if (session?.id && !hasRestoredFromStorage && ideaBank.length === 0) {
-      try {
-        const storageKey = `ideaBank_${session.id}`
-        const saved = sessionStorage.getItem(storageKey)
-        console.log('🔍 Checking sessionStorage for key:', storageKey, 'found:', !!saved)
-        if (saved) {
-          const parsed = JSON.parse(saved)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            console.log('💾 Restored ideaBank from sessionStorage:', parsed.length, 'ideas')
-            console.log('💾 First restored idea:', parsed[0]?.title?.substring(0, 50))
-            setIdeaBank(parsed)
-            setIdeaBankVersion(prev => prev + 1)
-            setHasRestoredFromStorage(true)
-          } else {
-            console.log('💾 sessionStorage had data but no valid ideas array')
-          }
-        } else {
-          console.log('💾 No saved ideaBank found in sessionStorage')
-        }
-      } catch (e) {
-        console.warn('Failed to restore ideaBank from sessionStorage:', e)
-      }
-    }
-  }, [session?.id, hasRestoredFromStorage, ideaBank.length])
-
-  // DEBUG: Log ideaBank changes and persist to sessionStorage
-  useEffect(() => {
-    console.log('💡 ideaBank state changed:', ideaBank.length, 'ideas, version:', ideaBankVersion)
-    if (ideaBank.length > 0) {
-      console.log('💡 First idea title:', ideaBank[0]?.title)
-    }
-
-    // Persist ideaBank to sessionStorage to survive component remounts
-    if (typeof window !== 'undefined' && session?.id) {
-      try {
-        if (ideaBank.length > 0) {
-          sessionStorage.setItem(`ideaBank_${session.id}`, JSON.stringify(ideaBank))
-          console.log('💾 Saved ideaBank to sessionStorage:', ideaBank.length, 'ideas')
-        } else if (hasRestoredFromStorage) {
-          // Only clear sessionStorage if we've already restored and now have 0 items
-          sessionStorage.removeItem(`ideaBank_${session.id}`)
-        }
-      } catch (e) {
-        console.warn('Failed to save ideaBank to sessionStorage:', e)
-      }
-    }
-  }, [ideaBank, session?.id, hasRestoredFromStorage])
-
-  // Display control settings (saved in localStorage)
-  const [displaySettings, setDisplaySettings] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('patentDisplaySettings')
-      return saved ? JSON.parse(saved) : {
-        showTitle: true,
-        showPatentNumber: true,
-        showAbstract: true,
-        showInventors: true,
-        showAssignees: false,
-        showPublicationDate: true,
-        showRelevanceScore: true
-      }
-    }
-    return {
-      showTitle: true,
-      showPatentNumber: true,
-      showAbstract: true,
-      showInventors: true,
-      showAssignees: false,
-      showPublicationDate: true,
-      showRelevanceScore: true
-    }
-  })
-
-  const [showDisplayControls, setShowDisplayControls] = useState(false)
-
-  // Save display settings to localStorage
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('patentDisplaySettings', JSON.stringify(displaySettings))
-    }
-  }, [displaySettings])
-
-  // Track whether initial hydration has been done to avoid overwriting user changes
-  const hasInitializedRef = useRef(false)
-
-  // CRITICAL FIX: Reset all state when session ID changes (navigating to a different patent)
-  // This prevents stale data from a previous patent from being shown
+  // ---------------------------------------------------------------------------
+  // Session lifecycle: reset on session change, hydrate from stored data
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     const newSessionId = session?.id || null
     const previousSessionId = currentSessionIdRef.current
-    
-    // Only reset if this is a genuine session change (not initial mount)
+
     if (previousSessionId !== null && newSessionId !== previousSessionId) {
-      console.log('🔄 Session ID changed from', previousSessionId, 'to', newSessionId, '- Resetting all prior art state')
-      
-      // Reset all refs
       hasInitializedRef.current = false
       lastLoadedRunIdRef.current = null
-      
-      // Reset all state to initial values
       setResults([])
       setRunId(null)
       setAiAnalysis({})
-      setHasLoadedSelections(false)
-      setCustomQuery('')
-      setShowCustomQuery(false)
-      setShowAdvancedSettings(false)
-      setReviewing(false)
-      setReviewInfo('')
-      setAnalysisProgress(null)
       setPatentDetailsMap({})
       setDetailsLoading(false)
-      setIdeaBank([])
-      setIdeaBankVersion(0)
-      setHasRestoredFromStorage(false)
-      setError(null)
-      
-      // Reset workflow states
-      setPriorArtMode('ai')
-      setPriorArtSelected({})
-      setPriorArtManualText('')
-      setPriorArtThreatFilter(null)
-      setClaimRefMode('ai')
-      setClaimRefSelected({})
-      setClaimRefManualText('')
-      setClaimRefThreatFilter(null)
-      setSkipClaimRefinement(false)
-      
-      // Reset UI states
-      setExpandedPatentDetails(new Set())
-      setExpandedSections({})
-      setSelected({})
-      setManualPriorArtText('')
-      setIsManualPriorArtSaved(false)
-      setUseOnlyManualPriorArt(false)
-      setUseManualAndAISearch(false)
-      setUseAutoPriorArt(true)
-      setUseManualPriorArtToggle(false)
-      setRelevanceFilters([])
-      setNoveltyThreatFilters([])
-      setResultSourceFilter('all')
-      // Source toggles removed — the stored corpus is the only lane.
+      setQueryText('')
+      setScopeOpen(false)
+      setSearchPanelOpen(false)
+      setLimit(25)
       setFilterCountries([])
+      setAfterDate('')
       setPublicationDateTo('')
       setFilingDateFrom('')
       setFilingDateTo('')
-      setCurrentPage(1)
-      setAutoSelectWarning(null)
+      setTags({})
+      setManualRefs([])
+      setRiskFilter(null)
+      setExpanded(new Set())
+      setAddFormOpen(false)
+      setManualDraft('')
+      setHasHydrated(false)
+      setError(null)
       setStatusMessage(null)
-      
-      // Clear sessionStorage for the old session
+      setPhase('idle')
+      setPhaseMessage('')
+      setAnalysisProgress(null)
+      setIdeaBank([])
+      setHasRestoredFromStorage(false)
       if (typeof window !== 'undefined' && previousSessionId) {
         sessionStorage.removeItem(`ideaBank_${previousSessionId}`)
-        console.log('🗑️ Cleared sessionStorage for old session:', previousSessionId)
       }
     }
-    
-    // Update the ref to track the current session ID
+
     currentSessionIdRef.current = newSessionId
   }, [session?.id])
 
-  // Load stored results and AI analysis on mount/session change
   useEffect(() => {
     if (!session) return
 
     const latestRun = session.relatedArtRuns?.[0]
     const latestRunId = latestRun?.id || null
-
-    console.log('🔄 useEffect running - session changed. runId:', latestRunId, 'ideaBank.length:', ideaBank.length, 'results.length:', results.length, 'hasInitialized:', hasInitializedRef.current)
-
     const hasStoredResults = latestRun?.resultsJson && Array.isArray(latestRun.resultsJson) && latestRun.resultsJson.length > 0
-
-    // Check if the run ID changed (new search was performed)
     const runIdChanged = latestRunId && lastLoadedRunIdRef.current !== latestRunId
 
-    // Hydrate results from DB on first load or when run ID changes
     if (latestRun && (runIdChanged || (!hasInitializedRef.current && latestRunId && hasStoredResults && results.length === 0))) {
       lastLoadedRunIdRef.current = latestRunId
       setResults(latestRun.resultsJson)
       setRunId(latestRun.id)
-      console.log('Hydrated prior-art results from DB:', latestRun.resultsJson.length, 'items from run:', latestRun.id)
     } else if (latestRunId && !runId) {
-      // Preserve runId hint even if resultsJson was not persisted (avoid losing AI review CTA)
       setRunId(latestRunId)
     }
 
-    // NOTE: Idea bank suggestions are stored in the main idea bank table, not in the run record
-    // The local ideaBank state is only populated by AI review and should persist until component unmount
-    // No loading from stored data needed here
-
-    // Load manual prior art data if it exists (only on first initialization to avoid overwriting user edits)
-    if (!hasInitializedRef.current && session?.manualPriorArt) {
-      const manualData = session.manualPriorArt
-      setManualPriorArtText(manualData.manualPriorArtText || '')
-      setUseOnlyManualPriorArt(manualData.useOnlyManualPriorArt || false)
-      setUseManualAndAISearch(manualData.useManualAndAISearch !== false) // Default to true
-      setIsManualPriorArtSaved(true)
-      setUseManualPriorArtToggle(!!(manualData.manualPriorArtText || manualData.useOnlyManualPriorArt || manualData.useManualAndAISearch))
-      console.log('Loaded stored manual prior art data')
-    }
-
-    // CRITICAL: Always load AI analysis data from session if not already in state.
-    // This ensures AI review results persist across stage navigation, and that analysis
-    // imported alongside a run (e.g. seeded from a novelty assessment handoff, which creates
-    // a RelatedArtRun *and* aiAnalysisData together) is not skipped. Gating this on
-    // `!latestRunId` used to drop exactly that case.
+    // AI analysis persisted with the session (also covers novelty-handoff imports,
+    // which create a RelatedArtRun and aiAnalysisData together).
     if ((session as any)?.aiAnalysisData && Object.keys(aiAnalysis).length === 0) {
       const storedAiAnalysis = (session as any).aiAnalysisData
       if (storedAiAnalysis && typeof storedAiAnalysis === 'object' && Object.keys(storedAiAnalysis).length > 0) {
-      setAiAnalysis(storedAiAnalysis)
-        console.log('✅ Loaded stored AI analysis data:', Object.keys(storedAiAnalysis).length, 'entries')
+        setAiAnalysis(storedAiAnalysis)
       }
     }
 
-    // Load saved workflow configurations from priorArtConfig
-    if (!hasInitializedRef.current && (session as any)?.priorArtConfig) {
-      const config = (session as any).priorArtConfig
-      
-      // Load Prior Art for Drafting configuration
-      if (config.priorArtForDrafting) {
-        const draftConfig = config.priorArtForDrafting
-        if (draftConfig.mode) setPriorArtMode(draftConfig.mode)
-        if (draftConfig.manualText) setPriorArtManualText(draftConfig.manualText)
-        if (draftConfig.selectedPatents && Array.isArray(draftConfig.selectedPatents)) {
-          const selectedMap: Record<string, any> = {}
-          draftConfig.selectedPatents.forEach((p: any) => {
-            if (p.patentNumber) selectedMap[p.patentNumber] = p
-          })
-          setPriorArtSelected(selectedMap)
-        }
-        console.log('✅ Loaded Prior Art for Drafting config:', draftConfig.mode, Object.keys(draftConfig.selectedPatents || {}).length, 'patents')
-      }
-      
-      // Load Claim Refinement configuration
-      if (config.claimRefinementConfig) {
-        const claimConfig = config.claimRefinementConfig
-        if (claimConfig.mode) setClaimRefMode(claimConfig.mode)
-        if (claimConfig.manualText) setClaimRefManualText(claimConfig.manualText)
-        if (claimConfig.selectedPatents && Array.isArray(claimConfig.selectedPatents)) {
-          const selectedMap: Record<string, any> = {}
-          claimConfig.selectedPatents.forEach((p: any) => {
-            if (p.patentNumber) selectedMap[p.patentNumber] = p
-          })
-          setClaimRefSelected(selectedMap)
-        }
-        console.log('✅ Loaded Claim Refinement config:', claimConfig.mode, Object.keys(claimConfig.selectedPatents || {}).length, 'patents')
-      }
-      
-      // Load skip claim refinement flag
-      if (config.skippedClaimRefinement) {
-        setSkipClaimRefinement(true)
-        console.log('✅ Loaded skipClaimRefinement: true')
-      }
-    }
-
-    // Load user's saved selections (only on first initialization or when run changes)
-    if (!hasInitializedRef.current || runIdChanged) {
-    const selectionsMap: Record<string, any> = {}
-
-    if (latestRunId && session?.relatedArtSelections && session.relatedArtSelections.length > 0) {
+    // Analysis stored per-selection (tags + userNotes JSON) — the durable copy.
+    if ((!hasInitializedRef.current || runIdChanged) && latestRunId && session?.relatedArtSelections && session.relatedArtSelections.length > 0) {
       const allRunSelections = session.relatedArtSelections.filter((sel: any) => sel.runId === latestRunId)
-
-      const currentRunAnalysis: Record<string, AIAnalysisEntry> = {}
+      const storedAnalysis: Record<string, AIAnalysisEntry> = {}
       allRunSelections.forEach((sel: any) => {
-        const tags = Array.isArray(sel.tags) ? sel.tags : []
-        const analyzed = tags.includes('AI_REVIEWED')
-        const unknown = tags.includes('AI_ANALYSIS_UNKNOWN')
+        const selTags = Array.isArray(sel.tags) ? sel.tags : []
+        const analyzed = selTags.includes('AI_REVIEWED')
+        const unknown = selTags.includes('AI_ANALYSIS_UNKNOWN')
         if (!analyzed && !unknown) return
         let details: any = {}
         try { details = sel.userNotes ? JSON.parse(sel.userNotes) : {} } catch { details = { summary: sel.userNotes || '' } }
         const noveltyThreat = unknown ? 'unknown' :
-          tags.includes('AI_ANTICIPATES') ? 'anticipates' :
-          tags.includes('AI_OBVIOUS') ? 'obvious' :
-          tags.includes('AI_ADJACENT') ? 'adjacent' :
-          tags.includes('AI_REMOTE') ? 'remote' : 'unknown'
-        currentRunAnalysis[sel.patentNumber] = {
+          selTags.includes('AI_ANTICIPATES') ? 'anticipates' :
+          selTags.includes('AI_OBVIOUS') ? 'obvious' :
+          selTags.includes('AI_ADJACENT') ? 'adjacent' :
+          selTags.includes('AI_REMOTE') ? 'remote' : 'unknown'
+        storedAnalysis[sel.patentNumber] = {
           aiSummary: details.summary || '',
           noveltyThreat,
           relevantParts: Array.isArray(details.relevant_parts) ? details.relevant_parts : [],
@@ -727,88 +454,67 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           failureReason: details.failure_reason,
         }
       })
-      if (Object.keys(currentRunAnalysis).length > 0) setAiAnalysis(currentRunAnalysis)
-
-      // Prefer only user-confirmed selections (USER_SELECTED tag); if none, load none
-      const userConfirmed = allRunSelections.filter((sel: any) => Array.isArray(sel.tags) && sel.tags.includes('USER_SELECTED'))
-      const currentRunSelections = userConfirmed.length > 0 ? userConfirmed : []
-
-      console.log(`Filtering ${session.relatedArtSelections.length} total selections down to ${currentRunSelections.length} for runId: ${latestRunId} (user-confirmed: ${userConfirmed.length})`)
-
-      currentRunSelections.forEach((sel: any) => {
-        const key = sel.patentNumber && sel.patentNumber !== 'N/A' ? sel.patentNumber : sel.title || 'Untitled'
-
-        // Parse AI analysis from the saved selection
-        let aiSummary = '', relevantParts: string[] = [], irrelevantParts: string[] = [], noveltyComparison = ''
-        if (sel.userNotes) {
-          try {
-            const parsedAnalysis = JSON.parse(sel.userNotes)
-            aiSummary = parsedAnalysis.summary || ''
-            relevantParts = parsedAnalysis.relevant_parts || []
-            irrelevantParts = parsedAnalysis.irrelevant_parts || []
-            noveltyComparison = parsedAnalysis.novelty_comparison || ''
-          } catch (e) {
-            // Fallback for old format or plain text
-            aiSummary = sel.userNotes
-          }
-        }
-
-        const noveltyThreat = sel.tags?.includes('AI_ANTICIPATES') ? 'anticipates' :
-                              sel.tags?.includes('AI_OBVIOUS') ? 'obvious' :
-                              sel.tags?.includes('AI_ADJACENT') ? 'adjacent' :
-                              sel.tags?.includes('AI_REMOTE') ? 'remote' : 'unknown'
-
-        // Load user's saved selections for the current run
-        selectionsMap[key] = {
-          title: sel.title,
-          snippet: sel.snippet,
-          score: sel.score,
-          tags: sel.tags || [],
-          publication_date: sel.publicationDate,
-          inventors: sel.inventors,
-          assignees: sel.assignees,
-          aiSummary,
-          relevantParts,
-          irrelevantParts,
-          noveltyComparison,
-          noveltyThreat
-        }
-      })
+      if (Object.keys(storedAnalysis).length > 0) setAiAnalysis(prev => ({ ...storedAnalysis, ...prev }))
     }
 
-    setSelected(selectionsMap) // Load only user's saved selections for the current run
-    console.log('Loaded selections for current run:', Object.keys(selectionsMap).length, 'patents')
+    // Restore tags + manual references from the saved workflow config.
+    if (!hasInitializedRef.current) {
+      const config = (session as any)?.priorArtConfig || {}
+      const draftConfig = config.priorArtForDrafting || {}
+      const claimConfig = config.claimRefinementConfig || {}
+      const restoredTags: Record<string, PatentTags> = {}
+
+      if (Array.isArray(draftConfig.selectedPatents)) {
+        draftConfig.selectedPatents.forEach((p: any) => {
+          if (!p.patentNumber) return
+          restoredTags[p.patentNumber] = { ...(restoredTags[p.patentNumber] || { background: false, claims: false }), background: true }
+        })
+      }
+      if (Array.isArray(claimConfig.selectedPatents)) {
+        claimConfig.selectedPatents.forEach((p: any) => {
+          if (!p.patentNumber) return
+          restoredTags[p.patentNumber] = { ...(restoredTags[p.patentNumber] || { background: false, claims: false }), claims: true }
+        })
+      }
+      if (Object.keys(restoredTags).length > 0) setTags(prev => ({ ...restoredTags, ...prev }))
+
+      // Manual text from either the new config or the legacy manualPriorArt record.
+      const draftManual = String(draftConfig.manualText || session?.manualPriorArt?.manualPriorArtText || '').trim()
+      const claimManual = String(claimConfig.manualText || '').trim()
+      const restored: ManualRef[] = []
+      if (draftManual && draftManual === claimManual) {
+        restored.push({ id: 'manual-restored-1', text: draftManual, background: true, claims: true })
+      } else {
+        if (draftManual) restored.push({ id: 'manual-restored-1', text: draftManual, background: true, claims: false })
+        if (claimManual) restored.push({ id: 'manual-restored-2', text: claimManual, background: false, claims: true })
+      }
+      if (restored.length > 0) setManualRefs(prev => (prev.length === 0 ? restored : prev))
     }
 
-    // Mark initialization complete
     if (!hasInitializedRef.current) {
       hasInitializedRef.current = true
-      setHasLoadedSelections(true)
+      setHasHydrated(true)
     }
+    // Hydration must re-run only when the session object changes — reacting to
+    // aiAnalysis/results/runId here would replay stored state over user edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
+  // Fetch stored patent metadata for the current results.
   useEffect(() => {
     if (results.length === 0) {
       setPatentDetailsMap({})
       return
     }
-
-    const publicationNumbers = Array.from(
-      new Set(
-        results
-          .map((item) => getPatentNumber(item))
-          .filter((pn) => pn && pn !== 'N/A')
-      )
-    )
-
+    const publicationNumbers = Array.from(new Set(
+      results.map(item => getPatentNumber(item)).filter(pn => pn && pn !== 'N/A')
+    ))
     if (publicationNumbers.length === 0) {
       setPatentDetailsMap({})
       return
     }
-
     let cancelled = false
-
-    const loadStoredPatentDetails = async () => {
+    const load = async () => {
       setDetailsLoading(true)
       try {
         const response = await fetch('/api/patents/details/batch', {
@@ -819,63 +525,66 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           },
           body: JSON.stringify({ publicationNumbers })
         })
-
         if (!cancelled && response.ok) {
           const data = await response.json()
           setPatentDetailsMap(data?.success && data?.patents ? data.patents : {})
         } else if (!cancelled) {
           setPatentDetailsMap({})
         }
-      } catch (error) {
-        console.warn('Failed to load stored patent details:', error)
+      } catch (err) {
+        console.warn('Failed to load stored patent details:', err)
         if (!cancelled) setPatentDetailsMap({})
       } finally {
         if (!cancelled) setDetailsLoading(false)
       }
     }
-
-    loadStoredPatentDetails()
-
-    return () => {
-      cancelled = true
-    }
+    load()
+    return () => { cancelled = true }
   }, [results])
 
-  // Auto-persist checkbox selections without refreshing the whole page
+  // Idea bank persistence across remounts (unchanged behavior).
   useEffect(() => {
-    if (!hasLoadedSelections) return
-    if (!runId || !session?.id) return
-
-    if (autoSaveTimeoutRef.current) {
-      clearTimeout(autoSaveTimeoutRef.current)
-    }
-
-    autoSaveTimeoutRef.current = setTimeout(() => {
-      // Skip manual prior art to avoid noisy saves while the user types
-      // Errors are logged but do not interrupt the UX
-      // eslint-disable-next-line @typescript-eslint/no-floating-promises
-      saveSelections({ skipManual: true }).catch(err => {
-        console.error('Auto-save of related art selections failed:', err)
-      })
-    }, 800)
-
-    return () => {
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current)
+    if (session?.id && !hasRestoredFromStorage && ideaBank.length === 0) {
+      try {
+        const saved = sessionStorage.getItem(`ideaBank_${session.id}`)
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setIdeaBank(parsed)
+            setHasRestoredFromStorage(true)
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to restore ideaBank from sessionStorage:', e)
       }
     }
-  }, [selected, runId, session?.id, hasLoadedSelections])
+  }, [session?.id, hasRestoredFromStorage, ideaBank.length])
 
-  // Check if AI review has been done FOR CURRENT RESULTS
+  useEffect(() => {
+    if (typeof window === 'undefined' || !session?.id) return
+    try {
+      if (ideaBank.length > 0) {
+        sessionStorage.setItem(`ideaBank_${session.id}`, JSON.stringify(ideaBank))
+      } else if (hasRestoredFromStorage) {
+        sessionStorage.removeItem(`ideaBank_${session.id}`)
+      }
+    } catch (e) {
+      console.warn('Failed to save ideaBank to sessionStorage:', e)
+    }
+  }, [ideaBank, session?.id, hasRestoredFromStorage])
+
+  // ---------------------------------------------------------------------------
+  // Derived data
+  // ---------------------------------------------------------------------------
   const hasAIReview = useMemo(() => {
-    if (results.length === 0) return false;
-    return results.some(r => !!getAnalysisForPatent(r));
-  }, [results, aiAnalysis]);
+    if (results.length === 0) return false
+    return results.some(r => !!getAnalysisForPatent(r))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, aiAnalysis])
 
   const missingAnalysisPatentNumbers = useMemo(() => {
     const seen = new Set<string>()
     const missing: string[] = []
-
     results.forEach(result => {
       const pn = getPatentNumber(result)
       if (!pn || pn === 'N/A') return
@@ -885,452 +594,142 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       const analysis = getAnalysisForPatentNumber(pn)
       if (!analysis || analysis.analysisStatus === 'unknown' || analysis.noveltyThreat === 'unknown') missing.push(pn)
     })
-
     return missing
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results, aiAnalysis])
 
-  // Calculate AI analysis summary stats for Quick View panels
-  const analysisSummary = useMemo(() => {
-    const total = Object.keys(aiAnalysis).length
-    const anticipates = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'anticipates').length
-    const obvious = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'obvious').length
-    const adjacent = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'adjacent').length
-    const remote = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'remote').length
-    const unknown = Object.values(aiAnalysis).filter(a => a.analysisStatus === 'unknown' || a.noveltyThreat === 'unknown').length
-    return { total, anticipates, obvious, adjacent, remote, unknown }
-  }, [aiAnalysis])
-
-  // Get section visibility for a patent (defaults to all visible)
-  const getSectionVisibility = (patentKey: string) => {
-    return expandedSections[patentKey] || {
-      metadata: true,
-      abstract: true,
-      aiSummary: true,
-      relevantParts: true,
-      irrelevantParts: true,
-      noveltyComparison: true
-    }
-  }
-
-  // Toggle section visibility
-  const toggleSection = (patentKey: string, section: string) => {
-    setExpandedSections(prev => ({
-      ...prev,
-      [patentKey]: {
-        ...getSectionVisibility(patentKey),
-        [section]: !getSectionVisibility(patentKey)[section as keyof typeof getSectionVisibility]
-      }
-    }))
-  }
-
-  const handleRelevanceFilterChange = (range: string) => {
-    setRelevanceFilters(prev =>
-      prev.includes(range) ? prev.filter(r => r !== range) : [...prev, range]
-    )
-    setCurrentPage(1) // Reset to first page on filter change
-  }
-
-  const handleNoveltyThreatFilterChange = (threat: string) => {
-    setNoveltyThreatFilters(prev =>
-      prev.includes(threat) ? prev.filter(t => t !== threat) : [...prev, threat]
-    )
-    setCurrentPage(1) // Reset to first page on filter change
-  }
-
-  const handleAutoSelectAdjacent = () => {
-    if (!hasAIReview) return
-
-    const candidates = sourceFilteredResults
-      .map((r, index) => {
-        const pn = getPatentKey(r, index)
-        const analysis = getAnalysisForPatentNumber(pn)
-        if (!pn || pn === 'N/A' || !analysis || !['adjacent', 'remote'].includes(String(analysis.noveltyThreat || ''))) return null
-
-        const relevance =
-          typeof (r as any).score === 'number'
-            ? (r as any).score
-            : typeof (r as any).relevance === 'number'
-              ? (r as any).relevance
-              : 0
-
-        return { r, pn, relevance, index }
-      })
-      .filter(Boolean) as Array<{ r: ResultItem | any; pn: string; relevance: number; index: number }>
-
-    if (candidates.length === 0) {
-      setAutoSelectWarning('⚠️ No adjacent-category patents found. Automatic selection may reduce novelty quality. Manual selection is recommended.')
-      setStatusMessage({
-        type: 'warning',
-        text: '⚠️ No adjacent-category patents found. Try selecting patents manually.'
-      })
-      return
-    }
-
-    // Sort by relevance (desc), then by stable index
-    candidates.sort((a, b) => {
-      if (b.relevance !== a.relevance) return b.relevance - a.relevance
-      return a.index - b.index
+  const threatCounts = useMemo(() => {
+    const counts: Record<ThreatLevel, number> = { anticipates: 0, obvious: 0, adjacent: 0, remote: 0, unknown: 0 }
+    results.forEach(r => {
+      const analysis = getAnalysisForPatent(r)
+      const threat = (analysis?.noveltyThreat || 'unknown') as ThreatLevel
+      if (analysis?.analysisStatus === 'unknown' || !THREAT_META[threat]) counts.unknown += 1
+      else counts[threat] += 1
     })
+    return counts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, aiAnalysis])
 
-    const top = candidates.slice(0, 10)
-    const nextSelected: Record<string, any> = { ...priorArtSelected }
-
-    top.forEach(({ r, pn }) => {
-      const analysis = getAnalysisForPatentNumber(pn)
-      const title = (r as any).title || (r as any).invention_title || pn || 'Untitled'
-      const snippet = (r as any).snippet || (r as any).abstract || (r as any).summary || (r as any).description || ''
-      const publication_date = (r as any).publication_date
-      const score =
-        typeof (r as any).score === 'number'
-          ? (r as any).score
-          : typeof (r as any).relevance === 'number'
-            ? (r as any).relevance
-            : undefined
-      const inventors = (r as any).inventors || (r as any).inventor_names || []
-      const assignees = (r as any).assignees || (r as any).assignee_names || []
-
-      const existing = nextSelected[pn] || {}
-
-      nextSelected[pn] = {
-        ...existing,
-        ...r,
-        title,
-        snippet,
-        score,
-        publication_date,
-        inventors,
-        assignees,
-        aiSummary: analysis?.aiSummary || existing.aiSummary,
-        noveltyThreat: analysis?.noveltyThreat || existing.noveltyThreat,
-        relevantParts: analysis?.relevantParts || existing.relevantParts || [],
-        irrelevantParts: analysis?.irrelevantParts || existing.irrelevantParts || [],
-        noveltyComparison: analysis?.noveltyComparison || existing.noveltyComparison,
-        tags: Array.from(new Set([
-          ...(existing.tags || []),
-          'AI_REVIEWED',
-          analysis?.noveltyThreat === 'remote' ? 'AI_REMOTE' : 'AI_ADJACENT'
-        ]))
-      }
-    })
-
-    setPriorArtSelected(nextSelected)
-    setAutoSelectWarning(null)
-    setStatusMessage({
-      type: 'success',
-      text: `✓ Auto-selected ${top.length} adjacent patents for drafting`
-    })
-  }
-
-
-  // Send no explicit providers: the server resolves the stored-corpus lane
-  // (google-patents-corpus + indian-corpus) itself.
-  //
-  // This replaces four source checkboxes that could not reach the current corpus.
-  // 'International Patents' — checked by default — mapped to 'pqai-corpus'/'pqai',
-  // both retired and stripped by the provider registry; 'Google Patents' and
-  // 'European Patents' mapped to the live SerpAPI/EPO APIs. There was no option
-  // for google-patents-corpus at all, so the default UI state searched only the
-  // Indian corpus while the ~29.8M-vector Google corpus sat unused.
-  const selectedProviderIds = useMemo<string[]>(() => [], [])
-
-  const resultSourceCounts = useMemo(() => {
-    return results.reduce((acc, result) => {
-      const sources = getResultSourceTypes(result)
-      if (sources.includes('india')) acc.india += 1
-      if (sources.includes('international')) acc.international += 1
-      if (sources.includes('google')) acc.google += 1
-      if (sources.includes('europe')) acc.europe += 1
-      return acc
-    }, { all: results.length, india: 0, international: 0, google: 0, europe: 0 })
-  }, [results])
-
-  const sourceFilterOptions = useMemo(() => [
-    { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
-    { key: 'india' as const, label: 'Indian', count: resultSourceCounts.india },
-    { key: 'international' as const, label: 'International', count: resultSourceCounts.international },
-    { key: 'google' as const, label: 'Google', count: resultSourceCounts.google },
-    { key: 'europe' as const, label: 'European', count: resultSourceCounts.europe },
-  ], [resultSourceCounts])
-
-  const sourceFilteredResults = useMemo(() => {
-    return results.filter(result => resultMatchesSourceFilter(result, resultSourceFilter))
-  }, [results, resultSourceFilter])
-
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [resultSourceFilter])
-
-
-  // Calculate patent counts for each relevance range
-  const relevanceRangeCounts = useMemo(() => {
-    return sourceFilteredResults.reduce((acc, r) => {
-      const score = (r.score || 0) * 100
-      if (score >= 90 && score <= 100) acc['90-100'] = (acc['90-100'] || 0) + 1
-      else if (score >= 80 && score < 90) acc['80-90'] = (acc['80-90'] || 0) + 1
-      else if (score >= 70 && score < 80) acc['70-80'] = (acc['70-80'] || 0) + 1
-      else if (score >= 60 && score < 70) acc['60-70'] = (acc['60-70'] || 0) + 1
-      else if (score >= 50 && score < 60) acc['50-60'] = (acc['50-60'] || 0) + 1
-      else if (score < 50) acc['<50'] = (acc['<50'] || 0) + 1
-      return acc
-    }, {} as Record<string, number>)
-  }, [sourceFilteredResults])
-
-  // First, filter results by relevance only (not threat)
-  const relevanceFilteredResults = useMemo(() => {
-    if (relevanceFilters.length === 0) return sourceFilteredResults
-    return sourceFilteredResults.filter(r => {
-      const score = (r.score || 0) * 100
-      return relevanceFilters.some(filter => {
-        if (filter === '90-100') return score >= 90 && score <= 100
-        if (filter === '80-90') return score >= 80 && score < 90
-        if (filter === '70-80') return score >= 70 && score < 80
-        if (filter === '60-70') return score >= 60 && score < 70
-        if (filter === '50-60') return score >= 50 && score < 60
-        if (filter === '<50') return score < 50
-        return false
-      })
-    })
-  }, [sourceFilteredResults, relevanceFilters])
-
-  // Calculate patent counts for each novelty threat level (based on relevance-filtered results)
-  const noveltyThreatCounts = useMemo(() => {
-    return relevanceFilteredResults.reduce((acc, r) => {
-      const threat = getAnalysisForPatent(r)?.noveltyThreat || 'unknown'
-      acc[threat] = (acc[threat] || 0) + 1
-      return acc
-    }, {} as Record<string, number>)
-  }, [relevanceFilteredResults, aiAnalysis])
-
-  // Then apply threat filter to get final filtered results
   const filteredResults = useMemo(() => {
-    if (noveltyThreatFilters.length === 0) return relevanceFilteredResults
-    return relevanceFilteredResults.filter(r => {
-      const threat = getAnalysisForPatent(r)?.noveltyThreat || 'unknown'
-      return noveltyThreatFilters.includes(threat)
+    if (!riskFilter) return results
+    return results.filter(r => {
+      const analysis = getAnalysisForPatent(r)
+      const threat = (analysis?.noveltyThreat || 'unknown') as ThreatLevel
+      const effective = analysis?.analysisStatus === 'unknown' || !THREAT_META[threat] ? 'unknown' : threat
+      return effective === riskFilter
     })
-  }, [relevanceFilteredResults, noveltyThreatFilters, aiAnalysis])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, aiAnalysis, riskFilter])
 
-  // Calculate total analyzed results (excluding unknown)
-  const analyzedResultsCount = useMemo(() => {
-    return (noveltyThreatCounts.anticipates || 0) + (noveltyThreatCounts.obvious || 0) + (noveltyThreatCounts.adjacent || 0) + (noveltyThreatCounts.remote || 0)
-  }, [noveltyThreatCounts])
+  const getTagsFor = useCallback((key: string): PatentTags => {
+    return tags[key] || { background: false, claims: false }
+  }, [tags])
 
+  const backgroundCount = useMemo(() => {
+    const fromPatents = results.filter((r, i) => getTagsFor(getPatentKey(r, i)).background).length
+    const fromManual = manualRefs.filter(m => m.background).length
+    return fromPatents + fromManual
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, tags, manualRefs, getTagsFor])
 
-  const totalPages = Math.ceil(filteredResults.length / itemsPerPage)
-  const paginatedResults = filteredResults.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  )
+  const claimsCount = useMemo(() => {
+    const fromPatents = results.filter((r, i) => getTagsFor(getPatentKey(r, i)).claims).length
+    const fromManual = manualRefs.filter(m => m.claims).length
+    return fromPatents + fromManual
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, tags, manualRefs, getTagsFor])
 
-  const defaultQuery = useMemo(() => {
-    // Use only the searchQuery from Stage 1 (LLM-generated, compact and optimized)
-    return searchQuery
-  }, [searchQuery])
-
-  const q = defaultQuery
-
-  const getPatentKey = (item: any, index?: number) => {
-    const pn = getPatentNumber(item) || 'N/A'
-    const ttl = item.title || (item as any).invention_title || pn || 'Untitled'
-    const idx = typeof index === 'number' ? index : 0
-    return pn !== 'N/A' ? pn : `${ttl}-${idx}`
-  }
-
-  // Generate consistent key for selection (must match the key used in render)
-  const generateSelectionKey = (item: any, index?: number) => {
-    return getPatentKey(item, index)
-  }
-
-  const toggleSelect = (item: any, index?: number) => {
-    const key = getPatentKey(item, index)
-    setSelected(prev => {
+  // ---------------------------------------------------------------------------
+  // Pre-tagging: once analysis lands, give untagged patents a sensible default.
+  // Keys the user explicitly cleared stay in the map as {false,false}, so
+  // defaults never fight an explicit decision.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!hasHydrated || results.length === 0) return
+    setTags(prev => {
+      let changed = false
       const next = { ...prev }
-      if (next[key]) {
-        delete next[key]
-      } else {
-        next[key] = {
-          title: item.title || (item as any).invention_title || (item as any).patent_number || 'Untitled',
-          snippet: item.snippet || (item as any).abstract || (item as any).summary || (item as any).description || '',
-          score: item.score || (item as any).relevance || 0,
-          tags: [],
-          publication_date: (item as any).publication_date || (item as any).filing_date || (item as any).date || '',
-          inventors: (item as any).inventors || (item as any).inventor_names || [],
-          assignees: (item as any).assignees || (item as any).assignee_names || []
-        }
-      }
-      return next
+      results.forEach((r, i) => {
+        const key = getPatentKey(r, i)
+        if (next[key]) return
+        const analysis = getAnalysisForPatent(r)
+        if (!analysis || analysis.analysisStatus === 'unknown') return
+        next[key] = defaultTagsForThreat(analysis.noveltyThreat)
+        changed = true
+      })
+      return changed ? next : prev
     })
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiAnalysis, results, hasHydrated])
 
-  const scrollToManualPriorArt = () => {
-    if (manualPriorArtRef.current) {
-      manualPriorArtRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }
-
-  const manualPriorArtEnabled = useMemo(() => {
-    return manualPriorArtText.trim().length > 0 || useOnlyManualPriorArt || useManualAndAISearch
-  }, [manualPriorArtText, useOnlyManualPriorArt, useManualAndAISearch])
-
-  const clearAllSelections = async () => {
-    setSelected({})
-    try {
-      if (session?.id && runId) {
-        await onComplete({ action: 'clear_related_art_selections', sessionId: session.id, runId })
+  // ---------------------------------------------------------------------------
+  // Selection payloads: derived from tags — mode is data, not a user decision.
+  // ---------------------------------------------------------------------------
+  const buildSelectionArrays = useCallback(() => {
+    const priorArtPatents: any[] = []
+    const claimRefPatents: any[] = []
+    results.forEach((r, i) => {
+      const key = getPatentKey(r, i)
+      const t = tags[key]
+      if (!t || (!t.background && !t.claims)) return
+      const analysis = getAnalysisForPatent(r)
+      const entry = {
+        patentNumber: key,
+        ...r,
+        noveltyThreat: analysis?.noveltyThreat,
+        aiSummary: analysis?.aiSummary,
+        relevantParts: analysis?.relevantParts,
+        irrelevantParts: analysis?.irrelevantParts,
+        noveltyComparison: analysis?.noveltyComparison
       }
-      setStatusMessage({
-        type: 'warning',
-        text: 'All patent selections cleared.'
-      })
-    } catch (e) {
-      console.error('Failed to clear selections:', e)
-      setError('Failed to clear selections.')
+      if (t.background) priorArtPatents.push(entry)
+      if (t.claims) claimRefPatents.push(entry)
+    })
+    const backgroundManualText = manualRefs.filter(m => m.background && m.text.trim()).map(m => m.text.trim()).join('\n\n')
+    const claimsManualText = manualRefs.filter(m => m.claims && m.text.trim()).map(m => m.text.trim()).join('\n\n')
+    const priorArtMode = priorArtPatents.length > 0 && backgroundManualText ? 'hybrid' : backgroundManualText ? 'manual' : 'ai'
+    const claimRefMode = claimRefPatents.length > 0 && claimsManualText ? 'hybrid' : claimsManualText ? 'manual' : 'ai'
+    return { priorArtPatents, claimRefPatents, backgroundManualText, claimsManualText, priorArtMode, claimRefMode }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, tags, manualRefs, aiAnalysis])
+
+  // Autosave tag decisions so a reload never loses triage work. skipClaimRefinement
+  // is intentionally omitted — the server keeps its stored value; only Continue
+  // decides it.
+  useEffect(() => {
+    if (!hasHydrated || !session?.id) return
+    if (results.length === 0 && manualRefs.length === 0) return
+    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current)
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      const { priorArtPatents, claimRefPatents, backgroundManualText, claimsManualText, priorArtMode, claimRefMode } = buildSelectionArrays()
+      onComplete({
+        action: 'save_prior_art_config',
+        sessionId: session.id,
+        priorArtConfig: { mode: priorArtMode, selectedPatents: priorArtPatents, manualText: backgroundManualText },
+        claimRefConfig: { mode: claimRefMode, selectedPatents: claimRefPatents, manualText: claimsManualText }
+      }).catch(err => console.error('Autosave of prior art tags failed:', err))
+    }, 1000)
+    return () => {
+      if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current)
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tags, manualRefs, hasHydrated, session?.id])
 
-  const runSearch = async () => {
-    console.log('🚀 runSearch called - customQuery:', customQuery, 'q:', q)
-    try {
-      setBusy(true)
-      setSearching(true)
-      setError(null)
-
-      const searchQuery = customQuery.trim() || q
-      // No source-selection guard: there are no source checkboxes any more, and an
-      // empty providerIds list is the correct signal for "use the stored corpus".
-
-      // Debug logging
-      console.log('🔍 Search Query Debug:')
-      console.log('  - Custom Query (raw):', customQuery)
-      console.log('  - Custom Query (trimmed):', customQuery.trim())
-      console.log('  - Default Query (q):', q)
-      console.log('  - Final Search Query:', searchQuery)
-      console.log('  - Using custom query?', customQuery.trim().length > 0)
-      console.log('  - Provider IDs:', selectedProviderIds)
-      console.log('  - Search precision:', searchPrecision)
-
-      // Sophisticated search progress simulation
-      /*
-        '🔍 Scanning the stored patent corpus...',
-        '🎯 Applying advanced semantic analysis to your invention...',
-        '🧠 Using proprietary AI algorithms for relevance matching...',
-        '📊 Calculating multi-dimensional similarity scores...',
-        '🔬 Cross-referencing with CPC/IPC classification systems...',
-        '⚡ Filtering results through novelty assessment engine...',
-        '✨ Ranking patents by technical relevance and impact...',
-        '📋 Preparing final results with comprehensive metadata...'
-      */
-
-      // Execute actual search
-      setSearchProgress('💡 Finalizing patent analysis and generating comprehensive report...')
-      setSearchProgress('Searching configured patent sources...')
-      const resp = await onComplete({
-        action: 'related_art_search',
-        sessionId: session?.id,
-        limit,
-        queryOverride: searchQuery,
-        afterDate: afterDate || undefined,
-        providerIds: selectedProviderIds,
-        // Corpus scope from Advanced Settings. Omitted keys are simply absent
-        // filters; the route validates country codes and drops inverted ranges.
-        filters: {
-          ...(filterCountries.length ? { countries: filterCountries } : {}),
-          ...(publicationDateTo ? { publicationDateTo } : {}),
-          ...(filingDateFrom ? { filingDateFrom } : {}),
-          ...(filingDateTo ? { filingDateTo } : {}),
-        },
-        // queryPlan intentionally omitted: googlePatentKeywords, epo*Keywords,
-        // patentSearchConceptGroups and searchPrecision were read only by the
-        // retired live providers. The corpus lane builds its own retrieval
-        // queries (concept + per-feature) and embeds them.
-      })
-
-      const items = Array.isArray(resp?.results) ? resp.results : []
-
-      // Show final result count
-      setSearchProgress(`✨ Analysis complete! Found ${items.length} highly relevant patent${items.length !== 1 ? 's' : ''} from millions of global records.`)
-
-      setSearchProgress(`Search complete. Found ${items.length} potential prior-art candidate${items.length !== 1 ? 's' : ''}.`)
-      // Brief pause to show the result
-
-      // Reset AI analysis and selections for new search to ensure fresh workflow
-      setAiAnalysis({})
-      setAnalysisProgress(null)
-      setPatentDetailsMap({})
-      setSelected({})
-      setIdeaBank([])
-      setIdeaBankVersion(prev => prev + 1) // Force re-render
-      setHasRestoredFromStorage(false) // Reset restoration flag
-
-      // Clear persisted ideaBank for this session
-      if (typeof window !== 'undefined' && session?.id) {
-        sessionStorage.removeItem(`ideaBank_${session.id}`)
-        console.log('🗑️ Cleared persisted ideaBank for new search')
-      }
-
-      setResults(items)
-      setRunId(resp?.runId || null)
-      setResultSourceFilter('all')
-
-    } catch (e) {
-      console.log('Search error:', e)
-      const errorData = (e as any)?.response?.data || e
-      const serviceError = String((errorData as any)?.error || 'Search failed. Please try again.')
-        .replace(/PQAI API/gi, 'Patent Search Service')
-        .replace(/PQAI/gi, 'Patent Search Service')
-      if ((errorData as any)?.showMockOption) {
-        setError(`${serviceError} Please retry the search later.`)
-      } else {
-        setError(serviceError)
-      }
-    } finally {
-      setBusy(false)
-      setSearching(false)
-      setSearchProgress('')
-    }
-  }
-
-  const applyAIReviewResponse = async (resp: any, options?: { mergeExisting?: boolean }) => {
-    console.log('=== AI REVIEW RESPONSE DEBUG ===')
-    console.log('AI Review Response received:', !!resp)
-    console.log('Response type:', typeof resp)
-
+  // ---------------------------------------------------------------------------
+  // Search + assess pipeline (one user action)
+  // ---------------------------------------------------------------------------
+  const applyAIReviewResponse = (resp: any, currentResults: ResultItem[], options?: { mergeExisting?: boolean }) => {
     if (!resp) {
-      console.error('AI Review API returned null/undefined response')
       setError('AI review failed: No response from server. Please try again.')
       return false
     }
 
-    console.log('Response keys:', Object.keys(resp))
-    console.log('Response has decisions:', Array.isArray(resp.decisions))
-    console.log('Response has ideaBankSuggestions:', Array.isArray(resp.ideaBankSuggestions))
-    console.log('Decisions count:', resp.decisions?.length || 0)
-    console.log('IdeaBankSuggestions count:', resp.ideaBankSuggestions?.length || 0)
-
     const decisions: Array<{ pn: string; title: string; relevance: number | null; novelty_threat?: string; summary: string; analysis_status?: 'analyzed' | 'unknown'; evidence_basis?: 'title_abstract'; failure_reason?: string; detailedAnalysis?: any }> = Array.isArray(resp?.decisions) ? resp.decisions : []
 
     let ideas: any[] = []
-    if (Array.isArray(resp?.ideaBankSuggestions)) {
-      ideas = resp.ideaBankSuggestions
-      console.log('Found ideas in resp.ideaBankSuggestions')
-    } else if (Array.isArray(resp?.data?.ideaBankSuggestions)) {
-      ideas = resp.data.ideaBankSuggestions
-      console.log('Found ideas in resp.data.ideaBankSuggestions')
-    } else if (resp?.data && Array.isArray(resp.data.ideaBankSuggestions)) {
-      ideas = resp.data.ideaBankSuggestions
-      console.log('Found ideas in resp.data (nested)')
-    } else {
-      console.log('No ideas found in any expected location')
-    }
-
-    console.log('Final Idea Bank Ideas:', ideas)
-    console.log('Ideas length:', ideas.length)
-    console.log('=== END AI REVIEW RESPONSE DEBUG ===')
-
-    if (!options?.mergeExisting || ideas.length > 0) {
-      setIdeaBank([...ideas])
-      setIdeaBankVersion(prev => prev + 1)
-    }
+    if (Array.isArray(resp?.ideaBankSuggestions)) ideas = resp.ideaBankSuggestions
+    else if (Array.isArray(resp?.data?.ideaBankSuggestions)) ideas = resp.data.ideaBankSuggestions
+    if (!options?.mergeExisting || ideas.length > 0) setIdeaBank([...ideas])
 
     const byPn: Record<string, any> = {}
     const byCanonicalPn: Record<string, any> = {}
@@ -1352,13 +751,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       byCanonicalPn[canonicalizePatentNumber(d.pn)] = decision
     }
 
-    const newAiAnalysis: Record<string, any> = {}
-    results.forEach((r) => {
+    const newAiAnalysis: Record<string, AIAnalysisEntry> = {}
+    currentResults.forEach((r) => {
       const pn = getPatentNumber(r) || 'N/A'
       if (!pn || pn === 'N/A') return
       const dec = byPn[pn] || byCanonicalPn[canonicalizePatentNumber(pn)]
       if (!dec) return
-
       newAiAnalysis[pn] = {
         aiSummary: dec.summary,
         noveltyThreat: dec.novelty_threat,
@@ -1371,34 +769,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       }
     })
 
-    const mergedAiAnalysis = options?.mergeExisting
-      ? { ...aiAnalysis, ...newAiAnalysis }
-      : newAiAnalysis
+    setAiAnalysis(prev => (options?.mergeExisting ? { ...prev, ...newAiAnalysis } : newAiAnalysis))
 
-    setAiAnalysis(mergedAiAnalysis)
-
-    setSelected(prev => {
-      const next = { ...prev }
-      Object.keys(next).forEach(key => {
-        const dec = byPn[key] || byCanonicalPn[canonicalizePatentNumber(key)]
-        if (dec) {
-          next[key] = {
-            ...next[key],
-            aiSummary: dec.summary,
-            noveltyThreat: dec.novelty_threat,
-            tags: dec.analysis_status === 'unknown'
-              ? ['AI_ANALYSIS_UNKNOWN']
-              : ['AI_REVIEWED'].concat(
-                  dec.novelty_threat === 'anticipates' ? ['AI_ANTICIPATES'] :
-                  dec.novelty_threat === 'obvious' ? ['AI_OBVIOUS'] :
-                  dec.novelty_threat === 'adjacent' ? ['AI_ADJACENT'] :
-                  ['AI_REMOTE']
-                )
-          }
-        }
-      })
-      return next
-    })
+    // Keep session.aiAnalysisData in sync — the stage-progress indicator and
+    // session hydration both read it. The server merges, so partial re-runs are safe.
+    if (Object.keys(newAiAnalysis).length > 0) {
+      onComplete({ action: 'save_ai_analysis', sessionId: session?.id, aiAnalysisData: newAiAnalysis })
+        .catch(err => console.warn('Failed to persist AI analysis data:', err))
+    }
 
     const reviewedCount = typeof resp?.reviewed === 'number'
       ? resp.reviewed
@@ -1406,64 +784,39 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     const unknownCount = typeof resp?.unknown === 'number'
       ? resp.unknown
       : decisions.length - reviewedCount
-    const attemptedCount = typeof resp?.attempted === 'number' ? resp.attempted : decisions.length
     setAnalysisProgress(prev => ({
-      processed: attemptedCount,
-      total: prev?.total || results.length,
-      currentBatch: prev?.totalBatches || prev?.currentBatch || 1,
-      totalBatches: prev?.totalBatches || prev?.currentBatch || 1,
-      message: `${reviewedCount} analyzed; ${unknownCount} unknown after retry.`
+      processed: typeof resp?.attempted === 'number' ? resp.attempted : decisions.length,
+      total: prev?.total || currentResults.length,
+      currentBatch: prev?.totalBatches || 1,
+      totalBatches: prev?.totalBatches || 1,
+      message: `${reviewedCount} assessed${unknownCount > 0 ? `; ${unknownCount} unknown after retry` : ''}.`
     }))
-    setReviewInfo(`${reviewedCount} analyzed, ${unknownCount} unknown${resp?.batches ? ` in ${resp.batches} batch(es)` : ''}.`)
     return true
   }
 
-  const runAIReview = async (options?: { missingOnly?: boolean }) => {
-    if (!runId) { setError('Run a search first.'); return }
-    if (results.length === 0) { setError('No results to review.'); return }
-    if (reviewing) return
+  const runAIReview = async (options?: { missingOnly?: boolean; runIdOverride?: string; resultsOverride?: ResultItem[] }) => {
+    const activeRunId = options?.runIdOverride || runId
+    const activeResults = options?.resultsOverride || results
+    if (!activeRunId) { setError('Run a search first.'); return }
+    if (activeResults.length === 0) { setError('No results to review.'); return }
+    if (phase === 'assessing') return
 
     const missingOnly = options?.missingOnly === true
     const candidatePatentNumbers = missingOnly ? missingAnalysisPatentNumbers : []
-    const targetCount = missingOnly ? candidatePatentNumbers.length : results.length
+    const targetCount = missingOnly ? candidatePatentNumbers.length : activeResults.length
 
     if (missingOnly && targetCount === 0) {
-      setMainTab('analyze')
-      setError(null)
-      setStatusMessage({
-        type: 'success',
-        text: 'All current patent results already have AI relevance analysis.'
-      })
-      setReviewInfo('All current patent results already have AI relevance analysis.')
-      setAnalysisProgress(prev => prev ? {
-        ...prev,
-        message: 'No missing AI relevance analysis found.'
-      } : null)
+      setStatusMessage({ type: 'success', text: 'All current results already have an AI assessment.' })
       return
     }
 
     try {
       setError(null)
-      setReviewing(true)
-      setReviewInfo(`Preparing AI analysis for ${targetCount} patent${targetCount !== 1 ? 's' : ''}...`)
-      setAnalysisProgress({
-        processed: 0,
-        total: targetCount,
-        currentBatch: 0,
-        totalBatches: 0,
-        message: 'Preparing patent batches...'
-      })
+      setPhase('assessing')
+      setPhaseMessage(`Assessing ${targetCount} patent${targetCount !== 1 ? 's' : ''}...`)
+      setAnalysisProgress({ processed: 0, total: targetCount, currentBatch: 0, totalBatches: 0, message: 'Preparing patent batches...' })
 
-      const normalizedData = (session?.ideaRecord?.normalizedData || {}) as any
-      const claimsSnapshot = getAuthoritativeClaims(normalizedData)
-      const frozenClaims = claimsSnapshot.structured
-      const claimsText = claimsSnapshot.html
-      const claimsApprovedAt = normalizedData.claimsApprovedAt
-      const claimsContext = claimsApprovedAt ? {
-        claims: frozenClaims.length > 0 ? frozenClaims : claimsText,
-        jurisdiction: normalizedData.claimsJurisdiction,
-        frozenAt: claimsApprovedAt
-      } : null
+      const claimsContext = buildClaimsContext()
 
       const updateProgress = (event: any) => {
         const total = typeof event.total === 'number' && event.total > 0 ? event.total : targetCount
@@ -1471,22 +824,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         const currentBatch = typeof event.batch === 'number' ? event.batch : 0
         const totalBatches = typeof event.totalBatches === 'number' ? event.totalBatches : 0
         const message = String(event.message || '').trim()
-
         if (event.type === 'start') {
-          setAnalysisProgress({ processed: 0, total, currentBatch: 0, totalBatches, message: message || `Starting analysis for ${total} patents...` })
-          setReviewInfo(`Starting AI analysis for ${total} patents...`)
-        } else if (event.type === 'batch_started') {
-          setAnalysisProgress({ processed, total, currentBatch, totalBatches, message: message || `Analyzing batch ${currentBatch} of ${totalBatches}...` })
-          setReviewInfo(`Analyzing batch ${currentBatch} of ${totalBatches}...`)
-        } else if (event.type === 'batch_completed') {
-          setAnalysisProgress({ processed, total, currentBatch, totalBatches, message: message || `Analyzed ${processed} of ${total} patents.` })
-          setReviewInfo(`Analyzed ${processed} of ${total} patents...`)
-        } else if (event.type === 'saving') {
-          setAnalysisProgress({ processed: total, total, currentBatch: totalBatches, totalBatches, message: message || 'Saving AI analysis results...' })
-          setReviewInfo('Saving AI analysis results...')
-        } else if (event.type === 'saved') {
-          setAnalysisProgress({ processed: total, total, currentBatch: totalBatches, totalBatches, message: message || 'Finalizing AI analysis...' })
-          setReviewInfo('Finalizing AI analysis...')
+          setAnalysisProgress({ processed: 0, total, currentBatch: 0, totalBatches, message: message || `Starting assessment of ${total} patents...` })
+        } else if (event.type === 'batch_started' || event.type === 'batch_completed') {
+          setAnalysisProgress({ processed, total, currentBatch, totalBatches, message: message || `Assessed ${processed} of ${total} patents.` })
+        } else if (event.type === 'saving' || event.type === 'saved') {
+          setAnalysisProgress({ processed: total, total, currentBatch: totalBatches, totalBatches, message: message || 'Saving assessment results...' })
         }
       }
 
@@ -1502,7 +845,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           body: JSON.stringify({
             action: 'related_art_llm_review_stream',
             sessionId: session?.id,
-            runId,
+            runId: activeRunId,
             claimsContext,
             candidatePatentNumbers: missingOnly ? candidatePatentNumbers : undefined
           })
@@ -1549,300 +892,281 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         finalResponse = await onComplete({
           action: 'related_art_llm_review',
           sessionId: session?.id,
-          runId,
+          runId: activeRunId,
           claimsContext,
           candidatePatentNumbers: missingOnly ? candidatePatentNumbers : undefined
         })
       }
 
-      await applyAIReviewResponse(finalResponse, { mergeExisting: missingOnly })
+      applyAIReviewResponse(finalResponse, activeResults, { mergeExisting: missingOnly })
     } catch (e) {
       console.error('AI review failed:', e)
       setError(e instanceof Error ? e.message : 'AI review failed. Please try again.')
     } finally {
-      setReviewing(false)
+      setPhase('idle')
+      setPhaseMessage('')
     }
   }
 
-  const runAIReviewLegacy = async () => {
-    if (!runId) { setError('Run a search first.'); return }
-    if (results.length === 0) { setError('No results to review.'); return }
+  const runSearchAndAssess = async () => {
+    if (phase !== 'idle') return
     try {
+      setPhase('searching')
       setError(null)
-      setReviewing(true)
-      setReviewInfo('Analyzing patents with AI…')
-      
-      // Get frozen claims from session for claim-aware prior art analysis
-      const normalizedData = (session?.ideaRecord?.normalizedData || {}) as any
-      const claimsSnapshot = getAuthoritativeClaims(normalizedData)
-      const frozenClaims = claimsSnapshot.structured
-      const claimsText = claimsSnapshot.html
-      const claimsApprovedAt = normalizedData.claimsApprovedAt
-      
-      // Pass claims context to the AI review for deeper analysis
+      setStatusMessage(null)
+      setPhaseMessage('Searching the patent corpus...')
+
+      const effectiveQuery = queryText.trim() || searchQuery
       const resp = await onComplete({
-        action: 'related_art_llm_review',
+        action: 'related_art_search',
         sessionId: session?.id,
-        runId,
-        // Include frozen claims for claim-aware analysis
-        claimsContext: claimsApprovedAt ? {
-          claims: frozenClaims.length > 0 ? frozenClaims : claimsText,
-          jurisdiction: normalizedData.claimsJurisdiction,
-          frozenAt: claimsApprovedAt
-        } : null
+        limit,
+        queryOverride: effectiveQuery,
+        afterDate: afterDate || undefined,
+        providerIds: [],
+        // Corpus scope filters — these narrow what is searched, not just shown.
+        filters: {
+          ...(filterCountries.length ? { countries: filterCountries } : {}),
+          ...(publicationDateTo ? { publicationDateTo } : {}),
+          ...(filingDateFrom ? { filingDateFrom } : {}),
+          ...(filingDateTo ? { filingDateTo } : {}),
+        },
       })
 
-      console.log('=== AI REVIEW RESPONSE DEBUG ===')
-      console.log('AI Review Response received:', !!resp)
-      console.log('Response type:', typeof resp)
+      const items = Array.isArray(resp?.results) ? resp.results : []
+      const newRunId = resp?.runId || null
 
-      // Check if response is null or undefined
-      if (!resp) {
-        console.error('❌ AI Review API returned null/undefined response')
-        setError('AI review failed: No response from server. Please try again.')
-        setReviewing(false)
+      // Fresh search: previous analysis and tags no longer apply.
+      setAiAnalysis({})
+      setAnalysisProgress(null)
+      setPatentDetailsMap({})
+      setTags({})
+      setRiskFilter(null)
+      setExpanded(new Set())
+      setIdeaBank([])
+      setHasRestoredFromStorage(false)
+      if (typeof window !== 'undefined' && session?.id) {
+        sessionStorage.removeItem(`ideaBank_${session.id}`)
+      }
+
+      setResults(items)
+      setRunId(newRunId)
+      setSearchPanelOpen(false)
+
+      if (items.length === 0) {
+        setPhase('idle')
+        setPhaseMessage('')
+        setStatusMessage({ type: 'warning', text: 'No patents matched this search. Broaden the query or scope and try again.' })
         return
       }
 
-      console.log('Response keys:', Object.keys(resp))
-      console.log('Response has decisions:', Array.isArray(resp.decisions))
-      console.log('Response has ideaBankSuggestions:', Array.isArray(resp.ideaBankSuggestions))
-      console.log('Decisions count:', resp.decisions?.length || 0)
-      console.log('IdeaBankSuggestions count:', resp.ideaBankSuggestions?.length || 0)
+      // Assessment starts automatically — one user action, one pipeline.
+      await runAIReview({ runIdOverride: newRunId || undefined, resultsOverride: items })
+    } catch (e) {
+      const errorData = (e as any)?.response?.data || e
+      const serviceError = String((errorData as any)?.error || 'Search failed. Please try again.')
+        .replace(/PQAI API/gi, 'Patent Search Service')
+        .replace(/PQAI/gi, 'Patent Search Service')
+      setError(serviceError)
+      setPhase('idle')
+      setPhaseMessage('')
+    }
+  }
 
-      const decisions: Array<{ pn: string; title: string; relevance: number; decision: string; summary: string }> = Array.isArray(resp?.decisions) ? resp.decisions : []
-      const auto: string[] = Array.isArray(resp?.autoSelect) ? resp.autoSelect : []
+  // ---------------------------------------------------------------------------
+  // Continue: derive the exact legacy payloads from tags, then advance.
+  // Claim refinement is skipped as a consequence of tagging nothing for claims.
+  // ---------------------------------------------------------------------------
+  const handleContinue = async () => {
+    if (continuing) return
+    setContinuing(true)
+    setError(null)
+    try {
+      const { priorArtPatents, claimRefPatents, backgroundManualText, claimsManualText, priorArtMode, claimRefMode } = buildSelectionArrays()
+      const willRefine = claimRefPatents.length > 0 || claimsManualText.trim().length > 0
 
-      // Try multiple ways to extract ideas
-      let ideas: any[] = []
-      if (Array.isArray(resp?.ideaBankSuggestions)) {
-        ideas = resp.ideaBankSuggestions
-        console.log('✅ Found ideas in resp.ideaBankSuggestions')
-      } else if (Array.isArray(resp?.data?.ideaBankSuggestions)) {
-        ideas = resp.data.ideaBankSuggestions
-        console.log('✅ Found ideas in resp.data.ideaBankSuggestions')
-      } else if (resp?.data && Array.isArray(resp.data.ideaBankSuggestions)) {
-        ideas = resp.data.ideaBankSuggestions
-        console.log('✅ Found ideas in resp.data (nested)')
-      } else {
-        console.log('❌ No ideas found in any expected location')
-      }
-
-      console.log('Final Idea Bank Ideas:', ideas)
-      console.log('Ideas length:', ideas.length)
-      console.log('=== END AI REVIEW RESPONSE DEBUG ===')
-
-      // Always set ideaBank, even if empty, to ensure UI updates
-      console.log('🚀 About to call setIdeaBank with:', ideas.length, 'ideas')
-      console.log('🚀 Ideas array content:', ideas)
-
-      // Store ideas in a way that survives re-renders
-      const ideasToSet = [...ideas] // Create a copy
-
-      // Update both states to force re-render
-      setIdeaBank(ideasToSet)
-      setIdeaBankVersion(prev => prev + 1) // Force re-render
-      console.log('✅ Idea Bank setIdeaBank called with', ideasToSet.length, 'ideas, new version will be:', ideaBankVersion + 1)
-
-      // Force an immediate state check
-      setTimeout(() => {
-        console.log('🔄 Immediate check after setIdeaBank:', ideaBank.length, 'ideas, version:', ideaBankVersion)
-        if (ideasToSet.length > 0) {
-          console.log('🔄 Immediate check - first idea:', ideasToSet[0]?.title)
-        }
-      }, 0)
-
-      // Update review info
-      setReviewInfo('Analysis complete - ' + ideasToSet.length + ' ideas generated')
-
-      // Force a re-render check
-      setTimeout(() => {
-        console.log('🔄 Re-checking ideaBank state after setState:', ideaBank.length, 'ideas, version:', ideaBankVersion)
-        console.log('🔄 Current ideaBank content:', ideaBank)
-      }, 100)
-      const byPn: Record<string, { relevance: number; novelty_threat: string; summary: string; title: string; relevant_parts?: string[]; irrelevant_parts?: string[]; novelty_comparison?: string }> = {}
-      for (const d of decisions) {
-        if (!d?.pn) continue
-        byPn[d.pn] = {
-          relevance: typeof d.relevance === 'number' ? d.relevance : 0,
-          novelty_threat: String((d as any).novelty_threat||'remote'),
-          summary: String(d.summary||'').slice(0,260),
-          title: d.title || '',
-          relevant_parts: (d as any).detailedAnalysis?.relevant_parts || [],
-          irrelevant_parts: (d as any).detailedAnalysis?.irrelevant_parts || [],
-          novelty_comparison: (d as any).detailedAnalysis?.novelty_comparison || ''
+      // Persist user-confirmed selections on the run (kept for downstream
+      // fallbacks and stage-status derivation).
+      if (runId && session?.id) {
+        try {
+          await onComplete({ action: 'clear_related_art_selections', sessionId: session.id, runId })
+          const taggedEntries = [...priorArtPatents, ...claimRefPatents]
+          const seen = new Set<string>()
+          const selections = taggedEntries.filter(entry => {
+            if (seen.has(entry.patentNumber)) return false
+            seen.add(entry.patentNumber)
+            return true
+          }).map(entry => ({
+            patent_number: entry.patentNumber,
+            title: entry.title,
+            snippet: (entry as any).snippet || (entry as any).abstract,
+            score: (entry as any).score,
+            tags: ['USER_SELECTED'],
+            publication_date: (entry as any).publication_date,
+            inventors: (entry as any).inventors,
+            assignees: (entry as any).assignees,
+            user_notes: entry.aiSummary || undefined
+          }))
+          if (selections.length > 0) {
+            await onComplete({ action: 'related_art_select', sessionId: session.id, runId, selections })
+          }
+        } catch (e) {
+          console.warn('Failed to persist run selections:', e)
         }
       }
-      // Store AI analysis results separately from manual selections
-      const newAiAnalysis: Record<string, any> = {}
-      results.forEach((r, i) => {
-        const pn = r.pn || (r as any).patent_number || (r as any).publication_number || (r as any).publication_id || (r as any).publicationId || (r as any).patentId || (r as any).patent_id || (r as any).id || 'N/A'
-        if (!pn || pn === 'N/A') return
-        const dec = byPn[pn]
-        if (!dec) return
 
-        newAiAnalysis[pn] = {
-          aiSummary: dec.summary,
-          noveltyThreat: dec.novelty_threat,
-          relevantParts: Array.isArray(dec.relevant_parts) ? dec.relevant_parts : [],
-          irrelevantParts: Array.isArray(dec.irrelevant_parts) ? dec.irrelevant_parts : [],
-          noveltyComparison: String(dec.novelty_comparison || '').trim()
-        }
+      await onComplete({
+        action: 'save_prior_art_config',
+        sessionId: session?.id,
+        priorArtConfig: { mode: priorArtMode, selectedPatents: priorArtPatents, manualText: backgroundManualText },
+        claimRefConfig: willRefine
+          ? { mode: claimRefMode, selectedPatents: claimRefPatents, manualText: claimsManualText }
+          : { mode: 'ai', selectedPatents: [], manualText: '' },
+        skipClaimRefinement: !willRefine
       })
 
-      setAiAnalysis(newAiAnalysis)
+      const manualPriorArt = backgroundManualText ? {
+        manualPriorArtText: backgroundManualText,
+        useOnlyManualPriorArt: priorArtMode === 'manual',
+        useManualAndAISearch: priorArtMode === 'hybrid'
+      } : null
 
-      // Save AI analysis data to database
-      try {
-        await onComplete({ action: 'save_ai_analysis', sessionId: session?.id, aiAnalysisData: newAiAnalysis })
-        console.log('AI analysis data saved to database')
-      } catch (e) {
-        console.error('Failed to save AI analysis data:', e)
-      }
-
-      // Only update selected items (manually selected patents) with AI data
-      setSelected(prev => {
-        const next = { ...prev }
-        Object.keys(next).forEach(key => {
-          const dec = byPn[key]
-          if (dec) {
-            // Update existing selected patent with AI data
-            next[key] = {
-              ...next[key],
-              aiSummary: dec.summary,
-              noveltyThreat: dec.novelty_threat,
-              tags: ['AI_REVIEWED'].concat(
-                dec.novelty_threat === 'anticipates' ? ['AI_ANTICIPATES'] :
-                dec.novelty_threat === 'obvious' ? ['AI_OBVIOUS'] :
-                dec.novelty_threat === 'adjacent' ? ['AI_ADJACENT'] :
-                ['AI_REMOTE']
-              )
-            }
+      if (willRefine) {
+        await onComplete({
+          action: 'set_stage',
+          sessionId: session?.id,
+          stage: 'CLAIM_REFINEMENT',
+          priorArtForDrafting: { mode: priorArtMode, selectedPatents: priorArtPatents, manualText: backgroundManualText },
+          claimRefinementConfig: { mode: claimRefMode, selectedPatents: claimRefPatents, manualText: claimsManualText },
+          manualPriorArt,
+          selectedPatents: claimRefPatents,
+          priorArtConfig: {
+            useAuto: claimRefMode !== 'manual',
+            useManual: claimRefMode === 'manual' || claimRefMode === 'hybrid'
           }
         })
-        return next
-      })
-      setReviewInfo(`AI reviewed ${decisions.length} items${resp?.batches ? ` in ${resp.batches} batch(es)` : ''}.`)
+      } else {
+        await onComplete({
+          action: 'set_stage',
+          sessionId: session?.id,
+          stage: 'COMPONENT_PLANNER',
+          priorArtForDrafting: { mode: priorArtMode, selectedPatents: priorArtPatents, manualText: backgroundManualText },
+          claimRefinementSkipped: true,
+          freezePreliminaryClaims: true,
+          manualPriorArt,
+          selectedPatents: priorArtPatents,
+          priorArtConfig: {
+            useAuto: priorArtMode !== 'manual',
+            useManual: priorArtMode === 'manual' || priorArtMode === 'hybrid',
+            skippedClaimRefinement: true
+          }
+        })
+      }
+      await onRefresh()
     } catch (e) {
-      setError('AI review failed. Please try again.')
+      console.error('Failed to continue from prior art stage:', e)
+      setError('Failed to save your selections. Please try again.')
     } finally {
-      setReviewing(false)
+      setContinuing(false)
     }
   }
 
-  const saveManualPriorArt = async () => {
-    if (!session?.id) {
-      setError('Cannot save manual prior art: missing session ID.')
-      return false
-    }
-
-    try {
-      setSavingManualPriorArt(true)
-      if (!manualPriorArtEnabled) {
-        await onComplete({ action: 'save_manual_prior_art', sessionId: session?.id, manualPriorArt: null })
-        setIsManualPriorArtSaved(false)
-        return true
-      }
-      const manualPriorArtData = {
-        manualPriorArtText,
-        useOnlyManualPriorArt,
-        useManualAndAISearch
-      }
-      await onComplete({ action: 'save_manual_prior_art', sessionId: session?.id, manualPriorArt: manualPriorArtData })
-      setIsManualPriorArtSaved(true)
-      console.log('Manual prior art saved successfully:', manualPriorArtData)
-      setUseManualPriorArtToggle(true)
-      return true
-    } catch (e) {
-      console.error('Failed to save manual prior art:', e)
-      setError('Failed to save manual prior art.')
-      return false
-    } finally {
-      setSavingManualPriorArt(false)
-    }
-  }
-
-  const clearManualPriorArt = async () => {
-    setManualPriorArtText('')
-    setUseOnlyManualPriorArt(false)
-    setUseManualAndAISearch(false)
-    setIsManualPriorArtSaved(false)
-    setUseManualPriorArtToggle(false)
-    try {
-      if (session?.id) {
-        await onComplete({ action: 'save_manual_prior_art', sessionId: session?.id, manualPriorArt: null })
-      }
-      setStatusMessage({
-        type: 'warning',
-        text: 'Manual prior art removed. Drafting will not use manual prior art unless re-enabled.'
-      })
-    } catch (e) {
-      console.error('Failed to clear manual prior art:', e)
-      setError('Failed to remove manual prior art.')
-    }
-  }
-
-  const saveSelections = async (options?: { skipManual?: boolean }) => {
-    if (!runId || !session?.id) {
-      setError('Cannot save selections: missing run or session ID.')
-      return
-    }
-
-    // First, clear all existing user selections for this session/run
-    // This ensures we only keep the current selections
-    try {
-      await onComplete({ action: 'clear_related_art_selections', sessionId: session?.id, runId })
-    } catch (e) {
-      console.warn('Failed to clear existing selections:', e)
-      // Continue anyway - not a critical error
-    }
-
-    const selections = Object.entries(selected).map(([k, v]) => {
-      const baseTags = Array.isArray(v.tags) ? v.tags : []
-      const tags = baseTags.includes('USER_SELECTED') ? baseTags : [...baseTags, 'USER_SELECTED']
-      return {
-        patent_number: k,
-        title: v.title,
-        snippet: v.snippet,
-        score: v.score,
-        tags,
-        publication_date: v.publication_date,
-        inventors: v.inventors,
-        assignees: v.assignees,
-        user_notes: v.aiSummary || undefined
-      }
+  // ---------------------------------------------------------------------------
+  // Small UI helpers
+  // ---------------------------------------------------------------------------
+  const togglePatentTag = (key: string, which: keyof PatentTags) => {
+    setTags(prev => {
+      const current = prev[key] || { background: false, claims: false }
+      return { ...prev, [key]: { ...current, [which]: !current[which] } }
     })
-
-    // Save current selections if any exist
-    if (selections.length > 0) {
-      await onComplete({ action: 'related_art_select', sessionId: session?.id, runId, selections })
-    }
-
-    // Save manual prior art data unless explicitly skipped (auto-save path)
-    if (!options?.skipManual) {
-      await saveManualPriorArt()
-    }
   }
 
-  // Determine which tabs should be enabled based on workflow progress
-  const canAccessAnalyze = results.length > 0
-  const canAccessSelect = hasAIReview
+  const toggleManualTag = (id: string, which: 'background' | 'claims') => {
+    setManualRefs(prev => prev.map(m => (m.id === id ? { ...m, [which]: !m[which] } : m)))
+  }
+
+  const toggleExpanded = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const addManualRef = () => {
+    const text = manualDraft.trim()
+    if (!text) return
+    setManualRefs(prev => [...prev, { id: `manual-${Date.now()}`, text, background: true, claims: false }])
+    setManualDraft('')
+    setAddFormOpen(false)
+  }
+
+  const removeManualRef = (id: string) => {
+    setManualRefs(prev => prev.filter(m => m.id !== id))
+  }
 
   const noveltyHandoff = session?.noveltyHandoff
+  const running = phase !== 'idle'
+  const showTriage = results.length > 0 || manualRefs.length > 0
 
+  const TagChip = ({ on, label, onClick, disabled }: { on: boolean; label: string; onClick: () => void; disabled?: boolean }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={on}
+      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors whitespace-nowrap ${
+        on
+          ? 'bg-ai-blue-50 border-ai-blue-300 text-ai-blue-700'
+          : 'bg-white border-paper-300 text-ai-graphite-400 hover:border-paper-400 hover:text-ai-graphite-600'
+      } disabled:opacity-40`}
+    >
+      {on ? '✓ ' : ''}{label}
+    </button>
+  )
+
+  const ManualRow = ({ m }: { m: ManualRef }) => (
+    <div className={m.background || m.claims ? 'bg-ai-blue-50/30' : ''}>
+      <div className="flex items-start gap-3 p-4">
+        <span className="shrink-0 mt-0.5 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-white text-ai-graphite-600 border border-dashed border-ai-graphite-400">
+          Manual
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-ai-graphite-800 whitespace-pre-wrap">{m.text}</p>
+          <div className="text-xs text-ai-graphite-500 mt-1 flex items-center gap-2">
+            <span>Added manually · not assessed</span>
+            <button
+              type="button"
+              onClick={() => removeManualRef(m.id)}
+              className="text-red-500 hover:text-red-600 font-medium"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-1.5 shrink-0">
+          <TagChip on={m.background} label="Background" onClick={() => toggleManualTag(m.id, 'background')} />
+          <TagChip on={m.claims} label="Claims" onClick={() => toggleManualTag(m.id, 'claims')} />
+        </div>
+      </div>
+    </div>
+  )
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-ai-blue-50/30">
-      {/* Prior art seeded from a completed novelty assessment — explains why the list below is
-          already populated and analysed, so the user does not re-run a weaker search. */}
+    <div className="min-h-screen bg-white">
+      {/* Prior art seeded from a completed novelty assessment — explains why the list
+          below is already populated and analysed. */}
       {noveltyHandoff?.searchId && (
-        <div className="max-w-[1800px] mx-auto px-3 pt-3 sm:px-6 sm:pt-4">
-          <div className="rounded-xl border border-violet-200 bg-violet-50/70 p-4">
+        <div className="max-w-5xl mx-auto px-4 pt-4">
+          <div className="rounded-xl border border-lamp-200 bg-lamp-50/70 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-violet-900">
-                  Imported from your novelty assessment
-                </div>
-                <p className="mt-1 text-sm text-violet-800">
+                <div className="text-sm font-semibold text-lamp-900">Imported from your novelty assessment</div>
+                <p className="mt-1 text-sm text-lamp-800">
                   {noveltyHandoff.citationCount ?? 0} analysed reference{(noveltyHandoff.citationCount ?? 0) === 1 ? '' : 's'} were
                   carried over and pre-selected for drafting
                   {(noveltyHandoff.shortlistedCount ?? 0) > 0
@@ -1855,15 +1179,15 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 href={`/novelty-search/${noveltyHandoff.searchId}/consolidated`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="shrink-0 rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-sm font-medium text-violet-800 hover:bg-violet-100"
+                className="shrink-0 rounded-lg border border-lamp-300 bg-white px-3 py-1.5 text-sm font-medium text-lamp-800 hover:bg-lamp-100"
               >
                 View full report
               </a>
             </div>
             {noveltyHandoff.findingsDigest && (
               <details className="mt-3">
-                <summary className="cursor-pointer text-sm font-medium text-violet-900">Assessment findings</summary>
-                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-violet-200 bg-white p-3 text-xs leading-5 text-slate-700">
+                <summary className="cursor-pointer text-sm font-medium text-lamp-900">Assessment findings</summary>
+                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-lamp-200 bg-white p-3 text-xs leading-5 text-slate-700">
                   {noveltyHandoff.findingsDigest}
                 </pre>
               </details>
@@ -1872,2030 +1196,521 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         </div>
       )}
 
-      {/* ============= HEADER WITH PROGRESS STEPS ============= */}
-      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-paper-300 shadow-sm">
-        <div className="max-w-[1800px] mx-auto px-3 py-3 sm:px-6 sm:py-4">
-          {/* Title */}
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-xl font-bold text-ai-graphite-900">Prior Art Analysis</h2>
-              <p className="text-sm text-ai-graphite-500">Discover, analyze, and select relevant patents for your invention</p>
-            </div>
-            {/* Quick Stats */}
-            <div className="flex items-center gap-4 text-sm">
-              {results.length > 0 && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-ai-blue-50 rounded-full">
-                  <span className="text-ai-blue-600 font-medium">{results.length}</span>
-                  <span className="text-ai-blue-500">patents found</span>
-                </div>
-              )}
-              {hasAIReview && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 rounded-full">
-                  <span className="text-emerald-600 font-medium">{analysisSummary.total}</span>
-                  <span className="text-emerald-500">analyzed</span>
-                </div>
-              )}
-            </div>
+      <div className="max-w-5xl mx-auto px-4 py-6 pb-32">
+        {/* Header */}
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
+          <div>
+            <h2 className="text-xl font-bold text-ai-graphite-900">Prior Art Analysis</h2>
+            <p className="text-sm text-ai-graphite-500 mt-0.5">
+              {showTriage && hasAIReview
+                ? `${results.length} reference${results.length !== 1 ? 's' : ''} found and assessed${detailsLoading ? ' · loading metadata' : ''}`
+                : 'One search, assessed automatically — then tag each reference for how it should be used.'}
+            </p>
           </div>
-
-          {/* Step Navigation Tabs */}
-          <div className="flex items-center gap-2">
-            {/* Step 1: Search */}
+          {showTriage && !running && (
             <button
-              onClick={() => setMainTab('search')}
-              className={`flex items-center gap-3 px-5 py-3 rounded-xl font-medium transition-all ${
-                mainTab === 'search'
-                  ? 'bg-ai-blue-600 text-white shadow-lg shadow-ai-blue-200'
-                  : 'bg-white text-ai-graphite-600 hover:bg-paper-100 border border-paper-300'
-              }`}
+              type="button"
+              onClick={() => setSearchPanelOpen(open => !open)}
+              className="px-4 py-2 rounded-xl text-sm font-medium border border-paper-300 text-ai-graphite-700 hover:border-ai-graphite-400 transition-colors"
             >
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${
-                mainTab === 'search' ? 'bg-white/20' : results.length > 0 ? 'bg-green-100 text-green-600' : 'bg-paper-200'
-              }`}>
-                {results.length > 0 ? '✓' : '1'}
-              </div>
-              <div className="text-left">
-                <div className="font-semibold">Search</div>
-                <div className={`text-xs ${mainTab === 'search' ? 'text-ai-blue-200' : 'text-ai-graphite-400'}`}>
-                  Find prior art
-                </div>
-              </div>
+              {searchPanelOpen ? 'Hide search options' : 'Adjust search'}
             </button>
-
-            {/* Arrow */}
-            <svg className={`w-5 h-5 ${canAccessAnalyze ? 'text-ai-graphite-400' : 'text-gray-200'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-
-            {/* Step 2: Analyze */}
-            <button
-              onClick={() => {
-                if (!canAccessAnalyze || reviewing) return
-                setMainTab('analyze')
-                if (hasAIReview) {
-                  void runAIReview({ missingOnly: true })
-                }
-              }}
-              disabled={!canAccessAnalyze || reviewing}
-              className={`flex items-center gap-3 px-5 py-3 rounded-xl font-medium transition-all ${
-                mainTab === 'analyze'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'
-                  : canAccessAnalyze
-                    ? 'bg-white text-ai-graphite-600 hover:bg-paper-100 border border-paper-300'
-                    : 'bg-paper-100 text-gray-300 cursor-not-allowed border border-paper-200'
-              }`}
-            >
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${
-                mainTab === 'analyze' ? 'bg-white/20' : hasAIReview ? 'bg-green-100 text-green-600' : canAccessAnalyze ? 'bg-paper-200' : 'bg-paper-100 text-gray-300'
-              }`}>
-                {hasAIReview ? '✓' : '2'}
-              </div>
-              <div className="text-left">
-                <div className="font-semibold">{hasAIReview ? 'Re-Analyze' : 'Analyze'}</div>
-                <div className={`text-xs ${mainTab === 'analyze' ? 'text-emerald-200' : canAccessAnalyze ? 'text-ai-graphite-400' : 'text-gray-300'}`}>
-                  {hasAIReview ? `${missingAnalysisPatentNumbers.length} missing` : 'AI review'}
-                </div>
-              </div>
-            </button>
-
-            {/* Arrow */}
-            <svg className={`w-5 h-5 ${canAccessSelect ? 'text-ai-graphite-400' : 'text-gray-200'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-
-            {/* Step 3: Select */}
-            <button
-              onClick={() => canAccessSelect && setMainTab('select')}
-              disabled={!canAccessSelect}
-              className={`flex items-center gap-3 px-5 py-3 rounded-xl font-medium transition-all ${
-                mainTab === 'select'
-                  ? 'bg-ai-blue-600 text-white shadow-lg shadow-ai-blue-200'
-                  : canAccessSelect
-                    ? 'bg-white text-ai-graphite-600 hover:bg-paper-100 border border-paper-300'
-                    : 'bg-paper-100 text-gray-300 cursor-not-allowed border border-paper-200'
-              }`}
-            >
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${
-                mainTab === 'select' ? 'bg-white/20' : canAccessSelect ? 'bg-paper-200' : 'bg-paper-100 text-gray-300'
-              }`}>
-                3
-              </div>
-              <div className="text-left">
-                <div className="font-semibold">Select</div>
-                <div className={`text-xs ${mainTab === 'select' ? 'text-ai-blue-200' : canAccessSelect ? 'text-ai-graphite-400' : 'text-gray-300'}`}>
-                  Choose patents
-                </div>
-              </div>
-            </button>
-          </div>
+          )}
         </div>
-      </div>
 
-      {/* ============= MAIN CONTENT AREA ============= */}
-      <div className="max-w-[1800px] mx-auto px-3 py-5 sm:px-6 sm:py-8">
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
-            <span className="text-red-500 text-xl">⚠️</span>
-            <div>
-              <div className="font-medium text-red-800">Error</div>
-              <div className="text-sm text-red-600">{error}</div>
+          <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+            <div className="flex-1">
+              <div className="font-medium text-red-800">Something went wrong</div>
+              <div className="text-sm text-red-600 mt-0.5">{error}</div>
             </div>
-            <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 text-lg leading-none">×</button>
           </div>
         )}
 
-        {/* ============= TAB 1: SEARCH ============= */}
-        {mainTab === 'search' && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* Your Invention Context Card */}
-            <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-2xl border border-ai-blue-100 p-6">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-ai-blue-100 flex items-center justify-center text-2xl">💡</div>
-                <div className="flex-1">
-                  <h3 className="font-semibold text-ai-graphite-900 mb-1">Your Invention</h3>
-                  <p className="text-lg text-ai-blue-900 font-medium">{idea?.title || 'Untitled'}</p>
-                  {idea?.abstract && (
-                    <p className="text-sm text-ai-graphite-600 mt-2 line-clamp-2">{idea.abstract}</p>
-                  )}
-                </div>
-              </div>
+        {statusMessage && (
+          <div className={`mb-4 p-3 rounded-xl border text-sm ${
+            statusMessage.type === 'success'
+              ? 'bg-green-50 border-green-200 text-green-800'
+              : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}>
+            <div className="flex items-start justify-between gap-3">
+              <span>{statusMessage.text}</span>
+              <button onClick={() => setStatusMessage(null)} className="opacity-60 hover:opacity-100 leading-none">×</button>
             </div>
+          </div>
+        )}
 
-            {/* Search Configuration */}
-            <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
-              <div className="p-6 border-b border-paper-200">
-                <h3 className="font-semibold text-ai-graphite-900 flex items-center gap-2">
-                  <span className="text-xl">🔍</span> Global Patent Search
-                </h3>
-                <p className="text-sm text-ai-graphite-500 mt-1">
-                  Meaning-based search over the stored corpus — 46.2M patent publications worldwide, of which 29.8M patent families are semantically indexed
-                </p>
+        {/* Search card — the start state, and reachable later via "Adjust search". */}
+        {(!showTriage || searchPanelOpen) && !running && (
+          <div className="space-y-4 mb-6">
+            {!showTriage && (
+              <div className="bg-ai-blue-50 rounded-2xl border border-ai-blue-100 p-5 flex items-start gap-4">
+                <div className="w-10 h-10 rounded-xl bg-ai-blue-100 text-ai-blue-700 flex items-center justify-center font-semibold shrink-0">
+                  {String(idea?.title || 'I').slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-ai-graphite-900">{idea?.title || 'Untitled invention'}</div>
+                  {idea?.abstract && <p className="text-sm text-ai-graphite-600 mt-1 line-clamp-2">{idea.abstract}</p>}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white rounded-2xl border border-paper-300 p-5 space-y-4">
+              <div>
+                <label htmlFor="prior-art-query" className="block text-sm font-medium text-ai-graphite-700 mb-2">
+                  Search query — edit freely
+                </label>
+                <textarea
+                  id="prior-art-query"
+                  className="w-full border border-paper-400 rounded-xl p-3 text-sm bg-paper-100 focus:bg-white focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
+                  rows={3}
+                  value={queryText || searchQuery}
+                  onChange={(e) => setQueryText(e.target.value)}
+                  placeholder="Describe the invention concepts to search for..."
+                />
               </div>
 
-              <div className="p-6 space-y-6">
-                {/* Search Query Display */}
-                <div>
-                  <label className="block text-sm font-medium text-ai-graphite-700 mb-2">AI-Optimized Search Query</label>
-                  <div className="bg-paper-100 rounded-xl p-4 border border-paper-300">
-                    <code className="text-sm text-ai-graphite-700 break-all">{searchQuery || 'No search query available'}</code>
-                  </div>
-                </div>
-                {/* Patent sources and precision controls removed: the stored corpus
-                    (Google Patents + Indian) is the only lane, and Broad/Refined
-                    precision was only ever read by the retired live SerpAPI/EPO
-                    providers. Country scope now lives in Advanced Settings. */}
-
-                {/* Custom Query Option */}
-                <div className="space-y-3">
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showCustomQuery}
-                      onChange={(e) => setShowCustomQuery(e.target.checked)}
-                      className="w-4 h-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
-                    />
-                    <span className="text-sm text-ai-graphite-700">Use custom search query instead</span>
-                  </label>
-
-                  {showCustomQuery && (
-                    <textarea
-                      className="w-full border border-paper-400 rounded-xl p-4 text-sm focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
-                      rows={3}
-                      value={customQuery}
-                      onChange={(e) => setCustomQuery(e.target.value)}
-                      placeholder="Enter your custom Boolean search query..."
-                    />
-                  )}
-                </div>
-
-                {/* Advanced Settings */}
-                <div className="border-t border-paper-200 pt-4">
-                  <button
-                    onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-                    className="text-sm text-ai-blue-600 hover:text-ai-blue-700 font-medium flex items-center gap-1"
-                  >
-                    {showAdvancedSettings ? '▼' : '▶'} Advanced Settings
-                  </button>
-                  
-                  {showAdvancedSettings && (
-                    <div className="mt-4 grid md:grid-cols-2 gap-4 p-4 bg-paper-100 rounded-xl">
-                      {/* Corpus scope — applied as filters on the stored corpus,
-                          so these narrow what is searched, not just what is shown. */}
-                      <div className="md:col-span-2">
-                        <div className="flex items-baseline justify-between mb-1">
-                          <label className="block text-sm font-medium text-ai-graphite-700">
-                            Patent offices
-                          </label>
-                          <span className="text-xs text-ai-graphite-500">
-                            {filterCountries.length === 0
-                              ? 'All countries'
-                              : `${filterCountries.length} selected`}
-                          </span>
-                        </div>
-                        <p className="text-xs text-ai-graphite-500 mb-2">
-                          Leave empty to search every country in the corpus. Selecting offices narrows the search — it does not re-rank.
-                        </p>
-                        <div className="p-2 bg-white border border-paper-400 rounded-lg space-y-2">
-                          {/* Major contributors first (PATENT_COUNTRIES marks these
-                              `primary`, ordered by corpus volume), then the rest.
-                              India is simply one of them — no special casing. */}
-                          {([
-                            { key: 'primary', label: 'Major offices', items: PATENT_COUNTRIES.filter(c => c.primary) },
-                            { key: 'other', label: 'Other offices', items: PATENT_COUNTRIES.filter(c => !c.primary) },
-                          ] as const).map(group => group.items.length ? (
-                            <div key={group.key}>
-                              <div className="text-[11px] uppercase tracking-wide text-ai-graphite-400 mb-1">
-                                {group.label}
-                              </div>
-                              <div className={`flex flex-wrap gap-1.5 ${group.key === 'other' ? 'max-h-28 overflow-y-auto' : ''}`}>
-                                {group.items.map(country => {
-                                  const selected = filterCountries.includes(country.code)
-                                  return (
-                                    <button
-                                      key={country.code}
-                                      type="button"
-                                      aria-pressed={selected}
-                                      aria-label={`${country.name} (${country.code})`}
-                                      // Native tooltip: full office name on hover, and
-                                      // announced by screen readers via aria-label.
-                                      title={country.name}
-                                      onClick={() => setFilterCountries(prev =>
-                                        prev.includes(country.code)
-                                          ? prev.filter(code => code !== country.code)
-                                          : [...prev, country.code]
-                                      )}
-                                      className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors cursor-help ${
-                                        selected
-                                          ? 'bg-ai-blue-600 text-white border-ai-blue-600'
-                                          : 'bg-white text-ai-graphite-700 border-paper-400 hover:border-ai-blue-400 hover:bg-ai-blue-50'
-                                      }`}
-                                    >
-                                      {country.code}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          ) : null)}
-                        </div>
-                        {filterCountries.length > 0 && (
-                          <p className="mt-2 text-xs text-ai-graphite-600">
-                            {filterCountries
-                              .map(code => PATENT_COUNTRIES.find(c => c.code === code)?.name || code)
-                              .join(' · ')}
-                          </p>
-                        )}
-                        {filterCountries.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setFilterCountries([])}
-                            className="mt-2 text-xs text-ai-blue-600 hover:text-ai-blue-700"
-                          >
-                            Clear selection (search all countries)
-                          </button>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Published before</label>
-                        <input
-                          type="date"
-                          value={publicationDateTo}
-                          onChange={(e) => setPublicationDateTo(e.target.value)}
-                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Filed after</label>
-                        <input
-                          type="date"
-                          value={filingDateFrom}
-                          onChange={(e) => setFilingDateFrom(e.target.value)}
-                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Filed before</label>
-                        <input
-                          type="date"
-                          value={filingDateTo}
-                          onChange={(e) => setFilingDateTo(e.target.value)}
-                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Results Limit</label>
-                        <select
-                          value={limit}
-                          onChange={(e) => setLimit(parseInt(e.target.value))}
-                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
-                        >
-                          <option value={10}>10 results</option>
-                          <option value={25}>25 results</option>
-                          <option value={50}>50 results</option>
-                          <option value={100}>100 results</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Published After</label>
-                        <input
-                          type="date"
-                          value={afterDate}
-                          onChange={(e) => setAfterDate(e.target.value)}
-                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
-                        />
-                      </div>
-                      {/* Removed: Google Patents / European keyword phrases and
-                          Boolean concept groups. Verified via grep that
-                          indian-corpus-provider.ts (which serves BOTH the Indian and
-                          Google corpora) reads none of googlePatentKeywords,
-                          epoTitleKeywords, epoAbstractKeywords, epoCombinedKeywords,
-                          patentSearchConceptGroups or searchPrecision - they were only
-                          ever consumed by the retired live SerpAPI/EPO/BigQuery
-                          providers. Meaning-based retrieval uses the embedded query
-                          instead, so these controls changed nothing. */}
-                    </div>
-                  )}
-                </div>
-
-                {/* Search Button */}
-                <div className="flex items-center gap-4">
-                  <button
-                    onClick={runSearch}
-                    disabled={busy}
-                    className={`flex-1 md:flex-none px-8 py-4 rounded-xl text-base font-semibold transition-all shadow-lg ${
-                      searching
-                        ? 'bg-ai-blue-100 text-ai-blue-700 cursor-wait'
-                        : 'bg-ai-blue-600 text-white hover:bg-ai-blue-700 hover:shadow-ai-blue-200'
-                    } disabled:opacity-50`}
-                  >
-                    {searching ? (
-                      <span className="flex items-center gap-3">
-                        <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Searching...
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-2">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                        {results.length > 0 ? 'Search Again' : 'Search Prior Art'}
-                      </span>
-                    )}
-                  </button>
-
-                  {results.length > 0 && (
-                    <button
-                      onClick={() => setMainTab('analyze')}
-                      className="px-6 py-4 rounded-xl text-base font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-all shadow-lg hover:shadow-emerald-200 flex items-center gap-2"
-                    >
-                      Continue to Analysis
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-
-                {/* Search Progress */}
-                {searching && searchProgress && (
-                  <div className="bg-ai-blue-50 rounded-xl p-4 border border-ai-blue-100">
-                    <div className="flex items-center gap-3">
-                      <div className="animate-pulse w-3 h-3 rounded-full bg-ai-blue-500"></div>
-                      <span className="text-sm text-ai-blue-700">{searchProgress}</span>
-                    </div>
-                  </div>
-                )}
+              <div className="flex flex-wrap items-center gap-2 text-sm text-ai-graphite-600">
+                <span>Scope:</span>
+                <span className="px-2.5 py-0.5 rounded-full border border-paper-300 text-xs">
+                  {filterCountries.length === 0 ? 'All offices' : `${filterCountries.length} office${filterCountries.length !== 1 ? 's' : ''}`}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full border border-paper-300 text-xs">
+                  {afterDate || publicationDateTo || filingDateFrom || filingDateTo ? 'Date filters set' : 'Any date'}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full border border-paper-300 text-xs">{limit} results</span>
+                <button
+                  type="button"
+                  onClick={() => setScopeOpen(open => !open)}
+                  className="text-ai-blue-600 hover:text-ai-blue-700 font-medium"
+                >
+                  {scopeOpen ? 'Hide scope options' : 'Adjust scope'}
+                </button>
               </div>
-            </div>
 
-            {/* Search Results (if any) */}
-            {results.length > 0 && (
-              <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-paper-200 flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-ai-graphite-900 flex items-center gap-2">
-                      <span className="text-xl">📋</span> Search Results
-                    </h3>
-                    <p className="text-sm text-ai-graphite-500 mt-1">
-                      Found {results.length} potentially relevant patents
-                      {sourceFilteredResults.length !== results.length ? ` - showing ${sourceFilteredResults.length}` : ''}
-                      {detailsLoading ? ' - loading Patent Search Service metadata' : ''}
+              {scopeOpen && (
+                <div className="grid md:grid-cols-2 gap-4 p-4 bg-paper-100 rounded-xl">
+                  <div className="md:col-span-2">
+                    <div className="flex items-baseline justify-between mb-1">
+                      <label className="block text-sm font-medium text-ai-graphite-700">Patent offices</label>
+                      <span className="text-xs text-ai-graphite-500">
+                        {filterCountries.length === 0 ? 'All countries' : `${filterCountries.length} selected`}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ai-graphite-500 mb-2">
+                      Leave empty to search every country in the corpus. Selecting offices narrows the search — it does not re-rank.
                     </p>
+                    <div className="p-2 bg-white border border-paper-400 rounded-lg space-y-2">
+                      {([
+                        { key: 'primary', label: 'Major offices', items: PATENT_COUNTRIES.filter(c => c.primary) },
+                        { key: 'other', label: 'Other offices', items: PATENT_COUNTRIES.filter(c => !c.primary) },
+                      ] as const).map(group => group.items.length ? (
+                        <div key={group.key}>
+                          <div className="text-[11px] uppercase tracking-wide text-ai-graphite-400 mb-1">{group.label}</div>
+                          <div className={`flex flex-wrap gap-1.5 ${group.key === 'other' ? 'max-h-28 overflow-y-auto' : ''}`}>
+                            {group.items.map(country => {
+                              const selectedCountry = filterCountries.includes(country.code)
+                              return (
+                                <button
+                                  key={country.code}
+                                  type="button"
+                                  aria-pressed={selectedCountry}
+                                  aria-label={`${country.name} (${country.code})`}
+                                  title={country.name}
+                                  onClick={() => setFilterCountries(prev =>
+                                    prev.includes(country.code)
+                                      ? prev.filter(code => code !== country.code)
+                                      : [...prev, country.code]
+                                  )}
+                                  className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors ${
+                                    selectedCountry
+                                      ? 'bg-ai-blue-600 text-white border-ai-blue-600'
+                                      : 'bg-white text-ai-graphite-700 border-paper-400 hover:border-ai-blue-400 hover:bg-ai-blue-50'
+                                  }`}
+                                >
+                                  {country.code}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ) : null)}
+                    </div>
+                    {filterCountries.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterCountries([])}
+                        className="mt-2 text-xs text-ai-blue-600 hover:text-ai-blue-700"
+                      >
+                        Clear selection (search all countries)
+                      </button>
+                    )}
                   </div>
-                  <span className="px-3 py-1.5 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-                    ✓ Ready for Analysis
+
+                  <div>
+                    <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Published after</label>
+                    <input type="date" value={afterDate} onChange={(e) => setAfterDate(e.target.value)}
+                      className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Published before</label>
+                    <input type="date" value={publicationDateTo} onChange={(e) => setPublicationDateTo(e.target.value)}
+                      className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Filed after</label>
+                    <input type="date" value={filingDateFrom} onChange={(e) => setFilingDateFrom(e.target.value)}
+                      className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Filed before</label>
+                    <input type="date" value={filingDateTo} onChange={(e) => setFilingDateTo(e.target.value)}
+                      className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Results limit</label>
+                    <select value={limit} onChange={(e) => setLimit(parseInt(e.target.value))}
+                      className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm">
+                      <option value={10}>10 results</option>
+                      <option value={25}>25 results</option>
+                      <option value={50}>50 results</option>
+                      <option value={100}>100 results</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-4 pt-1">
+                <button
+                  onClick={runSearchAndAssess}
+                  disabled={running}
+                  className="px-6 py-3 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {results.length > 0 ? 'Search again and assess' : 'Search and assess prior art'}
+                </button>
+                <span className="text-xs text-ai-graphite-500">
+                  Searches 46.2M publications, then AI-screens every result — one step.
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Pipeline progress — search and assessment share one indicator. */}
+        {running && (
+          <div className="bg-white rounded-2xl border border-paper-300 p-6 mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="animate-pulse w-3 h-3 rounded-full bg-ai-blue-500 shrink-0"></div>
+              <div className="font-medium text-ai-graphite-900">
+                {phase === 'searching' ? 'Searching the patent corpus...' : 'Assessing results against your invention...'}
+              </div>
+            </div>
+            {phase === 'assessing' && analysisProgress && (
+              <>
+                <div className="flex items-center justify-between text-sm text-ai-graphite-600 mb-2">
+                  <span>{analysisProgress.message}</span>
+                  <span>
+                    {analysisProgress.total > 0
+                      ? `${Math.min(100, Math.round((analysisProgress.processed / analysisProgress.total) * 100))}%`
+                      : '0%'}
                   </span>
                 </div>
-
-                <div className="px-6 py-3 border-b border-paper-200 bg-paper-100 flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium text-ai-graphite-600 mr-1">Filter:</span>
-                  {sourceFilterOptions.map(option => (
-                    <button
-                      key={option.key}
-                      type="button"
-                      onClick={() => setResultSourceFilter(option.key)}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                        resultSourceFilter === option.key
-                          ? 'bg-ai-blue-600 border-ai-blue-600 text-white'
-                          : 'bg-white border-paper-300 text-ai-graphite-600 hover:border-ai-blue-300'
-                      }`}
-                    >
-                      {option.label}
-                      <span className={resultSourceFilter === option.key ? 'ml-1 text-ai-blue-100' : 'ml-1 text-ai-graphite-400'}>
-                        {option.count}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="divide-y divide-paper-200 max-h-[650px] overflow-y-auto">
-                  {sourceFilteredResults.length === 0 && (
-                    <div className="p-6 text-sm text-ai-graphite-500">
-                      No patents match the selected source filter.
-                    </div>
-                  )}
-                  {sourceFilteredResults.map((r, i) => {
-                    const details = getPatentDisplayData(r, i)
-                    const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
-                    return (
-                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-paper-100 transition-colors">
-                        <div className="flex items-start gap-4">
-                          <div className="text-sm text-ai-graphite-400 w-6">{i + 1}</div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-ai-graphite-900">{details.title}</div>
-                            <div className="text-xs text-ai-graphite-500 mt-1 flex flex-wrap items-center gap-2">
-                              <span>{details.pn}</span>
-                              <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{details.sourceLabel}</span>
-                            </div>
-                            <div className="mt-3 text-sm text-ai-graphite-700 leading-relaxed">
-                              {details.abstract || 'No abstract or snippet was returned for this patent.'}
-                            </div>
-
-                            {isExpanded && (
-                              <div className="mt-4 rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
-                                <div className="grid gap-3 md:grid-cols-2">
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">Publication: </span>
-                                    {details.publicationDate || 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">Filing: </span>
-                                    {details.filingDate || 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">Priority: </span>
-                                    {details.priorityDate || 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">Application: </span>
-                                    {details.applicationNumber || 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">Inventors: </span>
-                                    {details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">Assignees: </span>
-                                    {details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">CPC: </span>
-                                    {details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}
-                                  </div>
-                                  <div className="text-xs text-ai-graphite-600">
-                                    <span className="font-semibold text-ai-graphite-800">IPC: </span>
-                                    {details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}
-                                  </div>
-                                </div>
-                                {details.link && (
-                                  <a
-                                    href={details.link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
-                                  >
-                                    View patent source
-                                  </a>
-                                )}
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpandedPatentDetails(prev => {
-                                  const next = new Set(prev)
-                                  const key = `search-${details.pn}`
-                                  if (next.has(key)) next.delete(key)
-                                  else next.add(key)
-                                  return next
-                                })
-                              }}
-                              className="mt-3 text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700"
-                            >
-                              {isExpanded ? 'Hide details' : 'Show details'}
-                            </button>
-                          </div>
-                          {details.score !== null && (
-                            <div className={`px-2 py-1 rounded text-xs font-medium ${
-                              details.score >= 80 ? 'bg-ai-blue-100 text-ai-blue-700' :
-                              details.score >= 60 ? 'bg-ai-blue-100 text-ai-blue-700' :
-                              'bg-paper-200 text-ai-graphite-600'
-                            }`}>
-                              {details.score.toFixed(0)}% match
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {false && results.length > 0 && (
-              <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-paper-200 flex items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-semibold text-ai-graphite-900">Patent Details From Patent Search Service</h3>
-                    <p className="text-sm text-ai-graphite-500 mt-1">
-                      Full metadata and abstracts/snippets for all {results.length} search results.
-                      {detailsLoading ? ' Loading stored patent metadata...' : ''}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setMainTab('analyze')}
-                    className="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-                  >
-                    Analyze These Results
-                  </button>
-                </div>
-
-                <div className="divide-y divide-paper-200 max-h-[650px] overflow-y-auto">
-                  {results.map((r, i) => {
-                    const details = getPatentDisplayData(r, i)
-                    const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
-                    const metadataItems = [
-                      details.publicationDate ? ['Publication', details.publicationDate] : null,
-                      details.filingDate ? ['Filing', details.filingDate] : null,
-                      details.priorityDate ? ['Priority', details.priorityDate] : null,
-                      details.applicationNumber ? ['Application', details.applicationNumber] : null
-                    ].filter(Boolean) as Array<[string, string]>
-
-                    return (
-                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-paper-100 transition-colors">
-                        <div className="flex items-start gap-4">
-                          <div className="text-sm text-ai-graphite-400 w-6">{i + 1}</div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <div className="font-semibold text-ai-graphite-900">{details.title}</div>
-                              <div className="text-xs px-2 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{details.pn}</div>
-                            </div>
-
-                            {metadataItems.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {metadataItems.map(([label, value]) => (
-                                  <span key={label} className="text-xs text-ai-graphite-600 bg-paper-100 border border-paper-300 rounded px-2 py-1">
-                                    <span className="font-medium text-ai-graphite-700">{label}:</span> {value}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            <div className={`mt-3 text-sm text-ai-graphite-700 leading-relaxed ${isExpanded ? '' : 'line-clamp-3'}`}>
-                              {details.abstract || 'No abstract or snippet was returned for this patent.'}
-                            </div>
-
-                            <div className="mt-3 grid gap-3 md:grid-cols-2">
-                              <div className="text-xs text-ai-graphite-600">
-                                <span className="font-semibold text-ai-graphite-800">Inventors: </span>
-                                {details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}
-                              </div>
-                              <div className="text-xs text-ai-graphite-600">
-                                <span className="font-semibold text-ai-graphite-800">Assignees: </span>
-                                {details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}
-                              </div>
-                            </div>
-
-                            {isExpanded && (
-                              <div className="mt-4 rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
-                                <div className="grid gap-3 md:grid-cols-2">
-                                  <div>
-                                    <div className="text-xs font-semibold uppercase tracking-wide text-ai-graphite-500">CPC</div>
-                                    <div className="mt-1 text-sm text-ai-graphite-700">{details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}</div>
-                                  </div>
-                                  <div>
-                                    <div className="text-xs font-semibold uppercase tracking-wide text-ai-graphite-500">IPC</div>
-                                    <div className="mt-1 text-sm text-ai-graphite-700">{details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}</div>
-                                  </div>
-                                </div>
-                                {details.link && (
-                                  <a
-                                    href={details.link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
-                                  >
-                                    View patent source
-                                    <svg className="ml-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h4m0 0v4m0-4L10 14m-5 3h14" />
-                                    </svg>
-                                  </a>
-                                )}
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpandedPatentDetails(prev => {
-                                  const next = new Set(prev)
-                                  const key = `search-${details.pn}`
-                                  if (next.has(key)) next.delete(key)
-                                  else next.add(key)
-                                  return next
-                                })
-                              }}
-                              className="mt-3 text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700"
-                            >
-                              {isExpanded ? 'Show less' : 'Show full details'}
-                            </button>
-                          </div>
-                          {details.score !== null && (
-                            <div className={`px-2 py-1 rounded text-xs font-medium ${
-                              details.score >= 80 ? 'bg-ai-blue-100 text-ai-blue-700' :
-                              details.score >= 60 ? 'bg-ai-blue-100 text-ai-blue-700' :
-                              'bg-paper-200 text-ai-graphite-600'
-                            }`}>
-                              {details.score.toFixed(0)}% match
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ============= TAB 2: ANALYZE ============= */}
-        {mainTab === 'analyze' && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* AI Analysis CTA */}
-            {!hasAIReview && (
-              <div className="bg-gradient-to-r from-emerald-500 to-ai-blue-600 rounded-2xl p-8 text-white shadow-xl">
-                <div className="flex items-start gap-6">
-                  <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center text-4xl">🧠</div>
-                  <div className="flex-1">
-                    <h3 className="text-2xl font-bold mb-2">Run Initial Potential Novelty Analysis</h3>
-                    <p className="text-emerald-100 mb-4">
-                      The AI will screen {results.length} patent title-and-abstract records for potential novelty signals,
-                      extract relevant disclosures, and provide actionable insights.
-                    </p>
-                    <button
-                      onClick={() => void runAIReview()}
-                      disabled={reviewing || !runId}
-                      className="px-8 py-3 bg-white text-emerald-700 rounded-xl font-semibold hover:bg-emerald-50 transition-colors shadow-lg disabled:opacity-50"
-                    >
-                      {reviewing ? (
-                        <span className="flex items-center gap-2">
-                          <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          {reviewInfo || 'Analyzing...'}
-                        </span>
-                      ) : (
-                        'Start AI Analysis'
-                      )}
-                    </button>
-                    {analysisProgress && (reviewing || analysisProgress.processed > 0) && (
-                      <div className="mt-5 bg-white/15 rounded-xl p-4 border border-white/20">
-                        <div className="flex items-center justify-between gap-4 text-sm font-medium">
-                          <span>
-                            Processed {analysisProgress.processed} of {analysisProgress.total} patents
-                          </span>
-                          <span>
-                            {analysisProgress.total > 0
-                              ? `${Math.round((analysisProgress.processed / analysisProgress.total) * 100)}%`
-                              : '0%'}
-                          </span>
-                        </div>
-                        <div className="mt-3 h-2 rounded-full bg-white/25 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-white transition-all duration-500"
-                            style={{
-                              width: `${analysisProgress.total > 0
-                                ? Math.min(100, Math.round((analysisProgress.processed / analysisProgress.total) * 100))
-                                : 0}%`
-                            }}
-                          />
-                        </div>
-                        <div className="mt-2 text-sm text-emerald-100">
-                          {analysisProgress.message}
-                          {analysisProgress.totalBatches > 0 && (
-                            <span className="ml-2">
-                              Batch {Math.max(analysisProgress.currentBatch, 1)} of {analysisProgress.totalBatches}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Analysis Complete - Summary */}
-            {hasAIReview && (
-              <>
-                <div className="bg-white rounded-2xl border border-paper-300 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-semibold text-ai-graphite-900">Initial Potential Novelty Analysis</h3>
-                    <p className="text-sm text-ai-graphite-500 mt-1">
-                      {missingAnalysisPatentNumbers.length > 0
-                        ? `${missingAnalysisPatentNumbers.length} current patent${missingAnalysisPatentNumbers.length !== 1 ? 's are' : ' is'} missing AI relevance analysis.`
-                        : 'All current search results have AI relevance analysis.'}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void runAIReview({ missingOnly: true })}
-                    disabled={reviewing || !runId}
-                    className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {reviewing ? (reviewInfo || 'Re-analyzing...') : 'Re-Analyze'}
-                  </button>
-                  {analysisProgress && (reviewing || analysisProgress.message) && (
-                    <div className="w-full bg-emerald-50 rounded-xl p-4 border border-emerald-100">
-                      <div className="flex items-center justify-between gap-4 text-sm font-medium text-emerald-800">
-                        <span>
-                          Processed {analysisProgress.processed} of {analysisProgress.total} patents
-                        </span>
-                        <span>
-                          {analysisProgress.total > 0
-                            ? `${Math.round((analysisProgress.processed / analysisProgress.total) * 100)}%`
-                            : '0%'}
-                        </span>
-                      </div>
-                      <div className="mt-3 h-2 rounded-full bg-emerald-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-emerald-600 transition-all duration-500"
-                          style={{
-                            width: `${analysisProgress.total > 0
-                              ? Math.min(100, Math.round((analysisProgress.processed / analysisProgress.total) * 100))
-                              : 0}%`
-                          }}
-                        />
-                      </div>
-                      <div className="mt-2 text-sm text-emerald-700">
-                        {analysisProgress.message}
-                        {analysisProgress.totalBatches > 0 && (
-                          <span className="ml-2">
-                            Batch {Math.max(analysisProgress.currentBatch, 1)} of {analysisProgress.totalBatches}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Threat Level Summary Cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
-                  <div className="bg-red-50 rounded-2xl p-6 border border-red-100">
-                    <div className="text-4xl font-bold text-red-600">{analysisSummary.anticipates}</div>
-                    <div className="text-sm font-medium text-red-800 mt-1">🛑 Anticipates</div>
-                    <div className="text-xs text-red-600 mt-0.5">High Risk</div>
-                  </div>
-                  <div className="bg-amber-50 rounded-2xl p-6 border border-amber-100">
-                    <div className="text-4xl font-bold text-amber-600">{analysisSummary.obvious}</div>
-                    <div className="text-sm font-medium text-amber-800 mt-1">⚠️ Obvious</div>
-                    <div className="text-xs text-amber-600 mt-0.5">Medium Risk</div>
-                  </div>
-                  <div className="bg-green-50 rounded-2xl p-6 border border-green-100">
-                    <div className="text-4xl font-bold text-green-600">{analysisSummary.adjacent}</div>
-                    <div className="text-sm font-medium text-green-800 mt-1">✅ Adjacent</div>
-                    <div className="text-xs text-green-600 mt-0.5">Low Risk</div>
-                  </div>
-                  <div className="bg-paper-100 rounded-2xl p-6 border border-paper-200">
-                    <div className="text-4xl font-bold text-ai-graphite-600">{analysisSummary.remote}</div>
-                    <div className="text-sm font-medium text-ai-graphite-800 mt-1">⚪ Remote</div>
-                    <div className="text-xs text-ai-graphite-500 mt-0.5">Safe</div>
-                  </div>
-                  <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200">
-                    <div className="text-4xl font-bold text-slate-600">{analysisSummary.unknown}</div>
-                    <div className="text-sm font-medium text-slate-800 mt-1">Unknown</div>
-                    <div className="text-xs text-slate-500 mt-0.5">Retry available</div>
-                  </div>
-                </div>
-
-                {/* Filter Bar */}
-                <div className="bg-white rounded-xl border border-paper-300 p-4 flex flex-wrap items-center gap-3">
-                  <span className="text-sm text-ai-graphite-500">Source:</span>
-                  {sourceFilterOptions.map(option => (
-                    <button
-                      key={option.key}
-                      type="button"
-                      onClick={() => setResultSourceFilter(option.key)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-                        resultSourceFilter === option.key
-                          ? 'bg-ai-blue-100 text-ai-blue-700 border-ai-blue-300'
-                          : 'bg-white border-paper-300 text-ai-graphite-500 hover:border-paper-400'
-                      }`}
-                    >
-                      {option.label}
-                      <span className="ml-1 opacity-70">({option.count})</span>
-                    </button>
-                  ))}
-                  <span className="text-sm text-ai-graphite-500">Filter by threat level:</span>
-                  {['anticipates', 'obvious', 'adjacent', 'remote'].map(threat => (
-                    <button
-                      key={threat}
-                      onClick={() => handleNoveltyThreatFilterChange(threat)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                        noveltyThreatFilters.includes(threat)
-                          ? threat === 'anticipates' ? 'bg-red-100 text-red-700 border border-red-300' :
-                            threat === 'obvious' ? 'bg-amber-100 text-amber-700 border border-amber-300' :
-                            threat === 'adjacent' ? 'bg-green-100 text-green-700 border border-green-300' :
-                            'bg-paper-300 text-ai-graphite-700 border border-paper-400'
-                          : 'bg-white border border-paper-300 text-ai-graphite-500 hover:border-paper-400'
-                      }`}
-                    >
-                      {threat === 'anticipates' ? '🛑' : threat === 'obvious' ? '⚠️' : threat === 'adjacent' ? '✅' : '⚪'} {threat}
-                      <span className="ml-1 opacity-70">({noveltyThreatCounts[threat] || 0})</span>
-                    </button>
-                  ))}
-                  {noveltyThreatFilters.length > 0 && (
-                    <button
-                      onClick={() => setNoveltyThreatFilters([])}
-                      className="text-xs text-ai-graphite-400 hover:text-ai-graphite-600"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-
-                {/* Patent Analysis Results */}
-                <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-paper-200">
-                    <h3 className="font-semibold text-ai-graphite-900">Detailed Analysis Results</h3>
-                    <p className="text-sm text-ai-graphite-500 mt-1">
-                      Click on any patent to see the full analysis including abstract comparison
-                    </p>
-                  </div>
-
-                  <div className="divide-y divide-paper-200 max-h-[600px] overflow-y-auto">
-                    {filteredResults.length === 0 && (
-                      <div className="p-6 text-sm text-ai-graphite-500">
-                        No analyzed patents match the selected filters.
-                      </div>
-                    )}
-                    {filteredResults.slice(0, 20).map((r, i) => {
-                      const pn = getPatentKey(r, i)
-                      const analysis = getAnalysisForPatentNumber(pn)
-                      const isExpanded = expandedPatentDetails.has(`analyze-${pn}`)
-                      const patentAbstract = (r as any).abstract || (r as any).snippet || ''
-                      const sourceLabel = getResultSourceLabel(r)
-
-                      return (
-                        <div key={pn} className="border-b border-paper-200 last:border-b-0">
-                          <div 
-                            className="p-4 hover:bg-paper-100 cursor-pointer transition-colors"
-                            onClick={() => {
-                              setExpandedPatentDetails(prev => {
-                                const next = new Set(prev)
-                                const key = `analyze-${pn}`
-                                if (next.has(key)) next.delete(key)
-                                else next.add(key)
-                                return next
-                              })
-                            }}
-                          >
-                            <div className="flex items-center gap-4">
-                              <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                analysis?.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-700' :
-                                analysis?.noveltyThreat === 'obvious' ? 'bg-amber-100 text-amber-700' :
-                                analysis?.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-700' :
-                                'bg-paper-200 text-ai-graphite-600'
-                              }`}>
-                                {analysis?.noveltyThreat || 'unknown'}
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-ai-graphite-900 truncate">{r.title}</div>
-                                <div className="text-xs text-ai-graphite-500 mt-0.5 flex flex-wrap items-center gap-2">
-                                  <span>{pn}</span>
-                                  <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{sourceLabel}</span>
-                                </div>
-                              </div>
-                              <svg className={`w-5 h-5 text-ai-graphite-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                              </svg>
-                            </div>
-                          </div>
-
-                          {/* Expanded Analysis - Side by Side View */}
-                          {isExpanded && (
-                            <div className="px-4 pb-4">
-                              <div className="bg-gradient-to-r from-slate-50 to-ai-blue-50/50 rounded-xl border border-paper-300 p-5">
-                                <div className="grid md:grid-cols-2 gap-6">
-                                  {/* Left: Patent Abstract */}
-                                  <div>
-                                    <h4 className="font-semibold text-ai-graphite-800 flex items-center gap-2 mb-3">
-                                      <span>📄</span> Patent Abstract
-                                    </h4>
-                                    <div className="bg-white rounded-lg p-4 border border-paper-300 text-sm text-ai-graphite-700 leading-relaxed">
-                                      {patentAbstract || 'No abstract available'}
-                                    </div>
-                                  </div>
-
-                                  {/* Right: AI Analysis */}
-                                  <div>
-                                    <h4 className="font-semibold text-ai-graphite-800 flex items-center gap-2 mb-3">
-                                      <span>🤖</span> AI Analysis
-                                    </h4>
-                                    {analysis ? (
-                                      <div className="space-y-3">
-                                        <div className="flex flex-wrap gap-2 text-xs">
-                                          <span className="rounded-full bg-ai-blue-100 px-2.5 py-1 text-ai-blue-700">Evidence: title + abstract</span>
-                                          <span className={`rounded-full px-2.5 py-1 ${analysis.analysisStatus === 'unknown' ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                            {analysis.analysisStatus === 'unknown' ? 'Unknown — retry available' : 'Initial potential assessment'}
-                                          </span>
-                                        </div>
-                                        {analysis.failureReason && (
-                                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">{analysis.failureReason}</div>
-                                        )}
-                                        {analysis.aiSummary && (
-                                          <div className="bg-white rounded-lg p-4 border border-paper-300">
-                                            <div className="text-xs font-semibold text-ai-blue-600 uppercase tracking-wide mb-1">Summary</div>
-                                            <div className="text-sm text-ai-graphite-700">{analysis.aiSummary}</div>
-                                          </div>
-                                        )}
-                                        {analysis.relevantParts && analysis.relevantParts.length > 0 && (
-                                          <div className="bg-red-50 rounded-lg p-4 border border-red-100">
-                                            <div className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-1">⚠️ Overlaps</div>
-                                            <ul className="text-sm text-red-800 space-y-1">
-                                              {analysis.relevantParts.map((part, idx) => (
-                                                <li key={idx} className="flex items-start gap-2">
-                                                  <span className="text-red-400">•</span>
-                                                  <span>{part}</span>
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          </div>
-                                        )}
-                                        {analysis.irrelevantParts && analysis.irrelevantParts.length > 0 && (
-                                          <div className="bg-green-50 rounded-lg p-4 border border-green-100">
-                                            <div className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">✅ Differences</div>
-                                            <ul className="text-sm text-green-800 space-y-1">
-                                              {analysis.irrelevantParts.map((part, idx) => (
-                                                <li key={idx} className="flex items-start gap-2">
-                                                  <span className="text-green-400">•</span>
-                                                  <span>{part}</span>
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          </div>
-                                        )}
-                                        {analysis.noveltyComparison && (
-                                          <div className="bg-ai-blue-50 rounded-lg p-4 border border-ai-blue-100">
-                                            <div className="text-xs font-semibold text-ai-blue-600 uppercase tracking-wide mb-1">⚖️ Novelty Assessment</div>
-                                            <div className="text-sm text-ai-blue-800">{analysis.noveltyComparison}</div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <div className="bg-white rounded-lg p-4 border border-paper-300 text-sm text-ai-graphite-500">
-                                        No AI analysis available for this patent
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Threat Level Badge */}
-                                {analysis?.noveltyThreat && (
-                                  <div className={`mt-4 pt-4 border-t border-paper-300 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium ${
-                                    analysis.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-800' :
-                                    analysis.noveltyThreat === 'obvious' ? 'bg-amber-100 text-amber-800' :
-                                    analysis.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-800' :
-                                    'bg-paper-200 text-ai-graphite-700'
-                                  }`}>
-                                    {analysis.noveltyThreat === 'anticipates' ? '🛑 High Risk: May anticipate your invention' :
-                                     analysis.noveltyThreat === 'obvious' ? '⚠️ Medium Risk: May raise obviousness concerns' :
-                                     analysis.noveltyThreat === 'adjacent' ? '✅ Low Risk: Related but differentiable' :
-                                     '⚪ Safe: Remotely related'}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-
-                {/* Continue Button */}
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => setMainTab('select')}
-                    className="px-8 py-4 rounded-xl text-base font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 transition-all shadow-lg hover:shadow-ai-blue-200 flex items-center gap-2"
-                  >
-                    Continue to Selection
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                    </svg>
-                  </button>
+                <div className="h-2 rounded-full bg-paper-200 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-ai-blue-600 transition-all duration-500"
+                    style={{
+                      width: `${analysisProgress.total > 0
+                        ? Math.min(100, Math.round((analysisProgress.processed / analysisProgress.total) * 100))
+                        : 0}%`
+                    }}
+                  />
                 </div>
               </>
             )}
+            {phase === 'searching' && phaseMessage && (
+              <div className="text-sm text-ai-graphite-500">{phaseMessage}</div>
+            )}
           </div>
         )}
 
-        {/* ============= TAB 3: SELECT ============= */}
-        {mainTab === 'select' && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* Purpose Explanation */}
-            <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-2xl p-6 border border-ai-blue-100">
-              <h3 className="font-semibold text-ai-graphite-900 text-lg mb-2">Configure Prior Art Usage</h3>
-              <p className="text-ai-graphite-600">
-                Select which patents to use for drafting your patent application and for refining your claims.
-              </p>
-            </div>
-
-            {results.length > 0 && (
-              <div className="bg-white rounded-xl border border-paper-300 p-4 flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-ai-graphite-600 mr-1">Source:</span>
-                {sourceFilterOptions.map(option => (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => setResultSourceFilter(option.key)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                      resultSourceFilter === option.key
-                        ? 'bg-ai-blue-600 border-ai-blue-600 text-white'
-                        : 'bg-white border-paper-300 text-ai-graphite-600 hover:border-ai-blue-300'
-                    }`}
-                  >
-                    {option.label}
-                    <span className={resultSourceFilter === option.key ? 'ml-1 text-ai-blue-100' : 'ml-1 text-ai-graphite-400'}>
-                      {option.count}
-                    </span>
-                  </button>
-                ))}
+        {/* Triage */}
+        {showTriage && (
+          <div className="space-y-4">
+            {/* Results without assessment yet (e.g. hydrated old session) */}
+            {results.length > 0 && !hasAIReview && !running && (
+              <div className="bg-ai-blue-50 rounded-2xl border border-ai-blue-100 p-5 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-ai-graphite-900">Assess these {results.length} results</div>
+                  <p className="text-sm text-ai-graphite-600 mt-0.5">
+                    The AI screens each patent for novelty risk and pre-tags it for drafting or claim comparison.
+                  </p>
+                </div>
+                <button
+                  onClick={() => void runAIReview()}
+                  disabled={!runId}
+                  className="px-5 py-2.5 rounded-xl bg-ai-blue-600 text-white text-sm font-semibold hover:bg-ai-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  Start assessment
+                </button>
               </div>
             )}
 
-            {/* Selection Workflow Tabs */}
-            <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
-              {/* Sub-Tab Navigation */}
-              <div className="border-b border-paper-300 px-6 pt-4">
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => setActiveWorkflowTab('prior-art')}
-                    className={`pb-3 px-1 border-b-2 transition-colors ${
-                      activeWorkflowTab === 'prior-art'
-                        ? 'border-ai-blue-600 text-ai-blue-600 font-medium'
-                        : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span>📚</span> Prior Art for Drafting
-                      {Object.keys(priorArtSelected).length > 0 && (
-                        <span className="px-2 py-0.5 bg-ai-blue-100 text-ai-blue-700 rounded-full text-xs">
-                          {Object.keys(priorArtSelected).length}
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setActiveWorkflowTab('claim-refinement')}
-                    className={`pb-3 px-1 border-b-2 transition-colors ${
-                      activeWorkflowTab === 'claim-refinement'
-                        ? 'border-amber-600 text-amber-600 font-medium'
-                        : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span>⚖️</span> Claim Refinement
-                      {Object.keys(claimRefSelected).length > 0 && (
-                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs">
-                          {Object.keys(claimRefSelected).length}
-                        </span>
-                      )}
-                    </span>
-                  </button>
+            {/* Risk cards double as filters — the single taxonomy display. */}
+            {hasAIReview && (
+              <>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  {(['anticipates', 'obvious', 'adjacent', 'remote'] as ThreatLevel[]).map(level => {
+                    const meta = THREAT_META[level]
+                    const active = riskFilter === level
+                    return (
+                      <button
+                        key={level}
+                        type="button"
+                        onClick={() => setRiskFilter(active ? null : level)}
+                        aria-pressed={active}
+                        className={`text-left rounded-xl border p-4 transition-all ${active ? meta.cardActive : `bg-white ${meta.card}`}`}
+                      >
+                        <div className={`text-2xl font-bold ${meta.number}`}>{threatCounts[level]}</div>
+                        <div className="text-sm font-medium text-ai-graphite-800 mt-0.5">{meta.label}</div>
+                        <div className="text-xs text-ai-graphite-500">{meta.sub}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-ai-graphite-500">
+                  <span>
+                    Cards filter the list. Risky references are pre-tagged for claim comparison; safe ones for the background section.
+                  </span>
+                  {riskFilter && (
+                    <button onClick={() => setRiskFilter(null)} className="text-ai-blue-600 hover:text-ai-blue-700 font-medium">
+                      Show all
+                    </button>
+                  )}
+                  {threatCounts.unknown > 0 && !running && (
+                    <button
+                      onClick={() => void runAIReview({ missingOnly: true })}
+                      className="text-ai-blue-600 hover:text-ai-blue-700 font-medium"
+                    >
+                      {threatCounts.unknown} not assessed — retry
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* The one list: search results and manual references together. */}
+            {(results.length > 0 || manualRefs.length > 0) && (
+              <div className="bg-white rounded-2xl border border-paper-300 overflow-hidden">
+                <div className="divide-y divide-paper-200 max-h-[640px] overflow-y-auto">
+                  {filteredResults.length === 0 && results.length > 0 && (
+                    <div className="p-6 text-sm text-ai-graphite-500">No references match this filter.</div>
+                  )}
+                  {filteredResults.map((r, i) => {
+                    const key = getPatentKey(r, i)
+                    const details = getPatentDisplayData(r, i)
+                    const analysis = getAnalysisForPatent(r)
+                    const threat = (analysis?.analysisStatus === 'unknown' ? 'unknown' : (analysis?.noveltyThreat || 'unknown')) as ThreatLevel
+                    const meta = THREAT_META[threat] || THREAT_META.unknown
+                    const t = getTagsFor(key)
+                    const isExpanded = expanded.has(key)
+                    return (
+                      <div key={key} className={t.background || t.claims ? 'bg-ai-blue-50/30' : ''}>
+                        <div className="flex items-start gap-3 p-4">
+                          <span className={`shrink-0 mt-0.5 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${meta.badge}`}>
+                            {meta.label}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-sm text-ai-graphite-900">{details.title}</div>
+                            <div className="text-xs text-ai-graphite-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span className="font-mono">{details.pn}</span>
+                              <span>·</span>
+                              <span>{details.sourceLabel}</span>
+                              {details.score !== null && (
+                                <>
+                                  <span>·</span>
+                                  <span>{details.score.toFixed(0)}% match</span>
+                                </>
+                              )}
+                              <span>·</span>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpanded(key)}
+                                className="text-ai-blue-600 hover:text-ai-blue-700 font-medium"
+                              >
+                                {isExpanded ? 'Hide analysis' : 'View analysis'}
+                              </button>
+                            </div>
+                            {analysis?.aiSummary && !isExpanded && (
+                              <p className="text-xs text-ai-graphite-600 mt-1 line-clamp-1">{analysis.aiSummary}</p>
+                            )}
+                          </div>
+                          <div className="flex gap-1.5 shrink-0">
+                            <TagChip on={t.background} label="Background" onClick={() => togglePatentTag(key, 'background')} />
+                            <TagChip on={t.claims} label="Claims" onClick={() => togglePatentTag(key, 'claims')} />
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="px-4 pb-4">
+                            <div className="rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
+                              {details.abstract && (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-ai-graphite-500 mb-1">Abstract</div>
+                                  <p className="text-sm text-ai-graphite-700">{details.abstract}</p>
+                                </div>
+                              )}
+                              {analysis?.aiSummary && (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-ai-graphite-500 mb-1">AI summary</div>
+                                  <p className="text-sm text-ai-graphite-700">{analysis.aiSummary}</p>
+                                </div>
+                              )}
+                              {analysis?.relevantParts && analysis.relevantParts.length > 0 && (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-red-600 mb-1">Overlaps with your invention</div>
+                                  <ul className="text-sm text-red-800 space-y-1">
+                                    {analysis.relevantParts.map((part, idx) => (
+                                      <li key={idx} className="flex items-start gap-2"><span className="text-red-400">•</span><span>{part}</span></li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {analysis?.irrelevantParts && analysis.irrelevantParts.length > 0 && (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-green-700 mb-1">Differences</div>
+                                  <ul className="text-sm text-green-800 space-y-1">
+                                    {analysis.irrelevantParts.map((part, idx) => (
+                                      <li key={idx} className="flex items-start gap-2"><span className="text-green-500">•</span><span>{part}</span></li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {analysis?.noveltyComparison && (
+                                <div>
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-ai-blue-600 mb-1">Novelty assessment</div>
+                                  <p className="text-sm text-ai-graphite-700">{analysis.noveltyComparison}</p>
+                                </div>
+                              )}
+                              {analysis?.failureReason && (
+                                <div className="text-sm text-ai-graphite-600 bg-white rounded-lg border border-paper-300 p-3">{analysis.failureReason}</div>
+                              )}
+                              <div className="grid gap-2 md:grid-cols-2 text-xs text-ai-graphite-600 pt-1">
+                                <div><span className="font-semibold text-ai-graphite-800">Publication: </span>{details.publicationDate || 'Not available'}</div>
+                                <div><span className="font-semibold text-ai-graphite-800">Filing: </span>{details.filingDate || 'Not available'}</div>
+                                <div><span className="font-semibold text-ai-graphite-800">Inventors: </span>{details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}</div>
+                                <div><span className="font-semibold text-ai-graphite-800">Assignees: </span>{details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}</div>
+                                <div><span className="font-semibold text-ai-graphite-800">CPC: </span>{details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}</div>
+                                <div><span className="font-semibold text-ai-graphite-800">IPC: </span>{details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}</div>
+                              </div>
+                              {details.link && (
+                                <a
+                                  href={details.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
+                                >
+                                  View patent source
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  {/* Manual references live in the same list (hidden while a risk filter is active). */}
+                  {!riskFilter && manualRefs.map(m => <ManualRow key={m.id} m={m} />)}
                 </div>
               </div>
-
-              <div className="p-6">
-                {/* Prior Art for Drafting Tab Content */}
-                {activeWorkflowTab === 'prior-art' && (
-                  <div className="space-y-6">
-                    <div className="bg-ai-blue-50 rounded-xl p-4 border border-ai-blue-100">
-                      <h4 className="font-medium text-ai-blue-900 mb-1">📚 Purpose: Background Section</h4>
-                      <p className="text-sm text-ai-blue-700">
-                        These patents will be cited in your patent's background section to establish the prior art landscape.
-                        Recommended: Select "adjacent" and "remote" patents that provide good context.
-                      </p>
-                    </div>
-
-                    {/* Threat Level Filter Badges */}
-                    {hasAIReview && (
-                      <div className="flex flex-wrap items-center gap-3">
-                        <span className="text-sm font-medium text-ai-graphite-600">Filter by threat:</span>
-                        {[
-                          { level: null, label: 'All', icon: '📋' },
-                          { level: 'anticipates', label: 'Anticipates', icon: '🛑' },
-                          { level: 'obvious', label: 'Obvious', icon: '⚠️' },
-                          { level: 'adjacent', label: 'Adjacent', icon: '✅' },
-                          { level: 'remote', label: 'Remote', icon: '⚪' }
-                        ].map(({ level, label, icon }) => {
-                          const count = level === null 
-                            ? sourceFilteredResults.length 
-                            : sourceFilteredResults.filter(r => getAnalysisForPatent(r)?.noveltyThreat === level).length
-                          const isActive = priorArtThreatFilter === level
-                          
-                          return (
-                            <button
-                              key={label}
-                              onClick={() => setPriorArtThreatFilter(level)}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                                isActive 
-                                  ? level === 'anticipates' ? 'bg-red-100 text-red-800 ring-2 ring-red-300' :
-                                    level === 'obvious' ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-300' :
-                                    level === 'adjacent' ? 'bg-green-100 text-green-800 ring-2 ring-green-300' :
-                                    level === 'remote' ? 'bg-paper-300 text-ai-graphite-800 ring-2 ring-gray-400' :
-                                    'bg-ai-blue-100 text-ai-blue-800 ring-2 ring-ai-blue-300'
-                                  : level === 'anticipates' ? 'bg-red-50 text-red-700 hover:bg-red-100' :
-                                    level === 'obvious' ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' :
-                                    level === 'adjacent' ? 'bg-green-50 text-green-700 hover:bg-green-100' :
-                                    level === 'remote' ? 'bg-paper-200 text-ai-graphite-600 hover:bg-paper-300' :
-                                    'bg-paper-100 text-ai-graphite-600 hover:bg-paper-200'
-                              }`}
-                            >
-                              <span>{icon}</span>
-                              <span>{label}</span>
-                              <span className={`px-1.5 py-0.5 rounded text-xs ${
-                                isActive ? 'bg-white/50' : 'bg-white/70'
-                              }`}>
-                                {count}
-                              </span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
-
-                    {/* Mode Selection */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                      {[
-                        { mode: 'ai' as const, icon: '🤖', label: 'AI-Selected', desc: 'Use AI-recommended patents' },
-                        { mode: 'manual' as const, icon: '✍️', label: 'Manual Only', desc: 'Enter your own prior art' },
-                        { mode: 'hybrid' as const, icon: '🔀', label: 'Hybrid', desc: 'AI patents + your notes' }
-                      ].map(({ mode, icon, label, desc }) => (
-                        <label
-                          key={mode}
-                          className={`relative flex flex-col items-center p-4 border-2 rounded-xl cursor-pointer transition-all ${
-                            priorArtMode === mode ? 'border-ai-blue-500 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-300'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name="priorArtMode"
-                            value={mode}
-                            checked={priorArtMode === mode}
-                            onChange={() => setPriorArtMode(mode)}
-                            className="sr-only"
-                          />
-                          <span className="text-2xl mb-2">{icon}</span>
-                          <span className="font-medium text-sm">{label}</span>
-                          <span className="text-xs text-ai-graphite-500 text-center mt-1">{desc}</span>
-                          {priorArtMode === mode && (
-                            <CheckIcon className="absolute top-2 right-2 w-5 h-5 text-ai-blue-600" />
-                          )}
-                        </label>
-                      ))}
-                    </div>
-
-                    {/* Manual Text Input */}
-                    {(priorArtMode === 'manual' || priorArtMode === 'hybrid') && (
-                      <div>
-                        <label className="block text-sm font-medium text-ai-graphite-700 mb-2">Manual Prior Art Text</label>
-                        <textarea
-                          className="w-full border border-paper-400 rounded-xl p-4 text-sm focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500 min-h-[120px]"
-                          placeholder="Enter prior art references or descriptions..."
-                          value={priorArtManualText}
-                          onChange={(e) => setPriorArtManualText(e.target.value)}
-                        />
-                      </div>
-                    )}
-
-                    {/* AI Patent Selection */}
-                    {(priorArtMode === 'ai' || priorArtMode === 'hybrid') && (
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <label className="text-sm font-medium text-ai-graphite-700">Select Patents for Background Section</label>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={handleAutoSelectAdjacent}
-                              className="text-xs text-ai-blue-600 hover:text-ai-blue-700 font-medium px-2 py-1 bg-ai-blue-50 rounded-lg hover:bg-ai-blue-100 transition-colors"
-                            >
-                              ✨ Auto-select Adjacent
-                            </button>
-                            <button
-                              onClick={() => setPriorArtSelected({})}
-                              className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700 px-2 py-1 bg-paper-200 rounded-lg hover:bg-paper-300 transition-colors"
-                            >
-                              Clear All
-                            </button>
-                          </div>
-                        </div>
-                        
-                        {/* Patent list with expandable details */}
-                        <div className="border border-paper-300 rounded-xl overflow-hidden">
-                          <div className="max-h-[600px] overflow-y-auto divide-y divide-paper-200">
-                            {sourceFilteredResults.filter(r => {
-                              const pn = getPatentKey(r)
-                              const threat = getAnalysisForPatentNumber(pn)?.noveltyThreat
-                              // Apply threat filter if set, otherwise show all patents
-                              if (priorArtThreatFilter !== null) {
-                                return threat === priorArtThreatFilter
-                              }
-                              // Default: show all patents when no filter (removed adjacent/remote only restriction)
-                              return true
-                            }).map((r, i) => {
-                              const pn = getPatentKey(r, i)
-                              const analysis = getAnalysisForPatentNumber(pn)
-                              const isSelected = !!priorArtSelected[pn]
-                              const isExpanded = expandedPatentDetails.has(`priorArt-select-${pn}`)
-                              const patentAbstract = (r as any).abstract || (r as any).snippet || ''
-                              const sourceLabel = getResultSourceLabel(r)
-                              
-                              return (
-                                <div key={pn} className={`${isSelected ? 'bg-ai-blue-50/50' : ''}`}>
-                                  {/* Patent header row */}
-                                  <div className="flex items-start gap-3 p-4">
-                                    <input
-                                      type="checkbox"
-                                      checked={isSelected}
-                                      onChange={() => {
-                                        setPriorArtSelected(prev => {
-                                          if (prev[pn]) {
-                                            const { [pn]: _, ...rest } = prev
-                                            return rest
-                                          }
-                                          return { 
-                                            ...prev, 
-                                            [pn]: { 
-                                              ...r, 
-                                              noveltyThreat: analysis?.noveltyThreat,
-                                              aiSummary: analysis?.aiSummary,
-                                              relevantParts: analysis?.relevantParts,
-                                              irrelevantParts: analysis?.irrelevantParts,
-                                              noveltyComparison: analysis?.noveltyComparison
-                                            } 
-                                          }
-                                        })
-                                      }}
-                                      className="mt-1 w-4 h-4 rounded border-paper-400 text-ai-blue-600 cursor-pointer"
-                                    />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="font-medium text-sm text-ai-graphite-900">{r.title}</span>
-                                        <span className={`px-1.5 py-0.5 text-xs rounded flex-shrink-0 ${
-                                          analysis?.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-700' :
-                                          'bg-paper-200 text-ai-graphite-600'
-                                        }`}>
-                                          {analysis?.noveltyThreat || 'unknown'}
-                                        </span>
-                                      </div>
-                                      <div className="text-xs text-ai-graphite-500 mt-0.5 flex items-center gap-2">
-                                        <span className="font-mono">{pn}</span>
-                                        <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{sourceLabel}</span>
-                                        <span>•</span>
-                                        <button
-                                          onClick={(e) => {
-                                            e.preventDefault()
-                                            e.stopPropagation()
-                                            setExpandedPatentDetails(prev => {
-                                              const next = new Set(prev)
-                                              const key = `priorArt-select-${pn}`
-                                              if (next.has(key)) next.delete(key)
-                                              else next.add(key)
-                                              return next
-                                            })
-                                          }}
-                                          className="text-ai-blue-600 hover:text-ai-blue-700 font-medium"
-                                        >
-                                          {isExpanded ? 'Hide Details' : 'View Details'}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Expandable details */}
-                                  {isExpanded && (
-                                    <div className="px-4 pb-4">
-                                      <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-xl border border-ai-blue-100 p-4 space-y-4">
-                                        {/* Patent Abstract */}
-                                        {patentAbstract && (
-                                          <div>
-                                            <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                              📄 Patent Abstract
-                                            </h5>
-                                            <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-ai-blue-100">
-                                              {patentAbstract}
-                                            </div>
-                                          </div>
-                                        )}
-
-                                        {/* AI Summary */}
-                                        {analysis?.aiSummary && (
-                                          <div>
-                                            <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                              🤖 AI Summary
-                                            </h5>
-                                            <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-ai-blue-100">
-                                              {analysis.aiSummary}
-                                            </div>
-                                          </div>
-                                        )}
-
-                                        {/* Matching Parts */}
-                                        {analysis?.relevantParts && analysis.relevantParts.length > 0 && (
-                                          <div>
-                                            <h5 className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                              ✅ Matching Parts (Relevant)
-                                            </h5>
-                                            <ul className="text-sm text-ai-graphite-700 bg-green-50/50 rounded-lg p-3 border border-green-100 space-y-1">
-                                              {analysis.relevantParts.map((part, idx) => (
-                                                <li key={idx} className="flex items-start gap-2">
-                                                  <span className="text-green-500 mt-0.5">•</span>
-                                                  <span>{part}</span>
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          </div>
-                                        )}
-
-                                        {/* Non-matching Parts */}
-                                        {analysis?.irrelevantParts && analysis.irrelevantParts.length > 0 && (
-                                          <div>
-                                            <h5 className="text-xs font-semibold text-ai-graphite-600 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                              ❌ Non-matching Parts (Differences)
-                                            </h5>
-                                            <ul className="text-sm text-ai-graphite-600 bg-paper-100/50 rounded-lg p-3 border border-paper-300 space-y-1">
-                                              {analysis.irrelevantParts.map((part, idx) => (
-                                                <li key={idx} className="flex items-start gap-2">
-                                                  <span className="text-ai-graphite-400 mt-0.5">•</span>
-                                                  <span>{part}</span>
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          </div>
-                                        )}
-
-                                        {/* Novelty Comparison */}
-                                        {analysis?.noveltyComparison && (
-                                          <div>
-                                            <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                              ⚖️ Novelty Assessment
-                                            </h5>
-                                            <div className="text-sm text-ai-graphite-700 bg-ai-blue-50/50 rounded-lg p-3 border border-ai-blue-100">
-                                              {analysis.noveltyComparison}
-                                            </div>
-                                          </div>
-                                        )}
-
-                                        {/* Threat Level Badge */}
-                                        <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
-                                          analysis?.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-800' :
-                                          analysis?.noveltyThreat === 'remote' ? 'bg-paper-200 text-ai-graphite-700' :
-                                          'bg-paper-200 text-ai-graphite-600'
-                                        }`}>
-                                          {analysis?.noveltyThreat === 'adjacent' ? '✅ Low Risk: Related but differentiable' :
-                                           analysis?.noveltyThreat === 'remote' ? '⚪ Safe: Remotely related' :
-                                           'Risk level unknown'}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Summary */}
-                    <div className="bg-paper-100 rounded-xl p-4 border border-paper-300">
-                      <div className="text-sm font-medium text-ai-graphite-700">
-                        {priorArtMode === 'ai' && `${Object.keys(priorArtSelected).length} patents selected for drafting`}
-                        {priorArtMode === 'manual' && (priorArtManualText.trim() ? 'Manual prior art text provided' : 'No manual text entered')}
-                        {priorArtMode === 'hybrid' && `${Object.keys(priorArtSelected).length} patents + ${priorArtManualText.trim() ? 'manual text' : 'no manual text'}`}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Claim Refinement Tab Content */}
-                {activeWorkflowTab === 'claim-refinement' && (
-                  <div className="space-y-6">
-                    <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
-                      <h4 className="font-medium text-amber-900 mb-1">⚖️ Purpose: Differentiate Your Claims</h4>
-                      <p className="text-sm text-amber-700">
-                        These patents will be compared against your claims to ensure novelty and non-obviousness.
-                        Recommended: Select high-risk patents (anticipates, obvious) for thorough claim refinement.
-                      </p>
-                      <p className="text-xs text-ai-blue-600 mt-2 italic">
-                        Tip: Use the "Skip Refinement" button below if you're confident in your claims and want to proceed directly.
-                      </p>
-                    </div>
-
-                    {/* Threat Level Filter Badges */}
-                    {hasAIReview && (
-                          <div className="flex flex-wrap items-center gap-3">
-                            <span className="text-sm font-medium text-ai-graphite-600">Filter by threat:</span>
-                            {[
-                              { level: null, label: 'All', icon: '📋' },
-                              { level: 'anticipates', label: 'Anticipates', icon: '🛑' },
-                              { level: 'obvious', label: 'Obvious', icon: '⚠️' },
-                              { level: 'adjacent', label: 'Adjacent', icon: '✅' },
-                              { level: 'remote', label: 'Remote', icon: '⚪' }
-                            ].map(({ level, label, icon }) => {
-                              const count = level === null 
-                                ? sourceFilteredResults.length 
-                                : sourceFilteredResults.filter(r => getAnalysisForPatent(r)?.noveltyThreat === level).length
-                              const isActive = claimRefThreatFilter === level
-                              
-                              return (
-                                <button
-                                  key={label}
-                                  onClick={() => setClaimRefThreatFilter(level)}
-                                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                                    isActive 
-                                      ? level === 'anticipates' ? 'bg-red-100 text-red-800 ring-2 ring-red-300' :
-                                        level === 'obvious' ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-300' :
-                                        level === 'adjacent' ? 'bg-green-100 text-green-800 ring-2 ring-green-300' :
-                                        level === 'remote' ? 'bg-paper-300 text-ai-graphite-800 ring-2 ring-gray-400' :
-                                        'bg-amber-100 text-amber-800 ring-2 ring-amber-300'
-                                      : level === 'anticipates' ? 'bg-red-50 text-red-700 hover:bg-red-100' :
-                                        level === 'obvious' ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' :
-                                        level === 'adjacent' ? 'bg-green-50 text-green-700 hover:bg-green-100' :
-                                        level === 'remote' ? 'bg-paper-200 text-ai-graphite-600 hover:bg-paper-300' :
-                                        'bg-paper-100 text-ai-graphite-600 hover:bg-paper-200'
-                                  }`}
-                                >
-                                  <span>{icon}</span>
-                                  <span>{label}</span>
-                                  <span className={`px-1.5 py-0.5 rounded text-xs ${
-                                    isActive ? 'bg-white/50' : 'bg-white/70'
-                                  }`}>
-                                    {count}
-                                  </span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
-
-                        {/* Mode Selection */}
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                          {[
-                            { mode: 'ai' as const, icon: '🤖', label: 'AI-Selected', desc: 'High-risk patents from AI' },
-                            { mode: 'manual' as const, icon: '✍️', label: 'Manual Only', desc: 'Your own prior art notes' },
-                            { mode: 'hybrid' as const, icon: '🔀', label: 'Hybrid', desc: 'AI patents + your notes' }
-                          ].map(({ mode, icon, label, desc }) => (
-                            <label
-                              key={mode}
-                              className={`relative flex flex-col items-center p-4 border-2 rounded-xl cursor-pointer transition-all ${
-                                claimRefMode === mode ? 'border-amber-500 bg-amber-50' : 'border-paper-300 hover:border-amber-300'
-                              }`}
-                            >
-                              <input
-                                type="radio"
-                                name="claimRefMode"
-                                value={mode}
-                                checked={claimRefMode === mode}
-                                onChange={() => setClaimRefMode(mode)}
-                                className="sr-only"
-                              />
-                              <span className="text-2xl mb-2">{icon}</span>
-                              <span className="font-medium text-sm">{label}</span>
-                              <span className="text-xs text-ai-graphite-500 text-center mt-1">{desc}</span>
-                              {claimRefMode === mode && (
-                                <CheckIcon className="absolute top-2 right-2 w-5 h-5 text-amber-600" />
-                              )}
-                            </label>
-                          ))}
-                        </div>
-
-                        {/* Manual Text Input */}
-                        {(claimRefMode === 'manual' || claimRefMode === 'hybrid') && (
-                          <div>
-                            <label className="block text-sm font-medium text-ai-graphite-700 mb-2">Prior Art for Claim Comparison</label>
-                            <textarea
-                              className="w-full border border-paper-400 rounded-xl p-4 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 min-h-[120px]"
-                              placeholder="Describe prior art that your claims should be differentiated from..."
-                              value={claimRefManualText}
-                              onChange={(e) => setClaimRefManualText(e.target.value)}
-                            />
-                          </div>
-                        )}
-
-                        {/* AI Patent Selection */}
-                        {(claimRefMode === 'ai' || claimRefMode === 'hybrid') && (
-                          <div>
-                            <div className="flex items-center justify-between mb-3">
-                              <label className="text-sm font-medium text-ai-graphite-700">Select High-Risk Patents for Claim Comparison</label>
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => {
-                                    const autoSelected: Record<string, any> = {}
-                                    sourceFilteredResults.forEach((r) => {
-                                      const pn = getPatentKey(r)
-                                      const analysis = getAnalysisForPatentNumber(pn)
-                                      const threat = analysis?.noveltyThreat
-                                      if (threat === 'anticipates' || threat === 'obvious') {
-                                        autoSelected[pn] = { 
-                                          ...r, 
-                                          noveltyThreat: threat,
-                                          aiSummary: analysis?.aiSummary,
-                                          relevantParts: analysis?.relevantParts,
-                                          irrelevantParts: analysis?.irrelevantParts,
-                                          noveltyComparison: analysis?.noveltyComparison
-                                        }
-                                      }
-                                    })
-                                    setClaimRefSelected(autoSelected)
-                                    setStatusMessage({
-                                      type: 'success',
-                                      text: `✓ Auto-selected ${Object.keys(autoSelected).length} high-risk patents for claim comparison`
-                                    })
-                                  }}
-                                  className="text-xs text-amber-600 hover:text-amber-700 font-medium px-2 py-1 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors"
-                                >
-                                  ✨ Auto-select High-Risk
-                                </button>
-                                <button
-                                  onClick={() => setClaimRefSelected({})}
-                                  className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700 px-2 py-1 bg-paper-200 rounded-lg hover:bg-paper-300 transition-colors"
-                                >
-                                  Clear All
-                                </button>
-                              </div>
-                            </div>
-                            
-                            {/* Patent list with expandable details */}
-                            <div className="border border-paper-300 rounded-xl overflow-hidden">
-                              <div className="max-h-[600px] overflow-y-auto divide-y divide-paper-200">
-                                {sourceFilteredResults.filter(r => {
-                                  const pn = getPatentKey(r)
-                                  const threat = getAnalysisForPatentNumber(pn)?.noveltyThreat
-                                  // Apply threat filter if set, otherwise show all patents
-                                  if (claimRefThreatFilter !== null) {
-                                    return threat === claimRefThreatFilter
-                                  }
-                                  // Default: show all patents when no filter
-                                  return true
-                                }).map((r, i) => {
-                                  const pn = getPatentKey(r, i)
-                                  const analysis = getAnalysisForPatentNumber(pn)
-                                  const isSelected = !!claimRefSelected[pn]
-                                  const isExpanded = expandedPatentDetails.has(`claimRef-select-${pn}`)
-                                  const patentAbstract = (r as any).abstract || (r as any).snippet || ''
-                                  const sourceLabel = getResultSourceLabel(r)
-                                  
-                                  return (
-                                    <div key={pn} className={`${isSelected ? 'bg-amber-50/50' : ''}`}>
-                                      {/* Patent header row */}
-                                      <div className="flex items-start gap-3 p-4">
-                                        <input
-                                          type="checkbox"
-                                          checked={isSelected}
-                                          onChange={() => {
-                                            setClaimRefSelected(prev => {
-                                              if (prev[pn]) {
-                                                const { [pn]: _, ...rest } = prev
-                                                return rest
-                                              }
-                                              return { 
-                                                ...prev, 
-                                                [pn]: { 
-                                                  ...r, 
-                                                  noveltyThreat: analysis?.noveltyThreat,
-                                                  aiSummary: analysis?.aiSummary,
-                                                  relevantParts: analysis?.relevantParts,
-                                                  irrelevantParts: analysis?.irrelevantParts,
-                                                  noveltyComparison: analysis?.noveltyComparison
-                                                } 
-                                              }
-                                            })
-                                          }}
-                                          className="mt-1 w-4 h-4 rounded border-paper-400 text-amber-600 cursor-pointer"
-                                        />
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-center gap-2 flex-wrap">
-                                            <span className="font-medium text-sm text-ai-graphite-900">{r.title}</span>
-                                            <span className={`px-1.5 py-0.5 text-xs rounded flex-shrink-0 ${
-                                              analysis?.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-700' :
-                                              'bg-amber-100 text-amber-700'
-                                            }`}>
-                                              {analysis?.noveltyThreat || 'unknown'}
-                                            </span>
-                                          </div>
-                                          <div className="text-xs text-ai-graphite-500 mt-0.5 flex items-center gap-2">
-                                            <span className="font-mono">{pn}</span>
-                                            <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{sourceLabel}</span>
-                                            <span>•</span>
-                                            <button
-                                              onClick={(e) => {
-                                                e.preventDefault()
-                                                e.stopPropagation()
-                                                setExpandedPatentDetails(prev => {
-                                                  const next = new Set(prev)
-                                                  const key = `claimRef-select-${pn}`
-                                                  if (next.has(key)) next.delete(key)
-                                                  else next.add(key)
-                                                  return next
-                                                })
-                                              }}
-                                              className="text-amber-600 hover:text-amber-700 font-medium"
-                                            >
-                                              {isExpanded ? 'Hide Details' : 'View Details'}
-                                            </button>
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Expandable details */}
-                                      {isExpanded && (
-                                        <div className="px-4 pb-4">
-                                          <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-100 p-4 space-y-4">
-                                            {/* Patent Abstract */}
-                                            {patentAbstract && (
-                                              <div>
-                                                <h5 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                                  📄 Patent Abstract
-                                                </h5>
-                                                <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-amber-100">
-                                                  {patentAbstract}
-                                                </div>
-                                              </div>
-                                            )}
-
-                                            {/* AI Summary */}
-                                            {analysis?.aiSummary && (
-                                              <div>
-                                                <h5 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                                  🤖 AI Summary
-                                                </h5>
-                                                <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-amber-100">
-                                                  {analysis.aiSummary}
-                                                </div>
-                                              </div>
-                                            )}
-
-                                            {/* Matching Parts - These are the THREATS */}
-                                            {analysis?.relevantParts && analysis.relevantParts.length > 0 && (
-                                              <div>
-                                                <h5 className="text-xs font-semibold text-red-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                                  ⚠️ Overlapping Claims (Potential Conflicts)
-                                                </h5>
-                                                <ul className="text-sm text-ai-graphite-700 bg-red-50/50 rounded-lg p-3 border border-red-100 space-y-1">
-                                                  {analysis.relevantParts.map((part, idx) => (
-                                                    <li key={idx} className="flex items-start gap-2">
-                                                      <span className="text-red-500 mt-0.5">•</span>
-                                                      <span>{part}</span>
-                                                    </li>
-                                                  ))}
-                                                </ul>
-                                              </div>
-                                            )}
-
-                                            {/* Non-matching Parts - These are SAFE */}
-                                            {analysis?.irrelevantParts && analysis.irrelevantParts.length > 0 && (
-                                              <div>
-                                                <h5 className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                                  ✅ Key Differences (Your Advantages)
-                                                </h5>
-                                                <ul className="text-sm text-ai-graphite-600 bg-green-50/50 rounded-lg p-3 border border-green-100 space-y-1">
-                                                  {analysis.irrelevantParts.map((part, idx) => (
-                                                    <li key={idx} className="flex items-start gap-2">
-                                                      <span className="text-green-500 mt-0.5">•</span>
-                                                      <span>{part}</span>
-                                                    </li>
-                                                  ))}
-                                                </ul>
-                                              </div>
-                                            )}
-
-                                            {/* Novelty Comparison */}
-                                            {analysis?.noveltyComparison && (
-                                              <div>
-                                                <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                                  ⚖️ Novelty Assessment
-                                                </h5>
-                                                <div className="text-sm text-ai-graphite-700 bg-ai-blue-50/50 rounded-lg p-3 border border-ai-blue-100">
-                                                  {analysis.noveltyComparison}
-                                                </div>
-                                              </div>
-                                            )}
-
-                                            {/* Threat Level Badge */}
-                                            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
-                                              analysis?.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-800' :
-                                              analysis?.noveltyThreat === 'obvious' ? 'bg-amber-100 text-amber-800' :
-                                              'bg-paper-200 text-ai-graphite-600'
-                                            }`}>
-                                              {analysis?.noveltyThreat === 'anticipates' ? '🛑 High Risk: May anticipate your claims - needs differentiation' :
-                                               analysis?.noveltyThreat === 'obvious' ? '⚠️ Medium Risk: May raise obviousness concerns - strengthen claims' :
-                                               'Risk level unknown'}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                    {/* Summary */}
-                    <div className="bg-paper-100 rounded-xl p-4 border border-paper-300">
-                      <div className="text-sm font-medium text-ai-graphite-700">
-                        {claimRefMode === 'ai' && `${Object.keys(claimRefSelected).length} patents selected for claim comparison`}
-                        {claimRefMode === 'manual' && (claimRefManualText.trim() ? 'Manual prior art text provided' : 'No manual text entered')}
-                        {claimRefMode === 'hybrid' && `${Object.keys(claimRefSelected).length} patents + ${claimRefManualText.trim() ? 'manual text' : 'no manual text'}`}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Status Message */}
-            {statusMessage && (
-              <div className={`p-4 rounded-xl border ${
-                statusMessage.type === 'success' 
-                  ? 'bg-green-50 border-green-200 text-green-800' 
-                  : 'bg-amber-50 border-amber-200 text-amber-800'
-              }`}>
-                {statusMessage.text}
-              </div>
             )}
 
-            {/* Action Buttons */}
-            <div className="flex items-center justify-between pt-6 border-t border-paper-300">
-              <button
-                onClick={async () => {
-                  // Build prior art data for drafting
-                  const priorArtPatentsArray = Object.entries(priorArtSelected).map(
-                    ([patentNumber, patentData]) => ({ patentNumber, ...patentData })
-                  )
-                  
-                  // Build claim refinement data  
-                  const claimRefPatentsArray = Object.entries(claimRefSelected).map(
-                    ([patentNumber, patentData]) => ({ patentNumber, ...patentData })
-                  )
-
-                  try {
-                    setSavingPriorArt(true)
-                    await onComplete({
-                      action: 'save_prior_art_config',
-                      sessionId: session?.id,
-                      priorArtConfig: {
-                        mode: priorArtMode,
-                        selectedPatents: priorArtPatentsArray,
-                        manualText: priorArtManualText
-                      },
-                      claimRefConfig: {
-                        mode: claimRefMode,
-                        selectedPatents: claimRefPatentsArray,
-                        manualText: claimRefManualText
-                      },
-                      skipClaimRefinement
-                    })
-                    await onRefresh()
-                    setStatusMessage({
-                      type: 'success',
-                      text: `✓ Saved: ${priorArtPatentsArray.length} patents for drafting, ${claimRefPatentsArray.length} patents for claim refinement`
-                    })
-                  } catch (e) {
-                    console.error('Failed to save config:', e)
-                    setStatusMessage({
-                      type: 'warning',
-                      text: '⚠️ Failed to save configuration'
-                    })
-                  } finally {
-                    setSavingPriorArt(false)
-                  }
-                }}
-                disabled={savingPriorArt || !hasAIReview}
-                className="px-6 py-3 text-sm font-medium text-ai-blue-700 bg-ai-blue-50 hover:bg-ai-blue-100 rounded-xl disabled:opacity-50 transition-colors"
-              >
-                {savingPriorArt ? 'Saving...' : 'Save Selections'}
-              </button>
-
-              {/* Proceed to Claim Refinement Button */}
-              <button
-                onClick={async () => {
-                  // Build prior art data for drafting
-                  const priorArtPatentsArray = Object.entries(priorArtSelected).map(
-                    ([patentNumber, patentData]) => ({ patentNumber, ...patentData })
-                  )
-                  
-                  // Build claim refinement data  
-                  const claimRefPatentsArray = Object.entries(claimRefSelected).map(
-                    ([patentNumber, patentData]) => ({ patentNumber, ...patentData })
-                  )
-
-                  // Save configuration first
-                  try {
-                    await onComplete({
-                      action: 'save_prior_art_config',
-                      sessionId: session?.id,
-                      priorArtConfig: {
-                        mode: priorArtMode,
-                        selectedPatents: priorArtPatentsArray,
-                        manualText: priorArtManualText
-                      },
-                      claimRefConfig: {
-                        mode: claimRefMode,
-                        selectedPatents: claimRefPatentsArray,
-                        manualText: claimRefManualText
-                      },
-                      skipClaimRefinement: false
-                    })
-                  } catch (e) {
-                    console.error('Failed to save config before proceeding:', e)
-                  }
-                  
-                  // Validate claim refinement selection
-                  const hasClaimRef = claimRefMode === 'manual' ? claimRefManualText.trim() :
-                                      claimRefMode === 'hybrid' ? (claimRefPatentsArray.length > 0 || claimRefManualText.trim()) :
-                                      claimRefPatentsArray.length > 0
-                  
-                  if (!hasClaimRef) {
-                    setStatusMessage({
-                      type: 'warning',
-                      text: '⚠️ Please select patents or provide text for claim refinement in the "Claim Refinement" tab.'
-                    })
-                    setActiveWorkflowTab('claim-refinement')
-                    return
-                  }
-
-                  setStatusMessage({
-                    type: 'success',
-                    text: '✓ Proceeding to Claim Refinement...'
-                  })
-
-                  await onComplete({
-                    action: 'set_stage',
-                    sessionId: session?.id,
-                    stage: 'CLAIM_REFINEMENT',
-                    priorArtForDrafting: {
-                      mode: priorArtMode,
-                      selectedPatents: priorArtPatentsArray,
-                      manualText: priorArtManualText
-                    },
-                    claimRefinementConfig: {
-                      mode: claimRefMode,
-                      selectedPatents: claimRefPatentsArray,
-                      manualText: claimRefManualText
-                    },
-                    manualPriorArt: priorArtManualText ? {
-                      manualPriorArtText: priorArtManualText,
-                      useOnlyManualPriorArt: priorArtMode === 'manual',
-                      useManualAndAISearch: priorArtMode === 'hybrid'
-                    } : null,
-                    selectedPatents: claimRefPatentsArray,
-                    priorArtConfig: {
-                      useAuto: claimRefMode !== 'manual',
-                      useManual: claimRefMode === 'manual' || claimRefMode === 'hybrid'
-                    }
-                  })
-                  await onRefresh()
-                }}
-                disabled={!hasAIReview}
-                className="px-8 py-3 text-sm font-semibold text-white rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all bg-emerald-600 hover:bg-emerald-700 hover:shadow-emerald-200"
-              >
-                <span>Proceed to Claim Refinement</span>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                </svg>
-              </button>
-
-              {/* Skip Claim Refinement Button */}
-              <button
-                onClick={async () => {
-                  // Build prior art data for drafting
-                  const priorArtPatentsArray = Object.entries(priorArtSelected).map(
-                    ([patentNumber, patentData]) => ({ patentNumber, ...patentData })
-                  )
-
-                  // Save configuration first
-                  try {
-                    await onComplete({
-                      action: 'save_prior_art_config',
-                      sessionId: session?.id,
-                      priorArtConfig: {
-                        mode: priorArtMode,
-                        selectedPatents: priorArtPatentsArray,
-                        manualText: priorArtManualText
-                      },
-                      claimRefConfig: {
-                        mode: 'ai',
-                        selectedPatents: [],
-                        manualText: ''
-                      },
-                      skipClaimRefinement: true
-                    })
-                  } catch (e) {
-                    console.error('Failed to save config before skipping:', e)
-                  }
-
-                  setStatusMessage({
-                    type: 'success',
-                    text: '✓ Skipping Claim Refinement, using preliminary claims as final...'
-                  })
-
-                  // Freeze preliminary claims as final before skipping
-                  await onComplete({
-                    action: 'set_stage',
-                    sessionId: session?.id,
-                    stage: 'COMPONENT_PLANNER',
-                    priorArtForDrafting: {
-                      mode: priorArtMode,
-                      selectedPatents: priorArtPatentsArray,
-                      manualText: priorArtManualText
-                    },
-                    claimRefinementSkipped: true,
-                    freezePreliminaryClaims: true, // Lock preliminary claims as final
-                    manualPriorArt: priorArtManualText ? {
-                      manualPriorArtText: priorArtManualText,
-                      useOnlyManualPriorArt: priorArtMode === 'manual',
-                      useManualAndAISearch: priorArtMode === 'hybrid'
-                    } : null,
-                    selectedPatents: priorArtPatentsArray,
-                    priorArtConfig: {
-                      useAuto: priorArtMode !== 'manual',
-                      useManual: priorArtMode === 'manual' || priorArtMode === 'hybrid',
-                      skippedClaimRefinement: true
-                    }
-                  })
-                  await onRefresh()
-                }}
-                disabled={!hasAIReview}
-                className="px-6 py-3 text-sm font-medium text-ai-blue-700 bg-ai-blue-50 hover:bg-ai-blue-100 border border-ai-blue-200 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
-                title="Skip claim refinement and use preliminary claims as final claims for drafting"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                </svg>
-                <span>Skip Refinement</span>
-              </button>
+            {/* Add a manual reference */}
+            <div className="bg-white rounded-2xl border border-dashed border-paper-400 p-4">
+              {!addFormOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setAddFormOpen(true)}
+                  className="text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
+                >
+                  + Add reference manually
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <textarea
+                    className="w-full border border-paper-400 rounded-xl p-3 text-sm focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
+                    rows={3}
+                    autoFocus
+                    value={manualDraft}
+                    onChange={(e) => setManualDraft(e.target.value)}
+                    placeholder="US10999888B2 — or paste a citation or description of known prior art..."
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={addManualRef}
+                      disabled={!manualDraft.trim()}
+                      className="px-4 py-2 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      Add
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setAddFormOpen(false); setManualDraft('') }}
+                      className="px-4 py-2 rounded-xl text-sm font-medium text-ai-graphite-600 hover:bg-paper-100 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* Idea Bank Floating Panel */}
-      {ideaBank.length > 0 && ideaBankOpen && (
-        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-96 max-h-[60vh] sm:max-h-[500px] bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden z-50 animate-fadeIn">
-          <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-4 py-3 flex items-center justify-between">
-            <h4 className="font-semibold flex items-center gap-2">
-              <span>💡</span> Idea Bank ({ideaBank.length})
-            </h4>
-            <button onClick={() => setIdeaBankOpen(false)} className="text-white/80 hover:text-white">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+      {/* Sticky footer: one action. Skipping refinement is a consequence, not a button. */}
+      {showTriage && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm border-t border-paper-300">
+          <div className="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-ai-graphite-600">
+              <span className="font-semibold text-ai-graphite-900">{backgroundCount}</span> for background
+              {' · '}
+              {claimsCount > 0 ? (
+                <>
+                  <span className="font-semibold text-ai-graphite-900">{claimsCount}</span> for claim comparison — refinement runs next
+                </>
+              ) : (
+                <span className="text-amber-700">no claim references — claim refinement will be skipped</span>
+              )}
+            </div>
+            <button
+              onClick={handleContinue}
+              disabled={continuing || running || (!hasAIReview && manualRefs.length === 0)}
+              className="px-6 py-2.5 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+            >
+              {continuing ? 'Saving...' : 'Continue'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Idea bank floating panel (unchanged behavior, sits above the footer) */}
+      {ideaBank.length > 0 && ideaBankOpen && (
+        <div className="fixed bottom-20 right-4 left-4 sm:left-auto sm:w-96 max-h-[60vh] sm:max-h-[500px] bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden z-50">
+          <div className="bg-amber-500 text-white px-4 py-3 flex items-center justify-between">
+            <h4 className="font-semibold">Idea Bank ({ideaBank.length})</h4>
+            <button onClick={() => setIdeaBankOpen(false)} className="text-white/80 hover:text-white text-lg leading-none">×</button>
+          </div>
           <div className="max-h-[400px] overflow-y-auto p-4 space-y-3">
-            {ideaBank.map((idea, i) => (
+            {ideaBank.map((ideaItem, i) => (
               <div key={i} className="bg-amber-50 rounded-lg p-3 border border-amber-100">
-                <div className="font-medium text-ai-graphite-900 text-sm">{idea.title}</div>
-                <div className="text-xs text-ai-graphite-600 mt-1">{idea.core_principle}</div>
-                {idea.tags && idea.tags.length > 0 && (
+                <div className="font-medium text-ai-graphite-900 text-sm">{ideaItem.title}</div>
+                <div className="text-xs text-ai-graphite-600 mt-1">{ideaItem.core_principle}</div>
+                {ideaItem.tags && ideaItem.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-2">
-                    {idea.tags.map((tag, j) => (
+                    {ideaItem.tags.map((tag, j) => (
                       <span key={j} className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px]">{tag}</span>
                     ))}
                   </div>
@@ -3905,16 +1720,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           </div>
         </div>
       )}
-
-      {/* Idea Bank Toggle Button */}
       {ideaBank.length > 0 && !ideaBankOpen && (
         <button
           onClick={() => setIdeaBankOpen(true)}
-          className="fixed bottom-4 right-4 px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center gap-2 z-50"
+          className="fixed bottom-20 right-4 px-4 py-2.5 bg-amber-500 text-white rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center gap-2 z-50"
         >
-          <span>💡</span>
-          <span className="font-medium">Idea Bank</span>
-          <span className="bg-white/20 px-2 py-0.5 rounded-full text-sm">{ideaBank.length}</span>
+          <span className="font-medium text-sm">Idea Bank</span>
+          <span className="bg-white/20 px-2 py-0.5 rounded-full text-xs">{ideaBank.length}</span>
         </button>
       )}
     </div>

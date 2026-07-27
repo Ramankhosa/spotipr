@@ -4,6 +4,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { PROVIDER_TIMEOUTS } from './provider-timeouts'
+import { emitStreamDelta, readServerSentEvents } from './streaming'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 
@@ -178,8 +179,12 @@ export class GeminiProvider implements LLMProvider {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           console.log(`Attempting Gemini API call (attempt ${attempt}/${maxRetries})`)
-          const result = await model.generateContent(contentToGenerate)
-          const response = result.response
+
+          // Streaming and buffered calls resolve the same aggregated response; only
+          // streaming also notifies the caller of each chunk as it lands.
+          const response = request.stream
+            ? await this.collectSdkStream(model, contentToGenerate, request)
+            : (await model.generateContent(contentToGenerate)).response
 
           // If we get here, the call was successful
           console.log(`Gemini API call successful on attempt ${attempt}`)
@@ -248,6 +253,78 @@ export class GeminiProvider implements LLMProvider {
 
       throw new Error(`Gemini API call failed: ${error instanceof Error ? error.message : String(error)}`)
     }
+  }
+
+  /**
+   * Consume the REST `streamGenerateContent?alt=sse` body and rebuild the aggregated
+   * `generateContent` payload (candidates + usageMetadata) the caller expects.
+   */
+  private async collectRestStream(response: Response, request: LLMRequest): Promise<any> {
+    if (!response.body) {
+      throw new Error('Gemini streaming response had no body')
+    }
+
+    let accumulated = ''
+    let finishReason: string | undefined
+    let usageMetadata: any
+
+    for await (const data of readServerSentEvents(response.body)) {
+      let chunk: any
+      try {
+        chunk = JSON.parse(data)
+      } catch {
+        continue
+      }
+
+      if (chunk?.error) {
+        throw new Error(`Gemini API stream error: ${chunk.error.message || JSON.stringify(chunk.error)}`)
+      }
+      if (chunk?.usageMetadata) usageMetadata = chunk.usageMetadata
+
+      const candidate = chunk?.candidates?.[0]
+      if (!candidate) continue
+      if (candidate.finishReason) finishReason = candidate.finishReason
+
+      const text = (candidate.content?.parts || [])
+        .map((part: any) => part?.text)
+        .filter(Boolean)
+        .join('')
+      if (!text) continue
+
+      accumulated += text
+      emitStreamDelta(request, text, accumulated)
+    }
+
+    return {
+      candidates: [{
+        content: { parts: [{ text: accumulated }] },
+        finishReason
+      }],
+      usageMetadata
+    }
+  }
+
+  /**
+   * Drive the SDK's streaming call, emitting each chunk, and resolve the aggregated
+   * response object (same shape `generateContent()` returns, including usageMetadata).
+   */
+  private async collectSdkStream(model: any, contentToGenerate: any, request: LLMRequest): Promise<any> {
+    const result = await model.generateContentStream(contentToGenerate)
+    let accumulated = ''
+
+    for await (const chunk of result.stream) {
+      let text = ''
+      try {
+        text = typeof chunk?.text === 'function' ? chunk.text() : ''
+      } catch {
+        continue // safety-blocked or non-text chunk
+      }
+      if (!text) continue
+      accumulated += text
+      emitStreamDelta(request, text, accumulated)
+    }
+
+    return await result.response
   }
 
   getTokenLimits(modelName: string): { input: number, output: number } {
@@ -361,7 +438,9 @@ export class GeminiProvider implements LLMProvider {
     }
 
     // Use the configured baseURL (defaults to https://generativelanguage.googleapis.com/v1beta)
-    const url = `${this.config.baseURL}/models/${encodeURIComponent(modelClass)}:generateContent`
+    const streaming = Boolean(request.stream)
+    const method = streaming ? 'streamGenerateContent?alt=sse' : 'generateContent'
+    const url = `${this.config.baseURL}/models/${encodeURIComponent(modelClass)}:${method}`
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -377,7 +456,9 @@ export class GeminiProvider implements LLMProvider {
       throw new Error(`Gemini API error: ${response.status} ${errorText}`)
     }
 
-    const data = await response.json()
+    const data = streaming
+      ? await this.collectRestStream(response, request)
+      : await response.json()
     const candidate = data?.candidates?.[0]
     const candidateParts = candidate?.content?.parts || []
     const output = candidateParts.map((p: any) => p?.text).filter(Boolean).join('\n')

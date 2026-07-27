@@ -113,7 +113,7 @@ export default function TextEditOverlay({
         }}
         spellCheck={false}
         rows={lines.length}
-        className="block resize-none overflow-hidden rounded-sm border border-dashed border-blue-500 bg-white/80 outline-none"
+        className="block resize-none overflow-hidden rounded-sm border border-dashed border-lamp-500 bg-white/80 outline-none"
         style={{
           color,
           fontSize: fontSizePx,

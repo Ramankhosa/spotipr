@@ -28,8 +28,8 @@ const fmtNum = (n: number) => n.toLocaleString()
 const STATUS_TONE: Record<string, string> = {
   LOADED: 'bg-green-100 text-green-800',
   IMPORTED: 'bg-green-100 text-green-800',
-  VERIFIED: 'bg-blue-100 text-blue-800',
-  DOWNLOADED: 'bg-blue-100 text-blue-800',
+  VERIFIED: 'bg-lamp-100 text-lamp-800',
+  DOWNLOADED: 'bg-lamp-100 text-lamp-800',
   QUEUED: 'bg-gray-100 text-gray-700',
   PARTIAL: 'bg-amber-100 text-amber-800',
   SKIPPED: 'bg-gray-100 text-gray-500',

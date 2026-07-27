@@ -87,13 +87,13 @@ export function TopUsersChart({ data }: TopUsersChartProps) {
           <div
             key={user.userId}
             className={`flex items-center justify-between p-4 rounded-lg border ${
-              index < 3 ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200' : 'bg-white'
+              index < 3 ? 'bg-gradient-to-r from-lamp-50 to-lamp-50 border-lamp-200' : 'bg-white'
             }`}
           >
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2">
                 {getRankIcon(index)}
-                <div className="w-10 h-10 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center font-medium">
+                <div className="w-10 h-10 bg-lamp-100 text-lamp-700 rounded-full flex items-center justify-center font-medium">
                   {getInitials(user.userName)}
                 </div>
               </div>
@@ -110,13 +110,13 @@ export function TopUsersChart({ data }: TopUsersChartProps) {
             </div>
 
             <div className="text-right">
-              <div className="text-lg font-bold text-blue-600">
+              <div className="text-lg font-bold text-lamp-600">
                 {formatNumber(user.metrics.totalTokens)}
               </div>
               <div className="text-sm text-gray-600">
                 tokens used
               </div>
-              <div className="text-sm text-purple-600 font-medium">
+              <div className="text-sm text-lamp-600 font-medium">
                 {formatCurrency(user.metrics.cost)}
               </div>
             </div>

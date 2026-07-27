@@ -15,22 +15,21 @@ import {
   Globe,
   Lightbulb,
   Scale,
-  Info,
   Trash2,
   FileSearch,
-  ShieldCheck,
   BookOpen,
-  GitBranch,
-  Layers3,
-  CheckCircle2,
-  FileText
+  PenLine,
+  ListChecks,
+  Save,
+  User,
+  Loader2
 } from 'lucide-react'
 import { ClaimsEditor, RichTextEditorRef } from '@/components/ui/rich-text-editor'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import PersonaManager, { type PersonaSelection } from '@/components/drafting/PersonaManager'
 import { useAuth } from '@/lib/auth-context'
+import type { StreamingClaim } from '@/lib/draft-claims-stream'
 import {
   stripTrailingClaimDependencyLabel,
   stripTrailingClaimDependencyLabelsFromHtml
@@ -57,51 +56,55 @@ interface Claim {
 
 type ClaimScopeStyle = 'broad' | 'default' | 'narrow'
 
+type PatentType = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
+
 // ---------------------------------------------------------------------------
-// Helpers
+// Static config
 // ---------------------------------------------------------------------------
 
-const CLAIM_SCOPE_STYLE_STAGES: Array<{
-  value: ClaimScopeStyle
-  label: string
-  help: string
-}> = [
+const CLAIM_SCOPE_STYLES: Array<{ value: ClaimScopeStyle; label: string; help: string }> = [
   {
     value: 'broad',
-    label: 'Broad Style',
-    help: 'Use the minimum source-supported inventive combination in Claim 1; move embodiments, examples, ranges, and fallback details into dependent claims.',
+    label: 'Broad',
+    help: 'Claim 1 recites the minimum source-supported inventive combination. Embodiments, ranges and fallbacks move into dependent claims.',
   },
   {
     value: 'default',
-    label: 'Default Style',
-    help: 'Use the current balanced strategy: source-supported Claim 1 with dependent fallback positions.',
+    label: 'Balanced',
+    help: 'Source-supported Claim 1 with dependent fallback positions — neither obviously overbroad nor unnecessarily narrow.',
   },
   {
     value: 'narrow',
-    label: 'Narrow Claims',
-    help: 'Include more concrete source-supported differentiators in independent claims for tighter initial coverage.',
+    label: 'Narrow',
+    help: 'Independent claims carry more concrete source-supported differentiators for tighter initial coverage.',
   },
 ]
+
+const PATENT_TYPES: Array<{ value: PatentType; hint: string }> = [
+  { value: 'PRODUCT', hint: 'Single device or article' },
+  { value: 'SYSTEM', hint: 'Multi-component setup' },
+  { value: 'PROCESS', hint: 'Method or steps' },
+  { value: 'COMPOSITION', hint: 'Chemical or material' },
+]
+
+// Steps mirror the server's real progress events — nothing here is on a timer.
+const GENERATION_STEPS: Array<{ key: string; label: string; icon: React.ComponentType<any> }> = [
+  { key: 'reading', label: 'Reading disclosure', icon: FileSearch },
+  { key: 'rules', label: 'Applying jurisdiction rules', icon: BookOpen },
+  { key: 'drafting', label: 'Drafting claims', icon: PenLine },
+  { key: 'checking', label: 'Checking dependencies', icon: ListChecks },
+  { key: 'saving', label: 'Saving', icon: Save },
+]
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 const normalizeClaimScopeStyle = (value: unknown): ClaimScopeStyle => {
   const style = String(value || '').trim().toLowerCase()
   if (style === 'broad' || style === 'narrow') return style
   return 'default'
 }
-
-const Tooltip = ({ children, content, position = 'bottom' }: { children: React.ReactNode; content: string; position?: 'top' | 'bottom' | 'left' | 'right' }) => (
-  <div className="relative group">
-    {children}
-    <div className={`absolute z-50 hidden group-hover:block px-3 py-2 text-xs text-white bg-gray-900 rounded-lg shadow-lg whitespace-normal max-w-xs pointer-events-none
-      ${position === 'bottom' ? 'top-full mt-2 left-1/2 -translate-x-1/2' : ''}
-      ${position === 'top' ? 'bottom-full mb-2 left-1/2 -translate-x-1/2' : ''}
-      ${position === 'left' ? 'right-full mr-2 top-1/2 -translate-y-1/2' : ''}
-      ${position === 'right' ? 'left-full ml-2 top-1/2 -translate-y-1/2' : ''}
-    `}>
-      {content}
-    </div>
-  </div>
-)
 
 const parseClaimsFromHtml = (html: string): Claim[] => {
   if (!html || html.trim() === '' || html === '<p></p>') return []
@@ -134,216 +137,161 @@ const parseClaimsFromHtml = (html: string): Claim[] => {
   return claims
 }
 
-const CLAIM_GENERATION_PHASES = [
-  {
-    label: 'Reviewing invention disclosure',
-    detail: 'Reading normalized facts, objectives, components, and source-stated embodiments.',
-    icon: FileSearch
-  },
-  {
-    label: 'Checking support boundaries',
-    detail: 'Separating claimable features from unsupported or excluded material.',
-    icon: ShieldCheck
-  },
-  {
-    label: 'Selecting claim architecture',
-    detail: 'Aligning the independent-claim form with the invention type and jurisdiction.',
-    icon: BookOpen
-  },
-  {
-    label: 'Drafting the independent claim',
-    detail: 'Balancing broad scope with the minimum source-supported inventive combination.',
-    icon: Scale
-  },
-  {
-    label: 'Planning dependent fallbacks',
-    detail: 'Arranging embodiments, alternatives, ranges, components, and method steps.',
-    icon: GitBranch
-  },
-  {
-    label: 'Applying jurisdiction rules',
-    detail: 'Checking transitions, dependencies, numbering, and local drafting conventions.',
-    icon: Globe
-  },
-  {
-    label: 'Reviewing term consistency',
-    detail: 'Checking antecedent basis, dependency references, and repeated claim terms.',
-    icon: Layers3
-  },
-  {
-    label: 'Preparing support notes',
-    detail: 'Building quality observations and source-support signals for attorney review.',
-    icon: FileText
-  },
-]
+// ---------------------------------------------------------------------------
+// Small presentational primitives
+// ---------------------------------------------------------------------------
 
-const CLAIM_GENERATION_NOTES = [
-  'Claims define the boundaries of protection, so scope and clarity are being balanced.',
-  'Dependent claims are being used as fallback positions around narrower embodiments.',
-  'Unsupported wording is being avoided so the claim set remains tied to the disclosure.',
-  'The final validation waits for the model response before the claims are shown.',
-]
+const Tooltip = ({
+  children,
+  content,
+  align = 'center',
+  className = '',
+}: {
+  children: React.ReactNode
+  content: string
+  align?: 'center' | 'start' | 'end'
+  className?: string
+}) => (
+  <div className={`group relative ${className}`}>
+    {children}
+    <span
+      role="tooltip"
+      className={`pointer-events-none absolute top-full z-50 mt-2 hidden w-60 rounded-lg border border-paper-300 bg-white px-3 py-2 text-left text-[11px] font-normal leading-relaxed text-ai-graphite-600 shadow-lg group-hover:block
+        ${align === 'start' ? 'left-0' : align === 'end' ? 'right-0' : 'left-1/2 -translate-x-1/2'}`}
+    >
+      {content}
+    </span>
+  </div>
+)
 
-function estimateClaimGenerationDurationMs(componentCount: number, usePersonaStyle: boolean) {
-  const componentLoad = Math.min(7000, Math.max(0, componentCount - 6) * 350)
-  const styleLoad = usePersonaStyle ? 2500 : 0
-  return 36000 + componentLoad + styleLoad
-}
+/** Label + control pair inside the dense toolbar. */
+const ControlGroup = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="flex items-center gap-1.5">
+    <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-ai-graphite-400">{label}</span>
+    {children}
+  </div>
+)
+
+const ToolbarDivider = () => <span className="hidden h-4 w-px bg-paper-300 sm:block" />
+
+// ---------------------------------------------------------------------------
+// Generation progress — driven entirely by server events
+// ---------------------------------------------------------------------------
 
 function ClaimGenerationProgress({
-  activeJurisdiction,
-  patentType,
-  componentCount,
-  hasUserRemarks,
-  usePersonaStyle,
-  personaName,
-  claimScopeStyle,
-  hasSourceFactLedger,
-  hasScopeRecommendations,
+  completedSteps,
+  activeStep,
+  stepDetails,
+  streamedClaims,
+  startedAt,
 }: {
-  activeJurisdiction: string
-  patentType: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null
-  componentCount: number
-  hasUserRemarks: boolean
-  usePersonaStyle: boolean
-  personaName?: string
-  claimScopeStyle: ClaimScopeStyle
-  hasSourceFactLedger: boolean
-  hasScopeRecommendations: boolean
+  completedSteps: string[]
+  activeStep: string | null
+  stepDetails: Record<string, string>
+  streamedClaims: StreamingClaim[]
+  startedAt: number
 }) {
-  const [elapsedSeconds, setElapsedSeconds] = useState(0)
-  const [noteIndex, setNoteIndex] = useState(0)
-  const estimatedDuration = estimateClaimGenerationDurationMs(componentCount, usePersonaStyle)
-  const elapsedMs = elapsedSeconds * 1000
-  const ratio = Math.min(1, elapsedMs / estimatedDuration)
-  const readiness = Math.min(96, 7 + Math.round(ratio * 89))
-  const activePhaseIndex = Math.min(CLAIM_GENERATION_PHASES.length - 1, Math.floor(ratio * CLAIM_GENERATION_PHASES.length))
-  const currentPhase = elapsedMs > estimatedDuration
-    ? 'Finalizing claim set and support checks...'
-    : CLAIM_GENERATION_PHASES[activePhaseIndex]?.label || 'Drafting preliminary claims...'
+  const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setElapsedSeconds((seconds) => seconds + 1)
-    }, 1000)
+    const tick = () => setElapsed(Math.max(0, Math.round((Date.now() - startedAt) / 1000)))
+    tick()
+    const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [startedAt])
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNoteIndex((index) => (index + 1) % CLAIM_GENERATION_NOTES.length)
-    }, 5600)
-    return () => window.clearInterval(timer)
-  }, [])
-
-  const inputs = [
-    `${activeJurisdiction} rules`,
-    patentType ? `${patentType} claim form` : 'claim type review',
-    componentCount > 0 ? `${componentCount} component${componentCount === 1 ? '' : 's'}` : 'source text',
-    `${CLAIM_SCOPE_STYLE_STAGES.find(stage => stage.value === claimScopeStyle)?.label || 'Default Style'} scope`,
-    hasSourceFactLedger ? 'source fact ledger' : null,
-    hasScopeRecommendations ? 'scope recommendations' : null,
-    hasUserRemarks ? 'user remarks' : null,
-    usePersonaStyle ? (personaName ? `${personaName} style` : 'persona style') : null,
-  ].filter((input): input is string => Boolean(input))
+  const activeIndex = activeStep ? GENERATION_STEPS.findIndex(step => step.key === activeStep) : -1
+  const doneCount = completedSteps.length
+  const streamingClaim = streamedClaims.find(claim => !claim.complete)
+  const detail = activeStep ? stepDetails[activeStep] : undefined
 
   return (
-    <div className="rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-ai-blue-50 p-4 shadow-sm sm:p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Claim Drafting Workbench</p>
-          <h4 className="mt-1 text-base font-semibold text-ai-graphite-900">Drafting preliminary claims</h4>
-          <p className="mt-1 text-sm text-ai-graphite-600">
-            Estimated progress is shown while the model prepares the claim set.
-          </p>
-        </div>
-        <div className="inline-flex w-fit items-center gap-2 rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 shadow-sm">
-          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-          {elapsedSeconds}s elapsed
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-sm font-medium text-ai-graphite-800" aria-live="polite">{currentPhase}</span>
-          <span className="text-xs font-semibold text-amber-700">{readiness}%</span>
-        </div>
-        <div
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={readiness}
-          className="h-2 overflow-hidden rounded-full bg-amber-100"
-        >
-          <motion.div
-            className="h-full rounded-full bg-gradient-to-r from-amber-500 via-orange-400 to-ai-blue-500"
-            initial={false}
-            animate={{ width: `${readiness}%` }}
-            transition={{ duration: 0.45, ease: 'easeOut' }}
-          />
-        </div>
-        {elapsedMs > estimatedDuration && (
-          <p className="mt-2 rounded-md border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
-            This claim set is taking longer than usual. Final validation will complete as soon as the response returns.
-          </p>
-        )}
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        {inputs.map((input) => (
-          <span
-            key={input}
-            className="rounded-full border border-paper-300 bg-white px-2.5 py-1 text-xs font-medium text-ai-graphite-600"
-          >
-            {input}
+    <div className="overflow-hidden rounded-lg border border-paper-300 bg-white">
+      {/* Status line */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-paper-200 bg-paper-100 px-4 py-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-ai-blue-600" />
+          <span className="truncate text-[13px] font-medium text-ai-graphite-900" aria-live="polite">
+            {activeIndex >= 0 ? GENERATION_STEPS[activeIndex].label : 'Starting'}
+            {detail && <span className="ml-2 font-normal text-ai-graphite-500">{detail}</span>}
           </span>
-        ))}
+        </div>
+        <div className="flex items-center gap-3 text-[11px] tabular-nums text-ai-graphite-500">
+          {streamedClaims.length > 0 && (
+            <span className="font-medium text-ai-blue-700">
+              {streamedClaims.length} claim{streamedClaims.length === 1 ? '' : 's'} drafted
+            </span>
+          )}
+          <span>{elapsed}s</span>
+        </div>
       </div>
 
-      <div className="mt-5 grid gap-2 sm:grid-cols-2">
-        {CLAIM_GENERATION_PHASES.map((phase, index) => {
-          const Icon = phase.icon
-          const complete = index < activePhaseIndex
-          const active = index === activePhaseIndex
+      {/* Step rail */}
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-paper-200 px-4 py-2.5">
+        {GENERATION_STEPS.map((step, index) => {
+          const Icon = step.icon
+          const complete = completedSteps.includes(step.key)
+          const active = step.key === activeStep
           return (
-            <div
-              key={phase.label}
-              className={[
-                'flex gap-3 rounded-lg border px-3 py-2.5 transition-colors',
-                complete
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                  : active
-                    ? 'border-amber-300 bg-amber-100/70 text-amber-950'
-                    : 'border-paper-300 bg-white/80 text-ai-graphite-500',
-              ].join(' ')}
-            >
-              <div className={[
-                'mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full',
-                complete ? 'bg-emerald-600 text-white' : active ? 'bg-amber-500 text-white' : 'bg-paper-200 text-ai-graphite-400',
-              ].join(' ')}>
-                {complete ? <CheckCircle2 className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+            <React.Fragment key={step.key}>
+              {index > 0 && (
+                <span className={`hidden h-px w-4 sm:block ${complete || active ? 'bg-ai-blue-200' : 'bg-paper-300'}`} />
+              )}
+              <div
+                className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                  active
+                    ? 'bg-ai-blue-50 text-ai-blue-700'
+                    : complete
+                      ? 'text-ai-graphite-600'
+                      : 'text-ai-graphite-400'
+                }`}
+              >
+                {complete && !active
+                  ? <Check className="h-3.5 w-3.5 text-ai-blue-600" />
+                  : <Icon className={`h-3.5 w-3.5 ${active ? 'text-ai-blue-600' : ''}`} />}
+                <span className="whitespace-nowrap">{step.label}</span>
               </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">{phase.label}</p>
-                <p className="mt-0.5 text-xs leading-relaxed opacity-80">{phase.detail}</p>
-              </div>
-            </div>
+            </React.Fragment>
           )
         })}
+        <span className="ml-auto hidden text-[11px] tabular-nums text-ai-graphite-400 sm:block">
+          {doneCount}/{GENERATION_STEPS.length}
+        </span>
       </div>
 
-      <div className="mt-4 min-h-[36px] rounded-lg border border-ai-blue-100 bg-white/80 px-3 py-2 text-sm text-ai-graphite-700" aria-live="polite">
-        <AnimatePresence mode="wait">
-          <motion.p
-            key={CLAIM_GENERATION_NOTES[noteIndex]}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.18 }}
-          >
-            {CLAIM_GENERATION_NOTES[noteIndex]}
-          </motion.p>
-        </AnimatePresence>
+      {/* Live claim text */}
+      <div className="px-4 py-3">
+        {streamedClaims.length === 0 ? (
+          <div className="space-y-2.5 py-1" aria-hidden>
+            {[0, 1, 2].map((row) => (
+              <div
+                key={row}
+                className="h-3 animate-pulse rounded bg-paper-200"
+                style={{ width: `${[92, 78, 60][row]}%`, animationDelay: `${row * 140}ms` }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="max-h-[440px] space-y-3 overflow-y-auto pr-1">
+            {streamedClaims.map((claim) => (
+              <motion.p
+                key={claim.number}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.18 }}
+                className={`text-[13.5px] leading-relaxed ${
+                  claim.complete ? 'text-ai-graphite-700' : 'text-ai-graphite-900'
+                }`}
+              >
+                <strong className="font-semibold text-ai-graphite-900">{claim.number}.</strong>{' '}
+                {claim.text}
+                {claim === streamingClaim && (
+                  <span className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse bg-ai-blue-600 align-middle" />
+                )}
+              </motion.p>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -363,20 +311,22 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const [isResettingClaims, setIsResettingClaims] = useState(false)
   const claimsEditorRef = useRef<RichTextEditorRef>(null)
   const [isEditingClaims, setIsEditingClaims] = useState(false)
-  const [claimGenerationQuality, setClaimGenerationQuality] = useState<any>(null)
-  const [showClaimsDetails, setShowClaimsDetails] = useState(true)
-  const [showQualityObservations, setShowQualityObservations] = useState(false)
-  const [showFreezeHelp, setShowFreezeHelp] = useState(false)
+
+  // ---- Live generation state (fed by the NDJSON stream) ----
+  const [generationStartedAt, setGenerationStartedAt] = useState(0)
+  const [completedSteps, setCompletedSteps] = useState<string[]>([])
+  const [activeStep, setActiveStep] = useState<string | null>(null)
+  const [stepDetails, setStepDetails] = useState<Record<string, string>>({})
+  const [streamedClaims, setStreamedClaims] = useState<StreamingClaim[]>([])
 
   // ---- Patent type state ----
-  const [patentType, setPatentType] = useState<'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null>(null)
+  const [patentType, setPatentType] = useState<PatentType | null>(null)
   const [isUpdatingPatentType, setIsUpdatingPatentType] = useState(false)
   const [showPatentTypeDropdown, setShowPatentTypeDropdown] = useState(false)
 
   // ---- User claim remarks ----
   const [userClaimRemarks, setUserClaimRemarks] = useState('')
   const [claimScopeStyle, setClaimScopeStyle] = useState<ClaimScopeStyle>('default')
-  const [claimScopeTooltipStage, setClaimScopeTooltipStage] = useState<ClaimScopeStyle | null>(null)
   const [isSavingClaimScopeStyle, setIsSavingClaimScopeStyle] = useState(false)
 
   // ---- Persona / style state ----
@@ -439,7 +389,6 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       setClaims([])
       setClaimsText('')
     }
-    setClaimGenerationQuality(nd.claimGenerationQuality || null)
 
     if (nd.claimsApprovedAt) {
       setClaimsFrozen(true)
@@ -503,22 +452,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const strippedClaims = typeof claimsText === 'string' ? claimsText.replace(/<[^>]*>/g, '').trim() : ''
   const hasClaims = strippedClaims.length > 0 || claims.length > 0
   const canProceed = hasClaims
-  const claimScopeStageIndex = Math.max(0, CLAIM_SCOPE_STYLE_STAGES.findIndex(stage => stage.value === claimScopeStyle))
-  const claimScopeFillPercent = CLAIM_SCOPE_STYLE_STAGES.length > 1
-    ? (claimScopeStageIndex / (CLAIM_SCOPE_STYLE_STAGES.length - 1)) * 100
-    : 0
-  const activeClaimScopeStage = CLAIM_SCOPE_STYLE_STAGES[claimScopeStageIndex] || CLAIM_SCOPE_STYLE_STAGES[1]
-  const claimScopeSliderDisabled = claimsFrozen || isGeneratingClaims || isSavingClaimScopeStyle
-
-  const qualityStatus = claimGenerationQuality?.status as string | undefined
-  const qualityWarnings: any[] = Array.isArray(claimGenerationQuality?.warnings) ? claimGenerationQuality.warnings : []
-  const qualityBadge = qualityStatus === 'source_supported'
-    ? { label: 'Source-supported', className: 'bg-emerald-100 text-emerald-700 border-emerald-200' }
-    : qualityStatus === 'thin_disclosure'
-      ? { label: 'Thin disclosure', className: 'bg-amber-100 text-amber-800 border-amber-200' }
-      : qualityStatus === 'needs_review'
-        ? { label: 'Needs review', className: 'bg-rose-100 text-rose-700 border-rose-200' }
-        : null
+  const controlsLocked = claimsFrozen || isGeneratingClaims || isResettingClaims
 
   // ---------------------------------------------------------------------------
   // Persona handlers
@@ -604,10 +538,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   }
 
   const handleClaimScopeStyleChange = async (nextStyle: ClaimScopeStyle) => {
-    if (claimScopeSliderDisabled || nextStyle === claimScopeStyle) return
+    if (controlsLocked || isSavingClaimScopeStyle || nextStyle === claimScopeStyle) return
     const previousStyle = claimScopeStyle
     setClaimScopeStyle(nextStyle)
-    setClaimScopeTooltipStage(null)
     if (!session?.id) return
     try {
       setIsSavingClaimScopeStyle(true)
@@ -630,14 +563,115 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   }
 
   // ---------------------------------------------------------------------------
-  // Claims handlers
+  // Claims generation (streamed)
   // ---------------------------------------------------------------------------
+
+  const resetGenerationProgress = () => {
+    setCompletedSteps([])
+    setActiveStep(null)
+    setStepDetails({})
+    setStreamedClaims([])
+  }
+
+  const applyProgressEvent = (event: any) => {
+    if (event?.type === 'stage' && event.key) {
+      setActiveStep(event.key)
+      setCompletedSteps(steps => (steps.includes(event.key) ? steps : [...steps, event.key]))
+      if (event.detail) {
+        setStepDetails(details => ({ ...details, [event.key]: event.detail }))
+      }
+      return
+    }
+
+    if (event?.type === 'claims_reset') {
+      setStreamedClaims([])
+      return
+    }
+
+    if (event?.type === 'claims_delta' && Array.isArray(event.claims)) {
+      setStreamedClaims((current) => {
+        const merged = new Map(current.map(claim => [claim.number, claim]))
+        event.claims.forEach((claim: StreamingClaim) => merged.set(claim.number, claim))
+        return Array.from(merged.values()).sort((a, b) => a.number - b.number)
+      })
+    }
+  }
+
+  /**
+   * Run one generation over the NDJSON stream. Returns the terminal payload.
+   * Falls back to the buffered `generate_claims` action when streaming is unavailable
+   * (older deploy, proxy that buffers, or a response with no readable body).
+   */
+  const runClaimGeneration = async (payload: Record<string, any>): Promise<any> => {
+    if (!patent?.id || typeof window === 'undefined') {
+      return await onComplete(payload)
+    }
+
+    let response: Response
+    try {
+      response = await fetch(`/api/patents/${patent.id}/drafting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({ ...payload, action: 'generate_claims_stream' })
+      })
+    } catch (networkError) {
+      console.warn('Claim stream request failed, falling back to buffered generation:', networkError)
+      return await onComplete(payload)
+    }
+
+    if (!response.ok || !response.body) {
+      console.warn(`Claim stream unavailable (status ${response.status}); falling back to buffered generation.`)
+      return await onComplete(payload)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalPayload: any = null
+
+    const handleLine = (line: string) => {
+      if (!line.trim()) return
+      let event: any
+      try {
+        event = JSON.parse(line)
+      } catch {
+        return // ignore a partial or malformed frame
+      }
+
+      if (event.type === 'complete' || event.type === 'error') {
+        finalPayload = event
+        return
+      }
+      applyProgressEvent(event)
+    }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) handleLine(line)
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) handleLine(buffer)
+
+    if (!finalPayload) {
+      throw new Error('Claim generation ended before returning a claim set. Please try again.')
+    }
+    return finalPayload
+  }
 
   const handleGenerateClaims = async () => {
     if (!session?.id) return
     try {
       setIsGeneratingClaims(true)
       setError(null)
+      setGenerationStartedAt(Date.now())
+      resetGenerationProgress()
 
       const ideaContext = {
         title,
@@ -670,12 +704,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         ideaContext
       }
 
-      let response = await onComplete(payload)
+      let response = await runClaimGeneration(payload)
 
       if (response?.code === 'PERSONA_COVERAGE_WARNING') {
         const confirmed = window.confirm(formatPersonaCoverageWarning(response.personaWarnings || []))
         if (!confirmed) return
-        response = await onComplete({ ...payload, acceptPersonaWarnings: true })
+        resetGenerationProgress()
+        response = await runClaimGeneration({ ...payload, acceptPersonaWarnings: true })
       }
 
       if (response?.error) throw new Error(response.error)
@@ -707,7 +742,6 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       if (response?.claimScopeStyle) {
         setClaimScopeStyle(normalizeClaimScopeStyle(response.claimScopeStyle))
       }
-      setClaimGenerationQuality(response.claimGenerationQuality || null)
 
       await onRefresh()
       setRegenerateInstructions('')
@@ -716,10 +750,11 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       setError(e instanceof Error ? e.message : 'Failed to generate claims. Please try again.')
     } finally {
       setIsGeneratingClaims(false)
+      resetGenerationProgress()
     }
   }
 
-  const handleUpdatePatentType = async (newType: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION') => {
+  const handleUpdatePatentType = async (newType: PatentType) => {
     if (!session?.id || newType === patentType) return
     try {
       setIsUpdatingPatentType(true)
@@ -740,31 +775,10 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     }
   }
 
-  const handleSaveClaims = async () => {
-    if (!session?.id) return
-    try {
-      setError(null)
-      const claimsContent = claimsEditorRef.current?.getHTML() || claimsText
-      const parsedFromHtml = parseClaimsFromHtml(claimsContent)
-      const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
-      await onComplete({
-        action: 'save_claims',
-        sessionId: session.id,
-        claims: claimsContent,
-        claimsStructured: structuredToSave
-      })
-      await onRefresh()
-      setDraftSaved(true)
-    } catch (e) {
-      console.error('Failed to save claims:', e)
-      setError('Failed to save claims.')
-    }
-  }
-
   const handleResetClaims = async () => {
     if (!session?.id || !hasClaims) return
     const confirmed = window.confirm(
-      'Reset claims?\n\nThis will delete generated, edited, frozen, and refined claim data for this Stage 1 claim set. This cannot be undone.'
+      'Reset claims?\n\nThis deletes the generated, edited, and refined claim data for this Stage 1 claim set. This cannot be undone.'
     )
     if (!confirmed) return
 
@@ -781,7 +795,6 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
       setClaims([])
       setClaimsText('')
-      setClaimGenerationQuality(null)
       setClaimsFrozen(false)
       setClaimsFrozenAt(null)
       setIsEditingClaims(false)
@@ -820,33 +833,8 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     }
   }
 
-  const handleFreezeClaims = async () => {
-    if (!session?.id) return
-    try {
-      setError(null)
-      const claimsContent = claimsEditorRef.current?.getHTML() || claimsText
-      if (!claimsContent || claimsContent.trim() === '' || claimsContent === '<p></p>') {
-        setError('Please generate or enter claims before freezing.')
-        return
-      }
-      const parsedFromHtml = parseClaimsFromHtml(claimsContent)
-      const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
-      await onComplete({
-        action: 'freeze_claims',
-        sessionId: session.id,
-        claims: claimsContent,
-        claimsStructured: structuredToSave,
-        jurisdiction: activeJurisdiction
-      })
-      setClaimsFrozen(true)
-      setClaimsFrozenAt(new Date().toISOString())
-      await onRefresh()
-    } catch (e) {
-      console.error('Failed to freeze claims:', e)
-      setError('Failed to freeze claims.')
-    }
-  }
-
+  // Claims can still arrive locked (from the Claim Refinement stage, an automated batch
+  // run, or a session created before locking became optional), so unlocking stays.
   const handleUnfreezeClaims = async () => {
     if (!session?.id) return
     try {
@@ -908,7 +896,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     setSkipPriorArtClicked(true)
   }
 
-  const skipPriorArtAndFreeze = async () => {
+  const skipPriorArtAndContinue = async () => {
     if (!session?.id) return
     try {
       setIsNavigating(true)
@@ -935,674 +923,397 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="px-3 py-5 sm:px-6 sm:py-8 max-w-[1800px] mx-auto">
-      {/* ---- Page Header ---- */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
+    <div className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-6">
+      {/* ---- Page header: single row ---- */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ai-blue-50 ring-1 ring-inset ring-ai-blue-100">
+            <Scale className="h-[18px] w-[18px] text-ai-blue-700" />
+          </div>
           <div>
-            <h2 className="text-2xl font-bold text-ai-graphite-900 flex items-center gap-3">
-              <div className="p-2 bg-ai-blue-100 rounded-lg">
-                <Scale className="w-6 h-6 text-ai-blue-600" />
-              </div>
+            <h2 className="text-[17px] font-semibold leading-tight tracking-[-0.01em] text-ai-graphite-900">
               Preliminary Claims
             </h2>
-            <p className="text-ai-graphite-500 mt-2">
-              Generate and refine jurisdiction-aware patent claims based on your invention disclosure.
+            <p className="text-[13px] leading-tight text-ai-graphite-500">
+              Jurisdiction-aware claims drafted from your invention disclosure.
             </p>
           </div>
+        </div>
 
-          <Badge variant="outline" className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border-amber-200 text-amber-800">
-            <Globe className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-paper-300 bg-white px-2 py-1 text-[11px] font-medium text-ai-graphite-600">
+            <Globe className="h-3 w-3 text-ai-graphite-400" />
             {activeJurisdiction}
             {allJurisdictions.length > 1 && (
-              <span className="text-xs opacity-70">+{allJurisdictions.length - 1}</span>
+              <span className="text-ai-graphite-400">+{allJurisdictions.length - 1}</span>
             )}
-          </Badge>
+          </span>
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium ${
+              claimsFrozen
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-paper-300 bg-white text-ai-graphite-600'
+            }`}
+          >
+            {claimsFrozen ? <Lock className="h-3 w-3" /> : <Check className="h-3 w-3 text-emerald-600" />}
+            {claimsFrozen && claimsFrozenAt
+              ? `Locked ${new Date(claimsFrozenAt).toLocaleDateString()}`
+              : hasClaims ? 'Saved' : 'Not started'}
+          </span>
         </div>
       </div>
 
       {error && (
-        <Alert variant="destructive" className="mb-6">
+        <Alert variant="destructive" className="mb-4">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      {/* ---- Claims layout ---- */}
-      <div className="grid grid-cols-1 gap-6">
-        {/* ========== Claims Panel ========== */}
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-paper-300 shadow-sm">
-            {/* Claims Header */}
-            <button
-              onClick={() => setShowClaimsDetails(!showClaimsDetails)}
-              className="w-full flex items-center justify-between px-6 py-4 border-b border-paper-200 bg-gradient-to-r from-white to-ai-blue-50/30 hover:bg-ai-blue-50/30 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <div className="h-6 w-6 rounded-full bg-ai-blue-100 flex items-center justify-center">
-                  <Scale className="w-3.5 h-3.5 text-ai-blue-600" />
-                </div>
-                <h3 className="text-sm font-semibold text-ai-graphite-900">
-                  Initial Patent Claims
-                </h3>
-                <Badge variant="secondary" className="text-xs">
-                  {activeJurisdiction} Rules
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                {!showClaimsDetails && (
-                  <span className="text-xs text-ai-graphite-500">Click to expand</span>
+      {/* ---- Claims card ---- */}
+      <div className="rounded-xl border border-paper-300 bg-white">
+        {/* Dense control bar: every claim-generation setting on one line */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-t-xl border-b border-paper-200 bg-paper-50 px-3 py-2">
+          {/* Invention type */}
+          <ControlGroup label="Type">
+            <div className="relative" data-patent-type-dropdown>
+              <button
+                onClick={() => setShowPatentTypeDropdown(!showPatentTypeDropdown)}
+                disabled={isUpdatingPatentType || claimsFrozen}
+                title="Change the invention type if the AI classification is incorrect"
+                className={`flex items-center gap-1 rounded-md border border-paper-300 bg-white px-2 py-1 text-[11px] font-semibold text-ai-graphite-800 transition-colors ${
+                  isUpdatingPatentType
+                    ? 'cursor-wait opacity-60'
+                    : claimsFrozen
+                      ? 'cursor-not-allowed opacity-60'
+                      : 'hover:border-ai-blue-300 hover:text-ai-blue-700'
+                }`}
+              >
+                {isUpdatingPatentType
+                  ? <RefreshCw className="h-3 w-3 animate-spin" />
+                  : (patentType || 'Classifying…')}
+                {!claimsFrozen && !isUpdatingPatentType && (
+                  <ChevronDown className={`h-3 w-3 text-ai-graphite-400 transition-transform ${showPatentTypeDropdown ? 'rotate-180' : ''}`} />
                 )}
-                {showClaimsDetails ? <ChevronDown className="w-4 h-4 text-ai-graphite-400" /> : <ChevronRight className="w-4 h-4 text-ai-graphite-400" />}
-              </div>
-            </button>
+              </button>
 
-            {/* Compact metadata, status, and style controls */}
-            {showClaimsDetails && (
-              <div className="px-5 py-3 bg-gradient-to-r from-ai-blue-50/50 to-violet-50/50 border-b border-ai-blue-100">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-ai-graphite-600">Invention Type</span>
-                    <div className="relative" data-patent-type-dropdown>
-                      <Tooltip content="Click to change the invention type if the AI classification is incorrect" position="bottom">
-                        <button
-                          onClick={() => setShowPatentTypeDropdown(!showPatentTypeDropdown)}
-                          disabled={isUpdatingPatentType || claimsFrozen}
-                          className={`text-xs font-bold px-2.5 py-1 rounded-md flex items-center gap-1.5 transition-all ${
-                            isUpdatingPatentType ? 'opacity-50 cursor-wait' :
-                            claimsFrozen ? 'cursor-not-allowed opacity-70' :
-                            'cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-ai-blue-300'
-                          } ${
-                            patentType === 'PRODUCT' ? 'bg-ai-blue-100 text-ai-blue-800 border border-ai-blue-200' :
-                            patentType === 'SYSTEM' ? 'bg-ai-blue-100 text-ai-blue-800 border border-ai-blue-200' :
-                            patentType === 'PROCESS' ? 'bg-green-100 text-green-800 border border-green-200' :
-                            patentType === 'COMPOSITION' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
-                            'bg-paper-200 text-ai-graphite-600 border border-paper-300'
-                          }`}
-                        >
-                          {isUpdatingPatentType ? (
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                          ) : (
-                            patentType || 'Not classified'
-                          )}
-                          {!claimsFrozen && !isUpdatingPatentType && (
-                            <ChevronDown className={`w-3 h-3 transition-transform ${showPatentTypeDropdown ? 'rotate-180' : ''}`} />
-                          )}
-                        </button>
-                      </Tooltip>
-
-                      {/* Dropdown Menu */}
-                      <AnimatePresence>
-                        {showPatentTypeDropdown && !claimsFrozen && (
-                          <motion.div
-                            initial={{ opacity: 0, y: -4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -4 }}
-                            transition={{ duration: 0.15 }}
-                            className="absolute left-0 top-full mt-1 z-50 bg-white rounded-lg shadow-lg border border-paper-300 py-1 min-w-[160px]"
-                          >
-                            {(['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const).map((type) => (
-                              <button
-                                key={type}
-                                onClick={() => handleUpdatePatentType(type)}
-                                disabled={isUpdatingPatentType}
-                                className={`w-full px-3 py-2 text-left text-xs font-medium flex items-center gap-2 transition-colors ${
-                                  patentType === type
-                                    ? 'bg-ai-blue-50 text-ai-blue-700'
-                                    : 'hover:bg-paper-100 text-ai-graphite-700'
-                                }`}
-                              >
-                                <span className={`w-2 h-2 rounded-full ${
-                                  type === 'PRODUCT' ? 'bg-ai-blue-500' :
-                                  type === 'SYSTEM' ? 'bg-ai-blue-500' :
-                                  type === 'PROCESS' ? 'bg-green-500' :
-                                  'bg-amber-500'
-                                }`} />
-                                <span>{type}</span>
-                                {patentType === type && (
-                                  <Check className="w-3 h-3 ml-auto text-ai-blue-600" />
-                                )}
-                              </button>
-                            ))}
-                            <div className="border-t border-paper-200 mt-1 pt-1 px-3 py-2">
-                              <p className="text-[10px] text-ai-graphite-500 leading-relaxed">
-                                <strong>PRODUCT:</strong> Single device/article<br/>
-                                <strong>SYSTEM:</strong> Multi-component setup<br/>
-                                <strong>PROCESS:</strong> Method/steps<br/>
-                                <strong>COMPOSITION:</strong> Chemical/material
-                              </p>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    {!patentType && (
-                      <span className="text-[10px] text-ai-graphite-400">(Classifying...)</span>
-                    )}
-                    </div>
-
-                    <div className="flex items-center gap-2 text-xs text-ai-graphite-600">
-                      <span className="font-medium">Writing Style</span>
-                      <span className="text-ai-graphite-500">
-                        {usePersonaStyle
-                          ? (personaSelection?.primaryPersonaName || 'Enabled')
-                          : 'Off'}
-                      </span>
-                    </div>
-
-                    <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
-                      claimsFrozen
-                        ? 'border-green-200 bg-green-50 text-green-700'
-                        : 'border-amber-200 bg-amber-50 text-amber-700'
-                    }`}>
-                      {claimsFrozen ? <Check className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
-                      <span>
-                        {claimsFrozen && claimsFrozenAt
-                          ? `Frozen ${new Date(claimsFrozenAt).toLocaleDateString()}`
-                          : 'Freeze before proceeding'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {claimsFrozen && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleUnfreezeClaims}
-                        className="h-8 text-amber-700 hover:text-amber-800 hover:bg-amber-50"
-                      >
-                        <Unlock className="w-3 h-3 mr-1" />
-                        Unfreeze to Edit
-                      </Button>
-                    )}
-                    <Tooltip content={usePersonaStyle
-                      ? "Persona style is ON - Claims will be generated using your selected writing style"
-                      : "Enable to generate claims in your preferred writing style"
-                    } position="bottom">
-                      <div
-                        onClick={handleStyleToggle}
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border cursor-pointer transition-colors ${
-                          checkingPersonas ? 'opacity-50 cursor-wait' : ''
-                        } ${
-                          usePersonaStyle
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                            : 'bg-white border-paper-300 text-ai-graphite-500 hover:bg-paper-100'
-                        }`}
-                      >
-                        <span className="text-sm">{checkingPersonas ? '...' : usePersonaStyle ? '✓' : '○'}</span>
-                        <span className="text-xs font-medium">Style</span>
-                      </div>
-                    </Tooltip>
-
-                    <Tooltip content="Select a writing persona (e.g., CSE, Bio, Chemistry) for your claims" position="bottom">
+              <AnimatePresence>
+                {showPatentTypeDropdown && !claimsFrozen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute left-0 top-full z-50 mt-1 min-w-[210px] overflow-hidden rounded-lg border border-paper-300 bg-white py-1 shadow-lg"
+                  >
+                    {PATENT_TYPES.map(({ value, hint }) => (
                       <button
-                        onClick={handlePersonaButtonClick}
-                        disabled={checkingPersonas}
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
-                          checkingPersonas ? 'opacity-50 cursor-wait' : ''
-                        } ${
-                          personaSelection?.primaryPersonaName
-                            ? 'bg-ai-blue-50 border-ai-blue-200 text-ai-blue-700'
-                            : 'bg-white border-paper-300 text-ai-graphite-600 hover:bg-paper-100'
+                        key={value}
+                        onClick={() => handleUpdatePatentType(value)}
+                        disabled={isUpdatingPatentType}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+                          patentType === value ? 'bg-ai-blue-50' : 'hover:bg-paper-100'
                         }`}
                       >
-                        <span>👤</span>
-                        <span className="font-medium">
-                          {checkingPersonas ? 'Checking...' : personaSelection?.primaryPersonaName || 'Persona'}
-                        </span>
-                        {personaSelection?.secondaryPersonaNames?.length ? (
-                          <span className="text-[10px] bg-ai-blue-200 text-ai-blue-700 px-1 rounded">
-                            +{personaSelection.secondaryPersonaNames.length}
-                          </span>
-                        ) : null}
+                        <span className="text-[11px] font-semibold text-ai-graphite-800">{value}</span>
+                        <span className="text-[10px] text-ai-graphite-400">{hint}</span>
+                        {patentType === value && <Check className="ml-auto h-3 w-3 text-ai-blue-600" />}
                       </button>
-                    </Tooltip>
-                  </div>
-                </div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </ControlGroup>
 
-                <div className="mt-3 rounded-md border border-ai-blue-100 bg-white/80 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-ai-graphite-700">Claim Scope</div>
-                    <div className="flex items-center gap-2">
-                      {isSavingClaimScopeStyle && <RefreshCw className="h-3 w-3 animate-spin text-ai-blue-500" />}
-                      <span className="rounded-full bg-ai-blue-100 px-2 py-0.5 text-[11px] font-medium text-ai-blue-700">
-                        {activeClaimScopeStage.label}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="relative mt-4" role="group" aria-label="Claim scope style">
-                    <div className="absolute left-4 right-4 top-3 h-1 rounded-full bg-slate-200">
-                      <div
-                        className="h-1 rounded-full bg-ai-blue-500 transition-all"
-                        style={{ width: `${claimScopeFillPercent}%` }}
-                      />
-                    </div>
-                    <div className="relative grid grid-cols-3 gap-2">
-                      {CLAIM_SCOPE_STYLE_STAGES.map((stage, index) => {
-                        const active = stage.value === claimScopeStyle
-                        const reached = index <= claimScopeStageIndex
-                        const tooltipPosition = index === 0
-                          ? 'left-0'
-                          : index === CLAIM_SCOPE_STYLE_STAGES.length - 1
-                            ? 'right-0'
-                            : 'left-1/2 -translate-x-1/2'
-                        return (
-                          <button
-                            key={stage.value}
-                            type="button"
-                            onClick={() => handleClaimScopeStyleChange(stage.value)}
-                            onMouseEnter={() => setClaimScopeTooltipStage(stage.value)}
-                            onMouseLeave={() => setClaimScopeTooltipStage(current => current === stage.value ? null : current)}
-                            onFocus={() => setClaimScopeTooltipStage(stage.value)}
-                            onBlur={() => setClaimScopeTooltipStage(current => current === stage.value ? null : current)}
-                            disabled={claimScopeSliderDisabled}
-                            aria-pressed={active}
-                            className="relative flex min-w-0 flex-col items-center gap-1 rounded px-1 pb-1 text-center disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <span className={`z-10 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors ${
-                              active
-                                ? 'border-ai-blue-600 bg-ai-blue-600 text-white'
-                                : reached
-                                  ? 'border-ai-blue-500 bg-white text-ai-blue-700'
-                                  : 'border-slate-300 bg-white text-slate-500'
-                            }`}>
-                              {index + 1}
-                            </span>
-                            <span className={`text-[11px] font-medium sm:text-xs ${active ? 'text-ai-graphite-900' : 'text-ai-graphite-600'}`}>
-                              {stage.label}
-                            </span>
-                            <span
-                              role="tooltip"
-                              className={`pointer-events-none absolute bottom-full z-20 mb-2 w-56 rounded border border-slate-200 bg-white px-2 py-1 text-left text-[11px] font-normal text-slate-700 shadow-lg transition-opacity ${
-                                claimScopeTooltipStage === stage.value ? 'opacity-100' : 'opacity-0'
-                              } ${tooltipPosition}`}
-                            >
-                              {stage.help}
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
+          <ToolbarDivider />
+
+          {/* Claim scope — segmented control replaces the old slider block */}
+          <ControlGroup label="Scope">
+            <div
+              role="group"
+              aria-label="Claim scope"
+              className="flex items-center rounded-md border border-paper-300 bg-white p-0.5"
+            >
+              {CLAIM_SCOPE_STYLES.map((style) => {
+                const active = style.value === claimScopeStyle
+                return (
+                  <Tooltip key={style.value} content={style.help} align="start">
+                    <button
+                      type="button"
+                      onClick={() => handleClaimScopeStyleChange(style.value)}
+                      disabled={controlsLocked || isSavingClaimScopeStyle}
+                      aria-pressed={active}
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                        active
+                          ? 'bg-ai-blue-600 text-white'
+                          : 'text-ai-graphite-600 hover:bg-paper-100 hover:text-ai-graphite-900'
+                      }`}
+                    >
+                      {style.label}
+                    </button>
+                  </Tooltip>
+                )
+              })}
+            </div>
+            {isSavingClaimScopeStyle && <RefreshCw className="h-3 w-3 animate-spin text-ai-blue-500" />}
+          </ControlGroup>
+
+          <ToolbarDivider />
+
+          {/* Writing style / persona */}
+          <ControlGroup label="Style">
+            <div className="flex items-center rounded-md border border-paper-300 bg-white">
+              <button
+                type="button"
+                onClick={handleStyleToggle}
+                disabled={checkingPersonas}
+                title={usePersonaStyle
+                  ? 'Persona style is on — claims are drafted in your selected writing style'
+                  : 'Draft claims in your own writing style'}
+                className={`rounded-l-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                  usePersonaStyle
+                    ? 'bg-ai-blue-600 text-white'
+                    : 'text-ai-graphite-500 hover:bg-paper-100'
+                } ${checkingPersonas ? 'cursor-wait opacity-60' : ''}`}
+              >
+                {checkingPersonas ? '…' : usePersonaStyle ? 'On' : 'Off'}
+              </button>
+              <span className="h-4 w-px bg-paper-300" />
+              <button
+                type="button"
+                onClick={handlePersonaButtonClick}
+                disabled={checkingPersonas}
+                title="Select a writing persona for your claims"
+                className="flex items-center gap-1 rounded-r-md px-2 py-1 text-[11px] font-medium text-ai-graphite-700 transition-colors hover:bg-paper-100 hover:text-ai-blue-700"
+              >
+                <User className="h-3 w-3 text-ai-graphite-400" />
+                {personaSelection?.primaryPersonaName || 'Persona'}
+                {personaSelection?.secondaryPersonaNames?.length ? (
+                  <span className="rounded bg-ai-blue-50 px-1 text-[10px] text-ai-blue-700">
+                    +{personaSelection.secondaryPersonaNames.length}
+                  </span>
+                ) : null}
+              </button>
+            </div>
+          </ControlGroup>
+
+          {/* Right-aligned actions */}
+          <div className="ml-auto flex items-center gap-1.5">
+            {claimsFrozen ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleUnfreezeClaims}
+                title="These claims are locked. Unlock to edit or regenerate them."
+                className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+              >
+                <Unlock className="mr-1 h-3 w-3" />
+                Unlock
+              </Button>
+            ) : (
+              <>
+                {hasClaims && !isGeneratingClaims && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={isEditingClaims ? handleDoneEditing : () => setIsEditingClaims(true)}
+                    disabled={isResettingClaims}
+                    className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+                  >
+                    {isEditingClaims
+                      ? <><Check className="mr-1 h-3 w-3" />{draftSaved ? 'Saved' : 'Done'}</>
+                      : <><Edit2 className="mr-1 h-3 w-3" />Edit</>}
+                  </Button>
+                )}
+                {hasClaims && !isGeneratingClaims && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleResetClaims}
+                    disabled={isResettingClaims}
+                    title="Delete this claim set and start over"
+                    className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-600 hover:border-wax-300 hover:text-wax-600"
+                  >
+                    {isResettingClaims
+                      ? <RefreshCw className="h-3 w-3 animate-spin" />
+                      : <Trash2 className="h-3 w-3" />}
+                  </Button>
+                )}
+              </>
             )}
+          </div>
+        </div>
 
-            <AnimatePresence>
-              {showClaimsDetails && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="overflow-hidden"
+        {/* Multi-jurisdiction notice */}
+        {allJurisdictions.length > 1 && (
+          <div className="flex items-start gap-2 border-b border-paper-200 bg-ai-blue-50/50 px-3 py-1.5 text-[11px] leading-relaxed text-ai-blue-800">
+            <Globe className="mt-0.5 h-3 w-3 flex-shrink-0" />
+            <span>
+              Reference claims use {activeJurisdiction} rules. Jurisdiction-specific claims are drafted one-by-one during the drafting stage.
+            </span>
+          </div>
+        )}
+
+        {/* ---- Body ---- */}
+        <div className="p-3 sm:p-4">
+          {isGeneratingClaims ? (
+            <ClaimGenerationProgress
+              completedSteps={completedSteps}
+              activeStep={activeStep}
+              stepDetails={stepDetails}
+              streamedClaims={streamedClaims}
+              startedAt={generationStartedAt}
+            />
+          ) : !hasClaims ? (
+            /* ---- Empty state ---- */
+            <div className="mx-auto max-w-xl py-8 text-center">
+              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-paper-100">
+                <Scale className="h-5 w-5 text-ai-graphite-400" />
+              </div>
+              <h3 className="text-sm font-semibold text-ai-graphite-900">No claims yet</h3>
+              <p className="mt-1 text-[13px] text-ai-graphite-500">
+                Claims will be drafted from your disclosure using {activeJurisdiction} patent office rules.
+              </p>
+
+              <div className="mt-5 text-left">
+                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-ai-graphite-400">
+                  <Lightbulb className="h-3 w-3" />
+                  Drafting remarks (optional)
+                </label>
+                <textarea
+                  value={userClaimRemarks}
+                  onChange={(e) => setUserClaimRemarks(e.target.value)}
+                  placeholder="Any specific emphasis, exclusions, embodiments, or scope preferences?"
+                  className="w-full resize-none rounded-lg border border-paper-300 px-3 py-2 text-[13px] text-ai-graphite-800 placeholder:text-ai-graphite-400 focus:border-ai-blue-500 focus:outline-none focus:ring-1 focus:ring-ai-blue-500"
+                  rows={2}
+                />
+                <p className="mt-1 text-[11px] text-ai-graphite-400">
+                  Remarks influence scope and emphasis, not the invention type.
+                </p>
+              </div>
+
+              <Button
+                onClick={() => handleGenerateClaims()}
+                className="mt-4 bg-ai-blue-600 text-white hover:bg-ai-blue-700"
+              >
+                <Sparkles className="mr-2 h-4 w-4" />
+                Generate claims for {activeJurisdiction}
+              </Button>
+            </div>
+          ) : (
+            /* ---- Claims present ---- */
+            <div className="space-y-3">
+              {isEditingClaims ? (
+                <div className="overflow-hidden rounded-lg border border-ai-blue-200">
+                  <div className="flex items-center gap-1.5 border-b border-ai-blue-200 bg-ai-blue-50 px-3 py-1.5 text-[11px] text-ai-blue-800">
+                    <Edit2 className="h-3 w-3" />
+                    Editing — choose Done when finished to save.
+                  </div>
+                  <ClaimsEditor
+                    ref={claimsEditorRef}
+                    value={claimsText}
+                    onChange={setClaimsText}
+                    disabled={claimsFrozen}
+                    placeholder={`1. A method for... comprising:\n   a) a first step of...\n\n2. The method of claim 1, wherein...`}
+                  />
+                </div>
+              ) : (
+                <div
+                  className={`group rounded-lg border border-paper-300 transition-colors ${
+                    claimsFrozen ? '' : 'cursor-text hover:border-ai-blue-300'
+                  }`}
+                  onClick={() => !claimsFrozen && setIsEditingClaims(true)}
                 >
-                  {/* Multi-Jurisdiction Notice */}
-                  {allJurisdictions.length > 1 && (
-                    <div className="px-5 py-2 bg-ai-blue-50 border-b border-ai-blue-100">
-                      <div className="flex items-start gap-2 text-sm text-ai-blue-800">
-                        <Globe className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <span className="font-medium">Multi-Jurisdiction Filing:</span>{' '}
-                          <span>These reference claims are generated for initial review using {activeJurisdiction} rules. Jurisdiction-specific claims will be drafted one-by-one during the drafting stage.</span>
-                        </div>
-                      </div>
+                  <div
+                    className="prose prose-sm max-w-none px-4 py-3 text-[13.5px] leading-relaxed text-ai-graphite-700 [&>p]:mb-3 [&>p:last-child]:mb-0 [&_strong]:font-semibold [&_strong]:text-ai-graphite-900"
+                    dangerouslySetInnerHTML={{ __html: claimsText }}
+                  />
+                  {!claimsFrozen && (
+                    <div className="flex items-center gap-1 border-t border-paper-200 px-4 py-1.5 text-[11px] text-ai-graphite-400 transition-colors group-hover:text-ai-blue-600">
+                      <Edit2 className="h-3 w-3" />
+                      Click anywhere to edit
                     </div>
                   )}
-
-                  {/* Claims Editor */}
-                  <div className="p-6">
-                    {!claimsText && !isGeneratingClaims ? (
-                      <div className="py-6">
-                        <div className="text-center mb-6">
-                          <Scale className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                          <p className="text-ai-graphite-600">No claims generated yet.</p>
-                        </div>
-
-                        {/* User Remarks Textarea */}
-                        <div className="max-w-lg mx-auto mb-6">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Lightbulb className="w-4 h-4 text-amber-500" />
-                            <span className="text-sm text-ai-graphite-600">
-                              Add remarks to guide claim drafting (optional)
-                            </span>
-                          </div>
-                          <textarea
-                            value={userClaimRemarks}
-                            onChange={(e) => setUserClaimRemarks(e.target.value)}
-                            placeholder="Any specific emphasis, exclusions, embodiments, or scope preferences for claim drafting?"
-                            className="w-full px-4 py-3 text-sm border border-paper-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 resize-none"
-                            rows={3}
-                          />
-                          <p className="text-[11px] text-ai-graphite-400 mt-1">
-                            These remarks influence scope and emphasis, not the patent type.
-                          </p>
-                        </div>
-
-                        <div className="text-center">
-                          <Button
-                            onClick={() => handleGenerateClaims()}
-                            className="bg-amber-600 hover:bg-amber-700 text-white"
-                          >
-                            <Sparkles className="w-4 h-4 mr-2" />
-                            Generate Claims for {activeJurisdiction}
-                          </Button>
-                          <p className="text-xs text-ai-graphite-500 mt-3">
-                            Claims will be generated using {activeJurisdiction} patent office rules
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {isGeneratingClaims ? (
-                          <ClaimGenerationProgress
-                            activeJurisdiction={activeJurisdiction}
-                            patentType={patentType}
-                            componentCount={components.length}
-                            hasUserRemarks={Boolean(userClaimRemarks.trim() || regenerateInstructions.trim())}
-                            usePersonaStyle={usePersonaStyle}
-                            personaName={personaSelection?.primaryPersonaName}
-                            claimScopeStyle={claimScopeStyle}
-                            hasSourceFactLedger={Boolean(normalizedRecord.sourceFactLedger)}
-                            hasScopeRecommendations={Boolean(normalizedRecord.scopeRecommendations)}
-                          />
-                        ) : (
-                          <>
-                            {/* Edit Mode Header */}
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-ai-graphite-700">
-                                  {isEditingClaims ? 'Editing Claims' : 'Generated Claims'}
-                                </span>
-                                {isEditingClaims && (
-                                  <Badge variant="secondary" className="bg-ai-blue-100 text-ai-blue-700 text-xs">
-                                    <Edit2 className="w-3 h-3 mr-1" />
-                                    Edit Mode
-                                  </Badge>
-                                )}
-                                {qualityBadge && !isEditingClaims && (
-                                  <Badge variant="outline" className={`text-xs border ${qualityBadge.className}`}>
-                                    {qualityBadge.label}
-                                  </Badge>
-                                )}
-                              </div>
-
-                              {/* Claim action buttons */}
-                              <div className="flex items-center gap-2">
-                                {!claimsFrozen && !isEditingClaims && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setIsEditingClaims(true)}
-                                    disabled={isResettingClaims}
-                                    className="text-ai-blue-600 border-ai-blue-200 hover:bg-ai-blue-50"
-                                  >
-                                    <Edit2 className="w-3.5 h-3.5 mr-1.5" />
-                                    Edit Claims
-                                  </Button>
-                                )}
-                                {!claimsFrozen && isEditingClaims && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={handleDoneEditing}
-                                    disabled={isResettingClaims}
-                                    className="text-green-600 border-green-200 hover:bg-green-50"
-                                  >
-                                    <Check className="w-3.5 h-3.5 mr-1.5" />
-                                    Done Editing
-                                  </Button>
-                                )}
-                                {hasClaims && !isGeneratingClaims && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={handleResetClaims}
-                                    disabled={isResettingClaims}
-                                    className="text-red-600 border-red-200 hover:bg-red-50"
-                                  >
-                                    {isResettingClaims ? (
-                                      <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                                    ) : (
-                                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />
-                                    )}
-                                    Reset Claims
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-
-                            {qualityWarnings.length > 0 && (
-                              <div className="rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
-                                <button
-                                  type="button"
-                                  onClick={() => setShowQualityObservations(!showQualityObservations)}
-                                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-amber-100/60 transition-colors"
-                                  aria-expanded={showQualityObservations}
-                                >
-                                  <span className="flex items-center gap-2 font-medium">
-                                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-600" />
-                                    Claim Quality Observations
-                                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                                      {qualityWarnings.length}
-                                    </span>
-                                  </span>
-                                  {showQualityObservations ? (
-                                    <ChevronDown className="h-4 w-4 flex-shrink-0 text-amber-700" />
-                                  ) : (
-                                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-amber-700" />
-                                  )}
-                                </button>
-                                <AnimatePresence initial={false}>
-                                  {showQualityObservations && (
-                                    <motion.div
-                                      initial={{ height: 0, opacity: 0 }}
-                                      animate={{ height: 'auto', opacity: 1 }}
-                                      exit={{ height: 0, opacity: 0 }}
-                                      transition={{ duration: 0.18 }}
-                                      className="overflow-hidden"
-                                    >
-                                      <ul className="list-disc border-t border-amber-200 px-4 py-3 pl-10 text-xs leading-relaxed">
-                                        {qualityWarnings.map((warning: any, idx: number) => (
-                                          <li key={idx}>{warning?.message || String(warning)}</li>
-                                        ))}
-                                      </ul>
-                                    </motion.div>
-                                  )}
-                                </AnimatePresence>
-                              </div>
-                            )}
-
-                            {/* Claims Display / Editor */}
-                            {isEditingClaims ? (
-                              <div className="border-2 border-ai-blue-200 rounded-lg bg-ai-blue-50/30">
-                                <div className="px-3 py-2 bg-ai-blue-100 border-b border-ai-blue-200 text-xs text-ai-blue-700 flex items-center gap-2">
-                                  <Edit2 className="w-3 h-3" />
-                                  <span>Make your changes below. Click &quot;Done Editing&quot; when finished to save your changes.</span>
-                                </div>
-                                <div className="p-1">
-                                  <ClaimsEditor
-                                    ref={claimsEditorRef}
-                                    value={claimsText}
-                                    onChange={setClaimsText}
-                                    disabled={claimsFrozen}
-                                    placeholder={`1. A method for... comprising:\n   a) a first step of...\n   b) a second step of...\n\n2. The method of claim 1, wherein...`}
-                                  />
-                                </div>
-                              </div>
-                            ) : (
-                              <div
-                                className="border border-paper-300 rounded-lg bg-paper-100/50 cursor-pointer hover:border-ai-blue-300 hover:bg-ai-blue-50/20 transition-colors group"
-                                onClick={() => !claimsFrozen && setIsEditingClaims(true)}
-                              >
-                                <div className="px-4 py-3 prose prose-sm max-w-none text-ai-graphite-700 leading-relaxed [&>p]:mb-3 [&>p:last-child]:mb-0">
-                                  <div
-                                    dangerouslySetInnerHTML={{ __html: claimsText }}
-                                  />
-                                </div>
-                                {!claimsFrozen && (
-                                  <div className="px-4 py-2 border-t border-paper-200 bg-paper-100 text-xs text-ai-graphite-500 flex items-center gap-1 group-hover:text-ai-blue-600 group-hover:bg-ai-blue-50 transition-colors">
-                                    <Edit2 className="w-3 h-3" />
-                                    Click to edit claims
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
-                            {/* Regeneration instructions + action buttons */}
-                            <div className="flex flex-col gap-3 pt-4 border-t border-paper-200">
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="text"
-                                  value={regenerateInstructions}
-                                  onChange={(e) => setRegenerateInstructions(e.target.value)}
-                                  placeholder="Enter instructions for claim regeneration (optional)"
-                                  className="flex-1 px-3 py-2 text-sm border border-paper-400 rounded-md focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
-                                  disabled={claimsFrozen || isGeneratingClaims || isResettingClaims}
-                                />
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleGenerateClaims()}
-                                  disabled={claimsFrozen || isGeneratingClaims || isResettingClaims}
-                                >
-                                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-                                  Regenerate
-                                </Button>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {!claimsFrozen && (
-                                  <>
-                                    {isEditingClaims && (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={handleDoneEditing}
-                                        disabled={isResettingClaims}
-                                        className={draftSaved ? "bg-green-50 border-green-200 text-green-700" : "text-green-600 border-green-200 hover:bg-green-50"}
-                                      >
-                                        {draftSaved ? (
-                                          <>
-                                            <Check className="w-3.5 h-3.5 mr-1.5 text-green-600" />
-                                            Saved!
-                                          </>
-                                        ) : (
-                                          <>
-                                            <Check className="w-3.5 h-3.5 mr-1.5" />
-                                            Done Editing
-                                          </>
-                                        )}
-                                      </Button>
-                                    )}
-                                    <Button
-                                      size="sm"
-                                      onClick={handleFreezeClaims}
-                                      disabled={isResettingClaims}
-                                      className="bg-green-600 hover:bg-green-700 text-white"
-                                    >
-                                      <Lock className="w-3.5 h-3.5 mr-1.5" />
-                                      Freeze Initial Claims
-                                    </Button>
-                                    <div
-                                      className="relative"
-                                      onMouseEnter={() => setShowFreezeHelp(true)}
-                                      onMouseLeave={() => setShowFreezeHelp(false)}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => setShowFreezeHelp(!showFreezeHelp)}
-                                        className="flex h-8 w-8 items-center justify-center rounded-full border border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700 transition-colors hover:bg-ai-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500"
-                                        aria-label="Why freeze claims?"
-                                        aria-expanded={showFreezeHelp}
-                                      >
-                                        <Info className="h-4 w-4" />
-                                      </button>
-                                      {showFreezeHelp && (
-                                        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-4 text-left shadow-lg">
-                                          <h4 className="mb-2 text-sm font-semibold text-ai-blue-900">Why freeze claims?</h4>
-                                          <ul className="list-disc space-y-1 pl-4 text-xs text-ai-blue-800">
-                                            <li>Claims define the legal scope of your patent protection</li>
-                                            <li>Frozen claims will be used in Figure Planner for relevant diagrams</li>
-                                            <li>Prior Art analysis will compare patents against your specific claims</li>
-                                            <li>Final draft will use these exact claims (no regeneration)</li>
-                                            <li>Multi-jurisdiction support: claims transform to country-specific style</li>
-                                          </ul>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
+                </div>
               )}
-            </AnimatePresence>
-          </div>
 
+              {/* Regenerate row. No freeze step: saved claims are what drafting uses. */}
+              {!claimsFrozen && (
+                <div className="flex items-center gap-1.5 border-t border-paper-200 pt-3">
+                  <input
+                    type="text"
+                    value={regenerateInstructions}
+                    onChange={(e) => setRegenerateInstructions(e.target.value)}
+                    placeholder="Instructions for regeneration (optional)"
+                    className="h-8 flex-1 rounded-md border border-paper-300 px-2.5 text-[12px] text-ai-graphite-800 placeholder:text-ai-graphite-400 focus:border-ai-blue-500 focus:outline-none focus:ring-1 focus:ring-ai-blue-500"
+                    disabled={controlsLocked}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateClaims()}
+                    disabled={controlsLocked}
+                    className="h-8 border-paper-300 px-2.5 text-[12px] text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+                  >
+                    <RefreshCw className="mr-1.5 h-3 w-3" />
+                    Regenerate
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       {/* ---- Navigation ---- */}
-      <div className="mt-10 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2 text-sm text-amber-700">
-            <AlertCircle className="w-4 h-4" />
-            <span>
-              {claimsFrozen
-                ? 'Claims are frozen; you can still proceed or unfreeze to edit.'
-                : 'Claims are provisional; you can continue to prior art or skip and freeze them as final.'}
-            </span>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap justify-end">
-            {skipPriorArtClicked ? (
-              <>
-                <label className="flex items-center gap-2 text-sm text-ai-graphite-700">
-                  <input
-                    type="checkbox"
-                    checked={useInitialClaimsForDraft}
-                    onChange={(e) => setUseInitialClaimsForDraft(e.target.checked)}
-                    className="rounded border-paper-400"
-                  />
-                  Use Initial Claims for drafting
-                </label>
-                <Button
-                  onClick={skipPriorArtAndFreeze}
-                  disabled={!canProceed || isNavigating || isResettingClaims}
-                  className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
-                >
-                  Next
-                  <ChevronRight className="w-4 h-4 ml-2" />
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  onClick={handleSkipClick}
-                  disabled={!canProceed || isNavigating || isResettingClaims}
-                  className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
-                >
-                  Skip Prior Art Stage
-                  <ChevronRight className="w-4 h-4 ml-2" />
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={proceedToPriorArt}
-                  disabled={!canProceed || isNavigating || isResettingClaims}
-                >
-                  Next: Prior Art
-                  <ChevronRight className="w-4 h-4 ml-2" />
-                </Button>
-              </>
-            )}
-          </div>
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[12px] text-ai-graphite-500">
+          {claimsFrozen
+            ? 'Claims are locked. Unlock to edit — proceeding works either way.'
+            : 'These claims carry through to every later stage. You can still edit them.'}
+        </p>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {skipPriorArtClicked ? (
+            <>
+              <label className="flex items-center gap-2 text-[12px] text-ai-graphite-700">
+                <input
+                  type="checkbox"
+                  checked={useInitialClaimsForDraft}
+                  onChange={(e) => setUseInitialClaimsForDraft(e.target.checked)}
+                  className="rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
+                />
+                Use initial claims for drafting
+              </label>
+              <Button
+                onClick={skipPriorArtAndContinue}
+                disabled={!canProceed || isNavigating || isResettingClaims}
+                className="bg-ai-blue-600 text-white hover:bg-ai-blue-700"
+              >
+                Next
+                <ChevronRight className="ml-1.5 h-4 w-4" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                onClick={handleSkipClick}
+                disabled={!canProceed || isNavigating || isResettingClaims}
+                className="border-paper-300 text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+              >
+                Skip prior art
+              </Button>
+              <Button
+                onClick={proceedToPriorArt}
+                disabled={!canProceed || isNavigating || isResettingClaims}
+                className="bg-ai-blue-600 text-white hover:bg-ai-blue-700"
+              >
+                Next: Prior art
+                <ChevronRight className="ml-1.5 h-4 w-4" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -1633,96 +1344,50 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
       {/* ---- No Personas Available Modal ---- */}
       {showNoPersonasModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
-            {/* Header */}
-            <div className="p-6 border-b border-paper-200 bg-gradient-to-r from-ai-blue-50 to-violet-50">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-amber-100 rounded-xl">
-                  <AlertCircle className="w-6 h-6 text-amber-600" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-ai-graphite-900">No Writing Personas Available</h3>
-                  <p className="text-sm text-ai-graphite-500 mt-0.5">Create a persona to use your own writing style</p>
-                </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl border border-paper-300 bg-white shadow-xl">
+            <div className="flex items-center gap-3 border-b border-paper-200 px-5 py-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-paper-100">
+                <User className="h-4 w-4 text-ai-graphite-500" />
+              </div>
+              <div>
+                <h3 className="text-[15px] font-semibold text-ai-graphite-900">No writing personas yet</h3>
+                <p className="text-[12px] text-ai-graphite-500">Create one to draft in your own style</p>
               </div>
             </div>
 
-            {/* Content */}
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-ai-graphite-600">
-                Writing personas allow the AI to mimic your preferred drafting style, terminology, and structure
+            <div className="space-y-3 px-5 py-4">
+              <p className="text-[13px] leading-relaxed text-ai-graphite-600">
+                Writing personas let the AI mirror your preferred drafting style, terminology, and structure
                 when generating claims and other patent sections.
               </p>
 
-              <div className="space-y-3">
-                {/* Option 1 */}
-                <div className="p-4 bg-ai-blue-50 rounded-lg border border-ai-blue-100">
-                  <div className="flex items-start gap-3">
-                    <span className="text-lg">✍️</span>
-                    <div>
-                      <h4 className="font-medium text-ai-blue-900">Create Your Own Persona</h4>
-                      <p className="text-sm text-ai-blue-700 mt-1">
-                        Go to <strong>Personas</strong> page from the main navigation to create your personal writing style.
-                      </p>
-                      <a
-                        href="/personas"
-                        className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-ai-blue-600 hover:text-ai-blue-800"
-                      >
-                        Open Personas Page
-                        <ChevronRight className="w-4 h-4" />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Option 2: Org personas (non-admin) */}
-                {!isAdmin && (
-                  <div className="p-4 bg-ai-blue-50 rounded-lg border border-ai-blue-100">
-                    <div className="flex items-start gap-3">
-                      <span className="text-lg">🏢</span>
-                      <div>
-                        <h4 className="font-medium text-ai-blue-900">Use Organization Personas</h4>
-                        <p className="text-sm text-ai-blue-700 mt-1">
-                          Contact your Administrator (OWNER or ADMIN) to create shared organization personas
-                          that all team members can use.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Admin-specific guidance */}
-                {isAdmin && (
-                  <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-100">
-                    <div className="flex items-start gap-3">
-                      <span className="text-lg">👑</span>
-                      <div>
-                        <h4 className="font-medium text-emerald-900">Create Organization Personas</h4>
-                        <p className="text-sm text-emerald-700 mt-1">
-                          As an Admin, you can create <strong>Organization</strong> personas that will be
-                          available to all users in your organization. Set visibility to &quot;Organization&quot; when creating.
-                        </p>
-                        <a
-                          href="/personas"
-                          className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-emerald-600 hover:text-emerald-800"
-                        >
-                          Create Organization Persona
-                          <ChevronRight className="w-4 h-4" />
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                )}
+              <div className="rounded-lg border border-paper-300 bg-paper-50 p-3">
+                <h4 className="text-[12px] font-semibold text-ai-graphite-900">Create your own</h4>
+                <p className="mt-1 text-[12px] leading-relaxed text-ai-graphite-600">
+                  Open the <strong>Personas</strong> page from the main navigation to capture your personal writing style.
+                </p>
               </div>
+
+              {!isAdmin ? (
+                <div className="rounded-lg border border-paper-300 bg-paper-50 p-3">
+                  <h4 className="text-[12px] font-semibold text-ai-graphite-900">Use organization personas</h4>
+                  <p className="mt-1 text-[12px] leading-relaxed text-ai-graphite-600">
+                    Ask an Owner or Admin to create shared organization personas for your team.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-3">
+                  <h4 className="text-[12px] font-semibold text-ai-blue-900">Create organization personas</h4>
+                  <p className="mt-1 text-[12px] leading-relaxed text-ai-blue-800">
+                    As an Admin you can set a persona&apos;s visibility to <strong>Organization</strong> so everyone can use it.
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* Footer */}
-            <div className="px-6 py-4 bg-paper-100 border-t border-paper-200 flex justify-end gap-3">
-              <Button
-                variant="outline"
-                onClick={() => setShowNoPersonasModal(false)}
-              >
+            <div className="flex justify-end gap-2 border-t border-paper-200 bg-paper-50 px-5 py-3">
+              <Button variant="outline" onClick={() => setShowNoPersonasModal(false)} className="border-paper-300">
                 Close
               </Button>
               <Button
@@ -1730,9 +1395,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                   setShowNoPersonasModal(false)
                   window.location.href = '/personas'
                 }}
-                className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
+                className="bg-ai-blue-600 text-white hover:bg-ai-blue-700"
               >
-                Go to Personas Page
+                Go to Personas
               </Button>
             </div>
           </div>

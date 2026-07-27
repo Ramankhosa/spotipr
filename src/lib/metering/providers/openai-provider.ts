@@ -5,6 +5,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { PROVIDER_TIMEOUTS } from './provider-timeouts'
+import { emitStreamDelta, readServerSentEvents } from './streaming'
 
 // Reasoning models (o-series, GPT-5) spend part of their output-token budget on
 // internal reasoning tokens, which count against max_completion_tokens / max_output_tokens.
@@ -182,6 +183,13 @@ export class OpenAIProvider implements LLMProvider {
         }
       }
       
+      // Incremental delivery when the caller asked for it. Same request otherwise —
+      // only the transport differs, so the resolved response shape is unchanged.
+      if (request.stream) {
+        requestBody.stream = true
+        requestBody.stream_options = { include_usage: true }
+      }
+
       const response = await this.fetchWithRetry(`${this.config.baseURL}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -194,6 +202,10 @@ export class OpenAIProvider implements LLMProvider {
       if (!response.ok) {
         const error = await response.text()
         throw new Error(`OpenAI API error: ${response.status} ${error}`)
+      }
+
+      if (requestBody.stream) {
+        return await this.consumeChatStream(response, request, requestedModel, modelToUse, maxTokens, isReasoningModel)
       }
 
       const data = await response.json()
@@ -233,6 +245,76 @@ export class OpenAIProvider implements LLMProvider {
     } catch (error) {
       console.error('OpenAI API error:', error)
       throw new Error(`OpenAI API call failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /**
+   * Consume an SSE chat-completions stream into the same LLMResponse a buffered call
+   * would have produced, notifying the caller of each text delta on the way.
+   */
+  private async consumeChatStream(
+    response: Response,
+    request: LLMRequest,
+    requestedModel: string,
+    modelToUse: string,
+    maxTokens: number,
+    isReasoningModel: boolean
+  ): Promise<LLMResponse> {
+    if (!response.body) {
+      throw new Error('OpenAI streaming response had no body')
+    }
+
+    let content = ''
+    let finishReason: string | undefined
+    let usage: any
+
+    for await (const data of readServerSentEvents(response.body)) {
+      let chunk: any
+      try {
+        chunk = JSON.parse(data)
+      } catch {
+        continue // ignore keep-alive / non-JSON frames
+      }
+
+      if (chunk?.error) {
+        throw new Error(`OpenAI API stream error: ${chunk.error.message || JSON.stringify(chunk.error)}`)
+      }
+      if (chunk?.usage) usage = chunk.usage
+
+      const choice = chunk?.choices?.[0]
+      if (!choice) continue
+      if (choice.finish_reason) finishReason = choice.finish_reason
+
+      const delta = choice.delta?.content
+      if (typeof delta === 'string' && delta) {
+        content += delta
+        emitStreamDelta(request, delta, content)
+      }
+    }
+
+    const thoughtTokens = usage?.completion_tokens_details?.reasoning_tokens || 0
+
+    if (isReasoningModel && !content.trim() && finishReason === 'length') {
+      throw new Error(`OpenAI reasoning model ${modelToUse} produced no visible output: the ${maxTokens}-token budget was exhausted by reasoning (${thoughtTokens} reasoning tokens, finish_reason=length). Increase the stage's max output tokens.`)
+    }
+    if (!content.trim()) {
+      throw new Error(`OpenAI API returned an empty streamed response (finishReason: ${finishReason || 'unknown'})`)
+    }
+
+    return {
+      output: content,
+      outputTokens: usage?.completion_tokens || 0,
+      modelClass: requestedModel,
+      metadata: {
+        provider: 'openai',
+        inputTokens: usage?.prompt_tokens || 0,
+        thoughtTokens,
+        thoughtTokensIncludedInOutput: true,
+        totalTokens: usage?.total_tokens || 0,
+        finishReason,
+        modelUsed: modelToUse,
+        streamed: true
+      }
     }
   }
 

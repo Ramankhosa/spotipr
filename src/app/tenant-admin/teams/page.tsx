@@ -199,7 +199,7 @@ export default function TenantAdminTeamsPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -227,7 +227,7 @@ export default function TenantAdminTeamsPage() {
           </div>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+            className="px-4 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 text-sm font-medium"
           >
             + Create Team
           </button>
@@ -335,7 +335,7 @@ export default function TenantAdminTeamsPage() {
               {/* View Details */}
               <button
                 onClick={() => setSelectedTeam(team)}
-                className="mt-4 w-full text-center text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                className="mt-4 w-full text-center text-sm text-lamp-600 dark:text-lamp-400 hover:underline"
               >
                 View Details & Manage Members
               </button>
@@ -356,7 +356,7 @@ export default function TenantAdminTeamsPage() {
             <div className="mt-6">
               <button
                 onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700"
               >
                 + Create Team
               </button>
@@ -381,7 +381,7 @@ export default function TenantAdminTeamsPage() {
                     type="text"
                     value={newTeamName}
                     onChange={(e) => setNewTeamName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-lamp-500"
                     placeholder="e.g., Patent Team A"
                   />
                 </div>
@@ -394,7 +394,7 @@ export default function TenantAdminTeamsPage() {
                     value={newTeamDescription}
                     onChange={(e) => setNewTeamDescription(e.target.value)}
                     rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-lamp-500"
                     placeholder="Optional description..."
                   />
                 </div>
@@ -404,7 +404,7 @@ export default function TenantAdminTeamsPage() {
                     type="checkbox"
                     checked={newTeamIsDefault}
                     onChange={(e) => setNewTeamIsDefault(e.target.checked)}
-                    className="h-4 w-4 text-blue-600 rounded"
+                    className="h-4 w-4 text-lamp-600 rounded"
                   />
                   <span className="text-sm text-gray-700 dark:text-gray-300">
                     Set as default team for new users
@@ -427,7 +427,7 @@ export default function TenantAdminTeamsPage() {
                 <button
                   onClick={handleCreateTeam}
                   disabled={saving || !newTeamName.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 text-sm font-medium text-white bg-lamp-600 hover:bg-lamp-700 rounded-lg disabled:opacity-50"
                 >
                   {saving ? 'Creating...' : 'Create Team'}
                 </button>
@@ -715,7 +715,7 @@ function TeamDetailsModal({
               <button
                 onClick={handleAddMember}
                 disabled={!selectedUserId || loading}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="px-4 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 disabled:opacity-50"
               >
                 Add
               </button>

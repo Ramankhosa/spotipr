@@ -61,12 +61,14 @@ interface ProviderInfo {
   hasApiKey: boolean
 }
 
+// CATEGORICAL — one hue per provider, deliberately off the brand cobalt so a
+// provider tag never reads as an action.
 const PROVIDER_COLORS: Record<string, string> = {
-  google: 'bg-blue-100 text-blue-800 border-blue-200',
+  google: 'bg-sky-100 text-sky-800 border-sky-200',
   openai: 'bg-green-100 text-green-800 border-green-200',
   anthropic: 'bg-orange-100 text-orange-800 border-orange-200',
-  deepseek: 'bg-purple-100 text-purple-800 border-purple-200',
-  groq: 'bg-pink-100 text-pink-800 border-pink-200',
+  deepseek: 'bg-violet-100 text-violet-800 border-violet-200',
+  groq: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200',
   zai: 'bg-teal-100 text-teal-800 border-teal-200'
 }
 
@@ -445,7 +447,7 @@ export default function LLMConfigPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-900">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-400"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-lamp-400"></div>
       </div>
     )
   }
@@ -467,7 +469,7 @@ export default function LLMConfigPage() {
               <button
                 onClick={handleClearModelCache}
                 disabled={clearingCache}
-                className="px-4 py-2 text-sm bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition"
+                className="px-4 py-2 text-sm bg-lamp-700 hover:bg-lamp-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition"
                 title="Clear cached LLM model resolutions so recent model changes are picked immediately"
               >
                 {clearingCache ? 'Clearing...' : 'Clear Model Cache'}
@@ -498,7 +500,7 @@ export default function LLMConfigPage() {
                 onClick={() => setActiveTab(tab.id as any)}
                 className={`px-4 py-3 text-sm font-medium border-b-2 transition ${
                   activeTab === tab.id
-                    ? 'border-cyan-400 text-cyan-400'
+                    ? 'border-lamp-400 text-lamp-400'
                     : 'border-transparent text-slate-400 hover:text-white'
                 }`}
               >
@@ -561,7 +563,7 @@ export default function LLMConfigPage() {
             {/* Quick Stats */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                <div className="text-3xl font-bold text-cyan-400">{models.length}</div>
+                <div className="text-3xl font-bold text-lamp-400">{models.length}</div>
                 <div className="text-slate-400">Total Models</div>
               </div>
               <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
@@ -639,7 +641,7 @@ export default function LLMConfigPage() {
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
                           {model.supportsVision && (
-                            <span className="px-2 py-0.5 bg-blue-900/50 text-blue-300 text-xs rounded">Vision</span>
+                            <span className="px-2 py-0.5 bg-lamp-900/50 text-lamp-300 text-xs rounded">Vision</span>
                           )}
                           {model.supportsStreaming && (
                             <span className="px-2 py-0.5 bg-green-900/50 text-green-300 text-xs rounded">Stream</span>
@@ -655,7 +657,7 @@ export default function LLMConfigPage() {
                           <span className={`w-2 h-2 rounded-full ${model.isActive ? 'bg-green-400' : 'bg-red-400'}`} />
                           <span className="text-sm">{model.isActive ? 'Active' : 'Inactive'}</span>
                           {model.isDefault && (
-                            <span className="px-2 py-0.5 bg-cyan-900/50 text-cyan-300 text-xs rounded">Default</span>
+                            <span className="px-2 py-0.5 bg-lamp-900/50 text-lamp-300 text-xs rounded">Default</span>
                           )}
                         </div>
                       </td>
@@ -672,7 +674,7 @@ export default function LLMConfigPage() {
                             <button
                               onClick={() => handleSetDefault(model.id)}
                               disabled={saving}
-                              className="px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 rounded transition"
+                              className="px-2 py-1 text-xs bg-lamp-600 hover:bg-lamp-500 rounded transition"
                             >
                               Set Default
                             </button>
@@ -884,7 +886,7 @@ export default function LLMConfigPage() {
                                       }}
                                       className={`px-2 py-1 text-xs rounded border transition ${
                                         isSelected 
-                                          ? 'bg-cyan-600 border-cyan-500 text-white' 
+                                          ? 'bg-lamp-600 border-lamp-500 text-white' 
                                           : canSelect
                                             ? 'bg-slate-700 border-slate-600 hover:border-slate-500'
                                             : 'bg-slate-800 border-slate-700 opacity-50 cursor-not-allowed'
@@ -919,7 +921,7 @@ export default function LLMConfigPage() {
                                                   editingConfig.maxTokensOut
                                                 )}
                                                 disabled={saving || !editingConfig.modelId}
-                                                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded text-sm font-medium disabled:opacity-50"
+                                                className="px-4 py-2 bg-lamp-600 hover:bg-lamp-500 rounded text-sm font-medium disabled:opacity-50"
                                               >
                                                 {saving ? 'Saving...' : 'Save'}
                                               </button>

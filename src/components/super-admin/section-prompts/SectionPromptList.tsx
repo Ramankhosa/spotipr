@@ -161,7 +161,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -215,7 +215,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
 
         {historyLoading ? (
           <div className="flex items-center justify-center p-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-lamp-600"></div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -226,7 +226,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
                     <span className="font-medium">v{h.version}</span>
                     <span className={`ml-2 px-2 py-0.5 text-xs rounded ${
                       h.changeType === 'CREATE' ? 'bg-green-100 text-green-700' :
-                      h.changeType === 'UPDATE' ? 'bg-blue-100 text-blue-700' :
+                      h.changeType === 'UPDATE' ? 'bg-lamp-100 text-lamp-700' :
                       h.changeType === 'ARCHIVE' ? 'bg-red-100 text-red-700' :
                       'bg-gray-100 text-gray-700'
                     }`}>
@@ -242,7 +242,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
                   <p className="text-sm text-gray-600 mb-2">Reason: {h.changeReason}</p>
                 )}
                 <details className="text-sm">
-                  <summary className="cursor-pointer text-blue-600">View instruction</summary>
+                  <summary className="cursor-pointer text-lamp-600">View instruction</summary>
                   <pre className="mt-2 p-2 bg-gray-50 rounded text-xs overflow-auto max-h-40">
                     {h.instruction}
                   </pre>
@@ -300,7 +300,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
               </button>
               <button
                 onClick={() => setIsCreating(true)}
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="px-4 py-2 text-sm bg-lamp-600 text-white rounded-md hover:bg-lamp-700"
               >
                 + Add Prompt
               </button>
@@ -346,7 +346,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {prompt.constraints?.slice(0, 3).map((c, i) => (
-                        <span key={i} className="text-xs px-2 py-1 bg-blue-50 text-blue-700 rounded">
+                        <span key={i} className="text-xs px-2 py-1 bg-lamp-50 text-lamp-700 rounded">
                           {c.substring(0, 50)}...
                         </span>
                       ))}
@@ -368,7 +368,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
                     </button>
                     <button
                       onClick={() => setEditingPrompt(prompt)}
-                      className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded"
+                      className="px-3 py-1 text-sm text-lamp-600 hover:bg-lamp-50 rounded"
                     >
                       Edit
                     </button>
@@ -397,7 +397,7 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
                     setSelectedCountry(countryCode)
                     handleSeedFromJson(countryCode)
                   }}
-                  className="ml-2 text-blue-600 underline"
+                  className="ml-2 text-lamp-600 underline"
                 >
                   Seed from JSON
                 </button>

@@ -47,14 +47,14 @@ export default function TestGifPage() {
             />
           </div>
 
-          <div className="mt-8 p-4 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-800">
+          <div className="mt-8 p-4 bg-lamp-50 rounded-lg">
+            <p className="text-sm text-lamp-800">
               🎯 <strong>Ultra-Slow Playback:</strong> Animation runs at 10% speed for elegant, gentle motion
             </p>
-            <p className="text-sm text-blue-800 mt-2">
+            <p className="text-sm text-lamp-800 mt-2">
               ⏸️ <strong>Auto-Pause:</strong> Animation stops after 2 seconds and shows static logo
             </p>
-            <p className="text-sm text-blue-600 mt-2">
+            <p className="text-sm text-lamp-600 mt-2">
               File location: <code>public/animations/logo-video.gif</code>
             </p>
           </div>

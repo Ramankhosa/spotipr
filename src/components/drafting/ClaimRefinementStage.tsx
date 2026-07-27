@@ -2,9 +2,8 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { AlertCircle, CheckCircle2, Sparkles, Lock, Unlock, Pencil, Save, X, Plus, Trash2, Wand2, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Sparkles, Unlock, Pencil, Save, X, Plus, Trash2, Wand2, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react'
 
 interface ClaimRefinementStageProps {
   session: any
@@ -69,18 +68,23 @@ const diffWords = (oldText: string, newText: string): DiffPart[] => {
 }
 
 const renderDiff = (oldText: string, newText: string) => {
-  if (!newText || oldText === newText) return <span className="text-ai-graphite-800">{oldText || newText}</span>
+  if (!newText || oldText === newText) return <span className="text-ai-graphite-700">{oldText || newText}</span>
   const parts = diffWords(oldText, newText)
   return (
-    <div className="flex flex-wrap gap-1 text-sm leading-6">
+    <span className="text-[13.5px] leading-relaxed text-ai-graphite-700">
       {parts.map((p, idx) => {
-        if (p.type === 'same') return <span key={idx}>{p.text}</span>
-        if (p.type === 'add') return <span key={idx} className="bg-green-100 text-green-800 px-1 rounded">{p.text}</span>
-        return <span key={idx} className="bg-red-100 text-red-800 line-through px-1 rounded">{p.text}</span>
+        if (p.type === 'same') return <span key={idx}>{p.text} </span>
+        if (p.type === 'add') return <span key={idx} className="rounded bg-emerald-50 px-0.5 font-medium text-emerald-800">{p.text} </span>
+        return <span key={idx} className="rounded bg-wax-50 px-0.5 text-wax-600 line-through">{p.text} </span>
       })}
-    </div>
+    </span>
   )
 }
+
+/** Label + control pair used across the dense settings strip. */
+const FieldLabel = ({ children }: { children: React.ReactNode }) => (
+  <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-ai-graphite-400">{children}</span>
+)
 
 export default function ClaimRefinementStage({ session, onComplete, onRefresh }: ClaimRefinementStageProps) {
   // Debug: Log session data to diagnose data flow issues
@@ -151,7 +155,6 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
   const [error, setError] = useState<string | null>(null)
   const [showAdditionalInstructions, setShowAdditionalInstructions] = useState(false)
   const [additionalInstructions, setAdditionalInstructions] = useState('')
-  const [expandedPatentRefs, setExpandedPatentRefs] = useState<Set<string>>(new Set())
   const [showPatentReferences, setShowPatentReferences] = useState(true)
   
   // Manual editing states
@@ -161,20 +164,9 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [unfreezing, setUnfreezing] = useState(false)
-  const [showInputsPanel, setShowInputsPanel] = useState(true)
   
   // Check if claims are frozen
   const isFrozen = !!normalized.claimsApprovedAt
-
-  // Toggle patent expansion
-  const togglePatentRef = (patentId: string) => {
-    setExpandedPatentRefs(prev => {
-      const next = new Set(prev)
-      if (next.has(patentId)) next.delete(patentId)
-      else next.add(patentId)
-      return next
-    })
-  }
 
   useEffect(() => {
     const mode = claimRefConfig.mode || 'ai'
@@ -218,58 +210,13 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
   const hasAutoUnfrozenRef = useRef(false)
   const userJustFrozeRef = useRef(false)
   const initialFrozenStateRef = useRef<boolean | null>(null)
-  const refreezeOnLeaveArmedRef = useRef(false)
-  const onCompleteRef = useRef(onComplete)
-  const latestClaimsRef = useRef<{
-    sessionId?: string
-    claimsHtml: string
-    claimsStructured?: any[]
-    jurisdiction: string
-    hasClaims: boolean
-  }>({
-    sessionId: session?.id,
-    claimsHtml: currentClaimsHtml,
-    claimsStructured: structured && structured.length ? structured : undefined,
-    jurisdiction: (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase(),
-    hasClaims: stripTags(currentClaimsHtml).length > 0 || (Array.isArray(structured) && structured.length > 0)
-  })
 
-  useEffect(() => {
-    onCompleteRef.current = onComplete
-  }, [onComplete])
+  // Leaving the stage used to silently re-freeze the claims, purely so downstream
+  // drafting would accept them. Drafting now reads the saved claim set directly, so that
+  // auto-lock only served to make the claims read-only behind the user's back. Nothing
+  // needs to happen on unmount — the claims are already saved.
 
-  useEffect(() => {
-    latestClaimsRef.current = {
-      sessionId: session?.id,
-      claimsHtml: currentClaimsHtml,
-      claimsStructured: structured && structured.length ? structured : undefined,
-      jurisdiction: (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase(),
-      hasClaims: stripTags(currentClaimsHtml).length > 0 || (Array.isArray(structured) && structured.length > 0)
-    }
-  })
 
-  useEffect(() => {
-    const armTimer = window.setTimeout(() => {
-      refreezeOnLeaveArmedRef.current = true
-    }, 0)
-
-    return () => {
-      window.clearTimeout(armTimer)
-      const latest = latestClaimsRef.current
-      if (!refreezeOnLeaveArmedRef.current || !latest.sessionId || !latest.hasClaims || userJustFrozeRef.current) return
-
-      void onCompleteRef.current({
-        action: 'freeze_claims',
-        sessionId: latest.sessionId,
-        claims: latest.claimsHtml,
-        claimsStructured: latest.claimsStructured,
-        jurisdiction: latest.jurisdiction
-      }).catch((e) => {
-        console.error('[ClaimRefinementStage] Failed to re-freeze claims while leaving stage:', e)
-      })
-    }
-  }, [])
-  
   // Capture the initial frozen state on first render
   useEffect(() => {
     if (initialFrozenStateRef.current === null) {
@@ -441,17 +388,22 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
     }
   }
 
-  const freezeClaimsAndProceed = async (claimsOverride?: string, structuredOverride?: any[]) => {
+  /**
+   * Record this claim set as the one drafting will use, then advance.
+   * `lock: false` — the claims stay editable. Downstream stages read the saved set
+   * regardless, so there is no reason to make the user unlock to fix a typo later.
+   */
+  const finalizeClaimsAndProceed = async (claimsOverride?: string, structuredOverride?: any[]) => {
     if (!session?.id) return
     try {
       setFreezing(true)
       setError(null)
 
       userJustFrozeRef.current = true
-      console.log('[ClaimRefinementStage] User manually freezing claims - auto-unfreeze disabled')
 
       await onComplete({
         action: 'freeze_claims',
+        lock: false,
         sessionId: session.id,
         claims: claimsOverride || normalized.claims || normalized.claimsFinal || normalized.claimsProvisional || currentClaimsHtml,
         claimsStructured: structuredOverride || (structured && structured.length ? structured : undefined),
@@ -463,11 +415,11 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
         stage: 'COMPONENT_PLANNER'
       })
       await onRefresh()
-      setSuccessMessage('Claims frozen and ready for next stage!')
+      setSuccessMessage('Claims finalized and ready for the next stage.')
       setTimeout(() => setSuccessMessage(null), 3000)
     } catch (e) {
-      console.error('Freeze failed', e)
-      setError('Failed to freeze claims.')
+      console.error('Finalize failed', e)
+      setError('Failed to finalize claims.')
       userJustFrozeRef.current = false
       throw e
     } finally {
@@ -498,11 +450,11 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
         refinedClaims.find((r: any) => Number(r.number) === claimNum)?.refined_text
       ).length
 
-      await freezeClaimsAndProceed(applyResponse?.claimsHtml, applyResponse?.claims)
+      await finalizeClaimsAndProceed(applyResponse?.claimsHtml, applyResponse?.claims)
 
       const message = claimCount === 0
-        ? 'No selected refinements were applied. Claims have still been frozen and the workflow has advanced.'
-        : `Applied ${claimCount} claim refinement${claimCount !== 1 ? 's' : ''}${modifiedCount > 0 ? ` (${modifiedCount} claim${modifiedCount !== 1 ? 's' : ''} modified)` : ''}. Claims frozen and ready for next stage.`
+        ? 'No selected refinements were applied. Your claims carry forward unchanged and the workflow has advanced.'
+        : `Applied ${claimCount} claim refinement${claimCount !== 1 ? 's' : ''}${modifiedCount > 0 ? ` (${modifiedCount} claim${modifiedCount !== 1 ? 's' : ''} modified)` : ''}. Ready for the next stage.`
       setSuccessMessage(message)
       setTimeout(() => setSuccessMessage(null), 8000)
     } catch (e) {
@@ -513,19 +465,19 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
     }
   }
 
-  const handleFreeze = async () => {
+  const handleFinalize = async () => {
     if (!session?.id) return
-    
+
     // Warn if there are unsaved changes
     if (isEditMode && hasUnsavedChanges) {
-      const confirmProceed = window.confirm('You have unsaved changes. Do you want to save them before freezing?')
+      const confirmProceed = window.confirm('You have unsaved changes. Do you want to save them before continuing?')
       if (confirmProceed) {
         await handleSaveClaims()
         // Wait for refresh to complete
         await new Promise(resolve => setTimeout(resolve, 500))
       }
     }
-    await freezeClaimsAndProceed()
+    await finalizeClaimsAndProceed()
   }
 
   const handleUnfreeze = async () => {
@@ -552,467 +504,393 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
     }
   }
 
-  const refinedClaims = preview?.refinedClaims || []
+  // One row per claim, carrying its AI suggestion inline. Previously the original claims
+  // and the AI suggestions lived in two separate cards showing the same claim set twice,
+  // so comparing meant scrolling between panels. Merging them is the whole point of the
+  // layout below: read a claim, see what changed, accept it — without moving.
+  const claimRows = useMemo(() => {
+    const refinedClaims: any[] = preview?.refinedClaims || []
+    return baseClaims.map((claim) => {
+      const refined = refinedClaims.find((r: any) => Number(r.number) === Number(claim.number))
+      const refinedText = refined?.refined_text || ''
+      return {
+        number: claim.number,
+        originalText: refined?.original_text || claim.text,
+        refinedText,
+        changed: Boolean(refinedText),
+        changeReason: refined?.change_reason || '',
+      }
+    })
+  }, [baseClaims, preview])
+
+  const changedCount = claimRows.filter(row => row.changed).length
+  const acceptedCount = claimRows.filter(row => row.changed && (acceptMap[row.number] ?? true)).length
+  const canRefine = !loadingPreview && (useAuto ? selectedPatents.length > 0 : useManual)
+
+  const setAllAccepted = (accepted: boolean) => {
+    setAcceptMap(claimRows.reduce((map, row) => {
+      if (row.changed) map[row.number] = accepted
+      return map
+    }, {} as Record<number, boolean>))
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-      <div className="max-w-[1800px] mx-auto px-3 py-5 sm:px-6 sm:py-8 space-y-6 sm:space-y-8">
-        {/* Header */}
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-ai-blue-600 flex items-center justify-center shadow-lg shadow-ai-blue-200">
-                <Wand2 className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Claim Refinement</h1>
-                <p className="text-slate-500 text-sm">AI-powered novelty optimization</p>
-              </div>
-            </div>
+    <div className="mx-auto max-w-[1100px] px-4 py-5 sm:px-6 sm:py-6">
+      {/* ---- Header: one row ---- */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ai-blue-50 ring-1 ring-inset ring-ai-blue-100">
+            <Wand2 className="h-[18px] w-[18px] text-ai-blue-700" />
           </div>
-          <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${
-            isFrozen 
-              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-              : 'bg-amber-50 text-amber-700 border border-amber-200'
-          }`}>
-            {isFrozen ? 'Claims Frozen' : 'Draft Mode'}
+          <div>
+            <h1 className="text-[17px] font-semibold leading-tight tracking-[-0.01em] text-ai-graphite-900">
+              Claim Refinement
+            </h1>
+            <p className="text-[13px] leading-tight text-ai-graphite-500">
+              Compare your claims against the selected prior art and accept what improves them.
+            </p>
+          </div>
+        </div>
+        {isFrozen && (
+          <button
+            onClick={handleUnfreeze}
+            disabled={unfreezing}
+            className="inline-flex items-center gap-1.5 rounded-md border border-paper-300 bg-white px-2 py-1 text-[11px] font-medium text-ai-graphite-700 transition-colors hover:border-ai-blue-300 hover:text-ai-blue-700"
+          >
+            <Unlock className="h-3 w-3" />
+            {unfreezing ? 'Unlocking…' : 'Locked — unlock to edit'}
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {successMessage && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-800">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <span>{successMessage}</span>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-paper-300 bg-white">
+        {/* ---- Settings strip: what the refinement reads from ---- */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-t-xl border-b border-paper-200 bg-paper-50 px-3 py-2">
+          <FieldLabel>Compare against</FieldLabel>
+
+          <div className="flex items-center rounded-md border border-paper-300 bg-white p-0.5">
+            <button
+              type="button"
+              onClick={() => setUseAuto(!useAuto)}
+              aria-pressed={useAuto}
+              title="Use the patents selected in the Prior Art stage"
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                useAuto ? 'bg-ai-blue-600 text-white' : 'text-ai-graphite-600 hover:bg-paper-100'
+              }`}
+            >
+              {priorArtOptions.length} patent{priorArtOptions.length === 1 ? '' : 's'}
+            </button>
+            <span className="h-4 w-px bg-paper-300" />
+            <button
+              type="button"
+              onClick={() => setUseManual(!useManual)}
+              aria-pressed={useManual}
+              title="Include your manual prior-art notes"
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                useManual ? 'bg-ai-blue-600 text-white' : 'text-ai-graphite-600 hover:bg-paper-100'
+              }`}
+            >
+              Manual notes
+            </button>
+          </div>
+
+          {priorArtOptions.length > 0 && useAuto && (
+            <button
+              type="button"
+              onClick={() => setShowPatentReferences(!showPatentReferences)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-ai-graphite-500 transition-colors hover:text-ai-blue-700"
+            >
+              {selectedPatents.length} of {priorArtOptions.length} selected
+              {showPatentReferences ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setShowAdditionalInstructions(!showAdditionalInstructions)}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+              additionalInstructions.trim()
+                ? 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
+                : 'border-paper-300 bg-white text-ai-graphite-600 hover:border-ai-blue-300'
+            }`}
+          >
+            <Pencil className="h-3 w-3" />
+            Instructions
+          </button>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              size="sm"
+              onClick={handlePreview}
+              disabled={!canRefine}
+              className="h-7 bg-ai-blue-600 px-2.5 text-[11px] text-white hover:bg-ai-blue-700"
+            >
+              {loadingPreview
+                ? <><span className="mr-1.5 inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Analyzing…</>
+                : <><Sparkles className="mr-1.5 h-3 w-3" />{preview ? 'Re-run analysis' : 'Analyze claims'}</>}
+            </Button>
           </div>
         </div>
 
-        {/* Alerts */}
-        {error && (
-          <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-red-700">{error}</div>
-          </div>
-        )}
-
-        {successMessage && (
-          <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 flex items-start gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-emerald-700">{successMessage}</div>
-          </div>
-        )}
-
-        {/* Main Content Grid */}
-        <div className="grid lg:grid-cols-5 gap-6">
-          {/* Claims Panel - 3 columns */}
-          <div className="lg:col-span-3 space-y-4">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <h2 className="font-medium text-slate-900">
-                    {isEditMode ? 'Editing Claims' : 'Your Claims'}
-                  </h2>
-                  <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
-                    {isEditMode ? editableClaims.length : baseClaims.length}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {!isEditMode ? (
-                    <button
-                      onClick={handleStartEditing}
-                      disabled={isFrozen}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                      Edit
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        onClick={handleCancelEditing}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-lg transition-colors"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveClaims}
-                        disabled={savingClaims || !hasUnsavedChanges}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-ai-blue-600 hover:bg-ai-blue-700 rounded-lg transition-colors disabled:opacity-50"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        {savingClaims ? 'Saving...' : 'Save'}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {isFrozen && !isEditMode && (
-                <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                  <span className="text-xs text-slate-600">Claims are locked. Unlock to make changes.</span>
-                  <button
-                    onClick={handleUnfreeze}
-                    disabled={unfreezing}
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors"
+        {/* Expandable patent picker */}
+        {showPatentReferences && useAuto && priorArtOptions.length > 0 && (
+          <div className="max-h-44 overflow-y-auto border-b border-paper-200 bg-white px-3 py-2">
+            <div className="grid gap-1 sm:grid-cols-2">
+              {claimRefSelectedPatentsFromConfig.map((patent: any) => {
+                const patentId = patent?.patentNumber || patent?.pn || patent?.id || ''
+                const threat = patent?.noveltyThreat || resolveThreat(patent?.tags, patent?.noveltyThreat)
+                return (
+                  <label
+                    key={patentId}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-paper-100"
                   >
-                    <Unlock className="w-3 h-3" />
-                    {unfreezing ? 'Unlocking...' : 'Unlock'}
+                    <input
+                      type="checkbox"
+                      checked={selectedPatents.includes(patentId)}
+                      onChange={(e) => {
+                        setSelectedPatents((prev) => (
+                          e.target.checked ? [...prev, patentId] : prev.filter((x) => x !== patentId)
+                        ))
+                      }}
+                      className="h-3.5 w-3.5 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
+                    />
+                    <span className="flex-1 truncate font-mono text-[11px] text-ai-graphite-700">{patentId}</span>
+                    <span className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
+                      threat === 'anticipates' ? 'bg-wax-50 text-wax-600' :
+                      threat === 'obvious' ? 'bg-amber-50 text-amber-700' :
+                      'bg-paper-200 text-ai-graphite-600'
+                    }`}>
+                      {threat}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {showAdditionalInstructions && (
+          <div className="border-b border-paper-200 bg-white px-3 py-2">
+            <textarea
+              className="w-full resize-none rounded-md border border-paper-300 px-2.5 py-2 text-[12px] text-ai-graphite-800 placeholder:text-ai-graphite-400 focus:border-ai-blue-500 focus:outline-none focus:ring-1 focus:ring-ai-blue-500"
+              rows={2}
+              placeholder="E.g. focus on mechanical aspects, keep claim 1 broad, avoid software limitations…"
+              value={additionalInstructions}
+              onChange={(e) => setAdditionalInstructions(e.target.value)}
+            />
+          </div>
+        )}
+
+        {priorArtOptions.length === 0 && (
+          <div className="flex items-start gap-2 border-b border-paper-200 bg-amber-50/60 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+            <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+            <span>No patents selected. Pick references in the Prior Art stage, or switch on Manual notes to refine against your own guidance.</span>
+          </div>
+        )}
+
+        {/* ---- Claim list toolbar ---- */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-paper-200 px-3 py-2">
+          <span className="text-[12px] font-medium text-ai-graphite-900">
+            {isEditMode ? 'Editing claims' : 'Claims'}
+            <span className="ml-1.5 font-normal text-ai-graphite-400">
+              {isEditMode ? editableClaims.length : claimRows.length}
+            </span>
+          </span>
+
+          {preview && !isEditMode && (
+            <span className="text-[11px] text-ai-graphite-500">
+              {changedCount === 0
+                ? 'No changes suggested'
+                : <>{changedCount} suggested · <span className="font-medium text-ai-blue-700">{acceptedCount} accepted</span></>}
+            </span>
+          )}
+
+          {preview && changedCount > 0 && !isEditMode && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setAllAccepted(true)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-medium text-ai-graphite-500 transition-colors hover:bg-paper-100 hover:text-ai-blue-700"
+              >
+                Accept all
+              </button>
+              <button
+                onClick={() => setAllAccepted(false)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-medium text-ai-graphite-500 transition-colors hover:bg-paper-100 hover:text-ai-graphite-900"
+              >
+                Reject all
+              </button>
+            </div>
+          )}
+
+          <div className="ml-auto flex items-center gap-1.5">
+            {!isEditMode ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleStartEditing}
+                disabled={isFrozen}
+                className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+              >
+                <Pencil className="mr-1 h-3 w-3" />
+                Edit
+              </Button>
+            ) : (
+              <>
+                {hasUnsavedChanges && (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] text-ai-blue-700">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ai-blue-500" />
+                    Unsaved
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancelEditing}
+                  className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-600"
+                >
+                  <X className="mr-1 h-3 w-3" />
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSaveClaims}
+                  disabled={savingClaims || !hasUnsavedChanges}
+                  className="h-7 bg-ai-blue-600 px-2.5 text-[11px] text-white hover:bg-ai-blue-700"
+                >
+                  <Save className="mr-1 h-3 w-3" />
+                  {savingClaims ? 'Saving…' : 'Save'}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* ---- Unified claim list ---- */}
+        <div className="divide-y divide-paper-200">
+          {isEditMode ? (
+            <div className="space-y-2 p-3">
+              {editableClaims.map((c, index) => (
+                <div key={index} className="group relative flex gap-2.5 rounded-lg border border-paper-300 p-2.5 transition-colors focus-within:border-ai-blue-400">
+                  <span className="mt-0.5 w-5 flex-shrink-0 text-right text-[12px] font-semibold tabular-nums text-ai-graphite-500">
+                    {c.number}.
+                  </span>
+                  <textarea
+                    value={c.text}
+                    onChange={(e) => handleClaimTextChange(index, e.target.value)}
+                    className="min-h-[52px] flex-1 resize-none border-0 bg-transparent p-0 text-[13.5px] leading-relaxed text-ai-graphite-800 focus:outline-none focus:ring-0"
+                    placeholder="Enter claim text…"
+                  />
+                  <button
+                    onClick={() => handleRemoveClaim(index)}
+                    aria-label={`Remove claim ${c.number}`}
+                    className="h-fit rounded p-1 text-ai-graphite-300 opacity-0 transition-all hover:text-wax-500 group-hover:opacity-100"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
-              )}
-
-              {hasUnsavedChanges && isEditMode && (
-                <div className="px-5 py-2.5 bg-ai-blue-50 border-b border-ai-blue-100 flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-ai-blue-500 animate-pulse" />
-                  <span className="text-xs text-ai-blue-700">Unsaved changes</span>
-                </div>
-              )}
-
-              <div className="p-5 max-h-[480px] overflow-y-auto space-y-3">
-                {isEditMode ? (
-                  <>
-                    {editableClaims.map((c, index) => (
-                      <div key={index} className="group relative">
-                        <div className="absolute -left-3 top-3 w-6 h-6 rounded-full bg-ai-blue-100 text-ai-blue-600 text-xs font-medium flex items-center justify-center">
-                          {c.number}
-                        </div>
-                        <div className="ml-5 bg-slate-50 rounded-xl p-4 border border-slate-200 hover:border-ai-blue-200 transition-colors">
-                          <textarea
-                            value={c.text}
-                            onChange={(e) => handleClaimTextChange(index, e.target.value)}
-                            className="w-full text-sm text-slate-700 bg-transparent border-0 p-0 focus:outline-none focus:ring-0 resize-none min-h-[60px]"
-                            placeholder="Enter claim text..."
-                          />
-                          <button
-                            onClick={() => handleRemoveClaim(index)}
-                            className="absolute top-2 right-2 p-1.5 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    <button
-                      onClick={handleAddClaim}
-                      className="ml-5 w-[calc(100%-1.25rem)] py-3 border-2 border-dashed border-slate-200 rounded-xl text-sm text-slate-400 hover:text-ai-blue-600 hover:border-ai-blue-300 transition-colors flex items-center justify-center gap-2"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add claim
-                    </button>
-                  </>
-                ) : (
-                  baseClaims.map((c) => (
-                    <div key={c.number} className="flex gap-3">
-                      <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 text-xs font-medium flex items-center justify-center flex-shrink-0 mt-0.5">
-                        {c.number}
-                      </div>
-                      <div className="text-sm text-slate-700 leading-relaxed">{c.text}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* AI Preview Panel */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-violet-500" />
-                  <h2 className="font-medium text-slate-900">AI Suggestions</h2>
-                </div>
-                {preview && (
-                  <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 text-xs font-medium">
-                    {refinedClaims.filter((r: any) => r.refined_text).length} refined
-                  </span>
-                )}
-              </div>
-              <div className="p-5">
-                {!preview ? (
-                  <div className="text-center py-8">
-                    <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
-                      <Wand2 className="w-6 h-6 text-slate-400" />
-                    </div>
-                    <p className="text-sm text-slate-500">Run AI refinement to see suggestions</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {baseClaims.map((c) => {
-                      const refined = refinedClaims.find((r: any) => Number(r.number) === Number(c.number))
-                      const refinedText = refined?.refined_text || ''
-                      const originalText = refined?.original_text || c.text
-                      const accepted = acceptMap[c.number] ?? Boolean(refinedText)
-                      
-                      return (
-                        <div key={c.number} className={`rounded-xl p-4 transition-colors bg-white border ${
-                          refinedText ? 'border-emerald-200' : 'border-slate-200'
-                        }`}>
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-medium text-slate-500">Claim {c.number}</span>
-                              {refinedText ? (
-                                <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-medium">Modified</span>
-                              ) : (
-                                <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 text-[10px] font-medium">Unchanged</span>
-                              )}
-                            </div>
-                            {refinedText && (
-                              <label className="flex items-center gap-1.5 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={accepted}
-                                  onChange={(e) => setAcceptMap((prev) => ({ ...prev, [c.number]: e.target.checked }))}
-                                  className="w-3.5 h-3.5 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
-                                />
-                                <span className="text-[10px] text-slate-500">Accept</span>
-                              </label>
-                            )}
-                          </div>
-                          <div className="text-sm">
-                            {refinedText ? renderDiff(originalText, refinedText) : (
-                              <span className="text-slate-600">{originalText}</span>
-                            )}
-                          </div>
-                          {refined?.change_reason && (
-                            <div className="mt-2 pt-2 border-t border-emerald-100 text-xs text-emerald-700 flex items-start gap-1.5">
-                              <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                              <span>{refined.change_reason}</span>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Actions Panel - 2 columns */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Workflow Steps */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100">
-                <h2 className="font-medium text-slate-900">Workflow</h2>
-              </div>
-              <div className="p-5 space-y-3">
-                {/* Step 1 */}
-                <button
-                  onClick={handlePreview}
-                  disabled={loadingPreview}
-                  className="w-full group"
-                >
-                  <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
-                    loadingPreview
-                      ? 'border-ai-blue-300 bg-ai-blue-50'
-                      : 'border-slate-200 hover:border-ai-blue-300 hover:bg-ai-blue-50/50'
-                  }`}>
-                    <div className="w-8 h-8 rounded-full bg-ai-blue-600 text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
-                      1
-                    </div>
-                    <div className="flex-1 text-left">
-                      <div className="font-medium text-slate-900 text-sm">Generate Refinements</div>
-                      <div className="text-xs text-slate-500">AI analyzes claims against patents</div>
-                    </div>
-                    {loadingPreview ? (
-                      <div className="w-5 h-5 border-2 border-ai-blue-600 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <Wand2 className="w-5 h-5 text-slate-400 group-hover:text-ai-blue-600 transition-colors" />
-                    )}
-                  </div>
-                </button>
-
-                {/* Arrow */}
-                <div className="flex justify-center">
-                  <ArrowRight className="w-4 h-4 text-slate-300 rotate-90" />
-                </div>
-
-                {/* Step 2 */}
-                <button
-                  onClick={handleApply}
-                  disabled={applying || freezing || !preview}
-                  className="w-full group"
-                >
-                  <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
-                    applying || freezing
-                      ? 'border-violet-300 bg-violet-50'
-                      : !preview
-                        ? 'border-slate-100 bg-slate-50 opacity-60'
-                        : 'border-slate-200 hover:border-violet-300 hover:bg-violet-50/50'
-                  }`}>
-                    <div className={`w-8 h-8 rounded-full text-sm font-semibold flex items-center justify-center flex-shrink-0 ${
-                      preview ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-400'
-                    }`}>
-                      2
-                    </div>
-                    <div className="flex-1 text-left">
-                      <div className="font-medium text-slate-900 text-sm">Apply Changes</div>
-                      <div className="text-xs text-slate-500">Accept selected refinements and freeze claims</div>
-                    </div>
-                    {(applying || freezing) ? (
-                      <div className="w-5 h-5 border-2 border-violet-600 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <CheckCircle2 className={`w-5 h-5 transition-colors ${preview ? 'text-slate-400 group-hover:text-violet-600' : 'text-slate-300'}`} />
-                    )}
-                  </div>
-                </button>
-
-                {/* Arrow */}
-                <div className="flex justify-center">
-                  <ArrowRight className="w-4 h-4 text-slate-300 rotate-90" />
-                </div>
-
-                {/* Step 3 - Freeze/Unfreeze */}
-                <button
-                  onClick={isFrozen ? handleUnfreeze : handleFreeze}
-                  disabled={freezing || unfreezing}
-                  className="w-full group"
-                >
-                  <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
-                    isFrozen 
-                      ? 'border-emerald-200 bg-emerald-50 hover:border-amber-300 hover:bg-amber-50' 
-                      : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50'
-                  }`}>
-                    <div className={`w-8 h-8 rounded-full text-sm font-semibold flex items-center justify-center flex-shrink-0 ${
-                      isFrozen ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
-                    }`}>
-                      3
-                    </div>
-                    <div className="flex-1 text-left">
-                      <div className="font-medium text-slate-900 text-sm">
-                        {isFrozen ? 'Unlock Claims' : 'Freeze Claims'}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {isFrozen ? 'Unlock to make more changes' : 'Lock and proceed to next stage'}
-                      </div>
-                    </div>
-                    {(freezing || unfreezing) ? (
-                      <div className="w-5 h-5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-                    ) : isFrozen ? (
-                      <Unlock className="w-5 h-5 text-amber-500 group-hover:text-amber-600 transition-colors" />
-                    ) : (
-                      <Lock className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
-                    )}
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            {/* Inputs Panel */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              ))}
               <button
-                onClick={() => setShowInputsPanel(!showInputsPanel)}
-                className="w-full px-5 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
+                onClick={handleAddClaim}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-paper-400 py-2 text-[12px] text-ai-graphite-400 transition-colors hover:border-ai-blue-300 hover:text-ai-blue-600"
               >
-                <h2 className="font-medium text-slate-900">Refinement Settings</h2>
-                {showInputsPanel ? (
-                  <ChevronUp className="w-4 h-4 text-slate-400" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-slate-400" />
-                )}
+                <Plus className="h-3.5 w-3.5" />
+                Add claim
               </button>
-              
-              {showInputsPanel && (
-                <div className="px-5 pb-5 space-y-4 border-t border-slate-100 pt-4">
-                  {/* Source toggles */}
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-3 p-3 rounded-lg bg-slate-50 hover:bg-slate-100 cursor-pointer transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={useAuto}
-                        onChange={(e) => setUseAuto(e.target.checked)}
-                        className="w-4 h-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
-                      />
-                      <div>
-                        <div className="text-sm font-medium text-slate-700">Patent References</div>
-                        <div className="text-xs text-slate-500">{priorArtOptions.length} selected</div>
-                      </div>
-                    </label>
-                    <label className="flex items-center gap-3 p-3 rounded-lg bg-slate-50 hover:bg-slate-100 cursor-pointer transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={useManual}
-                        onChange={(e) => setUseManual(e.target.checked)}
-                        className="w-4 h-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
-                      />
-                      <div>
-                        <div className="text-sm font-medium text-slate-700">Manual Notes</div>
-                        <div className="text-xs text-slate-500">Custom guidance</div>
-                      </div>
-                    </label>
-                  </div>
+            </div>
+          ) : claimRows.length === 0 ? (
+            <div className="px-4 py-10 text-center">
+              <p className="text-[13px] text-ai-graphite-500">No claims found for this session.</p>
+            </div>
+          ) : (
+            claimRows.map((row) => {
+              const accepted = acceptMap[row.number] ?? true
+              const showRefined = row.changed && accepted
+              return (
+                <div
+                  key={row.number}
+                  className={`flex gap-3 px-4 py-3 transition-colors ${row.changed ? 'bg-ai-blue-50/30' : ''}`}
+                >
+                  <span className="mt-0.5 w-5 flex-shrink-0 text-right text-[12px] font-semibold tabular-nums text-ai-graphite-500">
+                    {row.number}.
+                  </span>
 
-                  {priorArtOptions.length === 0 && (
-                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-100">
-                      <p className="text-xs text-amber-700">No patents selected. Go to Related Art stage to select patents for refinement.</p>
-                    </div>
-                  )}
-
-                  {priorArtOptions.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-slate-500">Selected Patents</span>
-                        <button
-                          onClick={() => setShowPatentReferences(!showPatentReferences)}
-                          className="text-xs text-ai-blue-600 hover:text-ai-blue-700"
-                        >
-                          {showPatentReferences ? 'Hide' : 'Show'}
-                        </button>
-                      </div>
-                      {showPatentReferences && (
-                        <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-slate-50 rounded-lg">
-                          {claimRefSelectedPatentsFromConfig.map((patent: any) => {
-                            const patentId = patent?.patentNumber || patent?.pn || patent?.id || ''
-                            const threat = patent?.noveltyThreat || resolveThreat(patent?.tags, patent?.noveltyThreat)
-                            return (
-                              <label key={patentId} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedPatents.includes(patentId)}
-                                  onChange={(e) => {
-                                    setSelectedPatents((prev) => {
-                                      if (e.target.checked) return [...prev, patentId]
-                                      return prev.filter((x) => x !== patentId)
-                                    })
-                                  }}
-                                  className="w-3.5 h-3.5 rounded border-slate-300 text-ai-blue-600"
-                                />
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-xs font-mono text-slate-600 truncate">{patentId}</div>
-                                </div>
-                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
-                                  threat === 'anticipates' ? 'bg-red-100 text-red-700' :
-                                  threat === 'obvious' ? 'bg-amber-100 text-amber-700' :
-                                  'bg-slate-100 text-slate-600'
-                                }`}>
-                                  {threat}
-                                </span>
-                              </label>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Additional Instructions */}
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={showAdditionalInstructions}
-                        onChange={(e) => setShowAdditionalInstructions(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded border-slate-300 text-ai-blue-600"
-                      />
-                      <span className="text-xs font-medium text-slate-600">Custom Instructions</span>
-                    </label>
-                    {showAdditionalInstructions && (
-                      <textarea
-                        className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent resize-none"
-                        rows={3}
-                        placeholder="E.g., Focus on mechanical aspects, exclude software claims..."
-                        value={additionalInstructions}
-                        onChange={(e) => setAdditionalInstructions(e.target.value)}
-                      />
+                  <div className="min-w-0 flex-1">
+                    {row.changed ? (
+                      <>
+                        {showRefined
+                          ? renderDiff(row.originalText, row.refinedText)
+                          : <span className="text-[13.5px] leading-relaxed text-ai-graphite-700">{row.originalText}</span>}
+                        {row.changeReason && (
+                          <p className="mt-1.5 text-[11px] leading-relaxed text-ai-graphite-500">
+                            {row.changeReason}
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-[13.5px] leading-relaxed text-ai-graphite-700">{row.originalText}</span>
                     )}
                   </div>
+
+                  {row.changed && (
+                    <div className="flex-shrink-0">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={accepted}
+                        onClick={() => setAcceptMap((prev) => ({ ...prev, [row.number]: !accepted }))}
+                        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+                          accepted
+                            ? 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
+                            : 'border-paper-300 bg-white text-ai-graphite-500 hover:border-ai-blue-300'
+                        }`}
+                      >
+                        {accepted ? <CheckCircle2 className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                        {accepted ? 'Accepted' : 'Rejected'}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              )
+            })
+          )}
         </div>
+
+        {/* ---- Footer: the one action that moves you forward ---- */}
+        {!isEditMode && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-xl border-t border-paper-200 bg-paper-50 px-3 py-2.5">
+            <p className="text-[11px] text-ai-graphite-500">
+              {!preview
+                ? 'Analyze your claims to see suggested refinements, or continue with them as they are.'
+                : acceptedCount > 0
+                  ? `${acceptedCount} refinement${acceptedCount === 1 ? '' : 's'} will be written into your claims.`
+                  : 'Your claims will carry forward unchanged.'}
+            </p>
+            <Button
+              size="sm"
+              onClick={preview ? handleApply : handleFinalize}
+              disabled={applying || freezing || savingClaims}
+              className="h-8 bg-ai-blue-600 px-3 text-[12px] text-white hover:bg-ai-blue-700"
+            >
+              {(applying || freezing)
+                ? <><span className="mr-1.5 inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Saving…</>
+                : <>{preview && acceptedCount > 0 ? 'Apply & continue' : 'Continue'}<ArrowRight className="ml-1.5 h-3.5 w-3.5" /></>}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -97,7 +97,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
-        <span className="font-mono text-xs font-semibold text-blue-700 dark:text-blue-400">{family.publicationNumber}</span>
+        <span className="font-mono text-xs font-semibold text-lamp-700 dark:text-lamp-400">{family.publicationNumber}</span>
         <span className="text-sm font-bold text-foreground">{family.title}</span>
         <span
           className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
@@ -116,7 +116,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
           <button
             type="button"
             onClick={() => onSteerFrom(family)}
-            className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+            className="inline-flex items-center gap-1 rounded-md border border-lamp-300 bg-lamp-50 px-2 py-1 text-[11px] font-semibold text-lamp-700 hover:bg-lamp-100 dark:border-lamp-800 dark:bg-lamp-950/40 dark:text-lamp-300"
             title="Add this document to the steer block on your canvas"
           >
             <Sparkles className="h-3 w-3" /> More like this
@@ -269,7 +269,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
                       href={googlePatentsUrl(member.publicationNumber)}
                       target="_blank"
                       rel="noreferrer"
-                      className="font-mono text-blue-700 hover:underline dark:text-blue-400"
+                      className="font-mono text-lamp-700 hover:underline dark:text-lamp-400"
                     >
                       {member.publicationNumber}
                     </a>

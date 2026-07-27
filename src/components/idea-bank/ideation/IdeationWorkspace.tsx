@@ -1585,7 +1585,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
           animate={{ opacity: 1 }}
           className="text-center"
         >
-          <Loader2 className="w-8 h-8 animate-spin text-violet-500 mx-auto mb-4" />
+          <Loader2 className="w-8 h-8 animate-spin text-lamp-500 mx-auto mb-4" />
           <p className="text-slate-500">Restoring your session...</p>
         </motion.div>
       </div>
@@ -1604,7 +1604,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
         >
           {/* Header */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 mb-4 shadow-lg shadow-violet-500/25">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-lamp-500 to-lamp-600 mb-4 shadow-lg shadow-lamp-500/25">
               <Sparkles className="w-8 h-8 text-white" />
             </div>
             <h2 className="text-3xl font-bold text-slate-900 mb-2">
@@ -1632,7 +1632,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                     <div key={idx} className="flex items-center">
                       <div className={`w-3 h-3 rounded-full transition-all
                         ${isComplete ? 'bg-green-500' : 
-                          isActive ? 'bg-violet-500 animate-pulse' : 
+                          isActive ? 'bg-lamp-500 animate-pulse' : 
                           'bg-slate-200'}`}
                       />
                       {idx < 3 && <div className="w-6 h-0.5 bg-slate-200" />}
@@ -1657,7 +1657,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                   onChange={(e) => setSeedText(e.target.value)}
                   placeholder="Example: A disposable syringe that prevents reuse by breaking the plunger after first use, using only mechanical means without electronics..."
                   rows={4}
-                  className="w-full bg-slate-50 border-slate-200 focus:border-violet-500 focus:ring-violet-500/20 rounded-xl"
+                  className="w-full bg-slate-50 border-slate-200 focus:border-lamp-500 focus:ring-lamp-500/20 rounded-xl"
                   disabled={stage === 'clarifying'}
                 />
                 <p className="text-xs text-slate-400 mt-2">
@@ -1675,7 +1675,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                   value={seedGoal}
                   onChange={(e) => setSeedGoal(e.target.value)}
                   placeholder="Example: Prevent needle reuse while keeping manufacturing cost under $0.10"
-                  className="bg-slate-50 border-slate-200 focus:border-violet-500 rounded-xl"
+                  className="bg-slate-50 border-slate-200 focus:border-lamp-500 rounded-xl"
                   disabled={stage === 'clarifying'}
                 />
               </div>
@@ -1692,7 +1692,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                     onChange={(e) => setNewConstraint(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAddConstraint()}
                     placeholder="Add a constraint (e.g., 'no electronics')"
-                    className="bg-slate-50 border-slate-200 focus:border-violet-500 rounded-xl"
+                    className="bg-slate-50 border-slate-200 focus:border-lamp-500 rounded-xl"
                     disabled={stage === 'clarifying'}
                   />
                   <Button
@@ -1710,7 +1710,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                       <Badge
                         key={i}
                         variant="secondary"
-                        className="bg-violet-50 text-violet-700 hover:bg-violet-100 cursor-pointer"
+                        className="bg-lamp-50 text-lamp-700 hover:bg-lamp-100 cursor-pointer"
                         onClick={() => stage !== 'clarifying' && handleRemoveConstraint(i)}
                       >
                         {constraint}
@@ -1726,8 +1726,8 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
               {stage === 'clarifying' && (
                 <div className="border-t border-slate-200 pt-6">
                   <div className="flex items-center gap-2 mb-4">
-                    <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center">
-                      <HelpCircle className="w-4 h-4 text-violet-600" />
+                    <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center">
+                      <HelpCircle className="w-4 h-4 text-lamp-600" />
                     </div>
                     <div>
                       <h3 className="font-semibold text-slate-900">Clarifications Needed</h3>
@@ -1740,8 +1740,8 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                    (currentSession.groundingContext.clarificationQuestions as string[]).length > 0 ? (
                     <div className="space-y-4">
                       {(currentSession.groundingContext.clarificationQuestions as string[]).map((question: string, idx: number) => (
-                        <div key={idx} className="p-4 bg-violet-50/50 rounded-xl border border-violet-100">
-                          <label className="block text-sm font-medium text-violet-800 mb-2">
+                        <div key={idx} className="p-4 bg-lamp-50/50 rounded-xl border border-lamp-100">
+                          <label className="block text-sm font-medium text-lamp-800 mb-2">
                             {question}
                           </label>
                           <Textarea
@@ -1749,7 +1749,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                             onChange={(e) => setClarifyingAnswers(prev => ({ ...prev, [idx]: e.target.value }))}
                             placeholder="Type your answer here..."
                             rows={2}
-                            className="w-full bg-white border-violet-200 focus:border-violet-500 focus:ring-violet-500/20 rounded-lg text-sm"
+                            className="w-full bg-white border-lamp-200 focus:border-lamp-500 focus:ring-lamp-500/20 rounded-lg text-sm"
                           />
                         </div>
                       ))}
@@ -1798,7 +1798,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                         (currentSession?.groundingContext?.clarificationQuestions as string[] || []).length > 0 &&
                         Object.keys(clarifyingAnswers).length === 0
                       }
-                      className="flex-1 bg-violet-500 hover:bg-violet-600 text-white"
+                      className="flex-1 bg-lamp-500 hover:bg-lamp-600 text-white"
                     >
                       Apply Clarifications
                       <ArrowRight className="w-4 h-4 ml-1" />
@@ -1871,7 +1871,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                   <Button
                     onClick={handleCreateSession}
                     disabled={seedText.trim().length < 10 || loading}
-                    className="bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 text-white rounded-xl px-6 shadow-lg shadow-violet-500/25"
+                    className="bg-gradient-to-r from-lamp-500 to-lamp-600 hover:from-lamp-600 hover:to-lamp-700 text-white rounded-xl px-6 shadow-lg shadow-lamp-500/25"
                   >
                     {loading ? (
                       <>
@@ -1919,7 +1919,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                   </div>
                   {!sessionsLoaded ? (
                     <div className="flex items-center justify-center p-4">
-                      <Loader2 className="w-5 h-5 animate-spin text-violet-500" />
+                      <Loader2 className="w-5 h-5 animate-spin text-lamp-500" />
                       <span className="ml-2 text-sm text-slate-500">Loading...</span>
                     </div>
                   ) : sessions.length > 0 ? (
@@ -1928,7 +1928,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                         <button
                           key={session.id}
                           onClick={() => loadSession(session.id)}
-                          className="w-full text-left p-3 bg-white rounded-xl border border-slate-200 hover:border-violet-300 hover:shadow-md transition-all"
+                          className="w-full text-left p-3 bg-white rounded-xl border border-slate-200 hover:border-lamp-300 hover:shadow-md transition-all"
                         >
                           <div className="flex items-center justify-between">
                             <span className="font-medium text-slate-900 truncate">
@@ -2139,7 +2139,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                 {/* Session Info */}
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-lamp-500 to-lamp-600 flex items-center justify-center">
                       <Sparkles className="w-4 h-4 text-white" />
                     </div>
                     <div>
@@ -2168,7 +2168,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                 {/* Invention Archetype (from dimension discovery) */}
                 {currentSession?.primaryDimensions && (
                   <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-lamp-100 text-lamp-700">
                       {(currentSession as any).inventionArchetype?.replace(/_/g, ' ') || 'Custom Invention'}
                     </span>
                   </div>
@@ -2180,7 +2180,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                     variant="outline"
                     size="sm"
                     onClick={handleEditSeed}
-                    className="flex-1 text-xs h-8 border-violet-200 text-violet-700 hover:bg-violet-50"
+                    className="flex-1 text-xs h-8 border-lamp-200 text-lamp-700 hover:bg-lamp-50"
                   >
                     <ChevronLeft className="w-3 h-3 mr-1" />
                     Edit Input
@@ -2242,7 +2242,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                 <div className={`
                   bg-white/95 backdrop-blur-sm rounded-xl border shadow-lg p-3 w-48
                   transition-all duration-200
-                  ${selectedNodes.size > 0 ? 'border-violet-400' : 'border-slate-200'}
+                  ${selectedNodes.size > 0 ? 'border-lamp-400' : 'border-slate-200'}
                 `}>
                   {/* Selection Count */}
                   <div className="flex items-center justify-between mb-2">
@@ -2277,7 +2277,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                         return (
                           <span
                             key={nodeId}
-                            className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 truncate max-w-[70px]"
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-lamp-100 text-lamp-700 truncate max-w-[70px]"
                           >
                             {(node?.data as any)?.title || nodeId}
                           </span>
@@ -2297,7 +2297,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                     disabled={selectedNodes.size === 0}
                     className={`w-full h-8 text-xs ${
                       selectedNodes.size > 0
-                        ? 'bg-violet-500 hover:bg-violet-600 text-white'
+                        ? 'bg-lamp-500 hover:bg-lamp-600 text-white'
                         : 'bg-slate-100 text-slate-400'
                     }`}
                   >
@@ -2359,7 +2359,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
               className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50"
             >
               <div className="text-center">
-                <Loader2 className="w-12 h-12 animate-spin text-violet-500 mx-auto mb-4" />
+                <Loader2 className="w-12 h-12 animate-spin text-lamp-500 mx-auto mb-4" />
                 <p className="text-slate-600 font-medium">
                   {stage === 'grounding' && 'Analyzing your invention...'}
                   {stage === 'framing' && 'Identifying inventive tensions...'}
@@ -2432,7 +2432,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
 
             {/* Resize Handle */}
             <div
-              className="absolute left-0 top-0 bottom-0 w-1 bg-slate-200 hover:bg-violet-400 cursor-col-resize transition-colors duration-200 group"
+              className="absolute left-0 top-0 bottom-0 w-1 bg-slate-200 hover:bg-lamp-400 cursor-col-resize transition-colors duration-200 group"
               onMouseDown={(e) => {
                 e.preventDefault()
                 const startX = e.clientX
@@ -2457,7 +2457,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
                 document.body.style.userSelect = 'none'
               }}
             >
-              <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-0.5 h-8 bg-violet-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
+              <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-0.5 h-8 bg-lamp-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
             </div>
           </motion.div>
         )}
@@ -2475,7 +2475,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
       {/* Floating Help Button */}
       <button
         onClick={() => setShowHelp(true)}
-        className="fixed bottom-4 right-4 z-40 w-12 h-12 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center"
+        className="fixed bottom-4 right-4 z-40 w-12 h-12 rounded-full bg-gradient-to-br from-lamp-500 to-lamp-600 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center"
         title="Help (Press ? for keyboard shortcut)"
       >
         <HelpCircle className="w-6 h-6" />

@@ -234,7 +234,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
             <div key={s.id} className="flex items-center">
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                 i < stepIndex ? 'bg-green-100 text-green-800'
-                : i === stepIndex ? 'bg-blue-600 text-white'
+                : i === stepIndex ? 'bg-lamp-600 text-white'
                 : 'bg-gray-100 text-gray-500'
               }`}>
                 {s.label}
@@ -262,7 +262,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
                   onClick={() => setSourceTab(tab)}
                   className={`py-2 px-1 border-b-2 font-medium text-sm ${
                     sourceTab === tab
-                      ? 'border-blue-500 text-blue-600'
+                      ? 'border-lamp-500 text-lamp-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
@@ -279,7 +279,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
                 type="file"
                 accept=".json,application/json"
                 onChange={handleFileUpload}
-                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-lamp-50 file:text-lamp-700 hover:file:bg-lamp-100"
               />
               {uploadedFile && (
                 <p className="mt-2 text-sm text-gray-600">
@@ -362,7 +362,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
             <button
               onClick={runPreview}
               disabled={!clientValid || busy}
-              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+              className="px-6 py-2 bg-lamp-600 text-white rounded-md hover:bg-lamp-700 disabled:opacity-50"
             >
               {busy ? 'Analyzing…' : 'Preview changes →'}
             </button>
@@ -386,7 +386,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
             <button
               onClick={runImport}
               disabled={busy || hasBlockingIssues}
-              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+              className="px-6 py-2 bg-lamp-600 text-white rounded-md hover:bg-lamp-700 disabled:opacity-50"
               title={hasBlockingIssues ? 'Resolve the blocking issues first' : undefined}
             >
               {busy ? 'Importing…' : hasBlockingIssues ? 'Blocked by errors' : 'Import everything →'}
@@ -421,7 +421,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
               <button
                 onClick={() => setStep('activate')}
                 disabled={busy}
-                className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                className="px-6 py-2 bg-lamp-600 text-white rounded-md hover:bg-lamp-700 disabled:opacity-50"
               >
                 Continue to activation →
               </button>
@@ -450,7 +450,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
             </div>
           ) : (
             <>
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-800">
+              <div className="p-4 bg-lamp-50 border border-lamp-200 rounded-md text-sm text-lamp-800">
                 Activating makes <strong>{plan.countryName.name} ({plan.countryCode})</strong> available to all
                 users in the drafting country selector. Readiness is re-checked server-side.
               </div>

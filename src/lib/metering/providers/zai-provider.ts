@@ -6,6 +6,7 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { PROVIDER_TIMEOUTS } from './provider-timeouts'
+import { createOpenAICompatibleCompletion } from './streaming'
 
 export class ZAIProvider implements LLMProvider {
   name = 'zai'
@@ -86,7 +87,7 @@ export class ZAIProvider implements LLMProvider {
         requestBody.thinking = thinking
       }
 
-      const response = await this.client.chat.completions.create(requestBody)
+      const response = await createOpenAICompatibleCompletion(this.client, requestBody, request)
       const outputText = response.choices?.[0]?.message?.content || ''
       const inputTokens = response.usage?.prompt_tokens || 0
       const outputTokens = response.usage?.completion_tokens || 0

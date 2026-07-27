@@ -372,7 +372,7 @@ export default function AllInstructionsModal({
             <h2 className="text-xl font-bold text-white">📋 Custom Instructions</h2>
             <p className="text-sm text-slate-400">
               {instructions.length} instruction{instructions.length !== 1 ? 's' : ''} 
-              {persistentCount > 0 && <span className="text-violet-400"> • {persistentCount} persistent</span>}
+              {persistentCount > 0 && <span className="text-lamp-400"> • {persistentCount} persistent</span>}
               {sessionCount > 0 && <span className="text-ai-blue-400"> • {sessionCount} session-only</span>}
             </p>
           </div>
@@ -390,7 +390,7 @@ export default function AllInstructionsModal({
             <select
               value={filterJurisdiction}
               onChange={(e) => setFilterJurisdiction(e.target.value)}
-              className="px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-violet-500 focus:outline-none"
+              className="px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-lamp-500 focus:outline-none"
             >
               <option value="all">All Jurisdictions</option>
               <option value="*">Global (*)</option>
@@ -403,7 +403,7 @@ export default function AllInstructionsModal({
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value as any)}
-              className="px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-violet-500 focus:outline-none"
+              className="px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-lamp-500 focus:outline-none"
             >
               <option value="all">All Types</option>
               <option value="persistent">💾 Persistent Only</option>
@@ -447,7 +447,7 @@ export default function AllInstructionsModal({
         <div className="flex-1 overflow-y-auto p-4">
           {/* Add New Instruction Section */}
           {showAddNew && (
-            <div className="mb-6 p-4 bg-slate-800 rounded-xl border border-violet-500/50">
+            <div className="mb-6 p-4 bg-slate-800 rounded-xl border border-lamp-500/50">
               <h4 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
                 ➕ Add New Instruction
               </h4>
@@ -458,7 +458,7 @@ export default function AllInstructionsModal({
                   <select
                     value={newSectionKey}
                     onChange={(e) => setNewSectionKey(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-violet-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-lamp-500 focus:outline-none"
                   >
                     <option value="">Select section...</option>
                     {sectionsWithoutInstructions.map(key => (
@@ -476,7 +476,7 @@ export default function AllInstructionsModal({
                   <select
                     value={newJurisdiction}
                     onChange={(e) => setNewJurisdiction(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-violet-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:border-lamp-500 focus:outline-none"
                   >
                     <option value="*">🌐 All Jurisdictions</option>
                     {availableJurisdictions.map(j => (
@@ -493,7 +493,7 @@ export default function AllInstructionsModal({
                     type="checkbox"
                     checked={newIsPersistent}
                     onChange={(e) => setNewIsPersistent(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-lamp-500 focus:ring-lamp-500 focus:ring-offset-0"
                   />
                   <span className="text-xs text-slate-300 font-medium">
                     💾 Save for all future drafts
@@ -519,7 +519,7 @@ export default function AllInstructionsModal({
                   onChange={(e) => setNewInstruction(e.target.value)}
                   placeholder="E.g., Focus on the technical aspects and use formal language..."
                   className={`w-full px-3 py-2 bg-slate-700 border rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none resize-none ${
-                    countWords(newInstruction) > MAX_INSTRUCTION_WORDS ? 'border-red-500' : 'border-slate-600 focus:border-violet-500'
+                    countWords(newInstruction) > MAX_INSTRUCTION_WORDS ? 'border-red-500' : 'border-slate-600 focus:border-lamp-500'
                   }`}
                   rows={3}
                 />
@@ -538,7 +538,7 @@ export default function AllInstructionsModal({
                     value={newEmphasis}
                     onChange={(e) => setNewEmphasis(e.target.value)}
                     placeholder="E.g., novel features, industrial use"
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
                   />
                 </div>
                 <div>
@@ -548,7 +548,7 @@ export default function AllInstructionsModal({
                     value={newAvoid}
                     onChange={(e) => setNewAvoid(e.target.value)}
                     placeholder="E.g., marketing language, jargon"
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
                   />
                 </div>
               </div>
@@ -563,7 +563,7 @@ export default function AllInstructionsModal({
                 <button
                   onClick={handleAddNew}
                   disabled={saving || !newSectionKey || !newInstruction.trim() || countWords(newInstruction) > MAX_INSTRUCTION_WORDS}
-                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-lg font-medium disabled:opacity-50"
+                  className="px-4 py-2 bg-lamp-600 hover:bg-lamp-500 text-white text-sm rounded-lg font-medium disabled:opacity-50"
                 >
                   {saving ? 'Adding...' : (newIsPersistent ? 'Add Persistent' : 'Add Instruction')}
                 </button>
@@ -600,7 +600,7 @@ export default function AllInstructionsModal({
                         <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-slate-500'}`} />
                       )}
                       {hasPersistent && (
-                        <span className="text-violet-400 text-[10px]">💾</span>
+                        <span className="text-lamp-400 text-[10px]">💾</span>
                       )}
                     </div>
                   )
@@ -617,7 +617,7 @@ export default function AllInstructionsModal({
 
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin w-8 h-8 border-4 border-violet-500 border-t-transparent rounded-full" />
+              <div className="animate-spin w-8 h-8 border-4 border-lamp-500 border-t-transparent rounded-full" />
             </div>
           ) : instructions.length === 0 && !showAddNew ? (
             <div className="text-center py-12">
@@ -626,11 +626,11 @@ export default function AllInstructionsModal({
               <p className="text-sm text-slate-400 max-w-md mx-auto mb-4">
                 Add custom instructions to guide the AI when generating patent sections.
                 <br />
-                <span className="text-violet-400">💾 Persistent instructions</span> will apply to all your future drafts.
+                <span className="text-lamp-400">💾 Persistent instructions</span> will apply to all your future drafts.
               </p>
               <button
                 onClick={() => setShowAddNew(true)}
-                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-lg font-medium"
+                className="px-4 py-2 bg-lamp-600 hover:bg-lamp-500 text-white text-sm rounded-lg font-medium"
               >
                 ➕ Add First Instruction
               </button>
@@ -656,7 +656,7 @@ export default function AllInstructionsModal({
                         className={`bg-slate-800 rounded-lg p-4 border transition ${
                           instr.isActive 
                             ? instr.isPersistent
-                              ? 'border-violet-500/30 hover:border-violet-500/50'
+                              ? 'border-lamp-500/30 hover:border-lamp-500/50'
                               : 'border-slate-700 hover:border-slate-600'
                             : 'border-slate-700/50 opacity-60'
                         }`}
@@ -673,7 +673,7 @@ export default function AllInstructionsModal({
                                 </span>
                                 {/* Persistent badge */}
                                 {instr.isPersistent && (
-                                  <span className="text-xs px-2 py-0.5 bg-violet-500/20 text-violet-400 rounded font-medium">
+                                  <span className="text-xs px-2 py-0.5 bg-lamp-500/20 text-lamp-400 rounded font-medium">
                                     💾 Persistent
                                   </span>
                                 )}
@@ -709,7 +709,7 @@ export default function AllInstructionsModal({
                                     <textarea
                                       value={editText}
                                       onChange={(e) => setEditText(e.target.value)}
-                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-sm text-white focus:border-violet-500 focus:outline-none resize-none"
+                                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-sm text-white focus:border-lamp-500 focus:outline-none resize-none"
                                       rows={3}
                                       autoFocus
                                     />
@@ -722,7 +722,7 @@ export default function AllInstructionsModal({
                                         value={editEmphasis}
                                         onChange={(e) => setEditEmphasis(e.target.value)}
                                         placeholder="Focus on..."
-                                        className="w-full px-2 py-1.5 bg-slate-700 border border-slate-600 rounded text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                                        className="w-full px-2 py-1.5 bg-slate-700 border border-slate-600 rounded text-xs text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
                                       />
                                     </div>
                                     <div>
@@ -732,7 +732,7 @@ export default function AllInstructionsModal({
                                         value={editAvoid}
                                         onChange={(e) => setEditAvoid(e.target.value)}
                                         placeholder="Exclude..."
-                                        className="w-full px-2 py-1.5 bg-slate-700 border border-slate-600 rounded text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                                        className="w-full px-2 py-1.5 bg-slate-700 border border-slate-600 rounded text-xs text-white placeholder-slate-500 focus:border-lamp-500 focus:outline-none"
                                       />
                                     </div>
                                   </div>
@@ -740,7 +740,7 @@ export default function AllInstructionsModal({
                                     <button
                                       onClick={() => handleSaveEdit(instr)}
                                       disabled={saving}
-                                      className="px-3 py-1 bg-violet-600 text-white text-xs rounded hover:bg-violet-500 disabled:opacity-50"
+                                      className="px-3 py-1 bg-lamp-600 text-white text-xs rounded hover:bg-lamp-500 disabled:opacity-50"
                                     >
                                       {saving ? 'Saving...' : 'Save'}
                                     </button>
@@ -777,7 +777,7 @@ export default function AllInstructionsModal({
                               
                               <p className="text-xs text-slate-500 mt-2">
                                 Updated {new Date(instr.updatedAt).toLocaleDateString()}
-                                {instr.isPersistent && <span className="text-violet-400"> • Applies to all drafts</span>}
+                                {instr.isPersistent && <span className="text-lamp-400"> • Applies to all drafts</span>}
                               </p>
                             </div>
                           </div>
@@ -819,7 +819,7 @@ export default function AllInstructionsModal({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <span className="text-xs text-slate-500">
-                💡 <span className="text-violet-400">Persistent</span> instructions apply to all future drafts
+                💡 <span className="text-lamp-400">Persistent</span> instructions apply to all future drafts
               </span>
               {instructions.length > 0 && (
                 <span className="text-xs px-2 py-0.5 bg-slate-700 rounded text-slate-400">
@@ -831,7 +831,7 @@ export default function AllInstructionsModal({
               {!showAddNew && (
                 <button
                   onClick={() => setShowAddNew(true)}
-                  className="px-4 py-2 border border-violet-500/50 text-violet-400 hover:bg-violet-500/10 rounded-lg text-sm font-medium"
+                  className="px-4 py-2 border border-lamp-500/50 text-lamp-400 hover:bg-lamp-500/10 rounded-lg text-sm font-medium"
                 >
                   ➕ Add New
                 </button>

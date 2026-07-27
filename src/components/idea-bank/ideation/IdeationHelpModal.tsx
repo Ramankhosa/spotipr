@@ -53,27 +53,27 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               of your invention concept and combining them with proven TRIZ inventive principles.
             </p>
             
-            <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-200">
-              <h4 className="font-semibold text-violet-800 mb-2">Quick Start Guide</h4>
-              <ol className="space-y-2 text-sm text-violet-700">
+            <div className="bg-gradient-to-r from-lamp-50 to-lamp-50 rounded-xl p-4 border border-lamp-200">
+              <h4 className="font-semibold text-lamp-800 mb-2">Quick Start Guide</h4>
+              <ol className="space-y-2 text-sm text-lamp-700">
                 <li className="flex items-start gap-2">
-                  <span className="w-5 h-5 rounded-full bg-violet-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
+                  <span className="w-5 h-5 rounded-full bg-lamp-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
                   <span><strong>Enter your idea</strong> — Describe your invention concept in the input field</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="w-5 h-5 rounded-full bg-violet-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
+                  <span className="w-5 h-5 rounded-full bg-lamp-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
                   <span><strong>Explore the mind map</strong> — Double-click dimensions to expand and discover variations</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="w-5 h-5 rounded-full bg-violet-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
+                  <span className="w-5 h-5 rounded-full bg-lamp-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
                   <span><strong>Select dimensions</strong> — Click checkboxes to select dimensions you want to combine</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="w-5 h-5 rounded-full bg-violet-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">4</span>
+                  <span className="w-5 h-5 rounded-full bg-lamp-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">4</span>
                   <span><strong>Generate ideas</strong> — Click "Generate Ideas" to create novel inventions</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="w-5 h-5 rounded-full bg-violet-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">5</span>
+                  <span className="w-5 h-5 rounded-full bg-lamp-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">5</span>
                   <span><strong>Export to Idea Bank</strong> — Save your best ideas for patent drafting</span>
                 </li>
               </ol>
@@ -100,8 +100,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
 
             <div className="grid gap-3">
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
-                  <MousePointer2 className="w-4 h-4 text-violet-600" />
+                <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                  <MousePointer2 className="w-4 h-4 text-lamp-600" />
                 </div>
                 <div>
                   <h4 className="font-semibold text-sm text-slate-800">Double-Click to Expand</h4>
@@ -124,8 +124,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               </div>
 
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
-                  <Layers className="w-4 h-4 text-blue-600" />
+                <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                  <Layers className="w-4 h-4 text-lamp-600" />
                 </div>
                 <div>
                   <h4 className="font-semibold text-sm text-slate-800">Pan & Zoom</h4>
@@ -136,8 +136,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               </div>
             </div>
 
-            <div className="p-3 bg-violet-50 rounded-lg border border-violet-200">
-              <p className="text-sm text-violet-800">
+            <div className="p-3 bg-lamp-50 rounded-lg border border-lamp-200">
+              <p className="text-sm text-lamp-800">
                 <strong>Node Types:</strong><br />
                 <span className="text-xs">
                   • <strong>📂 Dimension Family</strong> — Category that can be expanded (e.g., "Material")<br />
@@ -159,8 +159,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
 
             <div className="grid gap-3">
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
-                  <CheckSquare className="w-4 h-4 text-violet-600" />
+                <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                  <CheckSquare className="w-4 h-4 text-lamp-600" />
                 </div>
                 <div>
                   <h4 className="font-semibold text-sm text-slate-800">Click Checkbox to Select</h4>
@@ -217,8 +217,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
 
             <div className="grid gap-3">
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
-                  <FolderPlus className="w-4 h-4 text-violet-600" />
+                <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                  <FolderPlus className="w-4 h-4 text-lamp-600" />
                 </div>
                 <div>
                   <h4 className="font-semibold text-sm text-slate-800">Enable Buckets</h4>
@@ -242,8 +242,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               </div>
 
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
-                  <Lightbulb className="w-4 h-4 text-blue-600" />
+                <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                  <Lightbulb className="w-4 h-4 text-lamp-600" />
                 </div>
                 <div>
                   <h4 className="font-semibold text-sm text-slate-800">Per-Bucket Generation</h4>
@@ -255,8 +255,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               </div>
             </div>
 
-            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
-              <p className="text-sm text-blue-800">
+            <div className="p-3 bg-lamp-50 rounded-lg border border-lamp-200">
+              <p className="text-sm text-lamp-800">
                 <strong>Example:</strong> Create buckets for "Material Variations", "Mechanism Alternatives", 
                 and "User Interface Options" to explore each design axis independently.
               </p>
@@ -314,18 +314,18 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               <h4 className="font-semibold text-slate-800">Generation Styles</h4>
               
               <div className="grid gap-2">
-                <div className="flex items-start gap-2 p-2 bg-violet-50 rounded-lg border border-violet-100">
-                  <Sparkles className="w-4 h-4 text-violet-600 flex-shrink-0 mt-0.5" />
+                <div className="flex items-start gap-2 p-2 bg-lamp-50 rounded-lg border border-lamp-100">
+                  <Sparkles className="w-4 h-4 text-lamp-600 flex-shrink-0 mt-0.5" />
                   <div>
-                    <span className="text-xs font-semibold text-violet-800">Divergent</span>
-                    <p className="text-xs text-violet-700">Maximum creativity — wild, cross-domain ideas using distant analogies</p>
+                    <span className="text-xs font-semibold text-lamp-800">Divergent</span>
+                    <p className="text-xs text-lamp-700">Maximum creativity — wild, cross-domain ideas using distant analogies</p>
                   </div>
                 </div>
-                <div className="flex items-start gap-2 p-2 bg-blue-50 rounded-lg border border-blue-100">
-                  <Target className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="flex items-start gap-2 p-2 bg-lamp-50 rounded-lg border border-lamp-100">
+                  <Target className="w-4 h-4 text-lamp-600 flex-shrink-0 mt-0.5" />
                   <div>
-                    <span className="text-xs font-semibold text-blue-800">Convergent</span>
-                    <p className="text-xs text-blue-700">Practical focus — implementable solutions based on proven principles</p>
+                    <span className="text-xs font-semibold text-lamp-800">Convergent</span>
+                    <p className="text-xs text-lamp-700">Practical focus — implementable solutions based on proven principles</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-2 p-2 bg-green-50 rounded-lg border border-green-100">
@@ -345,8 +345,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               </div>
             </div>
 
-            <div className="p-3 bg-violet-50 rounded-lg border border-violet-200">
-              <p className="text-sm text-violet-800">
+            <div className="p-3 bg-lamp-50 rounded-lg border border-lamp-200">
+              <p className="text-sm text-lamp-800">
                 <strong>What you get:</strong> Each idea includes a title, problem statement, technical principle, 
                 mechanism steps, variants, and suggested patent claim hooks.
               </p>
@@ -391,8 +391,8 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
               </div>
 
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
-                  <Lightbulb className="w-4 h-4 text-violet-600" />
+                <div className="w-8 h-8 rounded-lg bg-lamp-100 flex items-center justify-center flex-shrink-0">
+                  <Lightbulb className="w-4 h-4 text-lamp-600" />
                 </div>
                 <div>
                   <h4 className="font-semibold text-sm text-slate-800">Improvement Directions</h4>
@@ -440,9 +440,9 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="p-4 border-b border-slate-200 bg-gradient-to-r from-violet-50 to-purple-50 flex items-center justify-between">
+            <div className="p-4 border-b border-slate-200 bg-gradient-to-r from-lamp-50 to-lamp-50 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lamp-500 to-lamp-600 flex items-center justify-center">
                   <HelpCircle className="w-5 h-5 text-white" />
                 </div>
                 <div>
@@ -469,12 +469,12 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
                     className={`
                       w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm transition-all mb-1
                       ${activeSection === section.id
-                        ? 'bg-violet-100 text-violet-800 font-medium'
+                        ? 'bg-lamp-100 text-lamp-800 font-medium'
                         : 'text-slate-600 hover:bg-slate-100'
                       }
                     `}
                   >
-                    <span className={activeSection === section.id ? 'text-violet-600' : 'text-slate-400'}>
+                    <span className={activeSection === section.id ? 'text-lamp-600' : 'text-slate-400'}>
                       {section.icon}
                     </span>
                     {section.title}
@@ -496,7 +496,7 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
                 <span><kbd className="px-1.5 py-0.5 bg-slate-200 rounded text-[10px]">i</kbd> Ideas panel</span>
                 <span><kbd className="px-1.5 py-0.5 bg-slate-200 rounded text-[10px]">l</kbd> Auto-layout</span>
               </div>
-              <Button onClick={onClose} className="bg-violet-500 hover:bg-violet-600 text-white">
+              <Button onClick={onClose} className="bg-lamp-500 hover:bg-lamp-600 text-white">
                 Got it!
               </Button>
             </div>

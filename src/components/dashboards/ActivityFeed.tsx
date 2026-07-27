@@ -27,7 +27,7 @@ const typeIcons = {
 const typeStyles = {
   idea: 'bg-amber-50 border-amber-100 text-amber-600',
   draft: 'bg-ai-blue-50 border-ai-blue-100 text-ai-blue-600',
-  novelty: 'bg-purple-50 border-purple-100 text-purple-600',
+  novelty: 'bg-lamp-50 border-lamp-100 text-lamp-600',
   reservation: 'bg-slate-50 border-slate-100 text-slate-500'
 }
 

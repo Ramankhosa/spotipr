@@ -181,7 +181,7 @@ export function SectionPromptEditor({
             <select
               value={formData.sectionKey}
               onChange={(e) => setFormData(prev => ({ ...prev, sectionKey: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
               required
             >
               <option value="">Select a section...</option>
@@ -204,7 +204,7 @@ export function SectionPromptEditor({
             value={formData.instruction}
             onChange={(e) => setFormData(prev => ({ ...prev, instruction: e.target.value }))}
             rows={8}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-lamp-500 focus:border-transparent font-mono text-sm"
             placeholder="Enter jurisdiction-specific drafting instruction..."
             required
           />
@@ -264,7 +264,7 @@ export function SectionPromptEditor({
           </label>
           <div className="space-y-2">
             {formData.additions.map((addition, index) => (
-              <div key={index} className="flex items-start gap-2 bg-blue-50 p-2 rounded">
+              <div key={index} className="flex items-start gap-2 bg-lamp-50 p-2 rounded">
                 <span className="flex-1 text-sm">{addition}</span>
                 <button
                   type="button"
@@ -326,7 +326,7 @@ export function SectionPromptEditor({
           </button>
           <button
             type="submit"
-            className="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50"
+            className="px-4 py-2 text-white bg-lamp-600 rounded-md hover:bg-lamp-700 disabled:opacity-50"
             disabled={saving}
           >
             {saving ? 'Saving...' : isNew ? 'Create Prompt' : 'Save Changes'}

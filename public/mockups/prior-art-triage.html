@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior art analysis — proposed single-screen triage</title>
+<style>
+  :root{
+    --ink:#0f172a; --ink-2:#475569; --ink-3:#94a3b8;
+    --line:#e2e8f0; --panel:#f8fafc;
+    --cobalt:#1d4ed8; --cobalt-hov:#1e40af; --cobalt-bg:#eff6ff; --cobalt-line:#bfdbfe;
+    --red:#b91c1c; --red-bg:#fef2f2; --red-line:#fecaca;
+    --amber:#b45309; --amber-bg:#fffbeb; --amber-line:#fde68a;
+    --green:#15803d; --green-bg:#f0fdf4; --green-line:#bbf7d0;
+  }
+  *{box-sizing:border-box; margin:0}
+  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:#fff; font-size:14px; line-height:1.5;}
+  .wrap{max-width:960px; margin:0 auto; padding:24px 20px 120px;}
+
+  .demo-bar{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; margin-bottom:20px; border:1px dashed var(--line); border-radius:10px; background:var(--panel);}
+  .demo-bar span{font-size:12px; color:var(--ink-3);}
+  .demo-bar .pills{display:flex; gap:4px;}
+  .demo-bar button{font:inherit; font-size:12px; padding:4px 12px; border-radius:999px; border:1px solid var(--line); background:#fff; color:var(--ink-2); cursor:pointer;}
+  .demo-bar button.on{background:var(--ink); border-color:var(--ink); color:#fff;}
+
+  .stage-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:20px;}
+  h1{font-size:20px; font-weight:600; letter-spacing:-0.01em;}
+  .sub{color:var(--ink-2); font-size:13px; margin-top:2px;}
+
+  .btn{font:inherit; cursor:pointer; border-radius:10px; padding:9px 16px; border:1px solid var(--line); background:#fff; color:var(--ink); font-weight:500;}
+  .btn:hover{border-color:var(--ink-3);}
+  .btn-primary{background:var(--cobalt); border-color:var(--cobalt); color:#fff;}
+  .btn-primary:hover{background:var(--cobalt-hov);}
+  .btn-ghost{border-color:transparent; color:var(--cobalt); padding:6px 8px;}
+  .btn-ghost:hover{background:var(--cobalt-bg); border-color:transparent;}
+
+  .card{border:1px solid var(--line); border-radius:14px; background:#fff;}
+
+  /* ---------- start state ---------- */
+  .invention{display:flex; gap:14px; padding:18px 20px; align-items:flex-start;}
+  .invention .dot{width:38px; height:38px; border-radius:10px; background:var(--cobalt-bg); color:var(--cobalt); display:flex; align-items:center; justify-content:center; font-weight:600; flex:none;}
+  .invention h2{font-size:15px; font-weight:600;}
+  .invention p{font-size:13px; color:var(--ink-2); margin-top:2px;}
+
+  .search-card{margin-top:16px; padding:20px;}
+  .search-card label{display:block; font-size:12px; font-weight:600; color:var(--ink-2); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;}
+  textarea{width:100%; font:inherit; font-size:13px; color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:12px 14px; resize:vertical; min-height:72px; background:var(--panel);}
+  textarea:focus{outline:2px solid var(--cobalt-line); border-color:var(--cobalt);}
+  .scope-row{display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; color:var(--ink-2); flex-wrap:wrap;}
+  .scope-row .chip{border:1px solid var(--line); border-radius:999px; padding:2px 10px; font-size:12px; background:#fff;}
+  .start-actions{display:flex; align-items:center; gap:14px; margin-top:18px;}
+  .hint{font-size:12px; color:var(--ink-3);}
+
+  /* popover */
+  .pop-anchor{position:relative;}
+  .popover{position:absolute; right:0; top:calc(100% + 8px); width:340px; z-index:30; padding:16px; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 12px 32px rgba(15,23,42,.10); display:none;}
+  .popover.open{display:block;}
+  .popover h3{font-size:13px; font-weight:600; margin-bottom:10px;}
+  .office-chips{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;}
+  .office-chips button{font:inherit; font-size:12px; padding:3px 10px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; color:var(--ink-2);}
+  .office-chips button.on{background:var(--cobalt); border-color:var(--cobalt); color:#fff;}
+  .date-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .date-grid label{font-size:11px; font-weight:600; color:var(--ink-3); text-transform:uppercase; letter-spacing:.04em; display:block; margin-bottom:4px;}
+  .date-grid input{width:100%; font:inherit; font-size:13px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; color:var(--ink);}
+  .pop-foot{display:flex; justify-content:flex-end; gap:8px; margin-top:14px;}
+
+  /* ---------- running state ---------- */
+  .running{padding:40px 24px; text-align:center;}
+  .running .steps{max-width:420px; margin:0 auto; text-align:left;}
+  .step{display:flex; align-items:center; gap:12px; padding:10px 0; color:var(--ink-3); font-size:14px;}
+  .step .ic{width:22px; height:22px; border-radius:50%; border:2px solid var(--line); flex:none; display:flex; align-items:center; justify-content:center; font-size:12px;}
+  .step.done{color:var(--ink-2);}
+  .step.done .ic{border-color:var(--green); background:var(--green-bg); color:var(--green);}
+  .step.active{color:var(--ink); font-weight:500;}
+  .step.active .ic{border-color:var(--cobalt);}
+  .step.active .ic::after{content:""; width:10px; height:10px; border-radius:50%; background:var(--cobalt); animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.35; transform:scale(.8)} 50%{opacity:1; transform:scale(1)}}
+  .bar{height:6px; border-radius:999px; background:var(--panel); overflow:hidden; margin:18px auto 8px; max-width:420px;}
+  .bar i{display:block; height:100%; background:var(--cobalt); border-radius:999px; transition:width .5s ease;}
+  .bar-label{font-size:12px; color:var(--ink-3);}
+
+  /* ---------- triage state ---------- */
+  .risk-cards{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:8px;}
+  .risk-card{font:inherit; text-align:left; cursor:pointer; border-radius:12px; padding:12px 14px; border:1px solid var(--line); background:#fff;}
+  .risk-card b{display:block; font-size:22px; font-weight:600; line-height:1.2;}
+  .risk-card span{font-size:12px;}
+  .risk-card.r-high b{color:var(--red)} .risk-card.r-high span{color:var(--red)}
+  .risk-card.r-obv b{color:var(--amber)} .risk-card.r-obv span{color:var(--amber)}
+  .risk-card.r-adj b{color:var(--green)} .risk-card.r-adj span{color:var(--green)}
+  .risk-card.r-rem b{color:var(--ink-2)} .risk-card.r-rem span{color:var(--ink-2)}
+  .risk-card.on.r-high{background:var(--red-bg); border-color:var(--red-line);}
+  .risk-card.on.r-obv{background:var(--amber-bg); border-color:var(--amber-line);}
+  .risk-card.on.r-adj{background:var(--green-bg); border-color:var(--green-line);}
+  .risk-card.on.r-rem{background:var(--panel); border-color:var(--ink-3);}
+  .filter-note{display:flex; align-items:center; gap:10px; font-size:12px; color:var(--ink-3); margin-bottom:14px;}
+  .filter-note a{color:var(--cobalt); cursor:pointer; text-decoration:none;}
+
+  .list{overflow:hidden;}
+  .row{display:flex; gap:14px; padding:14px 18px; border-top:1px solid var(--line); align-items:flex-start;}
+  .row:first-child{border-top:none;}
+  .badge{flex:none; margin-top:2px; font-size:11px; font-weight:600; padding:3px 9px; border-radius:999px; white-space:nowrap;}
+  .b-high{background:var(--red-bg); color:var(--red); border:1px solid var(--red-line);}
+  .b-obv{background:var(--amber-bg); color:var(--amber); border:1px solid var(--amber-line);}
+  .b-adj{background:var(--green-bg); color:var(--green); border:1px solid var(--green-line);}
+  .b-rem{background:var(--panel); color:var(--ink-2); border:1px solid var(--line);}
+  .b-man{background:#fff; color:var(--ink-2); border:1px dashed var(--ink-3);}
+  .row .body{flex:1; min-width:0;}
+  .row .title{font-weight:500; font-size:14px;}
+  .row .meta{font-size:12px; color:var(--ink-3); margin-top:2px;}
+  .row .meta .mono{font-family:ui-monospace,Consolas,monospace; font-size:11.5px;}
+  .row .meta a{color:var(--cobalt); cursor:pointer; text-decoration:none;}
+  .tags{display:flex; gap:6px; flex:none;}
+  .tag{font:inherit; cursor:pointer; font-size:12px; padding:4px 12px; border-radius:999px; border:1px solid var(--line); background:#fff; color:var(--ink-3);}
+  .tag.on{border-color:var(--cobalt-line); background:var(--cobalt-bg); color:var(--cobalt); font-weight:500;}
+  .tag.on::before{content:"✓ ";}
+
+  .drawer{margin:0 18px 14px 60px; border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:14px 16px; display:none;}
+  .drawer.open{display:block;}
+  .drawer h4{font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-3); margin:10px 0 4px;}
+  .drawer h4:first-child{margin-top:0;}
+  .drawer p, .drawer li{font-size:13px; color:var(--ink-2);}
+  .drawer ul{padding-left:18px;}
+  .drawer .ov li{color:var(--red);}
+  .drawer .df li{color:var(--green);}
+
+  .add-row{padding:12px 18px; border-top:1px solid var(--line);}
+  .add-form{display:none; gap:8px; margin-top:10px;}
+  .add-form.open{display:flex;}
+  .add-form input{flex:1; font:inherit; font-size:13px; padding:8px 12px; border:1px solid var(--line); border-radius:10px;}
+
+  .footer{position:fixed; left:0; right:0; bottom:0; background:rgba(255,255,255,.96); backdrop-filter:blur(4px); border-top:1px solid var(--line);}
+  .footer .in{max-width:960px; margin:0 auto; padding:14px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px;}
+  .footer .sum{font-size:13px; color:var(--ink-2);}
+  .footer .sum .skip{color:var(--amber);}
+  .state{display:none;}
+  .state.on{display:block;}
+  @media (max-width:640px){ .risk-cards{grid-template-columns:repeat(2,1fr);} .row{flex-wrap:wrap;} .tags{margin-left:52px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="demo-bar">
+    <span>Mockup — click through the three states of the proposed single-screen stage</span>
+    <div class="pills">
+      <button data-state="start" class="on" onclick="setState('start')">1 · Start</button>
+      <button data-state="running" onclick="setState('running')">2 · Running</button>
+      <button data-state="triage" onclick="setState('triage')">3 · Triage</button>
+    </div>
+  </div>
+
+  <!-- ============ STATE 1: START ============ -->
+  <section class="state on" id="state-start">
+    <div class="stage-head">
+      <div>
+        <h1>Prior art analysis</h1>
+        <p class="sub">One search, assessed automatically — then tag each reference for how it should be used.</p>
+      </div>
+    </div>
+
+    <div class="card invention">
+      <div class="dot">Aa</div>
+      <div>
+        <h2>Adaptive irrigation controller with soil-moisture feedback</h2>
+        <p>A controller that modulates valve timing from distributed capacitive soil sensors…</p>
+      </div>
+    </div>
+
+    <div class="card search-card">
+      <label for="q">Search query — edit freely</label>
+      <textarea id="q">adaptive irrigation control using distributed soil moisture sensing, capacitive sensors, closed-loop valve modulation, water conservation scheduling</textarea>
+      <div class="scope-row">
+        <span>Scope:</span>
+        <span class="chip">All offices</span>
+        <span class="chip">Any date</span>
+        <div class="pop-anchor">
+          <button class="btn btn-ghost" onclick="togglePop(event)">Adjust scope</button>
+          <div class="popover" id="pop">
+            <h3>Patent offices</h3>
+            <div class="office-chips">
+              <button class="on" onclick="this.classList.toggle('on')">US</button>
+              <button class="on" onclick="this.classList.toggle('on')">EP</button>
+              <button onclick="this.classList.toggle('on')">WO</button>
+              <button onclick="this.classList.toggle('on')">CN</button>
+              <button onclick="this.classList.toggle('on')">JP</button>
+              <button class="on" onclick="this.classList.toggle('on')">IN</button>
+              <button onclick="this.classList.toggle('on')">KR</button>
+              <button onclick="this.classList.toggle('on')">More…</button>
+            </div>
+            <h3>Publication window</h3>
+            <div class="date-grid">
+              <div><label>From</label><input type="date"></div>
+              <div><label>To</label><input type="date"></div>
+            </div>
+            <div class="pop-foot">
+              <button class="btn" onclick="togglePop(event)">Cancel</button>
+              <button class="btn btn-primary" onclick="togglePop(event)">Apply</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="start-actions">
+        <button class="btn btn-primary" onclick="setState('running'); runSim()">Search and assess prior art</button>
+        <span class="hint">Searches 46.2M publications, then AI-screens every result — one step.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STATE 2: RUNNING ============ -->
+  <section class="state" id="state-running">
+    <div class="stage-head">
+      <div>
+        <h1>Prior art analysis</h1>
+        <p class="sub">Searching and assessing — no clicks needed until results are ready.</p>
+      </div>
+    </div>
+    <div class="card running">
+      <div class="steps">
+        <div class="step" id="st1"><span class="ic">1</span><span>Searching the corpus</span></div>
+        <div class="step" id="st2"><span class="ic">2</span><span>Assessing results against your invention</span></div>
+        <div class="step" id="st3"><span class="ic">3</span><span>Pre-tagging by risk level</span></div>
+      </div>
+      <div class="bar"><i id="barfill" style="width:0%"></i></div>
+      <div class="bar-label" id="barlabel">Starting…</div>
+    </div>
+  </section>
+
+  <!-- ============ STATE 3: TRIAGE ============ -->
+  <section class="state" id="state-triage">
+    <div class="stage-head">
+      <div>
+        <h1>Prior art analysis</h1>
+        <p class="sub">25 references found and assessed · US, EP, IN · any date</p>
+      </div>
+      <button class="btn" onclick="setState('start')">Adjust search</button>
+    </div>
+
+    <div class="risk-cards">
+      <button class="risk-card r-high" data-f="high" onclick="setFilter('high')"><b>2</b><span>High risk — anticipates</span></button>
+      <button class="risk-card r-obv" data-f="obv" onclick="setFilter('obv')"><b>3</b><span>Obviousness risk</span></button>
+      <button class="risk-card r-adj" data-f="adj" onclick="setFilter('adj')"><b>12</b><span>Adjacent — citable</span></button>
+      <button class="risk-card r-rem" data-f="rem" onclick="setFilter('rem')"><b>8</b><span>Remote</span></button>
+    </div>
+    <div class="filter-note">
+      <span id="filtermsg">Cards filter the list. Risky references are pre-tagged for claim comparison; safe ones for the background section.</span>
+      <a id="clearf" style="display:none" onclick="setFilter(null)">Show all</a>
+    </div>
+
+    <div class="card list" id="list"></div>
+
+    <div class="card add-row" style="margin-top:14px; border-style:dashed;">
+      <button class="btn btn-ghost" onclick="document.getElementById('addform').classList.toggle('open')">＋ Add reference manually</button>
+      <div class="add-form" id="addform">
+        <input placeholder="US10999888B2 — or paste a citation / description" id="addinput">
+        <button class="btn btn-primary" onclick="addManual()">Add</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="footer" id="footer" style="display:none;">
+  <div class="in">
+    <span class="sum" id="sumline"></span>
+    <button class="btn btn-primary" onclick="alert('Saves tags and advances the stage. Claim refinement runs only if any reference is tagged Claims.')">Continue</button>
+  </div>
+</div>
+
+<script>
+const DATA = [
+  {id:1, risk:'high', title:'Closed-loop irrigation valve control from soil probes', pn:'US10123456B2', src:'Google Patents', meta:'overlaps your independent claim 1',
+   summary:'Discloses a controller that adjusts valve duty cycle directly from in-ground moisture probes using threshold hysteresis.',
+   overlaps:['Moisture-threshold valve modulation','Distributed sensor polling loop'], diffs:['No per-zone learning model','Wired probes only'],
+   assessment:'May anticipate claim 1 as drafted. Consider narrowing to the adaptive scheduling element.', bg:false, cl:true},
+  {id:2, risk:'high', title:'Self-calibrating capacitive soil moisture sensor network', pn:'EP3456789A1', src:'Google Patents', meta:'overlaps sensor-calibration limitation',
+   summary:'A mesh of capacitive sensors that recalibrate against rainfall events, feeding a central irrigation scheduler.',
+   overlaps:['Capacitive sensing with drift correction','Central scheduler input'], diffs:['No valve-level actuation','Calibration is rainfall-triggered, not continuous'],
+   assessment:'Strong overlap on the sensing limb; the actuation limb remains distinguishable.', bg:false, cl:true},
+  {id:3, risk:'obv', title:'Weather-forecast-driven sprinkler scheduling system', pn:'US9876543B1', src:'Google Patents', meta:'similar scheduling logic, different input',
+   summary:'Schedules irrigation from forecast APIs rather than in-soil measurement; adjusts run times per zone.',
+   overlaps:['Per-zone schedule adjustment'], diffs:['Forecast-driven, no soil feedback','No closed loop'],
+   assessment:'Combinable with sensor art in an obviousness argument. Emphasise the closed-loop element.', bg:false, cl:true},
+  {id:4, risk:'obv', title:'Networked agricultural monitoring with threshold alerts', pn:'IN202341012345A', src:'Indian corpus', meta:'similar architecture, alerting not control',
+   summary:'Field-sensor gateway that raises alerts when soil metrics cross thresholds; human closes the loop.',
+   overlaps:['Sensor gateway architecture'], diffs:['Alerting only — no automated actuation'],
+   assessment:'Architecture overlap; function differs. Medium obviousness relevance.', bg:false, cl:true},
+  {id:5, risk:'adj', title:'Drip irrigation emitter with mechanical flow regulation', pn:'US8765432B2', src:'Google Patents', meta:'related field, differentiable approach',
+   summary:'Purely mechanical pressure-compensating emitter; no sensing or electronics.',
+   overlaps:[], diffs:['No sensing, no controller'], assessment:'Good background citation for the irrigation-hardware landscape.', bg:true, cl:false},
+  {id:6, risk:'adj', title:'Greenhouse climate controller with humidity feedback', pn:'WO2019123456A1', src:'Google Patents', meta:'adjacent domain — greenhouse air, not soil',
+   summary:'Feedback control of misting and ventilation from air-humidity sensors in greenhouses.',
+   overlaps:[], diffs:['Air humidity, not soil moisture','Ventilation actuation'], assessment:'Citable context for feedback control in agriculture.', bg:true, cl:false},
+  {id:7, risk:'rem', title:'Water-usage billing meter for municipal supply', pn:'US7654321B2', src:'Google Patents', meta:'remote — metering, not control',
+   summary:'Flow metering and billing; no irrigation control surface.',
+   overlaps:[], diffs:['Billing domain'], assessment:'Remote. Optional background citation.', bg:true, cl:false},
+  {id:8, risk:'rem', title:'Garden hose timer with fixed intervals', pn:'US6543210B1', src:'Google Patents', meta:'remote — no sensing',
+   summary:'Simple mechanical interval timer for hose-end use.',
+   overlaps:[], diffs:['No sensing or adaptivity'], assessment:'Remote. Illustrates the problem your invention solves.', bg:false, cl:false},
+];
+let filter = null;
+let manualSeq = 0;
+
+const RISK = {high:['b-high','High risk'], obv:['b-obv','Obvious'], adj:['b-adj','Adjacent'], rem:['b-rem','Remote'], man:['b-man','Manual']};
+
+function render(){
+  const list = document.getElementById('list');
+  const rows = DATA.filter(d => !filter || d.risk === filter);
+  list.innerHTML = rows.map(d => {
+    const [cls,label] = RISK[d.risk];
+    const analysis = d.risk==='man' ? '' :
+      `<div class="drawer" id="dr${d.id}">
+         <h4>AI summary</h4><p>${d.summary}</p>
+         ${d.overlaps.length?`<h4>Overlaps with your invention</h4><ul class="ov">${d.overlaps.map(o=>`<li>${o}</li>`).join('')}</ul>`:''}
+         ${d.diffs.length?`<h4>Differences</h4><ul class="df">${d.diffs.map(o=>`<li>${o}</li>`).join('')}</ul>`:''}
+         <h4>Assessment</h4><p>${d.assessment}</p>
+       </div>`;
+    return `<div class="row">
+      <span class="badge ${cls}">${label}</span>
+      <div class="body">
+        <div class="title">${d.title}</div>
+        <div class="meta"><span class="mono">${d.pn}</span> · ${d.src} · ${d.meta}${d.risk==='man'?'':` · <a onclick="document.getElementById('dr${d.id}').classList.toggle('open')">View analysis</a>`}</div>
+      </div>
+      <div class="tags">
+        <button class="tag ${d.bg?'on':''}" onclick="tog(${d.id},'bg')">Background</button>
+        <button class="tag ${d.cl?'on':''}" onclick="tog(${d.id},'cl')">Claims</button>
+      </div>
+    </div>${analysis}`;
+  }).join('');
+  updateFooter();
+}
+
+function tog(id, k){
+  const d = DATA.find(x=>x.id===id); d[k] = !d[k]; render();
+}
+
+function setFilter(f){
+  filter = (filter===f) ? null : f;
+  document.querySelectorAll('.risk-card').forEach(c=>c.classList.toggle('on', c.dataset.f===filter));
+  document.getElementById('clearf').style.display = filter?'inline':'none';
+  document.getElementById('filtermsg').textContent = filter
+    ? 'Filtered — showing one risk band.'
+    : 'Cards filter the list. Risky references are pre-tagged for claim comparison; safe ones for the background section.';
+  render();
+}
+
+function updateFooter(){
+  const bg = DATA.filter(d=>d.bg).length, cl = DATA.filter(d=>d.cl).length;
+  const el = document.getElementById('sumline');
+  el.innerHTML = cl>0
+    ? `<b>${bg}</b> for background · <b>${cl}</b> for claim comparison — refinement runs next`
+    : `<b>${bg}</b> for background · <span class="skip">no claim references — refinement will be skipped</span>`;
+}
+
+function addManual(){
+  const v = document.getElementById('addinput').value.trim() || 'Reference added by attorney';
+  DATA.push({id:100+(++manualSeq), risk:'man', title:v, pn:'—', src:'Added manually', meta:'not assessed', overlaps:[], diffs:[], summary:'', assessment:'', bg:true, cl:false});
+  document.getElementById('addinput').value='';
+  document.getElementById('addform').classList.remove('open');
+  render();
+}
+
+function setState(s){
+  ['start','running','triage'].forEach(x=>{
+    document.getElementById('state-'+x).classList.toggle('on', x===s);
+    document.querySelector(`.demo-bar [data-state="${x}"]`).classList.toggle('on', x===s);
+  });
+  document.getElementById('footer').style.display = s==='triage' ? 'block' : 'none';
+  if(s==='triage') render();
+}
+
+function togglePop(e){ e.stopPropagation(); document.getElementById('pop').classList.toggle('open'); }
+document.addEventListener('click', e=>{ if(!e.target.closest('.pop-anchor')) document.getElementById('pop').classList.remove('open'); });
+
+let simTimers=[];
+function runSim(){
+  simTimers.forEach(clearTimeout); simTimers=[];
+  const bar=document.getElementById('barfill'), lb=document.getElementById('barlabel');
+  const s1=document.getElementById('st1'), s2=document.getElementById('st2'), s3=document.getElementById('st3');
+  [s1,s2,s3].forEach(s=>{s.className='step';});
+  s1.classList.add('active'); bar.style.width='8%'; lb.textContent='Searching 46.2M publications…';
+  simTimers.push(setTimeout(()=>{ s1.className='step done'; s1.querySelector('.ic').textContent='✓'; s2.classList.add('active'); bar.style.width='35%'; lb.textContent='Found 25 — assessing 9 of 25…'; },1400));
+  simTimers.push(setTimeout(()=>{ bar.style.width='70%'; lb.textContent='Assessing 21 of 25…'; },2600));
+  simTimers.push(setTimeout(()=>{ s2.className='step done'; s2.querySelector('.ic').textContent='✓'; s3.classList.add('active'); bar.style.width='90%'; lb.textContent='Tagging by risk level…'; },3600));
+  simTimers.push(setTimeout(()=>{ s3.className='step done'; s3.querySelector('.ic').textContent='✓'; bar.style.width='100%'; lb.textContent='Done'; setState('triage'); },4400));
+}
+</script>
+</body>
+</html>

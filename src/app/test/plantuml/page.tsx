@@ -50,7 +50,7 @@ export default function TestPlantUML() {
           <option value="svg">SVG</option>
           <option value="png">PNG</option>
         </select>
-        <button onClick={render} disabled={loading} className="px-3 py-1 rounded bg-indigo-600 text-white text-sm disabled:opacity-50">{loading ? 'Rendering…' : 'Render & Save'}</button>
+        <button onClick={render} disabled={loading} className="px-3 py-1 rounded bg-lamp-600 text-white text-sm disabled:opacity-50">{loading ? 'Rendering…' : 'Render & Save'}</button>
         <button onClick={download} disabled={!imgUrl} className="px-3 py-1 rounded border text-sm disabled:opacity-50">Download</button>
       </div>
       <textarea className="w-full h-48 border rounded p-2 font-mono text-sm" value={code} onChange={(e) => setCode(e.target.value)} />

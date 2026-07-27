@@ -35,7 +35,7 @@ export default function TrustSection() {
       {/* Background Elements */}
       <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-ai-blue-900/50 to-transparent" />
       <div className="absolute -left-20 top-40 w-96 h-96 bg-ai-blue-900/10 rounded-full blur-[120px]" />
-      <div className="absolute -right-20 bottom-40 w-96 h-96 bg-purple-900/10 rounded-full blur-[120px]" />
+      <div className="absolute -right-20 bottom-40 w-96 h-96 bg-lamp-900/10 rounded-full blur-[120px]" />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         
@@ -81,7 +81,7 @@ export default function TrustSection() {
                 className="bg-ai-graphite-900/30 border border-ai-graphite-800/50 p-8 rounded-2xl backdrop-blur-sm hover:bg-ai-graphite-800/50 transition-colors"
               >
                 <div className="flex items-center gap-4 mb-6">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-ai-blue-500 to-purple-600 opacity-80" />
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-ai-blue-500 to-lamp-600 opacity-80" />
                   <div>
                     <div className="text-white font-medium">{t.user}</div>
                     <div className="text-xs text-ai-blue-400 uppercase tracking-wide">{t.role}</div>

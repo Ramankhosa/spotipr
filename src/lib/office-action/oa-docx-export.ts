@@ -3,6 +3,7 @@ import {
   LevelFormat, convertMillimetersToTwip
 } from 'docx'
 import { objectionLabel, type AssembledReply, type AmendedClaim, type DraftedObjectionReply, type ReplyBlock } from './reply-assembly'
+import { formatParagraphRefs } from './document-intake'
 import type { OfficeActionProfile } from './oa-profile-schema'
 import type { LintResult } from './compliance-lint'
 
@@ -174,7 +175,8 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
 }
 
 function splitParas(text: string): string[] {
-  return (text || '').split(/\n{2,}/).map(s => s.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
+  // formatParagraphRefs: internal ¶0007 anchors are filed as "[0007]".
+  return formatParagraphRefs(text).split(/\n{2,}/).map(s => s.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
 }
 
 function markedClaimParagraph(claim: AmendedClaim, fmt: Fmt): Paragraph {

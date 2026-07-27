@@ -141,7 +141,7 @@ export function CountryProfileList({ refreshTrigger, onRefresh, readinessByCount
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
         <span className="ml-3 text-gray-600">Loading country profiles...</span>
       </div>
     )
@@ -263,7 +263,7 @@ export function CountryProfileList({ refreshTrigger, onRefresh, readinessByCount
                         <div>
                           <a
                             href={`/super-admin/jurisdictions/${profile.countryCode}`}
-                            className="text-sm font-medium text-gray-900 hover:text-blue-700"
+                            className="text-sm font-medium text-gray-900 hover:text-lamp-700"
                             title="Open country configuration"
                           >
                             {profile.name}
@@ -275,7 +275,7 @@ export function CountryProfileList({ refreshTrigger, onRefresh, readinessByCount
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-lamp-100 text-lamp-800">
                         {profile.countryCode}
                       </span>
                     </td>
@@ -323,7 +323,7 @@ export function CountryProfileList({ refreshTrigger, onRefresh, readinessByCount
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => setEditingProfile(profile)}
-                          className="text-blue-600 hover:text-blue-900"
+                          className="text-lamp-600 hover:text-lamp-900"
                         >
                           View
                         </button>

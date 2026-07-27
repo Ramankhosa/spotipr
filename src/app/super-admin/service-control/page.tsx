@@ -283,7 +283,7 @@ export default function ServiceControlPage() {
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-900">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-400"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-400"></div>
       </div>
     )
   }
@@ -296,7 +296,7 @@ export default function ServiceControlPage() {
       <header className="bg-slate-800 border-b border-slate-700 shadow-lg">
         <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-cyan-400">🎛️ Service Control Center</h1>
+            <h1 className="text-2xl font-bold text-lamp-400">🎛️ Service Control Center</h1>
             <p className="text-slate-400 text-sm mt-1">
               Comprehensive quota management, usage monitoring, and cost tracking
             </p>
@@ -330,7 +330,7 @@ export default function ServiceControlPage() {
                 onClick={() => setActiveTab(tab.id as any)}
                 className={`py-4 px-2 border-b-2 font-medium text-sm transition-colors ${
                   activeTab === tab.id
-                    ? 'border-cyan-400 text-cyan-400'
+                    ? 'border-lamp-400 text-lamp-400'
                     : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-500'
                 }`}
               >
@@ -358,7 +358,7 @@ export default function ServiceControlPage() {
 
         {loading ? (
           <div className="flex justify-center py-20">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-400"></div>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-lamp-400"></div>
           </div>
         ) : (
           <>
@@ -368,7 +368,7 @@ export default function ServiceControlPage() {
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                    <div className="text-3xl font-bold text-cyan-400">{data.summary.totalTenants}</div>
+                    <div className="text-3xl font-bold text-lamp-400">{data.summary.totalTenants}</div>
                     <div className="text-slate-400 text-sm mt-1">Total Tenants</div>
                   </div>
                   <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
@@ -380,14 +380,14 @@ export default function ServiceControlPage() {
                     <div className="text-slate-400 text-sm mt-1">Active Plans</div>
                   </div>
                   <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                    <div className="text-3xl font-bold text-purple-400">{data.summary.activeSubscriptions}</div>
+                    <div className="text-3xl font-bold text-lamp-400">{data.summary.activeSubscriptions}</div>
                     <div className="text-slate-400 text-sm mt-1">Active Subscriptions</div>
                   </div>
                 </div>
 
                 {/* Today's Usage */}
                 <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                  <h2 className="text-lg font-semibold text-cyan-400 mb-4">📈 Today's Usage</h2>
+                  <h2 className="text-lg font-semibold text-lamp-400 mb-4">📈 Today's Usage</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
@@ -420,7 +420,7 @@ export default function ServiceControlPage() {
 
                 {/* Monthly Usage */}
                 <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                  <h2 className="text-lg font-semibold text-cyan-400 mb-4">📅 This Month's Usage</h2>
+                  <h2 className="text-lg font-semibold text-lamp-400 mb-4">📅 This Month's Usage</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
@@ -465,7 +465,7 @@ export default function ServiceControlPage() {
                   <div className="flex justify-end">
                     <button
                       onClick={() => setShowNewPlanForm(true)}
-                      className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium"
+                      className="px-4 py-2 bg-lamp-600 hover:bg-lamp-500 text-white rounded-lg font-medium"
                     >
                       + Create New Plan
                     </button>
@@ -474,8 +474,8 @@ export default function ServiceControlPage() {
 
                 {/* New Plan Form */}
                 {showNewPlanForm && (
-                  <div className="bg-slate-800 rounded-xl p-6 border border-cyan-600">
-                    <h3 className="text-lg font-semibold text-cyan-400 mb-4">Create New Plan</h3>
+                  <div className="bg-slate-800 rounded-xl p-6 border border-lamp-600">
+                    <h3 className="text-lg font-semibold text-lamp-400 mb-4">Create New Plan</h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm text-slate-400 mb-1">Plan Code</label>
@@ -519,7 +519,7 @@ export default function ServiceControlPage() {
                       <button
                         onClick={handleCreatePlan}
                         disabled={creatingPlan}
-                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium disabled:opacity-50"
+                        className="px-4 py-2 bg-lamp-600 hover:bg-lamp-500 text-white rounded-lg font-medium disabled:opacity-50"
                       >
                         {creatingPlan ? 'Creating...' : 'Create Plan'}
                       </button>
@@ -532,7 +532,7 @@ export default function ServiceControlPage() {
                   <div key={plan.id} className="bg-slate-800 rounded-xl p-6 border border-slate-700">
                     <div className="flex items-center justify-between mb-4">
                       <div>
-                        <h3 className="text-xl font-semibold text-cyan-400">
+                        <h3 className="text-xl font-semibold text-lamp-400">
                           {plan.name}
                           <span className="ml-2 text-xs font-mono text-slate-500">({plan.code})</span>
                         </h3>
@@ -660,7 +660,7 @@ export default function ServiceControlPage() {
             {/* Tenants Tab */}
             {activeTab === 'tenants' && (
               <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                <h2 className="text-lg font-semibold text-cyan-400 mb-4">🏢 All Tenants Usage (This Month)</h2>
+                <h2 className="text-lg font-semibold text-lamp-400 mb-4">🏢 All Tenants Usage (This Month)</h2>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -726,7 +726,7 @@ export default function ServiceControlPage() {
               <div className="space-y-6">
                 {/* Model Prices */}
                 <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                  <h2 className="text-lg font-semibold text-cyan-400 mb-4">💵 LLM Model Prices</h2>
+                  <h2 className="text-lg font-semibold text-lamp-400 mb-4">💵 LLM Model Prices</h2>
                   <p className="text-sm text-slate-400 mb-4">
                     Configure per-million token costs for accurate cost tracking. These prices are used to calculate costs per operation.
                   </p>
@@ -763,7 +763,7 @@ export default function ServiceControlPage() {
                   <div className="mt-4 text-right">
                     <a
                       href="/super-admin/model-costs"
-                      className="text-cyan-400 hover:text-cyan-300 text-sm"
+                      className="text-lamp-400 hover:text-lamp-300 text-sm"
                     >
                       Manage Model Prices →
                     </a>
@@ -772,7 +772,7 @@ export default function ServiceControlPage() {
 
                 {/* Cost Per Operation Summary */}
                 <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                  <h2 className="text-lg font-semibold text-cyan-400 mb-4">📊 Average Cost Per Operation (This Month)</h2>
+                  <h2 className="text-lg font-semibold text-lamp-400 mb-4">📊 Average Cost Per Operation (This Month)</h2>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {data.monthUsage.map(u => (
                       <div key={u.serviceType} className="bg-slate-700/50 rounded-lg p-4">
@@ -790,7 +790,7 @@ export default function ServiceControlPage() {
 
                 {/* Quick Links */}
                 <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                  <h2 className="text-lg font-semibold text-cyan-400 mb-4">🔗 Quick Links</h2>
+                  <h2 className="text-lg font-semibold text-lamp-400 mb-4">🔗 Quick Links</h2>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <a href="/super-admin/quota-controller" className="bg-slate-700/50 hover:bg-slate-700 rounded-lg p-4 text-center">
                       <div className="text-2xl mb-2">🎚️</div>

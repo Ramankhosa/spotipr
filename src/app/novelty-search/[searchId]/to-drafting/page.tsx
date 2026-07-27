@@ -52,7 +52,7 @@ type HandoffPayload = {
 const THREAT_STYLES: Record<string, string> = {
   anticipates: 'bg-red-50 text-red-700 border-red-200',
   obvious: 'bg-amber-50 text-amber-700 border-amber-200',
-  adjacent: 'bg-sky-50 text-sky-700 border-sky-200',
+  adjacent: 'bg-lamp-50 text-lamp-700 border-lamp-200',
   remote: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   unknown: 'bg-slate-50 text-slate-600 border-slate-200',
 }
@@ -392,12 +392,12 @@ export default function NoveltyToDraftingPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-violet-700">Refined — editable</div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-lamp-700">Refined — editable</div>
                   <input
                     value={editedTitle}
                     onChange={event => setEditedTitle(event.target.value)}
                     placeholder="Patent title"
-                    className="w-full rounded-lg border border-violet-200 px-3 py-2 text-sm font-medium text-ai-graphite-900 focus:border-violet-400 focus:outline-none"
+                    className="w-full rounded-lg border border-lamp-200 px-3 py-2 text-sm font-medium text-ai-graphite-900 focus:border-lamp-400 focus:outline-none"
                   />
                   <div className={`mt-1 text-xs ${titleWordCount > 15 ? 'text-red-600' : 'text-ai-graphite-500'}`}>
                     {titleWordCount}/15 words
@@ -407,7 +407,7 @@ export default function NoveltyToDraftingPage() {
                     onChange={event => setEditedDescription(event.target.value)}
                     rows={12}
                     placeholder="Refined invention description"
-                    className="mt-2 w-full rounded-lg border border-violet-200 px-3 py-2 text-sm leading-6 text-ai-graphite-800 focus:border-violet-400 focus:outline-none"
+                    className="mt-2 w-full rounded-lg border border-lamp-200 px-3 py-2 text-sm leading-6 text-ai-graphite-800 focus:border-lamp-400 focus:outline-none"
                   />
                 </div>
               </div>
@@ -497,7 +497,7 @@ export default function NoveltyToDraftingPage() {
           {payload ? (
             <>
               <div className="mt-4 flex flex-wrap gap-3 text-sm">
-                <span className="rounded-full bg-violet-50 px-3 py-1 text-violet-800">
+                <span className="rounded-full bg-lamp-50 px-3 py-1 text-lamp-800">
                   {payload.citationCount} analysed reference{payload.citationCount === 1 ? '' : 's'} → Prior Art stage
                 </span>
                 {payload.shortlistedCount > 0 && (
@@ -505,7 +505,7 @@ export default function NoveltyToDraftingPage() {
                     {payload.shortlistedCount} shortlisted, listed for reference
                   </span>
                 )}
-                <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-800">Claim guidance → claim generation</span>
+                <span className="rounded-full bg-lamp-50 px-3 py-1 text-lamp-800">Claim guidance → claim generation</span>
               </div>
 
               {payload.citations.length > 0 && (
@@ -541,13 +541,13 @@ export default function NoveltyToDraftingPage() {
               )}
 
               {payload.claimGuidance?.primaryClaimFocus && (
-                <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm">
-                  <div className="font-semibold text-sky-900">Primary claim focus</div>
-                  <p className="mt-1 text-sky-900">{payload.claimGuidance.primaryClaimFocus}</p>
+                <div className="mt-5 rounded-lg border border-lamp-200 bg-lamp-50 p-4 text-sm">
+                  <div className="font-semibold text-lamp-900">Primary claim focus</div>
+                  <p className="mt-1 text-lamp-900">{payload.claimGuidance.primaryClaimFocus}</p>
                   {payload.claimGuidance.avoidRelyingSolelyOn?.length > 0 && (
                     <>
-                      <div className="mt-3 font-semibold text-sky-900">Do not rely on alone</div>
-                      <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sky-900">
+                      <div className="mt-3 font-semibold text-lamp-900">Do not rely on alone</div>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-5 text-lamp-900">
                         {payload.claimGuidance.avoidRelyingSolelyOn.map((item, index) => <li key={index}>{item}</li>)}
                       </ul>
                     </>

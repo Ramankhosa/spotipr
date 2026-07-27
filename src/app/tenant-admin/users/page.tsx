@@ -34,9 +34,9 @@ const ROLE_LABELS: Record<string, string> = {
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  OWNER: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+  OWNER: 'bg-lamp-100 text-lamp-800 dark:bg-lamp-900/30 dark:text-lamp-300',
   ADMIN: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
-  MANAGER: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  MANAGER: 'bg-lamp-100 text-lamp-800 dark:bg-lamp-900/30 dark:text-lamp-300',
   ANALYST: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
   VIEWER: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
 }
@@ -234,7 +234,7 @@ export default function TenantAdminUsersPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -312,7 +312,7 @@ export default function TenantAdminUsersPage() {
                           </span>
                           <span className={`inline-flex px-2 py-0.5 text-[11px] rounded-full ${
                             user.emailDraftingEnabled
-                              ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                              ? 'bg-lamp-100 text-lamp-700 dark:bg-lamp-900/30 dark:text-lamp-300'
                               : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
                           }`}>
                             {user.emailDraftingEnabled ? 'Email Drafting Enabled' : 'Email Drafting Disabled'}
@@ -366,7 +366,7 @@ export default function TenantAdminUsersPage() {
                             setNewRole(user.roles[0])
                             setShowRoleModal(true)
                           }}
-                          className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
+                          className="text-lamp-600 hover:text-lamp-900 dark:text-lamp-400 dark:hover:text-lamp-300"
                         >
                           Change Role
                         </button>
@@ -398,7 +398,7 @@ export default function TenantAdminUsersPage() {
                         )}
                         <button
                           onClick={() => handleEmailDraftingToggle(user)}
-                          className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
+                          className="text-lamp-600 hover:text-lamp-900 dark:text-lamp-400 dark:hover:text-lamp-300"
                         >
                           {user.emailDraftingEnabled ? 'Disable Email Drafting' : 'Enable Email Drafting'}
                         </button>
@@ -425,7 +425,7 @@ export default function TenantAdminUsersPage() {
                     key={role}
                     className={`flex items-center p-3 rounded-lg border cursor-pointer transition-colors ${
                       newRole === role 
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' 
+                        ? 'border-lamp-500 bg-lamp-50 dark:bg-lamp-900/20' 
                         : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
                     }`}
                   >
@@ -435,7 +435,7 @@ export default function TenantAdminUsersPage() {
                       value={role}
                       checked={newRole === role}
                       onChange={(e) => setNewRole(e.target.value)}
-                      className="h-4 w-4 text-blue-600"
+                      className="h-4 w-4 text-lamp-600"
                     />
                     <span className="ml-3">
                       <span className="text-sm font-medium text-gray-900 dark:text-white">
@@ -460,7 +460,7 @@ export default function TenantAdminUsersPage() {
                 <button
                   onClick={handleRoleChange}
                   disabled={saving || newRole === selectedUser.roles[0]}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 text-sm font-medium text-white bg-lamp-600 hover:bg-lamp-700 rounded-lg disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Save Changes'}
                 </button>

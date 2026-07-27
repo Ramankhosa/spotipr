@@ -87,7 +87,7 @@ export default function TrialCampaignsPage() {
       case 'ACTIVE': return 'bg-green-100 text-green-800'
       case 'DRAFT': return 'bg-gray-100 text-gray-800'
       case 'PAUSED': return 'bg-yellow-100 text-yellow-800'
-      case 'COMPLETED': return 'bg-blue-100 text-blue-800'
+      case 'COMPLETED': return 'bg-lamp-100 text-lamp-800'
       case 'ARCHIVED': return 'bg-red-100 text-red-800'
       default: return 'bg-gray-100 text-gray-800'
     }
@@ -101,7 +101,7 @@ export default function TrialCampaignsPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -127,7 +127,7 @@ export default function TrialCampaignsPage() {
             </div>
             <button
               onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-lamp-600 hover:bg-lamp-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-lamp-500"
             >
               <svg className="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -149,8 +149,8 @@ export default function TrialCampaignsPage() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center">
-              <div className="p-3 rounded-full bg-indigo-100">
-                <svg className="w-6 h-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="p-3 rounded-full bg-lamp-100">
+                <svg className="w-6 h-6 text-lamp-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
               </div>
@@ -163,8 +163,8 @@ export default function TrialCampaignsPage() {
 
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center">
-              <div className="p-3 rounded-full bg-blue-100">
-                <svg className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="p-3 rounded-full bg-lamp-100">
+                <svg className="w-6 h-6 text-lamp-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
@@ -195,8 +195,8 @@ export default function TrialCampaignsPage() {
 
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center">
-              <div className="p-3 rounded-full bg-purple-100">
-                <svg className="w-6 h-6 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="p-3 rounded-full bg-lamp-100">
+                <svg className="w-6 h-6 text-lamp-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
               </div>
@@ -222,7 +222,7 @@ export default function TrialCampaignsPage() {
             <p className="mt-2 text-gray-500">Get started by creating your first trial invite campaign.</p>
             <button
               onClick={() => setShowCreateModal(true)}
-              className="mt-6 inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
+              className="mt-6 inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-lamp-600 hover:bg-lamp-700"
             >
               Create Campaign
             </button>
@@ -264,14 +264,14 @@ export default function TrialCampaignsPage() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
                         <div className="text-center">
-                          <p className="text-2xl font-bold text-blue-600">{campaign.sentCount}</p>
+                          <p className="text-2xl font-bold text-lamp-600">{campaign.sentCount}</p>
                           <p className="text-xs text-gray-500">Sent</p>
                         </div>
                         <svg className="w-4 h-4 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
                         <div className="text-center">
-                          <p className="text-2xl font-bold text-indigo-600">{campaign.openedCount}</p>
+                          <p className="text-2xl font-bold text-lamp-600">{campaign.openedCount}</p>
                           <p className="text-xs text-gray-500">Opened</p>
                         </div>
                         <svg className="w-4 h-4 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -433,7 +433,7 @@ The Patent Platform Team`
               onChange={(e) => setName(e.target.value)}
               required
               placeholder="e.g., Q1 2025 Product Launch"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
             />
           </div>
 
@@ -444,7 +444,7 @@ The Patent Platform Team`
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
               placeholder="Optional campaign description..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
             />
           </div>
 
@@ -454,7 +454,7 @@ The Patent Platform Team`
               type="text"
               value={emailSubject}
               onChange={(e) => setEmailSubject(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
             />
           </div>
 
@@ -467,7 +467,7 @@ The Patent Platform Team`
                 onChange={(e) => setTrialDays(parseInt(e.target.value))}
                 min={1}
                 max={365}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
               />
             </div>
             <div>
@@ -478,7 +478,7 @@ The Patent Platform Team`
                 onChange={(e) => setExpiryDays(parseInt(e.target.value))}
                 min={1}
                 max={365}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
               />
             </div>
           </div>
@@ -518,13 +518,13 @@ The Patent Platform Team`
                   onChange={(e) => setEmailTemplate(e.target.value)}
                   rows={12}
                   placeholder={defaultTemplate}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                 />
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setEmailTemplate(defaultTemplate)}
-                    className="text-xs text-indigo-600 hover:text-indigo-800"
+                    className="text-xs text-lamp-600 hover:text-lamp-800"
                   >
                     Reset to Default
                   </button>
@@ -579,7 +579,7 @@ The Patent Platform Team`
                       min={1}
                       max={100}
                       placeholder="3"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                     />
                   </div>
                   <div>
@@ -593,7 +593,7 @@ The Patent Platform Team`
                       min={1}
                       max={100}
                       placeholder="10"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                     />
                   </div>
                   <div>
@@ -607,7 +607,7 @@ The Patent Platform Team`
                       min={1}
                       max={100}
                       placeholder="5"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                     />
                   </div>
                   <div>
@@ -621,7 +621,7 @@ The Patent Platform Team`
                       min={1}
                       max={100}
                       placeholder="10"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                     />
                   </div>
                   <div>
@@ -635,7 +635,7 @@ The Patent Platform Team`
                       min={1}
                       max={200}
                       placeholder="20"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                     />
                   </div>
                   <div>
@@ -650,7 +650,7 @@ The Patent Platform Team`
                       max={1000000}
                       step={10000}
                       placeholder="70000"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-lamp-500 focus:border-transparent"
                     />
                   </div>
                 </div>
@@ -658,7 +658,7 @@ The Patent Platform Team`
                 <div className="bg-amber-50 rounded-lg p-3 text-xs text-amber-800">
                   <strong>⚠️ Token Budget is the SAFETY CAP:</strong> Trial ends when <em>either</em> time expires, feature limits hit, <em>or</em> token budget exhausted — whichever comes first. This prevents abuse from users who regenerate content endlessly.
                 </div>
-                <div className="bg-indigo-50 rounded-lg p-3 text-xs text-indigo-700">
+                <div className="bg-lamp-50 rounded-lg p-3 text-xs text-lamp-700">
                   <strong>Default Limits:</strong> 3 patents, 10 novelty searches, 5 ideation runs, 10 prior art searches, 20 diagrams, <strong>70K tokens</strong>
                 </div>
               </div>
@@ -682,7 +682,7 @@ The Patent Platform Team`
             <button
               type="submit"
               disabled={isSubmitting || !name}
-              className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              className="flex-1 px-4 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 disabled:opacity-50"
             >
               {isSubmitting ? 'Creating...' : 'Create Campaign'}
             </button>
@@ -811,14 +811,14 @@ function CampaignOverview({ campaign, onUpdate }: { campaign: Campaign; onUpdate
   return (
     <div className="space-y-6">
       {/* Funnel Visualization */}
-      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-6">
+      <div className="bg-gradient-to-r from-lamp-50 to-lamp-50 rounded-xl p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Conversion Funnel</h3>
         <div className="flex items-center justify-between">
           {[
             { label: 'Total Invites', value: campaign.totalInvites, color: 'bg-gray-500' },
-            { label: 'Sent', value: campaign.sentCount, color: 'bg-blue-500' },
-            { label: 'Opened', value: campaign.openedCount, color: 'bg-indigo-500' },
-            { label: 'Clicked', value: campaign.clickedCount, color: 'bg-purple-500' },
+            { label: 'Sent', value: campaign.sentCount, color: 'bg-lamp-500' },
+            { label: 'Opened', value: campaign.openedCount, color: 'bg-lamp-500' },
+            { label: 'Clicked', value: campaign.clickedCount, color: 'bg-lamp-500' },
             { label: 'Signed Up', value: campaign.signedUpCount, color: 'bg-green-500' }
           ].map((step, i, arr) => (
             <div key={step.label} className="flex items-center">
@@ -847,13 +847,13 @@ function CampaignOverview({ campaign, onUpdate }: { campaign: Campaign; onUpdate
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-sm text-gray-500">Open Rate</p>
-          <p className="text-2xl font-bold text-indigo-600">
+          <p className="text-2xl font-bold text-lamp-600">
             {campaign.sentCount > 0 ? ((campaign.openedCount / campaign.sentCount) * 100).toFixed(1) : 0}%
           </p>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-sm text-gray-500">Click Rate</p>
-          <p className="text-2xl font-bold text-purple-600">
+          <p className="text-2xl font-bold text-lamp-600">
             {campaign.openedCount > 0 ? ((campaign.clickedCount / campaign.openedCount) * 100).toFixed(1) : 0}%
           </p>
         </div>
@@ -872,7 +872,7 @@ function CampaignOverview({ campaign, onUpdate }: { campaign: Campaign; onUpdate
           {!isEditing ? (
             <button
               onClick={() => setIsEditing(true)}
-              className="px-3 py-1.5 text-sm text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center gap-1"
+              className="px-3 py-1.5 text-sm text-lamp-600 hover:bg-lamp-50 rounded-lg flex items-center gap-1"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -890,7 +890,7 @@ function CampaignOverview({ campaign, onUpdate }: { campaign: Campaign; onUpdate
               <button
                 onClick={handleSaveLimits}
                 disabled={isSaving}
-                className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                className="px-3 py-1.5 text-sm bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 disabled:opacity-50"
               >
                 {isSaving ? 'Saving...' : 'Save Changes'}
               </button>
@@ -1117,9 +1117,9 @@ function CampaignInvites({ campaign, onUpdate }: { campaign: Campaign; onUpdate:
     const colors: Record<string, string> = {
       PENDING: 'bg-gray-100 text-gray-700',
       SCHEDULED: 'bg-yellow-100 text-yellow-700',
-      SENT: 'bg-blue-100 text-blue-700',
-      OPENED: 'bg-indigo-100 text-indigo-700',
-      CLICKED: 'bg-purple-100 text-purple-700',
+      SENT: 'bg-lamp-100 text-lamp-700',
+      OPENED: 'bg-lamp-100 text-lamp-700',
+      CLICKED: 'bg-lamp-100 text-lamp-700',
       SIGNED_UP: 'bg-green-100 text-green-700',
       BOUNCED: 'bg-red-100 text-red-700',
       FAILED: 'bg-red-100 text-red-700',
@@ -1182,7 +1182,7 @@ function CampaignInvites({ campaign, onUpdate }: { campaign: Campaign; onUpdate:
             <button
               onClick={handleSendSelected}
               disabled={isSending}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
+              className="px-4 py-2 bg-lamp-600 text-white rounded-lg text-sm hover:bg-lamp-700 disabled:opacity-50"
             >
               {isSending ? 'Sending...' : `Send ${selectedIds.size} Selected`}
             </button>
@@ -1201,7 +1201,7 @@ function CampaignInvites({ campaign, onUpdate }: { campaign: Campaign; onUpdate:
           )}
           <button
             onClick={() => setShowImportModal(true)}
-            className="px-4 py-2 border border-indigo-600 text-indigo-600 rounded-lg text-sm hover:bg-indigo-50"
+            className="px-4 py-2 border border-lamp-600 text-lamp-600 rounded-lg text-sm hover:bg-lamp-50"
           >
             Import CSV
           </button>
@@ -1211,7 +1211,7 @@ function CampaignInvites({ campaign, onUpdate }: { campaign: Campaign; onUpdate:
       {/* Invites Table */}
       {isLoading ? (
         <div className="text-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600 mx-auto"></div>
         </div>
       ) : invites.length === 0 ? (
         <div className="text-center py-12 bg-gray-50 rounded-xl">
@@ -1389,11 +1389,11 @@ function ImportModal({
         <div className="flex-1 overflow-y-auto p-6">
           {step === 'input' && (
             <div className="space-y-4">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+              <div className="bg-lamp-50 border border-lamp-200 rounded-lg p-4 text-sm text-lamp-800">
                 <p className="font-medium">CSV Format</p>
                 <p className="mt-1">Required: email</p>
                 <p>Optional: firstName, lastName, country, company, jobTitle</p>
-                <code className="block mt-2 text-xs bg-blue-100 p-2 rounded">
+                <code className="block mt-2 text-xs bg-lamp-100 p-2 rounded">
                   email,firstName,lastName,country<br/>
                   john@example.com,John,Doe,USA
                 </code>
@@ -1408,7 +1408,7 @@ function ImportModal({
               <button
                 onClick={parseCSV}
                 disabled={!csvText.trim()}
-                className="w-full py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                className="w-full py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 disabled:opacity-50"
               >
                 Parse & Preview
               </button>
@@ -1451,7 +1451,7 @@ function ImportModal({
                 <button
                   onClick={handleImport}
                   disabled={isImporting}
-                  className="flex-1 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                  className="flex-1 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 disabled:opacity-50"
                 >
                   {isImporting ? 'Importing...' : `Import ${parsedData.length} Invites`}
                 </button>
@@ -1489,7 +1489,7 @@ function ImportModal({
               )}
               <button
                 onClick={onImported}
-                className="w-full py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                className="w-full py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700"
               >
                 Done
               </button>
@@ -1537,7 +1537,7 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
   if (isLoading) {
     return (
       <div className="text-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600 mx-auto"></div>
       </div>
     )
   }
@@ -1583,17 +1583,17 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
               <p className="text-3xl font-bold text-green-600">{summary.totalSignedUp}</p>
               <p className="text-sm text-green-700">Total Signups</p>
             </div>
-            <div className="bg-blue-50 rounded-xl p-4">
-              <p className="text-3xl font-bold text-blue-600">{summary.activeUsers}</p>
-              <p className="text-sm text-blue-700">Active Users</p>
+            <div className="bg-lamp-50 rounded-xl p-4">
+              <p className="text-3xl font-bold text-lamp-600">{summary.activeUsers}</p>
+              <p className="text-sm text-lamp-700">Active Users</p>
             </div>
-            <div className="bg-purple-50 rounded-xl p-4">
-              <p className="text-3xl font-bold text-purple-600">{summary.totalPatentsDrafted}</p>
-              <p className="text-sm text-purple-700">Patents Drafted</p>
+            <div className="bg-lamp-50 rounded-xl p-4">
+              <p className="text-3xl font-bold text-lamp-600">{summary.totalPatentsDrafted}</p>
+              <p className="text-sm text-lamp-700">Patents Drafted</p>
             </div>
-            <div className="bg-indigo-50 rounded-xl p-4">
-              <p className="text-3xl font-bold text-indigo-600">{summary.totalNoveltySearches}</p>
-              <p className="text-sm text-indigo-700">Novelty Searches</p>
+            <div className="bg-lamp-50 rounded-xl p-4">
+              <p className="text-3xl font-bold text-lamp-600">{summary.totalNoveltySearches}</p>
+              <p className="text-sm text-lamp-700">Novelty Searches</p>
             </div>
           </div>
           {users.length > 0 && (
@@ -1651,7 +1651,7 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
                     <p className="text-xs text-gray-500">{user.daysSinceSignup} days ago</p>
                   </td>
                   <td className="px-4 py-4 text-center">
-                    <span className="text-lg font-semibold text-purple-600">
+                    <span className="text-lg font-semibold text-lamp-600">
                       {user.activity?.patentsDrafted || 0}
                     </span>
                     {user.activity?.patentsCompleted > 0 && (
@@ -1661,12 +1661,12 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
                     )}
                   </td>
                   <td className="px-4 py-4 text-center">
-                    <span className="text-lg font-semibold text-indigo-600">
+                    <span className="text-lg font-semibold text-lamp-600">
                       {user.activity?.noveltySearches || 0}
                     </span>
                   </td>
                   <td className="px-4 py-4 text-center">
-                    <span className="text-lg font-semibold text-blue-600">
+                    <span className="text-lg font-semibold text-lamp-600">
                       {user.activity?.draftingSessions || 0}
                     </span>
                   </td>
@@ -1766,7 +1766,7 @@ function CampaignAnalytics({ campaign }: { campaign: Campaign }) {
   if (isLoading) {
     return (
       <div className="text-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600 mx-auto"></div>
       </div>
     )
   }
@@ -1795,9 +1795,9 @@ function CampaignAnalytics({ campaign }: { campaign: Campaign }) {
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Conversion Rates</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
           {[
-            { label: 'Delivery Rate', value: analytics.rates.deliveryRate + '%', color: 'text-blue-600' },
-            { label: 'Open Rate', value: analytics.rates.openRate + '%', color: 'text-indigo-600' },
-            { label: 'Click Rate', value: analytics.rates.clickRate + '%', color: 'text-purple-600' },
+            { label: 'Delivery Rate', value: analytics.rates.deliveryRate + '%', color: 'text-lamp-600' },
+            { label: 'Open Rate', value: analytics.rates.openRate + '%', color: 'text-lamp-600' },
+            { label: 'Click Rate', value: analytics.rates.clickRate + '%', color: 'text-lamp-600' },
             { label: 'Signup Rate', value: analytics.rates.signupRate + '%', color: 'text-green-600' },
             { label: 'Overall Conv.', value: analytics.rates.overallConversion + '%', color: 'text-emerald-600' }
           ].map(stat => (

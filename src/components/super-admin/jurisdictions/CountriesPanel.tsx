@@ -72,7 +72,7 @@ export function CountriesPanel({ initialView = 'list' }: CountriesPanelProps) {
         </div>
         <div className="bg-white p-4 rounded-lg shadow border">
           <h3 className="text-xs font-medium text-gray-600 mb-1">Ready for Drafting</h3>
-          <div className="text-2xl font-bold text-blue-600">{readyCount}</div>
+          <div className="text-2xl font-bold text-lamp-600">{readyCount}</div>
         </div>
         <div className="bg-white p-4 rounded-lg shadow border">
           <h3 className="text-xs font-medium text-gray-600 mb-1">Last Updated</h3>
@@ -87,7 +87,7 @@ export function CountriesPanel({ initialView = 'list' }: CountriesPanelProps) {
         {view === 'list' ? (
           <button
             onClick={() => setView('import')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
+            className="px-4 py-2 bg-lamp-600 text-white rounded-md text-sm hover:bg-lamp-700"
           >
             + Import Country
           </button>

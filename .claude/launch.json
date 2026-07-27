@@ -12,6 +12,20 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "-p", "3789"],
       "port": 3789
+    },
+    {
+      "name": "spotipr-dev-auto",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "mockups",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/serve-mockups.js"],
+      "port": 5713,
+      "autoPort": true
     }
   ]
 }

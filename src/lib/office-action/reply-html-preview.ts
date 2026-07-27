@@ -1,4 +1,5 @@
 import { objectionLabel, type AssembledReply, type ReplyBlock, type AmendedClaim } from './reply-assembly'
+import { formatParagraphRefs } from './document-intake'
 import type { OfficeActionProfile } from './oa-profile-schema'
 
 /**
@@ -22,7 +23,8 @@ function markedClaimHtml(c: AmendedClaim): string {
 }
 
 function paras(text: string): string {
-  return (text || '').split(/\n{2,}/).map(p => p.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
+  // formatParagraphRefs: internal ¶0007 anchors read as "[0007]" in the filing.
+  return formatParagraphRefs(text).split(/\n{2,}/).map(p => p.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
     .map(p => `<p>${esc(p)}</p>`).join('')
 }
 

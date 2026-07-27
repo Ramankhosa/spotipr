@@ -72,7 +72,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleBold().run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('bold') ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('bold') ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             <strong>B</strong>
@@ -80,7 +80,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleItalic().run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('italic') ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('italic') ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             <em>I</em>
@@ -88,7 +88,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleStrike().run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('strike') ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('strike') ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             <s>U</s>
@@ -100,7 +100,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('heading', { level: 1 }) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('heading', { level: 1 }) ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             H1
@@ -108,7 +108,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('heading', { level: 2 }) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('heading', { level: 2 }) ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             H2
@@ -116,7 +116,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('heading', { level: 3 }) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-300 hover:bg-gray-50'
+              editor.isActive('heading', { level: 3 }) ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-300 hover:bg-gray-50'
             }`}
           >
             H3
@@ -128,7 +128,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleBulletList().run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('bulletList') ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('bulletList') ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             • List
@@ -136,7 +136,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().toggleOrderedList().run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive('orderedList') ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive('orderedList') ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             1. List
@@ -148,7 +148,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().setTextAlign('left').run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive({ textAlign: 'left' }) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive({ textAlign: 'left' }) ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             ⬅
@@ -156,7 +156,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().setTextAlign('center').run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive({ textAlign: 'center' }) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive({ textAlign: 'center' }) ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             ⬌
@@ -164,7 +164,7 @@ export default function RichTextEditor({
           <button
             onClick={() => editor.chain().focus().setTextAlign('right').run()}
             className={`px-3 py-1 rounded text-sm font-medium ${
-              editor.isActive({ textAlign: 'right' }) ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+              editor.isActive({ textAlign: 'right' }) ? 'bg-lamp-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
             ➡

@@ -80,7 +80,7 @@ export function UsageTable({ data, groupBy }: UsageTableProps) {
                   <div className="flex items-center space-x-2">
                     <span>{row.entityName}</span>
                     {row.percentage >= 50 && (
-                      <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">High Usage</span>
+                      <span className="px-2 py-1 text-xs bg-lamp-100 text-lamp-800 rounded">High Usage</span>
                     )}
                     {row.percentage >= 80 && (
                       <span className="px-2 py-1 text-xs bg-red-100 text-red-800 rounded">Very High</span>
@@ -90,7 +90,7 @@ export function UsageTable({ data, groupBy }: UsageTableProps) {
                 <td className="text-right py-3 font-mono">
                   {formatNumber(row.metrics.totalTokens)}
                 </td>
-                <td className="text-right py-3 font-mono text-blue-600">
+                <td className="text-right py-3 font-mono text-lamp-600">
                   {formatNumber(row.metrics.inputTokens)}
                 </td>
                 <td className="text-right py-3 font-mono text-green-600">
@@ -99,7 +99,7 @@ export function UsageTable({ data, groupBy }: UsageTableProps) {
                 <td className="text-right py-3 font-mono">
                   {formatNumber(row.metrics.apiCalls)}
                 </td>
-                <td className="text-right py-3 font-mono text-purple-600">
+                <td className="text-right py-3 font-mono text-lamp-600">
                   {formatCurrency(row.metrics.cost)}
                 </td>
                 <td className="text-right py-3">
@@ -107,7 +107,7 @@ export function UsageTable({ data, groupBy }: UsageTableProps) {
                     <span className="font-mono">{formatPercentage(row.percentage)}</span>
                     <div className="w-16 bg-gray-200 rounded-full h-2">
                       <div
-                        className="bg-blue-600 h-2 rounded-full"
+                        className="bg-lamp-600 h-2 rounded-full"
                         style={{ width: `${Math.min(row.percentage, 100)}%` }}
                       ></div>
                     </div>

@@ -201,7 +201,7 @@ export default function IdeaEditorModal({
                   <Badge
                     key={domain}
                     variant="outline"
-                    className="cursor-pointer hover:bg-blue-100"
+                    className="cursor-pointer hover:bg-lamp-100"
                     onClick={() => addTag(domain)}
                   >
                     + {domain}
@@ -291,7 +291,7 @@ export default function IdeaEditorModal({
             <Button
               onClick={handleSave}
               disabled={saving || !editedIdea.title.trim() || !editedIdea.description.trim()}
-              className="bg-purple-600 hover:bg-purple-700"
+              className="bg-lamp-600 hover:bg-lamp-700"
             >
               {saving ? 'Saving...' : '💾 Save New Idea'}
             </Button>

@@ -80,7 +80,7 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
               isOpen
                 ? 'bg-brass-50 ring-1 ring-inset ring-brass-300 dark:bg-brass-950/40 dark:ring-brass-800'
                 : gate.accent
-                  ? 'bg-blue-50/70 dark:bg-blue-950/25'
+                  ? 'bg-lamp-50/70 dark:bg-lamp-950/25'
                   : 'bg-paper-50 dark:bg-background'
             } ${gate.clickable ? 'cursor-pointer hover:bg-brass-50/70 dark:hover:bg-brass-950/25' : ''} ${running ? 'animate-pulse' : ''}`
 
@@ -98,7 +98,7 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
 
         {counts?.steered && (
           <span
-            className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold text-blue-700 dark:bg-blue-950/50 dark:text-blue-300"
+            className="rounded-full bg-lamp-100 px-2 py-0.5 text-[9px] font-bold text-lamp-700 dark:bg-lamp-950/50 dark:text-lamp-300"
             title="Ranking was influenced by documents you marked relevant — the steer block is on your canvas and removable."
           >
             STEERED
@@ -120,7 +120,7 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
             <span>
               words-only <b className="font-mono text-foreground">{lanes.matchOnly.toLocaleString()}</b>
             </span>
-            <span className="text-blue-600 dark:text-blue-400">
+            <span className="text-lamp-600 dark:text-lamp-400">
               meaning-only <b className="font-mono">{lanes.castOnly.toLocaleString()}</b>
             </span>
             <span>
@@ -136,20 +136,20 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
 
       {/* Vocabulary repair — turn the gap into an action, not just a statistic */}
       {gapPct !== null && gapPct >= 20 && suggestedTerms && suggestedTerms.length > 0 && onHarvestTerms && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-border bg-blue-50/60 px-3 py-2 text-[11px] dark:bg-blue-950/20">
-          <Sparkles className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400" />
+        <div className="flex flex-wrap items-center gap-2 border-t border-border bg-lamp-50/60 px-3 py-2 text-[11px] dark:bg-lamp-950/20">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-lamp-600 dark:text-lamp-400" />
           <span className="text-foreground/90">
             <b>{gapPct}%</b> of meaning-only hits share no word with your query. Vocabulary they use:
           </span>
           {suggestedTerms.slice(0, 6).map(term => (
-            <span key={term} className="rounded-full border border-blue-300 bg-background px-2 py-0.5 font-mono text-[10px] text-blue-700 dark:border-blue-800 dark:text-blue-300">
+            <span key={term} className="rounded-full border border-lamp-300 bg-background px-2 py-0.5 font-mono text-[10px] text-lamp-700 dark:border-lamp-800 dark:text-lamp-300">
               {term}
             </span>
           ))}
           <button
             type="button"
             onClick={() => onHarvestTerms(suggestedTerms.slice(0, 6))}
-            className="ml-auto rounded-md border border-blue-300 bg-background px-2 py-1 font-semibold text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:text-blue-300"
+            className="ml-auto rounded-md border border-lamp-300 bg-background px-2 py-1 font-semibold text-lamp-700 hover:bg-lamp-100 dark:border-lamp-800 dark:text-lamp-300"
           >
             Add as suggestions to canvas
           </button>

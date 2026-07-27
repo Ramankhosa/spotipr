@@ -176,7 +176,7 @@ export function ElementGrid({
                     <button
                       type="button"
                       onClick={() => onOpenDocument(row.family)}
-                      className="font-mono text-[11px] font-semibold text-blue-700 hover:underline dark:text-blue-400"
+                      className="font-mono text-[11px] font-semibold text-lamp-700 hover:underline dark:text-lamp-400"
                     >
                       {row.publicationNumber}
                     </button>
@@ -218,7 +218,7 @@ export function ElementGrid({
                                 <button
                                   type="button"
                                   onClick={() => onOpenDocument(row.family)}
-                                  className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:underline dark:text-blue-400"
+                                  className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-lamp-700 hover:underline dark:text-lamp-400"
                                 >
                                   <Link2 className="h-3 w-3" /> Open the document
                                 </button>
@@ -314,10 +314,10 @@ export function ElementGrid({
         const key = `combo:${combo.publicationNumbers.join('+')}`
         const existing = theoryFor(combo.publicationNumbers)
         return (
-          <div key={key} className="rounded-lg border border-blue-500/40 bg-blue-500/[0.06] p-3 text-xs">
+          <div key={key} className="rounded-lg border border-lamp-500/40 bg-lamp-500/[0.06] p-3 text-xs">
             <div className="flex flex-wrap items-center gap-2">
-              <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-              <span className="font-semibold text-blue-800 dark:text-blue-300">Complementary coverage {i + 1}:</span>
+              <Sparkles className="h-3.5 w-3.5 text-lamp-600 dark:text-lamp-400" />
+              <span className="font-semibold text-lamp-800 dark:text-lamp-300">Complementary coverage {i + 1}:</span>
               <span className="font-mono">{combo.publicationNumbers.join('  +  ')}</span>
               <span className="text-muted-foreground">
                 jointly reach all {combo.total} elements

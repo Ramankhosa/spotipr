@@ -53,20 +53,20 @@ export default function KishoNormalizationLoader({ mode, className = '' }: Kisho
   const currentMessage = steps[Math.min(activeIndex, steps.length - 1)] || steps[0] || 'Kisho is getting things ready…'
 
   return (
-    <div className={`mb-8 border border-indigo-100 bg-indigo-50/50 rounded-lg p-4 ${className}`}>
+    <div className={`mb-8 border border-lamp-100 bg-lamp-50/50 rounded-lg p-4 ${className}`}>
       <div className="flex items-start gap-4">
         <AnimatedLogo size="sm" className="flex-shrink-0" useKishoFallback={true} autoPlayDuration={3500} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-semibold uppercase tracking-wider text-indigo-700/80">
+            <div className="text-xs font-semibold uppercase tracking-wider text-lamp-700/80">
               Preparing your idea
             </div>
-            <div className="text-xs text-indigo-700/70 tabular-nums">
+            <div className="text-xs text-lamp-700/70 tabular-nums">
               Step {stepNumber}/{steps.length}
             </div>
           </div>
 
-          <div className="mt-1 text-sm font-medium text-indigo-950" aria-live="polite">
+          <div className="mt-1 text-sm font-medium text-lamp-950" aria-live="polite">
             <AnimatePresence mode="wait">
               <motion.div
                 key={currentMessage}
@@ -90,13 +90,13 @@ export default function KishoNormalizationLoader({ mode, className = '' }: Kisho
                     key={idx}
                     className={[
                       'h-1.5 w-1.5 rounded-full transition-colors',
-                      isDone ? 'bg-indigo-500' : isActive ? 'bg-indigo-600 animate-pulse' : 'bg-indigo-200'
+                      isDone ? 'bg-lamp-500' : isActive ? 'bg-lamp-600 animate-pulse' : 'bg-lamp-200'
                     ].join(' ')}
                   />
                 )
               })}
             </div>
-            <div className="text-xs text-indigo-700/70">
+            <div className="text-xs text-lamp-700/70">
               {mode === 'preserve'
                 ? 'Your wording stays intact — you’ll review everything next.'
                 : 'You’ll review and fine-tune everything next.'}

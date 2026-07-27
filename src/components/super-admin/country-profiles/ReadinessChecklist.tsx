@@ -63,7 +63,7 @@ export function ReadinessChecklist({ readiness, fixLinks }: ReadinessChecklistPr
               {check.status !== 'pass' && links[check.id] && (
                 <a
                   href={links[check.id]}
-                  className="ml-3 flex-shrink-0 text-sm text-blue-600 hover:text-blue-800 font-medium"
+                  className="ml-3 flex-shrink-0 text-sm text-lamp-600 hover:text-lamp-800 font-medium"
                 >
                   Fix →
                 </a>

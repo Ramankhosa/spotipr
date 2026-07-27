@@ -34,9 +34,9 @@ export default function FooterStrip({ careModeEnabled = true, onCareModeToggle }
   const getKishoStatusColor = (status: string) => {
     switch (status) {
       case 'active': return 'text-green-600'
-      case 'thinking': return 'text-blue-600'
+      case 'thinking': return 'text-lamp-600'
       case 'processing': return 'text-amber-600'
-      case 'ready': return 'text-purple-600'
+      case 'ready': return 'text-lamp-600'
       default: return 'text-gray-600'
     }
   }
@@ -66,7 +66,7 @@ export default function FooterStrip({ careModeEnabled = true, onCareModeToggle }
           <div className="text-gray-400">·</div>
 
           <div className="flex items-center space-x-2">
-            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+            <div className="w-2 h-2 rounded-full bg-lamp-500 animate-pulse"></div>
             <span className="text-gray-700">
               Local time {currentTime}
             </span>
@@ -77,8 +77,8 @@ export default function FooterStrip({ careModeEnabled = true, onCareModeToggle }
           <div className="flex items-center space-x-2">
             <div className={`w-2 h-2 rounded-full animate-pulse ${
               kishoStatus === 'active' ? 'bg-green-500' :
-              kishoStatus === 'thinking' ? 'bg-blue-500' :
-              kishoStatus === 'processing' ? 'bg-amber-500' : 'bg-purple-500'
+              kishoStatus === 'thinking' ? 'bg-lamp-500' :
+              kishoStatus === 'processing' ? 'bg-amber-500' : 'bg-lamp-500'
             }`}></div>
             <span className={`${getKishoStatusColor(kishoStatus)} font-medium`}>
               Kisho {getKishoStatusText(kishoStatus)}
@@ -107,7 +107,7 @@ export default function FooterStrip({ careModeEnabled = true, onCareModeToggle }
       </div>
 
       {/* Subtle ambient light effect */}
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent"></div>
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-lamp-400/30 to-transparent"></div>
     </div>
   )
 }

@@ -728,7 +728,7 @@ export default function UserServiceUsagePage() {
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -1065,7 +1065,7 @@ export default function UserServiceUsagePage() {
           <div className="flex justify-end">
             <button
               onClick={fetchUsage}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700"
             >
               Refresh
             </button>
@@ -1221,7 +1221,7 @@ export default function UserServiceUsagePage() {
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.noveltySearches)}</td>
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.ideasReserved)}</td>
                       <td className="px-4 py-2 text-right font-mono font-semibold">{formatNumber(t.totalActions)}</td>
-                      <td className="px-4 py-2 text-right text-xs text-indigo-600 underline">
+                      <td className="px-4 py-2 text-right text-xs text-lamp-600 underline">
                         {t.users.length} user{t.users.length === 1 ? '' : 's'} {isOpen ? 'v' : '>'}
                       </td>
                     </tr>
@@ -1304,7 +1304,7 @@ export default function UserServiceUsagePage() {
 
           {loading ? (
             <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
             </div>
           ) : error ? (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
@@ -1532,21 +1532,21 @@ export default function UserServiceUsagePage() {
             <>
               {/* Patent Cost Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
-                  <h4 className="text-xs font-medium text-blue-700 mb-1">Total Patents</h4>
-                  <div className="text-xl font-bold text-blue-900">
+                <div className="bg-gradient-to-br from-lamp-50 to-lamp-100 p-4 rounded-lg border border-lamp-200">
+                  <h4 className="text-xs font-medium text-lamp-700 mb-1">Total Patents</h4>
+                  <div className="text-xl font-bold text-lamp-900">
                     {formatNumber(patentCosts.totals.patentCount)}
                   </div>
                 </div>
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
-                  <h4 className="text-xs font-medium text-purple-700 mb-1">Input Tokens</h4>
-                  <div className="text-xl font-bold text-purple-900">
+                <div className="bg-gradient-to-br from-lamp-50 to-lamp-100 p-4 rounded-lg border border-lamp-200">
+                  <h4 className="text-xs font-medium text-lamp-700 mb-1">Input Tokens</h4>
+                  <div className="text-xl font-bold text-lamp-900">
                     {formatNumber(patentCosts.totals.totalInputTokens)}
                   </div>
                 </div>
-                <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-4 rounded-lg border border-indigo-200">
-                  <h4 className="text-xs font-medium text-indigo-700 mb-1">Output Tokens</h4>
-                  <div className="text-xl font-bold text-indigo-900">
+                <div className="bg-gradient-to-br from-lamp-50 to-lamp-100 p-4 rounded-lg border border-lamp-200">
+                  <h4 className="text-xs font-medium text-lamp-700 mb-1">Output Tokens</h4>
+                  <div className="text-xl font-bold text-lamp-900">
                     {formatNumber(patentCosts.totals.totalOutputTokens)}
                   </div>
                 </div>

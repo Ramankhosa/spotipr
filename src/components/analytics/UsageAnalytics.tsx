@@ -95,7 +95,7 @@ export function UsageAnalytics({ title, isSuperAdmin = false, tenantId }: UsageA
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
         </div>
       </div>
     )
@@ -110,7 +110,7 @@ export function UsageAnalytics({ title, isSuperAdmin = false, tenantId }: UsageA
             <p className="text-sm mt-2">{error}</p>
             <button
               onClick={fetchAnalytics}
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="mt-4 px-4 py-2 bg-lamp-600 text-white rounded hover:bg-lamp-700"
             >
               Try Again
             </button>
@@ -165,20 +165,20 @@ export function UsageAnalytics({ title, isSuperAdmin = false, tenantId }: UsageA
         <div className="flex space-x-4 mb-4">
           <button
             onClick={() => setActiveTab('charts')}
-            className={`px-4 py-2 rounded ${activeTab === 'charts' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+            className={`px-4 py-2 rounded ${activeTab === 'charts' ? 'bg-lamp-600 text-white' : 'bg-gray-200'}`}
           >
             Charts
           </button>
           <button
             onClick={() => setActiveTab('table')}
-            className={`px-4 py-2 rounded ${activeTab === 'table' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+            className={`px-4 py-2 rounded ${activeTab === 'table' ? 'bg-lamp-600 text-white' : 'bg-gray-200'}`}
           >
             Table
           </button>
           {!isSuperAdmin && data.topUsers.length > 0 && (
             <button
               onClick={() => setActiveTab('users')}
-              className={`px-4 py-2 rounded ${activeTab === 'users' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+              className={`px-4 py-2 rounded ${activeTab === 'users' ? 'bg-lamp-600 text-white' : 'bg-gray-200'}`}
             >
               Top Users
             </button>

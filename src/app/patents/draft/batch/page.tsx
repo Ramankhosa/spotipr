@@ -104,7 +104,7 @@ function statusClasses(status: string) {
   if (status === 'COMPLETED' || status === 'DELIVERED') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (status === 'COMPLETED_WITH_ERRORS' || status === 'DELIVERED_WITH_WARNINGS') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'FAILED' || status === 'REJECTED' || status === 'CANCELED' || status === 'CANCELLED') return 'border-rose-200 bg-rose-50 text-rose-700'
-  if (status === 'PAUSED') return 'border-violet-200 bg-violet-50 text-violet-700'
+  if (status === 'PAUSED') return 'border-lamp-200 bg-lamp-50 text-lamp-700'
   if (status === 'PROCESSING') return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
   return 'border-slate-200 bg-slate-50 text-slate-700'
 }

@@ -9,7 +9,7 @@ import type { StudioTrailEntryPayload } from '@/lib/prior-art-studio/types'
 
 const KIND_STYLES: Record<string, string> = {
   RUN: 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
-  COPILOT: 'bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300',
+  COPILOT: 'bg-lamp-100 text-lamp-800 dark:bg-lamp-950/50 dark:text-lamp-300',
   TAG: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300',
   EDIT: 'bg-muted text-muted-foreground',
   NOTE: 'bg-muted text-muted-foreground',
@@ -55,7 +55,7 @@ export function TrailPanel({ entries, onDownloadReport, reportLoading }: TrailPa
             </span>
             <span className="text-foreground/90">{entry.summary}</span>
             {entry.actor.startsWith('model:') && (
-              <span className="ml-auto shrink-0 rounded bg-blue-50 px-1.5 text-[9px] font-semibold text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+              <span className="ml-auto shrink-0 rounded bg-lamp-50 px-1.5 text-[9px] font-semibold text-lamp-700 dark:bg-lamp-950/40 dark:text-lamp-300">
                 AI
               </span>
             )}

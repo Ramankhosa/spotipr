@@ -208,8 +208,8 @@ export default function NoveltySearchHistory() {
               </select>
               {item.status === 'COMPLETE' && <Link href={`/novelty-search/${item.id}/pdf`} className="inline-flex h-9 items-center gap-2 rounded-lg bg-ai-blue-600 px-3 text-xs font-medium text-white hover:bg-ai-blue-700"><FileText className="h-4 w-4" /> View PDF</Link>}
               {item.status === 'COMPLETE' && (item.draftingHandoff?.patentId
-                ? <Link href={`/patents/${item.draftingHandoff.patentId}/draft`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-violet-300 bg-violet-50 px-3 text-xs font-medium text-violet-800 hover:bg-violet-100"><FileText className="h-4 w-4" /> Open draft</Link>
-                : <Link href={`/novelty-search/${item.id}/to-drafting`} className="inline-flex h-9 items-center gap-2 rounded-lg bg-violet-600 px-3 text-xs font-medium text-white hover:bg-violet-700"><FileText className="h-4 w-4" /> Draft this</Link>
+                ? <Link href={`/patents/${item.draftingHandoff.patentId}/draft`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-lamp-300 bg-lamp-50 px-3 text-xs font-medium text-lamp-800 hover:bg-lamp-100"><FileText className="h-4 w-4" /> Open draft</Link>
+                : <Link href={`/novelty-search/${item.id}/to-drafting`} className="inline-flex h-9 items-center gap-2 rounded-lg bg-lamp-600 px-3 text-xs font-medium text-white hover:bg-lamp-700"><FileText className="h-4 w-4" /> Draft this</Link>
               )}
               {item.status === 'FAILED' && <button onClick={() => void retry(item.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-300 bg-white px-3 text-xs font-medium text-red-700 hover:bg-red-50"><RefreshCw className="h-4 w-4" /> Retry</button>}
               {(item.status === 'QUEUED' || item.status === 'PROCESSING') && (

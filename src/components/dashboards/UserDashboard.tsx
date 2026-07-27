@@ -288,7 +288,7 @@ export default function UserDashboard() {
             onClick={() => router.push('/patents/draft/batch')}
             className="group flex flex-col items-start p-4 bg-card border border-border rounded-xl hover:border-primary/50 hover:shadow-md transition-all duration-200"
           >
-            <div className="p-2 bg-cyan-50 rounded-lg text-cyan-600 mb-3 group-hover:bg-cyan-600 group-hover:text-white transition-colors">
+            <div className="p-2 bg-lamp-50 rounded-lg text-lamp-600 mb-3 group-hover:bg-lamp-600 group-hover:text-white transition-colors">
               <Files className="w-5 h-5" />
             </div>
             <span className="font-semibold text-foreground">Batch Drafting</span>
@@ -297,13 +297,13 @@ export default function UserDashboard() {
 
           <div className="group flex flex-col items-start p-4 bg-card border border-border rounded-xl hover:border-primary/50 hover:shadow-md transition-all duration-200">
             <button onClick={() => router.push('/novelty-search')} className="w-full text-left">
-              <div className="p-2 bg-purple-50 rounded-lg text-purple-600 mb-3 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+              <div className="p-2 bg-lamp-50 rounded-lg text-lamp-600 mb-3 group-hover:bg-lamp-600 group-hover:text-white transition-colors">
                 <Search className="w-5 h-5" />
               </div>
               <span className="font-semibold text-foreground">Novelty Search</span>
               <span className="block text-xs text-muted-foreground mt-1">Check prior art</span>
             </button>
-            <button onClick={() => router.push('/novelty-search/history')} className="mt-3 inline-flex items-center gap-1.5 border-t border-border pt-3 text-xs font-medium text-purple-700 hover:text-purple-900">
+            <button onClick={() => router.push('/novelty-search/history')} className="mt-3 inline-flex items-center gap-1.5 border-t border-border pt-3 text-xs font-medium text-lamp-700 hover:text-lamp-900">
               <History className="h-3.5 w-3.5" /> Search History
             </button>
           </div>

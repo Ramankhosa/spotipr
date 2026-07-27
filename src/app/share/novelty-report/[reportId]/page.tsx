@@ -52,7 +52,7 @@ export default function PublicNoveltyReportPage() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-lamp-600 mx-auto mb-4"></div>
           <p className="text-slate-600">Loading report...</p>
         </div>
       </div>
@@ -85,21 +85,21 @@ export default function PublicNoveltyReportPage() {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Public notice banner */}
-      <div className="bg-blue-50 border-b border-blue-200 px-4 py-3">
+      <div className="bg-lamp-50 border-b border-lamp-200 px-4 py-3">
         <div className="max-w-5xl mx-auto flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className="text-blue-600">
+            <div className="text-lamp-600">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
               </svg>
             </div>
             <div>
-              <p className="text-sm font-medium text-blue-900">Shared Report</p>
-              <p className="text-xs text-blue-700">This is a publicly shared novelty assessment report</p>
+              <p className="text-sm font-medium text-lamp-900">Shared Report</p>
+              <p className="text-xs text-lamp-700">This is a publicly shared novelty assessment report</p>
             </div>
           </div>
-          <div className="text-xs text-blue-600">
+          <div className="text-xs text-lamp-600">
             PatentNest.ai
           </div>
         </div>

@@ -143,10 +143,12 @@ function normalizeSectionKeyForGating(key: string): string {
 }
 
 /**
- * Check if a section should be gated (blocked) when Claim 1 is missing or not frozen.
- * 
- * Per SRS: Gated sections require FROZEN Claim 1, not just working claims.
- * 
+ * Check if a section should be gated (blocked) because Claim 1 is missing.
+ *
+ * Freezing is an optional lock, not a prerequisite: the current saved claim set is
+ * authoritative for drafting as soon as it exists. Only a total absence of claims
+ * blocks generation, because those sections genuinely cannot be written without one.
+ *
  * @param sectionKey - The section being generated
  * @param normalizedData - The normalized data containing claims
  * @returns true if generation should be blocked
@@ -167,11 +169,9 @@ export function shouldGateSection(
   const isCriticalSection = SECTIONS_REQUIRING_CLAIM1_FOR_GENERATION.has(normalizedKey)
   
   if (!isCriticalSection) return false // Non-critical sections don't gate
-  
-  // For critical sections: require FROZEN Claim 1
-  const claim1FrozenAvailable = isClaim1AvailableAndFrozen(normalizedData)
-  
-  return !claim1FrozenAvailable
+
+  // For critical sections: require a usable Claim 1, frozen or not
+  return !isClaim1AvailableForDrafting(normalizedData)
 }
 
 /**
@@ -185,23 +185,7 @@ export function getGatingReason(
     return null
   }
   
-  const hasClaim1 = isClaim1Available(normalizedData)
-  const isFrozen = areClaimsFrozen(normalizedData)
-  
-  // Check if HTML claims exist (even without structured claims)
-  const htmlClaims = normalizedData?.claimsFinal || normalizedData?.claims || normalizedData?.claimsProvisional || ''
-  const hasHtmlClaims = typeof htmlClaims === 'string' && htmlClaims.trim().length > 0
-  
-  if (!hasClaim1 && !hasHtmlClaims) {
-    return `Section "${sectionKey}" requires Claim 1 but no claims have been generated yet. Please complete the Claims Generation stage first.`
-  }
-  
-  if (!isFrozen) {
-    return `Section "${sectionKey}" requires frozen claims but claims are not yet frozen. Please freeze your claims in the CLAIM_REFINEMENT stage before generating this section.`
-  }
-  
-  // If frozen but still gated (shouldn't happen after the isClaim1AvailableAndFrozen fix)
-  return `Section "${sectionKey}" cannot be generated. Claims appear to be frozen but in an invalid format. Please try unfreezing and refreezing your claims, or regenerate them in the CLAIM_REFINEMENT stage.`
+  return `Section "${sectionKey}" requires Claim 1 but no claims are available yet. Please generate claims in the Preliminary Claims stage first.`
 }
 
 /**
@@ -259,12 +243,12 @@ export function countIndependentClaims(
  * 2. claimsStructured - Working/refined claims (actively being edited)
  * 3. claimsStructuredProvisional - Initial AI-generated claims (lowest authority)
  * 
- * IMPORTANT: claimsStructuredFinal is only populated AFTER user freezes claims
- * (sets claimsApprovedAt). Until then, the function uses working or provisional claims.
- * When requireFrozen=true, the function returns null unless claimsApprovedAt is set.
- * 
+ * claimsStructuredFinal is populated once the claim set is settled for drafting; until
+ * then the working or provisional claims are used. No drafting path requires a frozen
+ * claim set — `requireFrozen` remains only for callers that want to inspect lock state.
+ *
  * @param normalizedData - The normalized data object containing claims
- * @param requireFrozen - If true, only returns Claim 1 if claims are frozen (default: false)
+ * @param requireFrozen - If true, only returns Claim 1 when the claims are locked (default: false)
  */
 export function extractClaim1(
   normalizedData: Record<string, any> | null | undefined,
@@ -288,39 +272,36 @@ export function areIndependentClaimsAvailable(normalizedData: Record<string, any
  * Check if Claim 1 is available AND frozen.
  * This is stricter - used for gating critical sections.
  * 
- * IMPORTANT: Returns true if claims are frozen AND claims exist in ANY form:
+ * IMPORTANT: Returns true if claims exist in ANY form:
  * 1. Structured claims with extractable Claim 1 (preferred)
  * 2. HTML/text claims in claimsFinal or claims fields (fallback)
- * 
+ *
  * This handles cases where claims were manually entered or imported
- * without being parsed into structured format.
+ * without being parsed into structured format. Freezing is NOT required —
+ * the current saved claim set is what drafting builds on.
  */
-export function isClaim1AvailableAndFrozen(normalizedData: Record<string, any> | null | undefined): boolean {
+export function isClaim1AvailableForDrafting(normalizedData: Record<string, any> | null | undefined): boolean {
   if (!normalizedData) return false
-  
-  // First check: claims must be frozen
-  const isFrozen = !!normalizedData.claimsApprovedAt
-  if (!isFrozen) return false
-  
-  // Second check: try to extract Claim 1 from structured claims (preferred)
-  const independentClaimsFromStructured = extractIndependentClaims(normalizedData, true)
+
+  // Try to extract Claim 1 from structured claims (preferred)
+  const independentClaimsFromStructured = extractIndependentClaims(normalizedData)
   if (independentClaimsFromStructured !== null) return true
-  
-  // Fallback check: if structured claims are empty but HTML claims exist, allow it
-  // This handles cases where claims were frozen but not in structured format
+
+  // Fallback: structured claims are empty but HTML claims exist
   const htmlClaims = normalizedData.claimsFinal || normalizedData.claims || normalizedData.claimsProvisional || ''
   const hasHtmlClaims = typeof htmlClaims === 'string' && htmlClaims.trim().length > 0
-  
+
   if (hasHtmlClaims) {
-    console.warn('[isClaim1AvailableAndFrozen] Claims are frozen with HTML content but no structured claims. Allowing generation with reduced precision.')
+    console.warn('[isClaim1AvailableForDrafting] Claims exist as HTML but were never parsed into structured form. Generating with reduced precision.')
     return true
   }
-  
+
   return false
 }
 
 /**
- * Check if claims are frozen (approved by user).
+ * Check whether the user has explicitly locked the claim set. Informational only —
+ * no drafting path requires it.
  */
 export function areClaimsFrozen(normalizedData: Record<string, any> | null | undefined): boolean {
   return !!(normalizedData?.claimsApprovedAt)
@@ -586,8 +567,9 @@ export function buildIndependentClaimsBlock(
   const claimsText = formatIndependentClaimsText(independentClaims)
   if (!claimsText) return ''
 
-  const isFrozen = areClaimsFrozen(normalizedData)
-  const statusLabel = isFrozen ? '(FROZEN - LEGAL AUTHORITY)' : '(WORKING - FOR ALIGNMENT)'
+  // The saved claim set is the legal authority for drafting whether or not the user
+  // has explicitly locked it, so the model is told to treat it as binding either way.
+  const statusLabel = areClaimsFrozen(normalizedData) ? '(FROZEN - LEGAL AUTHORITY)' : '(LEGAL AUTHORITY)'
   const heading = independentClaims.length > 1 ? 'INDEPENDENT CLAIMS' : 'CLAIM 1'
 
   let modeInstruction = ''

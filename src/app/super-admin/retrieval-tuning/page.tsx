@@ -425,7 +425,7 @@ export default function RetrievalTuningPage() {
           className="flex w-full items-start justify-between gap-3 p-5 text-left"
         >
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-lamp-50 text-lamp-600">
               <FlaskConical className="h-4 w-4" />
             </span>
             <div>
@@ -509,7 +509,7 @@ export default function RetrievalTuningPage() {
               type="button"
               onClick={() => void runCalibration()}
               disabled={readOnly || calibrating || !selectedSearchIds.length}
-              className="inline-flex h-11 items-center gap-2 rounded-lg bg-violet-600 px-5 text-sm font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
+              className="inline-flex h-11 items-center gap-2 rounded-lg bg-lamp-600 px-5 text-sm font-semibold text-white transition-colors hover:bg-lamp-700 disabled:opacity-50"
             >
               {calibrating ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
               {calibrating ? 'Replaying searches…' : 'Run calibration'}

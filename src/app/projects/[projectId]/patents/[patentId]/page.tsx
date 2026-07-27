@@ -112,7 +112,7 @@ export default function PatentDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading patent...</p>
         </div>
       </div>
@@ -132,7 +132,7 @@ export default function PatentDetailPage() {
           <p className="text-gray-600 mb-4">The patent you&apos;re looking for could not be found.</p>
           <Link
             href={`/projects/${projectId}`}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700"
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-lamp-600 hover:bg-lamp-700"
           >
             Back to Project
           </Link>
@@ -145,7 +145,7 @@ export default function PatentDetailPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="text-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600 mx-auto mb-4"></div>
         <p className="text-gray-600">Redirecting...</p>
       </div>
     </div>

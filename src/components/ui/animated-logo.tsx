@@ -85,7 +85,7 @@ export default function AnimatedLogo({
 
   // Static logo for paused state
   const StaticLogo = () => (
-    <div className={`${sizeClasses[size]} ${className} bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center shadow-lg`}>
+    <div className={`${sizeClasses[size]} ${className} bg-gradient-to-br from-lamp-400 to-lamp-500 rounded-full flex items-center justify-center shadow-lg`}>
       <svg
         className="w-1/2 h-1/2 text-white"
         fill="none"
@@ -105,7 +105,7 @@ export default function AnimatedLogo({
   // Fallback logo when video fails or as alternative
   const FallbackLogo = () => (
     useKishoFallback ? (
-      <div className={`${sizeClasses[size]} ${className} rounded-full overflow-hidden shadow-lg border-2 border-cyan-200`}>
+      <div className={`${sizeClasses[size]} ${className} rounded-full overflow-hidden shadow-lg border-2 border-lamp-200`}>
         <img
           src="/images/kisho.jpg"
           alt="Kisho - Your AI Assistant"
@@ -144,7 +144,7 @@ export default function AnimatedLogo({
     <div className={`relative ${sizeClasses[size]} ${className}`}>
       {isLoading && (
         <div className="absolute inset-0 bg-gray-200 rounded-full animate-pulse flex items-center justify-center">
-          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <div className="w-4 h-4 border-2 border-lamp-500 border-t-transparent rounded-full animate-spin"></div>
         </div>
       )}
 

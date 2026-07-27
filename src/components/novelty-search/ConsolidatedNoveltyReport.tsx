@@ -725,7 +725,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 a new draft with the prior art already analysed here. */}
             <a
               href={`/novelty-search/${searchId}/to-drafting`}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 sm:shadow-lg"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-lamp-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-lamp-700 sm:shadow-lg"
             >
               <FileText className="h-4 w-4" />
               Push to Drafting

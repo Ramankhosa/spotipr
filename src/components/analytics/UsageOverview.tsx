@@ -56,8 +56,8 @@ export function UsageOverview({ data }: UsageOverviewProps) {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-gray-600">{stat.title}</h3>
             <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-              stat.title.includes('Token') ? 'bg-blue-100 text-blue-600' :
-              stat.title.includes('Cost') ? 'bg-purple-100 text-purple-600' :
+              stat.title.includes('Token') ? 'bg-lamp-100 text-lamp-600' :
+              stat.title.includes('Cost') ? 'bg-lamp-100 text-lamp-600' :
               stat.title.includes('Call') ? 'bg-green-100 text-green-600' :
               'bg-orange-100 text-orange-600'
             }`}>

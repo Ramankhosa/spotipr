@@ -12,7 +12,7 @@ interface ImportDiffViewProps {
 function OpBadge({ op }: { op: string }) {
   const styles: Record<string, string> = {
     create: 'bg-green-100 text-green-800',
-    update: 'bg-blue-100 text-blue-800',
+    update: 'bg-lamp-100 text-lamp-800',
     unchanged: 'bg-gray-100 text-gray-600',
     extra: 'bg-yellow-100 text-yellow-800',
     skip: 'bg-gray-100 text-gray-600'
@@ -27,7 +27,7 @@ function OpBadge({ op }: { op: string }) {
 function SummaryPill({ label, count, tone }: { label: string; count: number; tone: 'green' | 'blue' | 'gray' | 'yellow' }) {
   const tones = {
     green: 'bg-green-50 text-green-700 border-green-200',
-    blue: 'bg-blue-50 text-blue-700 border-blue-200',
+    blue: 'bg-lamp-50 text-lamp-700 border-lamp-200',
     gray: 'bg-gray-50 text-gray-600 border-gray-200',
     yellow: 'bg-yellow-50 text-yellow-700 border-yellow-200'
   }
@@ -94,7 +94,7 @@ function IssueRow({ issue, onResolved }: { issue: ImportIssue; onResolved?: () =
               <button
                 onClick={handleAddAlias}
                 disabled={resolving || !aliasTarget}
-                className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50"
+                className="px-2 py-1 bg-lamp-600 text-white rounded text-xs hover:bg-lamp-700 disabled:opacity-50"
               >
                 {resolving ? 'Adding…' : 'Add alias & re-check'}
               </button>
@@ -179,7 +179,7 @@ export function ImportDiffView({ plan, onIssueResolved }: ImportDiffViewProps) {
                 </tr>
               ))}
               {plan.mappings.update.map(u => (
-                <tr key={`u-${u.sectionKey}`} className="bg-blue-50/50">
+                <tr key={`u-${u.sectionKey}`} className="bg-lamp-50/50">
                   <td className="px-4 py-2"><OpBadge op="update" /></td>
                   <td className="px-4 py-2" colSpan={2}>
                     <span className="font-mono text-xs">{u.sectionKey}</span>
@@ -189,7 +189,7 @@ export function ImportDiffView({ plan, onIssueResolved }: ImportDiffViewProps) {
                       <div key={field}>
                         <span className="font-medium">{field}:</span>{' '}
                         <span className="line-through text-gray-400">{String(u.before[field])}</span>{' '}
-                        → <span className="text-blue-700">{String(u.after[field])}</span>
+                        → <span className="text-lamp-700">{String(u.after[field])}</span>
                       </div>
                     ))}
                   </td>
@@ -215,7 +215,7 @@ export function ImportDiffView({ plan, onIssueResolved }: ImportDiffViewProps) {
         {plan.mappings.unchanged.length > 0 && (
           <button
             onClick={() => setShowUnchanged(v => !v)}
-            className="mt-1 text-xs text-blue-600 hover:text-blue-800"
+            className="mt-1 text-xs text-lamp-600 hover:text-lamp-800"
           >
             {showUnchanged ? 'Hide' : 'Show'} {plan.mappings.unchanged.length} unchanged
           </button>

@@ -99,14 +99,14 @@ type ArchiveResponse = {
 const statusClass: Record<string, string> = {
   DISCOVERED: 'bg-slate-100 text-slate-700',
   QUEUED: 'bg-slate-100 text-slate-700',
-  DOWNLOADING: 'bg-blue-100 text-blue-700',
-  DOWNLOADED: 'bg-cyan-100 text-cyan-800',
-  IMPORTED: 'bg-violet-100 text-violet-700',
+  DOWNLOADING: 'bg-lamp-100 text-lamp-700',
+  DOWNLOADED: 'bg-lamp-100 text-lamp-800',
+  IMPORTED: 'bg-lamp-100 text-lamp-700',
   EXTRACTED: 'bg-amber-100 text-amber-800',
   EMBEDDED: 'bg-emerald-100 text-emerald-700',
   SKIPPED: 'bg-slate-100 text-slate-700',
   FAILED: 'bg-red-100 text-red-700',
-  PROCESSING: 'bg-blue-100 text-blue-700',
+  PROCESSING: 'bg-lamp-100 text-lamp-700',
   COMPLETED: 'bg-emerald-100 text-emerald-700',
   COMPLETED_WITH_WARNINGS: 'bg-amber-100 text-amber-800',
 }
@@ -365,7 +365,7 @@ export default function IpIndiaPatentArchivePage() {
                 <button
                   onClick={() => runAction('historical')}
                   disabled={Boolean(actioning)}
-                  className="inline-flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-md border border-lamp-300 bg-lamp-50 px-3 py-2 text-sm font-medium text-lamp-700 hover:bg-lamp-100 disabled:opacity-50"
                 >
                   <Download className="h-4 w-4" />
                   {actioning === 'historical' ? 'Queueing' : 'Download Historical PDFs'}
@@ -574,7 +574,7 @@ export default function IpIndiaPatentArchivePage() {
                         {file.expectedBytes && file.status === 'DOWNLOADING' && <span>{formatFileSize(file.expectedBytes)}</span>}
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-blue-600" style={{ width: `${progressPercent(file)}%` }} />
+                        <div className="h-full rounded-full bg-lamp-600" style={{ width: `${progressPercent(file)}%` }} />
                       </div>
                     </td>
                     <td className="px-4 py-3">

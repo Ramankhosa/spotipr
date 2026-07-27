@@ -79,10 +79,10 @@ export default function ContradictionInsightPanel({
       >
         <button
           onClick={() => setIsExpanded(true)}
-          className="group bg-gradient-to-r from-violet-500/10 to-purple-500/10 hover:from-violet-500/20 hover:to-purple-500/20 backdrop-blur-sm rounded-xl shadow-lg border border-violet-200/50 p-3 transition-all hover:shadow-xl"
+          className="group bg-gradient-to-r from-lamp-500/10 to-lamp-500/10 hover:from-lamp-500/20 hover:to-lamp-500/20 backdrop-blur-sm rounded-xl shadow-lg border border-lamp-200/50 p-3 transition-all hover:shadow-xl"
         >
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-lamp-500 to-lamp-600 flex items-center justify-center">
               <Lightbulb className="w-5 h-5 text-white" />
             </div>
             <div className="text-left">
@@ -93,7 +93,7 @@ export default function ContradictionInsightPanel({
                 {data.contradictions?.length || 0} tradeoffs identified
               </div>
             </div>
-            <ChevronUp className="w-4 h-4 text-slate-400 group-hover:text-violet-500 transition-colors" />
+            <ChevronUp className="w-4 h-4 text-slate-400 group-hover:text-lamp-500 transition-colors" />
           </div>
           
           {/* Mini preview of principles */}
@@ -102,7 +102,7 @@ export default function ContradictionInsightPanel({
               {data.inventivePrinciples!.slice(0, 3).map((p, i) => (
                 <span
                   key={i}
-                  className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 font-medium"
+                  className="text-[9px] px-1.5 py-0.5 rounded-full bg-lamp-100 text-lamp-600 font-medium"
                 >
                   {typeof p === 'string' ? p : (p as any).name || p}
                 </span>
@@ -134,7 +134,7 @@ export default function ContradictionInsightPanel({
       >
         <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden h-full flex flex-col">
           {/* Header */}
-          <div className="bg-gradient-to-r from-violet-500 to-purple-600 p-4 text-white">
+          <div className="bg-gradient-to-r from-lamp-500 to-lamp-600 p-4 text-white">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
@@ -142,7 +142,7 @@ export default function ContradictionInsightPanel({
                 </div>
                 <div>
                   <h3 className="font-bold text-lg">Invention Insights</h3>
-                  <p className="text-violet-100 text-xs">
+                  <p className="text-lamp-100 text-xs">
                     Understanding your invention's core tradeoffs
                   </p>
                 </div>
@@ -260,7 +260,7 @@ export default function ContradictionInsightPanel({
             {hasPrinciples && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                  <Sparkles className="w-4 h-4 text-violet-500" />
+                  <Sparkles className="w-4 h-4 text-lamp-500" />
                   TRIZ Inventive Principles Applied
                 </div>
                 
@@ -271,7 +271,7 @@ export default function ContradictionInsightPanel({
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: index * 0.05 }}
-                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700 text-xs font-medium border border-violet-200/50"
+                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-lamp-100 to-lamp-100 text-lamp-700 text-xs font-medium border border-lamp-200/50"
                     >
                       {typeof principle === 'string' ? principle : (principle as any).name || principle}
                     </motion.span>
@@ -340,7 +340,7 @@ export default function ContradictionInsightPanel({
               <span>Based on TRIZ methodology</span>
               <button
                 onClick={() => setIsExpanded(false)}
-                className="text-violet-600 hover:text-violet-700 font-medium"
+                className="text-lamp-600 hover:text-lamp-700 font-medium"
               >
                 Minimize
               </button>

@@ -15,7 +15,7 @@ const features = [
     title: "Evidence-Backed Novelty Mapping",
     description: "Feature-level coverage (present/partial/absent) with evidence excerpts, so novelty decisions are explainable.",
     icon: Search,
-    color: "from-blue-400 to-cyan-400"
+    color: "from-lamp-400 to-lamp-400"
   },
   {
     title: "Jurisdiction-Aware Drafting",
@@ -33,13 +33,13 @@ const features = [
     title: "Integrated Figures Workflow",
     description: "Figure planning and generation stays aligned with the draft, keeping descriptions, numerals, and figures in sync.",
     icon: Workflow,
-    color: "from-purple-400 to-pink-400"
+    color: "from-lamp-400 to-lamp-400"
   },
   {
     title: "Multi-Jurisdiction Ready",
     description: "Create a reference draft and translate sections for target jurisdictions with figure compatibility in mind.",
     icon: Globe,
-    color: "from-indigo-400 to-blue-400"
+    color: "from-lamp-400 to-lamp-400"
   },
   {
     title: "Post-Generation Validation",

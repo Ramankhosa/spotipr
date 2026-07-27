@@ -47,12 +47,14 @@ export default function IdeaCard({
     }
   }
 
+  // Status is CATEGORICAL, so it stays off the brand cobalt — a status pill
+  // must never be mistaken for an action.
   const getStatusColor = () => {
     switch (idea.status) {
       case 'PRIVATE': return 'bg-violet-50 text-violet-700 border-violet-200'
       case 'PUBLIC': return 'bg-emerald-50 text-emerald-700 border-emerald-200'
       case 'RESERVED': return 'bg-amber-50 text-amber-700 border-amber-200'
-      case 'LICENSED': return 'bg-blue-50 text-blue-700 border-blue-200'
+      case 'LICENSED': return 'bg-teal-50 text-teal-700 border-teal-200'
       case 'ARCHIVED': return 'bg-slate-50 text-slate-600 border-slate-200'
       default: return 'bg-slate-50 text-slate-600 border-slate-200'
     }
@@ -81,7 +83,7 @@ export default function IdeaCard({
         <div className={`h-1 w-full bg-gradient-to-r ${
           isReservedByUser ? 'from-amber-400 via-orange-400 to-amber-500' : 
           isReserved ? 'from-slate-300 via-slate-400 to-slate-300' :
-          'from-cyan-500 via-blue-500 to-purple-500'
+          'from-lamp-500 via-lamp-500 to-lamp-500'
         }`} />
         
         <CardHeader className="pb-3 space-y-3">
@@ -99,7 +101,7 @@ export default function IdeaCard({
             )}
           </div>
           
-          <h3 className="font-bold text-lg text-slate-900 leading-tight group-hover:text-indigo-600 transition-colors line-clamp-2">
+          <h3 className="font-bold text-lg text-slate-900 leading-tight group-hover:text-lamp-600 transition-colors line-clamp-2">
             {isRedacted ? (
               <span className="blur-[2px] select-none text-slate-400">Protected Invention Title</span>
             ) : (
@@ -220,7 +222,7 @@ export default function IdeaCard({
                 <Button
                   size="sm"
                   onClick={onSendToSearch}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs shadow-sm"
+                  className="w-full bg-lamp-600 hover:bg-lamp-700 text-white text-xs shadow-sm"
                 >
                   🔍 Deep Novelty
                 </Button>

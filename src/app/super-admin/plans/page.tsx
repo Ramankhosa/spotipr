@@ -384,7 +384,7 @@ export default function PlansAdminPage() {
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        <Loader2 className="h-8 w-8 animate-spin text-lamp-600" />
       </div>
     )
   }
@@ -439,7 +439,7 @@ export default function PlansAdminPage() {
 
         {loading ? (
           <div className="flex justify-center py-24">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+            <Loader2 className="h-8 w-8 animate-spin text-lamp-600" />
           </div>
         ) : (
           <>
@@ -454,7 +454,7 @@ export default function PlansAdminPage() {
                     onClick={() => setSelectedCode(plan.code)}
                     className={`text-left px-4 py-3 rounded-lg border transition-colors min-w-[190px] ${
                       isSelected
-                        ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600'
+                        ? 'border-lamp-600 bg-lamp-50 ring-1 ring-lamp-600'
                         : 'border-gray-200 bg-white hover:border-gray-300'
                     }`}
                   >
@@ -483,12 +483,12 @@ export default function PlansAdminPage() {
                       <div className="flex items-center gap-3">
                         <h2 className="text-2xl font-semibold text-gray-900">{selected.name}</h2>
                         {selected.isCustomPriced && (
-                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700">
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-lamp-100 text-lamp-700">
                             Sold one-to-one
                           </span>
                         )}
                         {selected.trialDays && (
-                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-lamp-100 text-lamp-700">
                             {selected.trialDays}-day trial
                           </span>
                         )}
@@ -526,7 +526,7 @@ export default function PlansAdminPage() {
                   </p>
 
                   {selected.isCustomPriced && (
-                    <div className="flex items-start gap-3 bg-purple-50 border border-purple-200 text-purple-800 px-4 py-3 rounded-lg mb-5">
+                    <div className="flex items-start gap-3 bg-lamp-50 border border-lamp-200 text-lamp-800 px-4 py-3 rounded-lg mb-5">
                       <Info className="h-5 w-5 shrink-0 mt-0.5" />
                       <p className="text-sm">
                         This plan is negotiated per customer. The pricing page shows &ldquo;Contact
@@ -759,7 +759,7 @@ export default function PlansAdminPage() {
                             onClick={() => toggleModelClass(selected.code, modelClass)}
                             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border transition-colors disabled:opacity-60 ${
                               active
-                                ? 'bg-blue-600 border-blue-600 text-white'
+                                ? 'bg-lamp-600 border-lamp-600 text-white'
                                 : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
                             }`}
                           >
@@ -861,7 +861,7 @@ export default function PlansAdminPage() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="inline-flex items-center gap-2 px-6 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
+                className="inline-flex items-center gap-2 px-6 py-2 text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700 disabled:opacity-60"
               >
                 {saving ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

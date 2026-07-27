@@ -222,15 +222,15 @@ export default function WritingSamplesModal({ onClose, onUpdate }: WritingSample
                   onClick={() => setActiveJurisdiction(j.code)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition ${
                     activeJurisdiction === j.code
-                      ? 'bg-violet-600 text-white'
+                      ? 'bg-lamp-600 text-white'
                       : hassamples
-                        ? 'bg-slate-700 text-violet-300 hover:bg-slate-600'
+                        ? 'bg-slate-700 text-lamp-300 hover:bg-slate-600'
                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                   }`}
                 >
                   {j.label}
                   {hassamples && (
-                    <span className="ml-2 px-1.5 py-0.5 bg-violet-500/30 rounded text-xs">
+                    <span className="ml-2 px-1.5 py-0.5 bg-lamp-500/30 rounded text-xs">
                       {Object.keys(samples[j.code]).length}
                     </span>
                   )}
@@ -260,7 +260,7 @@ export default function WritingSamplesModal({ onClose, onUpdate }: WritingSample
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin w-8 h-8 border-4 border-violet-500 border-t-transparent rounded-full" />
+              <div className="animate-spin w-8 h-8 border-4 border-lamp-500 border-t-transparent rounded-full" />
             </div>
           ) : (
             <div className="space-y-3">
@@ -280,7 +280,7 @@ export default function WritingSamplesModal({ onClose, onUpdate }: WritingSample
                     className={`rounded-xl border transition ${
                       sample 
                         ? sample.isActive !== false
-                          ? 'border-violet-500/50 bg-slate-800'
+                          ? 'border-lamp-500/50 bg-slate-800'
                           : 'border-slate-700 bg-slate-800/50 opacity-60'
                         : 'border-slate-700 bg-slate-800/30'
                     }`}
@@ -377,7 +377,7 @@ export default function WritingSamplesModal({ onClose, onUpdate }: WritingSample
                                 : 'Add your preferred writing style for this section...'
                             }"`}
                             className={`w-full px-3 py-3 bg-slate-900 border rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none resize-none ${
-                              isOverLimit ? 'border-red-500' : 'border-slate-600 focus:border-violet-500'
+                              isOverLimit ? 'border-red-500' : 'border-slate-600 focus:border-lamp-500'
                             }`}
                             rows={5}
                           />
@@ -411,7 +411,7 @@ export default function WritingSamplesModal({ onClose, onUpdate }: WritingSample
                             <button
                               onClick={() => handleSave(section.key)}
                               disabled={saving === section.key || isOverLimit || isUnderLimit}
-                              className="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-lg font-medium disabled:opacity-50"
+                              className="px-4 py-1.5 bg-lamp-600 hover:bg-lamp-500 text-white text-sm rounded-lg font-medium disabled:opacity-50"
                             >
                               {saving === section.key ? 'Saving...' : 'Save Sample'}
                             </button>
@@ -430,7 +430,7 @@ export default function WritingSamplesModal({ onClose, onUpdate }: WritingSample
         <div className="p-4 border-t border-slate-700 bg-slate-800/50">
           <div className="flex items-center justify-between">
             <div className="text-xs text-slate-500">
-              <span className="text-violet-400">{totalSamples}</span> writing samples saved
+              <span className="text-lamp-400">{totalSamples}</span> writing samples saved
               {activeJurisdiction === '*' && ' • Universal samples apply to all jurisdictions'}
             </div>
             <button

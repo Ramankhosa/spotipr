@@ -47,10 +47,10 @@ export default function IdeaListItem({
 
   const getStatusColor = () => {
     switch (idea.status) {
-      case 'PRIVATE': return 'bg-violet-100 text-violet-800'
+      case 'PRIVATE': return 'bg-lamp-100 text-lamp-800'
       case 'PUBLIC': return 'bg-green-100 text-green-800'
       case 'RESERVED': return 'bg-orange-100 text-orange-800'
-      case 'LICENSED': return 'bg-blue-100 text-blue-800'
+      case 'LICENSED': return 'bg-lamp-100 text-lamp-800'
       case 'ARCHIVED': return 'bg-gray-100 text-gray-800'
       default: return 'bg-gray-100 text-gray-800'
     }
@@ -139,7 +139,7 @@ export default function IdeaListItem({
               <Button
                 size="sm"
                 onClick={onSendToSearch}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-lamp-600 hover:bg-lamp-700"
               >
                 🔍 Search
               </Button>

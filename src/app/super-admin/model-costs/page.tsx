@@ -125,7 +125,7 @@ export default function ModelCostsPage() {
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
       </div>
     )
   }
@@ -223,7 +223,7 @@ export default function ModelCostsPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className="mt-1 inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                className="mt-1 inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-lamp-600 hover:bg-lamp-700 disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Save model cost'}
               </button>

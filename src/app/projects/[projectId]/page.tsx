@@ -185,7 +185,7 @@ export default function ProjectDashboardPage() {
       case 'DRAFT':
         return 'bg-amber-500/10 text-amber-600 border-amber-500/20'
       case 'IN_PROGRESS':
-        return 'bg-blue-500/10 text-blue-600 border-blue-500/20'
+        return 'bg-lamp-500/10 text-lamp-600 border-lamp-500/20'
       case 'COMPLETED':
         return 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
       default:
@@ -297,16 +297,16 @@ export default function ProjectDashboardPage() {
 
             <Link
               href={`/novelty-search?projectId=${projectId}`}
-              className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-purple-500/50 hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300"
+              className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-lamp-500/50 hover:shadow-lg hover:shadow-lamp-500/10 transition-all duration-300"
             >
-              <div className="p-3 bg-purple-50 rounded-xl mr-4 group-hover:bg-purple-600 group-hover:text-white transition-colors">
-                <Search className="w-6 h-6 text-purple-600 group-hover:text-white" />
+              <div className="p-3 bg-lamp-50 rounded-xl mr-4 group-hover:bg-lamp-600 group-hover:text-white transition-colors">
+                <Search className="w-6 h-6 text-lamp-600 group-hover:text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="text-lg font-semibold text-slate-900 group-hover:text-purple-600 transition-colors">Novelty Search</h3>
+                <h3 className="text-lg font-semibold text-slate-900 group-hover:text-lamp-600 transition-colors">Novelty Search</h3>
                 <p className="text-sm text-slate-500">Comprehensive patent novelty assessment</p>
               </div>
-              <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-1 transition-all" />
+              <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-lamp-500 group-hover:translate-x-1 transition-all" />
             </Link>
           </div>
         </motion.div>

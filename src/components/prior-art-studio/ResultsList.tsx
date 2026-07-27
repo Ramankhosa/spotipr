@@ -47,7 +47,7 @@ const LANE_META: Record<string, { label: string; classes: string; help: string }
   match: { label: 'WORDS', classes: 'text-muted-foreground', help: 'Found by literal keyword match only.' },
   cast: {
     label: 'MEANING',
-    classes: 'text-blue-600 dark:text-blue-400',
+    classes: 'text-lamp-600 dark:text-lamp-400',
     help: 'Found by meaning only — it shares no query word with your canvas. A keyword-only search would have missed it.',
   },
   both: {
@@ -154,7 +154,7 @@ export function ResultsList({
                     e.stopPropagation()
                     onOpenReader(family)
                   }}
-                  className="rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-blue-700 transition-colors hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-900/50"
+                  className="rounded bg-lamp-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-lamp-700 transition-colors hover:bg-lamp-100 dark:bg-lamp-950/40 dark:text-lamp-300 dark:hover:bg-lamp-900/50"
                   title="Open and read this document (Enter)"
                 >
                   {family.publicationNumber}

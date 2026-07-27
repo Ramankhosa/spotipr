@@ -34,7 +34,7 @@ export default function DiagramsSection() {
     <section className="relative py-32 bg-ai-graphite-950 overflow-hidden border-t border-ai-graphite-900/70">
       <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-[0.03]" />
       <div className="absolute top-20 right-0 w-[520px] h-[520px] bg-ai-blue-900/12 rounded-full blur-[140px]" />
-      <div className="absolute -left-32 bottom-0 w-[520px] h-[520px] bg-cyan-900/10 rounded-full blur-[160px]" />
+      <div className="absolute -left-32 bottom-0 w-[520px] h-[520px] bg-lamp-900/10 rounded-full blur-[160px]" />
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">

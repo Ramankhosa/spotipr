@@ -164,7 +164,7 @@ export default function FileUpload({ onFileProcessed, projectId, patentId, disab
         onClick={handleClick}
         className={`
           relative border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-all
-          ${isDragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}
+          ${isDragOver ? 'border-lamp-400 bg-lamp-50' : 'border-gray-300 hover:border-gray-400'}
           ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
           ${error ? 'border-red-300 bg-red-50' : ''}
         `}
@@ -181,14 +181,14 @@ export default function FileUpload({ onFileProcessed, projectId, patentId, disab
         <div className="flex flex-col items-center justify-center space-y-4">
           {isUploading ? (
             <>
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-lamp-600"></div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-gray-900">
                   Processing {selectedFile?.name}
                 </p>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                    className="bg-lamp-600 h-2 rounded-full transition-all duration-300"
                     style={{ width: `${uploadProgress}%` }}
                   ></div>
                 </div>

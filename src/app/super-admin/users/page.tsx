@@ -188,7 +188,7 @@ export default function SuperAdminUsersPage() {
             />
             <button
               onClick={() => fetchUsers(query)}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+              className="rounded-lg bg-lamp-600 px-4 py-2 text-sm font-medium text-white hover:bg-lamp-500"
             >
               Search
             </button>
@@ -245,7 +245,7 @@ export default function SuperAdminUsersPage() {
                       </span>
                     </td>
                     <td className="px-4 py-4">
-                      <span className={`rounded-full px-2 py-1 text-[11px] ${user.emailDraftingEnabled ? 'bg-indigo-500/15 text-indigo-300' : 'bg-slate-700 text-slate-300'}`}>
+                      <span className={`rounded-full px-2 py-1 text-[11px] ${user.emailDraftingEnabled ? 'bg-lamp-500/15 text-lamp-300' : 'bg-slate-700 text-slate-300'}`}>
                         {user.emailDraftingEnabled ? 'Enabled' : 'Disabled'}
                       </span>
                     </td>
@@ -275,7 +275,7 @@ export default function SuperAdminUsersPage() {
                         )}
                         <button
                           onClick={() => handleEmailDraftingToggle(user)}
-                          className="rounded-md border border-indigo-500/40 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-500/10"
+                          className="rounded-md border border-lamp-500/40 px-3 py-1.5 text-xs text-lamp-200 hover:bg-lamp-500/10"
                         >
                           {user.emailDraftingEnabled ? 'Disable Email Drafting' : 'Enable Email Drafting'}
                         </button>

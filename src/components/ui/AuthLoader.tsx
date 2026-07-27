@@ -33,7 +33,7 @@ export default function AuthLoader() {
             transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
           />
           <motion.div
-            className="absolute inset-2 border-r-4 border-purple-500 rounded-full"
+            className="absolute inset-2 border-r-4 border-lamp-500 rounded-full"
             animate={{ rotate: -360 }}
             transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
           />
@@ -67,7 +67,7 @@ export default function AuthLoader() {
         {/* Progress Bar */}
         <div className="mt-6 w-64 h-1 bg-ai-graphite-800 rounded-full overflow-hidden">
           <motion.div 
-            className="h-full bg-gradient-to-r from-ai-blue-600 to-purple-600"
+            className="h-full bg-gradient-to-r from-ai-blue-600 to-lamp-600"
             initial={{ width: "0%" }}
             animate={{ width: "100%" }}
             transition={{ duration: 3.5, ease: "easeInOut" }}
