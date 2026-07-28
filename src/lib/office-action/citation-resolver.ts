@@ -205,7 +205,8 @@ export function toAttorneyView(citation: {
     examinerRelevance: seed?.relevantDescription,
     status,
     sourceLabel: status === 'available'
-      ? (full?.claims && full?.description ? 'Full patent specification' : 'Patent record')
+      ? (full?.providedByAttorney ? 'Provided by you'
+        : full?.claims && full?.description ? 'Full patent specification' : 'Patent record')
       : status === 'awaiting-upload' ? 'Document to be provided' : 'Retrieving…'
   }
 }

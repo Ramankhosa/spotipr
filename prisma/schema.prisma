@@ -5208,6 +5208,9 @@ model OfficeActionJob {
   startedAt     DateTime?
   completedAt   DateTime?
   cancelledAt   DateTime?
+  // Pause request. The worker reads this between objections and stops cleanly,
+  // leaving the draft resumable — how the attorney pauses to add prior art.
+  cancelRequested Boolean             @default(false)
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
 

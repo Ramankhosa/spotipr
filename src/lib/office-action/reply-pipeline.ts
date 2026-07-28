@@ -27,6 +27,13 @@ export interface PrepareOptions {
   objectionIds?: string[]
   /** Called between stages (drives the background job's currentStep display). */
   onProgress?: (step: string, done: number, total: number) => void | Promise<void>
+  /**
+   * Checked before each objection. Returning true stops the run cleanly at the
+   * next boundary — the draft stays flagged in progress so "Resume preparation"
+   * picks it up, which is what lets the attorney pause, add prior art, and
+   * continue with the new document in play.
+   */
+  shouldStop?: () => Promise<boolean> | boolean
 }
 
 export interface PrepareResult {
@@ -38,6 +45,10 @@ export interface PrepareResult {
   amendmentsProposed: number
   amendmentsUsable: number
   judgmentFlags: Array<{ objectionId: string; flag: string }>
+  /** The run was paused at an objection boundary; the draft can be resumed. */
+  stopped?: boolean
+  /** Objections still to draft when the run stopped. */
+  remaining?: number
 }
 
 export async function prepareReply(caseId: string, opts: PrepareOptions = {}): Promise<PrepareResult> {
@@ -132,8 +143,14 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   }
   let namedSections: Record<string, string> = {}
 
+  let stopped = false
   for (const { doc, row } of workItems) {
     if (alreadyDrafted.has(row.id)) continue      // resumed run: keep what is already paid for
+
+    // Pause point. Checked here, between objections, so a stop never lands in
+    // the middle of a paid stage and never leaves a half-written section.
+    if (opts.shouldStop && await opts.shouldStop()) { stopped = true; break }
+
     await progress(`Objection ${done + 1} of ${workItems.length}`, done + 1, totalSteps)
 
     // Everything for ONE objection is isolated: a chart, strategy or draft that
@@ -219,6 +236,22 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     }
     done++
     await persistPartial(false)
+  }
+
+  // A paused run keeps its draft open so the next prepare resumes it, and skips
+  // the closing sections — they are written once, over the finished set.
+  if (stopped) {
+    await persistPartial(false)     // inProgress stays true — this draft resumes
+    return {
+      draftId: draft.id, version,
+      objectionsDrafted: objectionReplies.filter(r => (r.bodyText || '').trim()).length,
+      draftErrors: objectionReplies.filter(r => r.draftError).length,
+      amendmentsProposed: proposedCount,
+      amendmentsUsable: allAmendments.length,
+      judgmentFlags,
+      stopped: true,
+      remaining: Math.max(0, workItems.length - objectionReplies.length)
+    }
   }
 
   // ---- named sections ----

@@ -19,7 +19,7 @@ import { ACCEPTED_UPLOAD_EXTENSIONS, ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_LABEL 
 import { formatParagraphRefs } from '@/lib/office-action/document-intake'
 import {
   AlertTriangle, ArrowLeft, BookOpen, Check, CheckCheck, CheckCircle2, ChevronRight, Clock,
-  Download, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen,
+  Download, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen, Pause,
   RefreshCw, Sparkles, Upload, X
 } from 'lucide-react'
 
@@ -151,6 +151,7 @@ export default function OfficeActionWorkspacePage() {
   const [highlight, setHighlight] = useState<string | null>(null)
   const [showSource, setShowSource] = useState(false)       // small screens
   const [intakeStep, setIntakeStep] = useState<string | null>(null)
+  const [pausing, setPausing] = useState(false)
   // Docked source viewer: the attorney sets how much room the report gets, and
   // both the width and the collapsed state survive a reload (see SOURCE_PREFS).
   // Saving happens inside the updater rather than in an effect — an effect would
@@ -257,7 +258,15 @@ export default function OfficeActionWorkspacePage() {
         })
         setTab('draft')
         await load()
-      } else if (job.status === 'FAILED' || job.status === 'CANCELLED') {
+      } else if (job.status === 'CANCELLED') {
+        const r = job.result || {}
+        toast({
+          title: 'Preparation paused',
+          description: `${r.objectionsDrafted ?? 0} section(s) are saved. Upload any prior art you need, then choose “Resume preparation”.`,
+          variant: 'warning'
+        })
+        await load()
+      } else if (job.status === 'FAILED') {
         toast({ title: 'Could not prepare the reply', description: job.lastError || undefined, variant: 'error' })
         await load()
       }
@@ -278,6 +287,15 @@ export default function OfficeActionWorkspacePage() {
   const replies: any[] = view?.latestDraft?.sectionsJson?.objectionReplies || []
   const replyFor = (id: string) => replies.find(r => r.objectionId === id)
   const approvedCount = replies.filter(r => r.approved).length
+
+  /**
+   * A run that stopped part-way leaves its draft flagged inProgress with no job
+   * still working. Preparing again resumes that draft — the finished sections
+   * are kept and only the missing objections are drafted.
+   */
+  const preparationInterrupted = Boolean(
+    (view?.latestDraft?.sectionsJson as any)?.inProgress && !prepareActive
+  )
 
   // ---------- actions ----------
 
@@ -317,6 +335,7 @@ export default function OfficeActionWorkspacePage() {
   const startCase = async (payload: {
     fer: { file?: File; text?: string }
     materials: Array<{ kind: string; file?: File; text?: string; title?: string; intentNote?: string }>
+    citedDocuments?: Array<{ label: string; file?: File; text?: string; title?: string }>
   }) => {
     setBusy('ingest')
     const failures: string[] = []
@@ -359,11 +378,39 @@ export default function OfficeActionWorkspacePage() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not read the report')
 
+      // Cited art can only be attached now — D1/D2 exist once the report is parsed.
+      let citedAttached = 0
+      for (const c of payload.citedDocuments || []) {
+        setIntakeStep(`Attaching ${c.label}…`)
+        try {
+          let cres: Response
+          if (c.file) {
+            const fd = new FormData()
+            fd.append('file', c.file); fd.append('label', c.label)
+            if (c.title) fd.append('title', c.title)
+            cres = await fetch(`/api/office-actions/${caseId}/citations`, { method: 'POST', headers: authHeaders(), body: fd })
+          } else {
+            cres = await fetch(`/api/office-actions/${caseId}/citations`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify({ label: c.label, text: c.text, title: c.title })
+            })
+          }
+          const cdata = await cres.json().catch(() => ({}))
+          if (!cres.ok) throw new Error(cdata.error || 'Could not attach the document')
+          citedAttached++
+        } catch (err) {
+          failures.push(`${c.label}: ${err instanceof Error ? err.message : 'could not be attached'}`)
+        }
+      }
+
       const added = payload.materials.length - failures.length
       toast({
         title: `Report read — ${data.objectionCount} objection${data.objectionCount === 1 ? '' : 's'} found`,
-        description: [added ? `${added} case-file document${added === 1 ? '' : 's'} added.` : '', data.warning || '']
-          .filter(Boolean).join(' ') || undefined,
+        description: [
+          added > 0 ? `${added} case-file document${added === 1 ? '' : 's'} added.` : '',
+          citedAttached ? `${citedAttached} cited document${citedAttached === 1 ? '' : 's'} attached.` : '',
+          data.warning || ''
+        ].filter(Boolean).join(' ') || undefined,
         variant: data.warning ? 'warning' : 'success'
       })
       await load()
@@ -377,11 +424,34 @@ export default function OfficeActionWorkspacePage() {
     }
   }
 
+  /**
+   * Pause the run. It stops at the next objection boundary rather than
+   * immediately — the objection in flight is finished and saved, so nothing
+   * paid for is thrown away.
+   */
+  const pausePrepare = async () => {
+    setPausing(true)
+    try {
+      const res = await fetch(`/api/office-actions/${caseId}/prepare`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ action: 'pause' })
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not pause the run')
+      setPrepareStep('Pausing after the current objection…')
+      toast({ title: 'Pausing after the current objection', description: 'Upload any prior art you need — resuming keeps the sections already drafted.' })
+    } catch (err) {
+      toast({ title: 'Could not pause', description: err instanceof Error ? err.message : undefined, variant: 'error' })
+    } finally { setPausing(false) }
+  }
+
   // Prepare runs as a background job (a real FER is ~3 LLM calls per objection,
   // far beyond any request timeout) — start it, then poll for progress.
   const prepare = async () => {
     const anyWork = replies.some(r => r.approved || r.bodyText)
-    if (view?.latestDraft && anyWork) {
+    // Resuming an interrupted run adds the missing sections — nothing is
+    // replaced, so the "your edits will be lost" warning would be a lie.
+    if (view?.latestDraft && anyWork && !preparationInterrupted) {
       const ok = window.confirm('Re-preparing drafts a fresh reply: your edits and approvals on the current draft will be replaced. Continue?')
       if (!ok) return
     }
@@ -517,11 +587,14 @@ export default function OfficeActionWorkspacePage() {
         onOpenCaseFile={() => setShowCaseFile(true)}
         onAddDocument={() => setShowAddDocument(true)}
         onPrepare={prepare}
+        onPause={pausePrepare}
+        pausing={pausing}
         onPreview={previewReply}
         onExport={exportDocx}
         busy={busy}
         prepareStep={prepareStep}
         hasDraft={Boolean(view.latestDraft)}
+        interrupted={preparationInterrupted}
         hasReport={hasReport}
       />
 
@@ -607,6 +680,7 @@ export default function OfficeActionWorkspacePage() {
                     : { claimNumber: a.claimNumber, remove: true }] },
                   include ? `Claim ${a.claimNumber} amendment included in the reply` : `Claim ${a.claimNumber} amendment excluded from the reply`)}
                 onJump={jumpToSource}
+                onCitationUploaded={load}
               />
             ) : (
               <div className="p-10 text-center text-sm text-muted-foreground">No objections extracted yet.</div>
@@ -628,6 +702,7 @@ export default function OfficeActionWorkspacePage() {
             onToggleCollapsed={() => { updateSourcePrefs({ collapsed: !sourcePrefs.collapsed }); setShowSource(false) }}
             width={sourcePrefs.width}
             onResize={resizeSource}
+            onCitationUploaded={load}
           />
         </div>
       )}
@@ -669,7 +744,10 @@ export default function OfficeActionWorkspacePage() {
 function DeadlineStrip(props: {
   view: CaseView; approved: number; total: number
   onOpenCaseFile: () => void; onAddDocument: () => void; onPrepare: () => void; onPreview: () => void; onExport: () => void
+  onPause: () => void; pausing: boolean
   busy: string | null; prepareStep: string | null; hasDraft: boolean; hasReport: boolean
+  /** A previous run stopped part-way: its draft is still flagged in progress. */
+  interrupted: boolean
 }) {
   const { view } = props
   const primary = view.deadlines.find(d => d.consequence) || view.deadlines[0]
@@ -724,11 +802,22 @@ function DeadlineStrip(props: {
                 title="Upload a further communication (subsequent report, hearing notice…)">
                 <Upload className="w-4 h-4 mr-1.5" aria-hidden /> Add document
               </Button>
-              <Button size="sm" onClick={props.onPrepare} disabled={props.busy !== null}>
+              <Button size="sm" onClick={props.onPrepare} disabled={props.busy !== null}
+                title={props.interrupted ? 'A previous run stopped part-way — this continues it and keeps the sections already drafted' : undefined}>
                 {props.busy === 'prepare'
                   ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> {props.prepareStep || 'Preparing…'}</>
-                  : <><Sparkles className="w-4 h-4 mr-1.5" aria-hidden /> {props.hasDraft ? 'Re-prepare reply' : 'Prepare reply'}</>}
+                  : props.interrupted
+                    ? <><RefreshCw className="w-4 h-4 mr-1.5" aria-hidden /> Resume preparation</>
+                    : <><Sparkles className="w-4 h-4 mr-1.5" aria-hidden /> {props.hasDraft ? 'Re-prepare reply' : 'Prepare reply'}</>}
               </Button>
+              {props.busy === 'prepare' && (
+                <Button variant="outline" size="sm" onClick={props.onPause} disabled={props.pausing}
+                  title="Stop after the current objection — drafted sections are kept, and you can upload prior art before resuming">
+                  {props.pausing
+                    ? <>Pausing…</>
+                    : <><Pause className="w-4 h-4 mr-1.5" aria-hidden /> Pause</>}
+                </Button>
+              )}
               <Button variant="outline" size="sm" onClick={props.onPreview} disabled={props.busy !== null || !props.hasDraft}>
                 <BookOpen className="w-4 h-4 mr-1.5" aria-hidden /> Preview
               </Button>
@@ -845,6 +934,7 @@ function IntakePanel(props: {
   onStart: (p: {
     fer: { file?: File; text?: string }
     materials: Array<{ kind: string; file?: File; text?: string; title?: string; intentNote?: string }>
+    citedDocuments: Array<{ label: string; file?: File; text?: string; title?: string }>
   }) => void
   onOpenCaseFile: () => void
 }) {
@@ -852,6 +942,13 @@ function IntakePanel(props: {
   const [spec, setSpec] = useState<MaterialSlot>(EMPTY_SLOT)
   const [claims, setClaims] = useState<MaterialSlot>(EMPTY_SLOT)
   const [supplementary, setSupplementary] = useState<Array<{ key: string; slot: MaterialSlot; title: string; intentNote: string }>>([])
+  // The examiner's own cited art (D1, D2…), attached after the report is read
+  // — the labels only exist once the FER has been parsed.
+  const [cited, setCited] = useState<Array<{ key: string; slot: MaterialSlot; label: string; title: string }>>([])
+  const addCited = () =>
+    setCited(list => [...list, { key: `c${list.length}-${list.length}`, slot: EMPTY_SLOT, label: `D${list.length + 1}`, title: '' }])
+  const patchCited = (key: string, patch: Partial<{ slot: MaterialSlot; label: string; title: string }>) =>
+    setCited(list => list.map(c => c.key === key ? { ...c, ...patch } : c))
 
   const addSupplementary = () =>
     setSupplementary(list => [...list, { key: `s${list.length}-${list.length ? list[list.length - 1].key : 'first'}`, slot: EMPTY_SLOT, title: '', intentNote: '' }])
@@ -867,10 +964,20 @@ function IntakePanel(props: {
     push('SPECIFICATION', spec)
     push('CLAIMS', claims)
     for (const s of supplementary) push('SUPPLEMENTARY', s.slot, { title: s.title || undefined, intentNote: s.intentNote || undefined })
-    props.onStart({ fer: fer.file ? { file: fer.file } : { text: fer.text }, materials })
+
+    const citedDocuments = cited
+      .filter(c => c.label.trim() && slotFilled(c.slot))
+      .map(c => ({
+        label: c.label.trim(), title: c.title.trim() || undefined,
+        ...(c.slot.file ? { file: c.slot.file } : { text: c.slot.text })
+      }))
+
+    props.onStart({ fer: fer.file ? { file: fer.file } : { text: fer.text }, materials, citedDocuments })
   }
 
-  const optionalCount = [spec, claims].filter(slotFilled).length + supplementary.filter(s => slotFilled(s.slot)).length
+  const optionalCount = [spec, claims].filter(slotFilled).length
+    + supplementary.filter(s => slotFilled(s.slot)).length
+    + cited.filter(c => slotFilled(c.slot) && c.label.trim()).length
 
   return (
     <div className="max-w-2xl mx-auto w-full px-4 py-10">
@@ -897,7 +1004,7 @@ function IntakePanel(props: {
       {/* 2 — the invention as filed */}
       <section className="border rounded-lg p-4 mb-4">
         <div className="flex items-baseline justify-between gap-2 mb-1">
-          <h3 className="font-medium">The invention, as filed</h3>
+          <h3 className="font-medium">Your patent documents, as filed</h3>
           <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Recommended</span>
         </div>
         <p className="text-xs text-muted-foreground mb-3">
@@ -918,7 +1025,41 @@ function IntakePanel(props: {
         </div>
       </section>
 
-      {/* 3 — supporting material */}
+      {/* 3 — the examiner's cited art */}
+      <section className="border rounded-lg p-4 mb-4">
+        <div className="flex items-baseline justify-between gap-2 mb-1">
+          <h3 className="font-medium">Prior art cited in the report (D1, D2…)</h3>
+          <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Optional</span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Patents are fetched automatically where they can be found. Journal papers and other
+          non-patent literature usually cannot be — add your copies here, labelled as the report
+          labels them (D1, D2…), and each one feeds the claim chart instead of the examiner&rsquo;s summary.
+        </p>
+        {cited.map(d => (
+          <div key={d.key} className="border rounded-md p-3 mb-2">
+            <div className="flex items-center gap-2 mb-2">
+              <Input className="h-8 text-sm w-24 font-mono" placeholder="D1" value={d.label} disabled={props.busy}
+                onChange={e => patchCited(d.key, { label: e.target.value })} />
+              <Input className="h-8 text-sm" placeholder="Title (optional)" value={d.title} disabled={props.busy}
+                onChange={e => patchCited(d.key, { title: e.target.value })} />
+              <button type="button" className="text-muted-foreground hover:text-destructive shrink-0"
+                aria-label="Remove this cited document"
+                onClick={() => setCited(list => list.filter(x => x.key !== d.key))}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <MaterialInput id={`oa-cited-${d.key}`} value={d.slot} rows={3} disabled={props.busy}
+              onChange={slot => patchCited(d.key, { slot })}
+              placeholder="Paste the document text…" />
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm" onClick={addCited} disabled={props.busy}>
+          Add a cited document
+        </Button>
+      </section>
+
+      {/* 4 — supporting material */}
       <section className="border rounded-lg p-4 mb-5">
         <div className="flex items-baseline justify-between gap-2 mb-1">
           <h3 className="font-medium">Supporting material</h3>
@@ -1001,6 +1142,7 @@ function ObjectionWorkbench(props: {
   onDismiss: (dismiss: boolean) => void
   onToggleAmendment: (amendment: any, include: boolean) => void
   onJump: (tab: string, passage?: string) => void
+  onCitationUploaded: () => void | Promise<void>
 }) {
   const { objection: o, reply } = props
   const strategy = o.strategyJson || null
@@ -1066,7 +1208,7 @@ function ObjectionWorkbench(props: {
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm mt-4">
             <dt className="text-muted-foreground">Claims affected</dt>
             <dd>{o.claimsAffected?.length ? compactRange(o.claimsAffected) : '—'}</dd>
-            <dt className="text-muted-foreground">Cited documents</dt>
+            <dt className="text-muted-foreground">Prior art cited</dt>
             <dd>{o.citationLabels?.length ? o.citationLabels.join(', ') : 'None'}</dd>
             <dt className="text-muted-foreground">Statutory basis</dt>
             <dd>{o.localBasis || '—'}</dd>
@@ -1075,7 +1217,8 @@ function ObjectionWorkbench(props: {
       )}
 
       {props.tab === 'evidence' && (
-        <EvidenceTab citations={props.citations} citedDocs={props.citedDocs} onJump={props.onJump} />
+        <EvidenceTab citations={props.citations} citedDocs={props.citedDocs} onJump={props.onJump}
+          onCitationUploaded={props.onCitationUploaded} />
       )}
 
       {props.tab === 'strategy' && (
@@ -1211,7 +1354,77 @@ function ObjectionWorkbench(props: {
   )
 }
 
-function EvidenceTab(props: { citations: CitationRow[]; citedDocs: CitedDocView[]; onJump: (tab: string, passage?: string) => void }) {
+/**
+ * Attach the attorney's own copy of a cited document the office relied on.
+ * Papers and foreign patents often are not retrievable; without the text the
+ * claim chart cannot run and the reply argues against the examiner's summary
+ * rather than the document itself.
+ */
+function CitedDocumentUpload(props: {
+  label: string; caseId?: string; onUploaded: () => void | Promise<void>
+  /** Icon-only, for the source panel header. */
+  compact?: boolean
+  /** The document is already on file — this replaces it. */
+  replace?: boolean
+}) {
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const params = useParams<{ caseId: string }>()
+  const caseId = props.caseId || params?.caseId
+
+  const upload = async (file: File) => {
+    setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file); fd.append('label', props.label)
+      const res = await fetch(`/api/office-actions/${caseId}/citations`, { method: 'POST', headers: authHeaders(), body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not attach the document')
+      toast({ title: data.message || `${props.label} attached`, variant: 'success' })
+      await props.onUploaded()
+    } catch (err) {
+      toast({ title: `Could not attach ${props.label}`, description: err instanceof Error ? err.message : undefined, variant: 'error' })
+    } finally { setBusy(false) }
+  }
+
+  const picker = (
+    <input ref={fileRef} type="file" accept={ACCEPTED_UPLOAD_EXTENSIONS} className="hidden"
+      onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = '' }} />
+  )
+  const hint = `${props.replace ? 'Replace' : 'Upload'} ${props.label} — your copy of the prior art the examiner cited (${ACCEPTED_UPLOAD_LABEL})`
+
+  if (props.compact) {
+    return (
+      <span className="flex items-center">
+        {picker}
+        <button type="button" disabled={busy} onClick={() => fileRef.current?.click()}
+          aria-label={hint} title={hint}
+          className="text-muted-foreground hover:text-foreground disabled:opacity-50">
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <Upload className="w-4 h-4" aria-hidden />}
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <span className="flex items-center gap-2 shrink-0">
+      <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Document to be provided</span>
+      {picker}
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => fileRef.current?.click()} title={hint}>
+        {busy
+          ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" aria-hidden /> Reading…</>
+          : <><Upload className="w-3.5 h-3.5 mr-1.5" aria-hidden /> Upload {props.label}</>}
+      </Button>
+    </span>
+  )
+}
+
+function EvidenceTab(props: {
+  citations: CitationRow[]; citedDocs: CitedDocView[]
+  onJump: (tab: string, passage?: string) => void
+  onCitationUploaded: () => void | Promise<void>
+}) {
   if (!props.citations.length) {
     return <EmptyHint text="This objection cites no documents — the evidence is the specification itself. Open the case file to review it." />
   }
@@ -1235,7 +1448,7 @@ function EvidenceTab(props: { citations: CitationRow[]; citedDocs: CitedDocView[
               ) : doc?.status === 'pending' ? (
                 <span className="text-xs text-muted-foreground inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" aria-hidden /> Retrieving…</span>
               ) : (
-                <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Document to be provided</span>
+                <CitedDocumentUpload label={c.label} onUploaded={props.onCitationUploaded} />
               )}
             </div>
             <div className="px-3 py-2.5 space-y-2 text-sm">
@@ -1286,19 +1499,29 @@ function SourceViewer(props: {
   /** Docked (xl+) only — the small-screen panel is an overlay driven by `open`. */
   collapsed: boolean; onToggleCollapsed: () => void
   width: number; onResize: (next: number | ((prev: number) => number)) => void
+  onCitationUploaded: () => void | Promise<void>
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   // Show the report actually in play: the most recent successfully parsed one.
   const parsedDocs = props.view.case.documents.filter(d => d.parseStatus === 'COMPLETED')
   const ferText = (parsedDocs[parsedDocs.length - 1] || props.view.case.documents[0])?.rawText || ''
   const docs = props.view.citedDocuments.filter(d => d.status === 'available')
+  const missingDocs = props.view.citedDocuments.filter(d => d.status !== 'available')
 
-  const sources: Array<{ id: string; label: string; text: string; heading: string }> = [
+  // Prior art the examiner cited. Documents still missing get a tab too — that
+  // is where the attorney supplies their own copy, and an invisible gap is a
+  // gap nobody fills.
+  const sources: Array<{ id: string; label: string; text: string; heading: string; missing?: boolean }> = [
     { id: 'FER', label: 'FER', heading: 'First Examination Report — as issued', text: ferText },
     ...docs.map(d => ({
       id: d.label, label: d.label,
-      heading: `${d.label} · ${d.title || d.publicationNumber || 'Cited document'} — ${d.sourceLabel}`,
+      heading: `${d.label} · ${d.title || d.publicationNumber || 'Prior art cited by the examiner'} — ${d.sourceLabel}`,
       text: [d.abstract && `ABSTRACT\n${d.abstract}`, d.claims && `CLAIMS\n${d.claims}`, d.description && `DESCRIPTION\n${d.description}`].filter(Boolean).join('\n\n')
+    })),
+    ...missingDocs.map(d => ({
+      id: d.label, label: d.label, missing: true,
+      heading: `${d.label} · ${d.title || d.publicationNumber || 'Prior art cited by the examiner'} — not on file`,
+      text: ''
     }))
   ]
   const active = sources.find(s => s.id === props.activeTab) || sources[0]
@@ -1399,8 +1622,19 @@ function SourceViewer(props: {
           hover:bg-primary/40 focus-visible:outline-none focus-visible:bg-primary/60 ${dragging ? 'bg-primary/60' : ''}`}
       />
       <div className="px-3 py-2.5 border-b flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Source documents</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Report &amp; prior art
+        </span>
         <div className="flex items-center gap-1">
+          {/* Upload sits with the document it belongs to: the active prior-art tab. */}
+          {active && active.id !== 'FER' && (
+            <CitedDocumentUpload
+              label={active.id}
+              compact
+              replace={!active.missing}
+              onUploaded={props.onCitationUploaded}
+            />
+          )}
           <button
             className="hidden xl:inline-flex text-muted-foreground hover:text-foreground"
             onClick={props.onToggleCollapsed}
@@ -1414,19 +1648,34 @@ function SourceViewer(props: {
       <div className="flex gap-1 px-2 pt-2 flex-wrap">
         {sources.map(s => (
           <button key={s.id}
-            className={`text-xs font-mono px-2 py-1 rounded-t border-b-2 ${active?.id === s.id ? 'border-primary text-foreground bg-muted/50' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+            className={`text-xs font-mono px-2 py-1 rounded-t border-b-2 ${active?.id === s.id ? 'border-primary text-foreground bg-muted/50' : 'border-transparent text-muted-foreground hover:text-foreground'} ${s.missing ? 'italic opacity-70' : ''}`}
+            title={s.missing ? `${s.label} is not on file — upload your copy` : undefined}
             onClick={() => props.setActiveTab(s.id)}>
-            {s.label}
+            {s.label}{s.missing ? ' ·' : ''}
           </button>
         ))}
       </div>
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-3">
         <div className="text-[11px] text-muted-foreground mb-2">{active?.heading}</div>
-        <div className="font-serif text-[13.5px] leading-relaxed whitespace-pre-wrap">
-          {rendered.length === 3
-            ? <>{rendered[0]}<mark className="bg-emerald-200 dark:bg-emerald-900 rounded px-0.5">{rendered[1]}</mark>{rendered[2]}</>
-            : rendered[0] || <span className="font-sans text-sm text-muted-foreground">No text available.</span>}
-        </div>
+        {active?.missing ? (
+          <div className="text-sm text-muted-foreground space-y-3">
+            <p>
+              This prior-art document could not be retrieved — journal papers and some foreign
+              patents are not available to fetch.
+            </p>
+            <p>
+              Upload your copy and it reads like any other source here: the claim chart runs against
+              its actual text, and the reply argues the document rather than the examiner&rsquo;s summary of it.
+            </p>
+            <CitedDocumentUpload label={active.id} onUploaded={props.onCitationUploaded} />
+          </div>
+        ) : (
+          <div className="font-serif text-[13.5px] leading-relaxed whitespace-pre-wrap">
+            {rendered.length === 3
+              ? <>{rendered[0]}<mark className="bg-emerald-200 dark:bg-emerald-900 rounded px-0.5">{rendered[1]}</mark>{rendered[2]}</>
+              : rendered[0] || <span className="font-sans text-sm text-muted-foreground">No text available.</span>}
+          </div>
+        )}
       </div>
     </aside>
   )

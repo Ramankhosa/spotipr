@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { resolveCaseCitations, type ResolverDeps } from './office-action/citation-resolver'
+import { notifyPrepareOutcome } from './office-action/oa-notifications'
 
 /**
  * Office Action Studio — background job worker service
@@ -109,7 +110,15 @@ export async function processOfficeActionJob(job: any, workerId: string, opts: P
           userId: job.userId,
           requestHeaders,
           objectionIds: Array.isArray(payload.objectionIds) && payload.objectionIds.length ? payload.objectionIds : undefined,
-          onProgress: (step) => setStep(job.id, step)
+          onProgress: (step) => setStep(job.id, step),
+          // The attorney's pause is a flag on the row; the pipeline reads it at
+          // each objection boundary and stops cleanly.
+          shouldStop: async () => {
+            const row = await (prisma as any).officeActionJob.findUnique({
+              where: { id: job.id }, select: { cancelRequested: true }
+            })
+            return Boolean(row?.cancelRequested)
+          }
         }))
     }
     default:
@@ -162,22 +171,45 @@ export async function processPendingOfficeActionJobs(workerId: string, batch = 1
     if (!job) break
     try {
       const result = await processOfficeActionJob(job, workerId, opts)
-      await (prisma as any).officeActionJob.updateMany({
+      // A run the attorney paused is not a completed run: record it as
+      // CANCELLED and clear the request, so pressing Resume starts cleanly.
+      const paused = Boolean(result?.stopped)
+      const written = await (prisma as any).officeActionJob.updateMany({
         where: { id: job.id, lockedBy: workerId },
-        data: { status: 'COMPLETED', result, completedAt: new Date(), lockedBy: null, lockedUntil: null, currentStep: null }
+        data: paused
+          ? { status: 'CANCELLED', result, cancelledAt: new Date(), cancelRequested: false, lockedBy: null, lockedUntil: null, currentStep: null }
+          : { status: 'COMPLETED', result, completedAt: new Date(), lockedBy: null, lockedUntil: null, currentStep: null }
       })
       done.push(job.id)
+      // Only the worker that actually recorded the result mails it, so a lease
+      // handover cannot send the attorney two notifications for one run.
+      // A pause is deliberate — no mail for it.
+      if (written.count === 1 && !paused && job.jobType === 'PREPARE_REPLY') {
+        await notifyPrepareOutcome(job, {
+          status: 'COMPLETED',
+          objectionsDrafted: result?.objectionsDrafted,
+          draftErrors: result?.draftErrors,
+          judgmentFlags: Array.isArray(result?.judgmentFlags) ? result.judgmentFlags.length : 0
+        })
+      }
     } catch (err) {
       if (err instanceof OaJobLeaseLostError) continue  // another worker took it
       const attempt = (job.attemptCount || 0) + 1
       const maxAttempts = job.maxAttempts || 3
       const backoff = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)]
-      await (prisma as any).officeActionJob.updateMany({
+      const message = String(err instanceof Error ? err.message : err)
+      const givingUp = attempt >= maxAttempts
+      const written = await (prisma as any).officeActionJob.updateMany({
         where: { id: job.id, lockedBy: workerId },
-        data: attempt >= maxAttempts
-          ? { status: 'FAILED', attemptCount: attempt, lastError: String(err instanceof Error ? err.message : err), lockedBy: null, lockedUntil: null }
-          : { status: 'QUEUED', attemptCount: attempt, nextAttemptAt: new Date(Date.now() + backoff), lastError: String(err instanceof Error ? err.message : err), lockedBy: null, lockedUntil: null }
+        data: givingUp
+          ? { status: 'FAILED', attemptCount: attempt, lastError: message, lockedBy: null, lockedUntil: null }
+          : { status: 'QUEUED', attemptCount: attempt, nextAttemptAt: new Date(Date.now() + backoff), lastError: message, lockedBy: null, lockedUntil: null }
       })
+      // Mail only when the run is really over — a retry that will run again in a
+      // minute is not something to wake the attorney for.
+      if (written.count === 1 && givingUp && job.jobType === 'PREPARE_REPLY') {
+        await notifyPrepareOutcome(job, { status: 'FAILED', error: message })
+      }
     }
   }
   return done

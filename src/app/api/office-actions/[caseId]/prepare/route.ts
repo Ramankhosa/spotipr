@@ -38,6 +38,22 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     where: { caseId: params.caseId, jobType: 'PREPARE_REPLY', status: { in: ['QUEUED', 'PROCESSING'] } },
     orderBy: { createdAt: 'desc' }
   })
+
+  /**
+   * Pause: flag the running job. The worker checks the flag between objections
+   * and stops there, leaving the draft resumable — this is what lets the
+   * attorney break off to upload a cited prior-art document and continue with
+   * that document in play for the objections not yet drafted.
+   */
+  if (body.action === 'pause') {
+    if (!active) return NextResponse.json({ error: 'Nothing is running to pause.' }, { status: 409 })
+    await prisma.officeActionJob.update({
+      where: { id: active.id },
+      data: { cancelRequested: true, currentStep: 'Pausing after the current objection…' }
+    })
+    return NextResponse.json({ jobId: active.id, status: active.status, pausing: true }, { status: 202 })
+  }
+
   if (active) {
     return NextResponse.json({ jobId: active.id, status: active.status, alreadyRunning: true }, { status: 202 })
   }
