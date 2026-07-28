@@ -544,6 +544,9 @@ export async function listIpIndiaJournalArchive(filters: IpIndiaArchiveFilters =
             id: true,
             batchId: true,
             status: true,
+            // Cleared by the retention sweep, so the UI can tell whether the
+            // PDF is still on disk instead of offering a download that 404s.
+            storedPath: true,
             totalPages: true,
             patentPages: true,
             patentsCreated: true,

@@ -21,10 +21,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { SECTION_WORD_LIMITS, DEFAULT_LIMITS } from '@/lib/writing-sample-limits'
 import {
   getPersonaReadiness,
+  getPersonaCoverage,
+  resolveCoveredSections,
   sectionBlurb,
   isHighImpact,
   countWords,
-  type PersonaReadiness
+  type PersonaReadiness,
+  type PersonaSampleRef
 } from '@/lib/persona-guidance'
 import { getFlagEmoji } from '@/lib/country-flags'
 import {
@@ -40,6 +43,7 @@ interface Persona {
   isTemplate: boolean
   allowCopy: boolean
   sampleCount: number
+  sampleCoverage?: PersonaSampleRef[]
   coveredSections?: string[]
   jurisdictions?: string[]
   isOwn: boolean
@@ -167,7 +171,9 @@ function PersonaListCard({
   active: boolean
   onSelect: () => void
 }) {
-  const readiness = getPersonaReadiness(persona.coveredSections)
+  // The card has no jurisdiction in hand, so it reports the universal answer
+  // and names any country the persona is nonetheless ready for.
+  const { readiness, readyJurisdictions } = getPersonaCoverage(persona.sampleCoverage)
 
   return (
     <button
@@ -203,7 +209,14 @@ function PersonaListCard({
       <div className="mt-2.5">
         <ReadinessMeter readiness={readiness} />
         <div className="mt-1.5 flex items-center justify-between gap-2">
-          <ReadinessLabel readiness={readiness} />
+          {readyJurisdictions.length > 0 ? (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+              <Check className="h-3.5 w-3.5" aria-hidden />
+              Ready for {readyJurisdictions.join(', ')}
+            </span>
+          ) : (
+            <ReadinessLabel readiness={readiness} />
+          )}
           {!persona.isOwn && persona.createdBy && (
             <span className="truncate text-[11px] text-muted-foreground">by {persona.createdBy.name}</span>
           )}
@@ -419,8 +432,11 @@ export default function PersonasPage() {
     [countries, visibleCountries]
   )
 
+  // Measured against the jurisdiction tab in view, the same way generation
+  // resolves it: this country's samples plus the universal ones. Counting every
+  // jurisdiction at once would call a US-only persona ready for an Indian draft.
   const selectedReadiness = getPersonaReadiness(
-    selectedPersona ? Array.from(new Set(samples.map(s => s.sectionKey))) : []
+    selectedPersona ? resolveCoveredSections(samples, activeJurisdiction) : []
   )
 
   /* ---------------- actions ---------------- */
@@ -792,13 +808,18 @@ export default function PersonasPage() {
                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                       {selectedReadiness.level === 'ready' ? (
                         <>
-                          Switch <strong className="font-medium text-foreground">Style: On</strong> in the drafting
-                          toolbar and pick this persona. Adding more sections keeps sharpening it.
+                          Ready for{' '}
+                          <strong className="font-medium text-foreground">
+                            {activeJurisdiction === UNIVERSAL ? 'every country' : jurisdictionLabel(activeJurisdiction)}
+                          </strong>
+                          . Switch <strong className="font-medium text-foreground">Style: On</strong> in the drafting
+                          toolbar and pick this persona.
                         </>
                       ) : (
                         <>
                           Sections marked <strong className="font-medium text-foreground">Key</strong> carry the most
-                          style. {selectedReadiness.nextStep} before switching this persona on.
+                          style. {selectedReadiness.nextStep} for{' '}
+                          {activeJurisdiction === UNIVERSAL ? 'every country' : jurisdictionLabel(activeJurisdiction)}.
                         </>
                       )}
                     </p>

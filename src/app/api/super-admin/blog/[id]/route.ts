@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireBlogAdmin } from '@/lib/blog/admin-guard'
-import { derivedFields, postInputSchema, uniqueSlug } from '../route'
+import { derivedFields, postInputSchema, uniqueSlug } from '@/lib/blog/post-write'
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   const guard = await requireBlogAdmin(request)

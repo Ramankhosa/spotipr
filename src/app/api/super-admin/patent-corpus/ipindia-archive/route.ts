@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { kickPatentCorpusRunner } from '@/lib/patent-corpus-runner'
+import { cleanupOldStoredPdfs } from '@/lib/patent-corpus-service'
 import {
   getIpIndiaJournalArchiveSettings,
   listIpIndiaJournalArchive,
@@ -105,6 +106,14 @@ export async function POST(request: NextRequest) {
       const refresh = await refreshIpIndiaJournalPipelineStatuses()
       const archive = await listIpIndiaJournalArchive(filters)
       return NextResponse.json({ action, refresh, ...archive })
+    }
+
+    if (action === 'cleanup-pdfs') {
+      // Runs the retention sweep on demand. The queue runner does this too, but
+      // only when it goes idle, so on a quiet system it may never fire.
+      const cleanup = await cleanupOldStoredPdfs(Math.max(1, Number(body?.limit || 200) || 200))
+      const archive = await listIpIndiaJournalArchive(filters)
+      return NextResponse.json({ action, cleanup, ...archive })
     }
 
     if (action === 'process-one') {

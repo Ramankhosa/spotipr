@@ -11,6 +11,7 @@
  */
 
 import { prisma } from './prisma'
+import { isHighImpact } from './persona-guidance'
 
 // Cache for writing samples (5 minute TTL)
 const sampleCache = new Map<string, { samples: Map<string, string>, timestamp: number }>()
@@ -182,7 +183,12 @@ export async function getPersonaCoverageWarnings(
   if (!resolved?.primaryPersonaId) return []
 
   const normalizedJurisdiction = jurisdiction.toUpperCase()
-  const uniqueSections = uniqueIds(sectionKeys)
+  // Only the high-impact sections are worth interrupting a generation over.
+  // Titles, technical fields and figure captions are near-formulaic — style
+  // barely varies there — so warning about them made a fully taught persona
+  // raise a confirmation on every single draft. This keeps the gate and the
+  // readiness meter working from one definition of "covered".
+  const uniqueSections = uniqueIds(sectionKeys).filter(isHighImpact)
   const warnings: PersonaCoverageWarning[] = []
 
   for (const sectionKey of uniqueSections) {

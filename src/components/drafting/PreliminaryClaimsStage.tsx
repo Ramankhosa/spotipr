@@ -1323,6 +1323,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
           isOpen={showPersonaManager}
           onClose={() => setShowPersonaManager(false)}
           showSelector={true}
+          jurisdiction={activeJurisdiction}
           currentSelection={personaSelection}
           onSelectPersona={(selection) => {
             void (async () => {

@@ -134,8 +134,13 @@ export async function GET(request: NextRequest) {
       isTemplate: p.isTemplate,
       allowCopy: p.allowCopy,
       sampleCount: p.samples.length,
-      // Distinct section keys across every jurisdiction: a section taught
-      // universally counts as taught, which is how generation resolves it.
+      // Section/jurisdiction pairs, so the client can ask the same question
+      // generation asks: is this section covered *for the country being
+      // drafted*? Flattening the two axes here would let five US-only samples
+      // read as "Ready to use" for an Indian draft that resolves none of them.
+      sampleCoverage: p.samples.map(s => ({ sectionKey: s.sectionKey, jurisdiction: s.jurisdiction })),
+      // Retained for callers that only need the raw section list; readiness is
+      // computed from sampleCoverage above.
       coveredSections: Array.from(new Set(p.samples.map(s => s.sectionKey))),
       jurisdictions: Array.from(new Set(p.samples.map(s => s.jurisdiction))),
       createdAt: p.createdAt

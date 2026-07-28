@@ -17,7 +17,11 @@ import { useToast } from '@/components/ui/toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { getPersonaReadiness } from '@/lib/persona-guidance'
+import {
+  getPersonaReadiness,
+  resolveCoveredSections,
+  type PersonaSampleRef
+} from '@/lib/persona-guidance'
 import {
   X, Plus, Check, Building2, Lock, ExternalLink, AlertTriangle, Layers, Loader2
 } from 'lucide-react'
@@ -30,7 +34,7 @@ interface Persona {
   isTemplate: boolean
   allowCopy: boolean
   sampleCount: number
-  coveredSections?: string[]
+  sampleCoverage?: PersonaSampleRef[]
   isOwn: boolean
   createdBy?: { id: string; name: string }
   createdAt: string
@@ -41,6 +45,12 @@ interface PersonaManagerProps {
   onClose: () => void
   onSelectPersona?: (selection: PersonaSelection) => void
   currentSelection?: PersonaSelection
+  /**
+   * The jurisdiction about to be drafted. Readiness is reported against it,
+   * because a persona taught only under another country resolves to nothing
+   * here. Defaults to the universal set when the caller has no jurisdiction.
+   */
+  jurisdiction?: string
   /** Kept for call-site compatibility; the picker behaves the same either way. */
   showSelector?: boolean
 }
@@ -56,7 +66,8 @@ export default function PersonaManager({
   isOpen,
   onClose,
   onSelectPersona,
-  currentSelection
+  currentSelection,
+  jurisdiction
 }: PersonaManagerProps) {
   const { token } = useAuth()
   const { toast } = useToast()
@@ -101,7 +112,9 @@ export default function PersonaManager({
   }, [isOpen, currentSelection])
 
   const primary = useMemo(() => personas.find(p => p.id === primaryId), [personas, primaryId])
-  const primaryReadiness = getPersonaReadiness(primary?.coveredSections)
+  const primaryReadiness = getPersonaReadiness(
+    resolveCoveredSections(primary?.sampleCoverage, jurisdiction)
+  )
   const primaryIsUntaught = !!primary && (primary.sampleCount === 0)
 
   const createPersona = async () => {
@@ -207,7 +220,9 @@ export default function PersonaManager({
                 </legend>
                 <div className="space-y-2">
                   {personas.map(persona => {
-                    const readiness = getPersonaReadiness(persona.coveredSections)
+                    const readiness = getPersonaReadiness(
+                      resolveCoveredSections(persona.sampleCoverage, jurisdiction)
+                    )
                     const selected = primaryId === persona.id
                     return (
                       <label

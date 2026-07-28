@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PatentNest — Complete specification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#ffffff;
+  --sheet:#ffffff;
+  --card:#fafafa;
+  --ink:#181b2c;
+  --ink-soft:#4b4e60;
+  --ink-faint:#8b8d9c;
+  --rule:rgba(24,27,44,.14);
+  --rule-soft:rgba(24,27,44,.08);
+  --cobalt:#1d4ed8;
+  --cobalt-soft:rgba(29,78,216,.08);
+  --stamp:#b42318;
+  --serif:"Newsreader",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --sans:"Inter",system-ui,sans-serif;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-size:17px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--cobalt);color:#fff}
+
+/* ---------- chrome ---------- */
+.nav{
+  position:sticky;top:0;z-index:50;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 40px;
+  background:color-mix(in srgb,var(--paper) 88%,transparent);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--rule-soft);
+}
+.wordmark{font-family:var(--serif);font-weight:500;font-size:19px;letter-spacing:-.01em;text-decoration:none;color:var(--ink)}
+.wordmark span{color:var(--cobalt)}
+.nav-right{display:flex;align-items:center;gap:22px;font-family:var(--sans);font-size:13.5px}
+.nav-right a{color:var(--ink-soft);text-decoration:none}
+.nav-right a:hover{color:var(--ink)}
+.btn{
+  display:inline-block;font-family:var(--sans);font-weight:500;font-size:14px;
+  background:var(--cobalt);color:#fff;text-decoration:none;
+  padding:11px 20px;border-radius:6px;border:none;cursor:pointer;
+  transition:transform .15s var(--ease-out),box-shadow .15s ease,background .15s ease;
+}
+.btn:hover{background:#1a44be;transform:translateY(-1px);box-shadow:0 6px 16px -8px rgba(29,78,216,.55)}
+.btn:active{transform:scale(.97)}
+.btn-ghost{
+  display:inline-block;font-family:var(--sans);font-weight:500;font-size:14px;
+  color:var(--ink);text-decoration:none;padding:11px 16px;border-radius:6px;
+  border:1px solid var(--rule);background:transparent;
+  transition:background .15s ease,transform .15s var(--ease-out);
+}
+.btn-ghost:hover{background:rgba(24,27,44,.04);transform:translateY(-1px)}
+.nav .btn{padding:8px 16px;font-size:13px}
+
+.wrap{max-width:1080px;margin:0 auto;padding:0 40px}
+
+/* ---------- kickers & section furniture ---------- */
+.kicker{
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;
+  color:var(--ink-faint);text-transform:uppercase;
+  display:flex;align-items:center;gap:14px;margin-bottom:22px;
+}
+.kicker::after{content:"";flex:1;height:1px;background:var(--rule-soft)}
+.kicker b{color:var(--cobalt);font-weight:500}
+h1,h2{font-weight:500;letter-spacing:-.015em;line-height:1.12}
+h2{font-size:clamp(28px,3.6vw,40px);max-width:20ch}
+.para-num{font-family:var(--mono);font-size:12px;color:var(--cobalt);margin-right:10px;user-select:none}
+
+/* ---------- hero ---------- */
+.hero{padding:76px 0 96px;overflow:hidden}
+.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:64px;align-items:center}
+.form-line{
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--ink-faint);
+  text-transform:uppercase;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:26px;
+}
+.form-line span+span::before{content:"·";margin-right:10px;color:var(--rule)}
+.inid{font-family:var(--mono);font-size:12px;color:var(--ink-faint);display:block;margin-bottom:8px}
+.hero h1{font-size:clamp(34px,4.6vw,54px);margin-bottom:26px}
+.hero h1 em{font-style:italic;color:var(--cobalt)}
+.abstract{color:var(--ink-soft);font-size:18px;max-width:52ch;margin-bottom:34px}
+.cta-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-family:var(--sans)}
+.risk{font-family:var(--sans);font-size:12.5px;color:var(--ink-faint);margin-top:16px}
+
+/* ---------- page stack (the 3D flip-through) ---------- */
+.stack-scene{perspective:1600px;justify-self:center}
+.stack{position:relative;width:320px;height:440px;transform-style:preserve-3d;transform:rotateX(4deg) rotateY(-6deg);transition:transform .4s var(--ease-out)}
+.sheet-wrap{position:absolute;inset:0;transition:transform .8s var(--ease-inout)}
+.sheet{
+  position:absolute;inset:0;background:var(--sheet);
+  border:1px solid var(--rule-soft);border-radius:3px;
+  box-shadow:0 24px 48px -24px rgba(24,27,44,.28),0 2px 6px rgba(24,27,44,.06);
+  transform-origin:8% center;backface-visibility:hidden;
+  padding:26px 24px;overflow:hidden;
+}
+.sheet.turning{transition:transform 1.05s var(--ease-inout),box-shadow 1.05s ease;transform:rotateY(-150deg);box-shadow:0 40px 60px -20px rgba(24,27,44,.45)}
+.sheet-meta{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink-faint);text-transform:uppercase;display:flex;justify-content:space-between;border-bottom:1px solid var(--rule-soft);padding-bottom:10px;margin-bottom:16px}
+.sheet h3{font-family:var(--serif);font-weight:500;font-size:17px;line-height:1.3;margin-bottom:14px}
+.line{height:7px;border-radius:2px;background:rgba(24,27,44,.09);margin-bottom:9px}
+.line.c{background:var(--cobalt-soft)}
+.sheet .fig-label{font-family:var(--serif);font-style:italic;font-size:13px;text-align:center;color:var(--ink-soft);margin-top:10px}
+.sheet svg{display:block;margin:8px auto 0}
+.sheet .claim-n{font-family:var(--mono);font-size:11px;color:var(--cobalt)}
+.stack-caption{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-faint);text-align:center;margin-top:30px;text-transform:uppercase}
+
+/* ---------- sections ---------- */
+section{padding:88px 0}
+.section-rule{border-top:1px solid var(--rule-soft)}
+.lede{color:var(--ink-soft);font-size:18px;max-width:56ch;margin-top:18px}
+.paras{margin-top:44px;display:grid;grid-template-columns:repeat(3,1fr);gap:36px}
+.paras p{font-size:15.5px;color:var(--ink-soft)}
+.paras p strong{display:block;color:var(--ink);font-weight:500;font-size:17px;margin-bottom:6px}
+
+/* steps with reference numerals */
+.steps{margin-top:52px;display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--rule-soft);border-radius:8px;background:var(--card);overflow:hidden}
+.step{padding:30px 28px;position:relative}
+.step+.step{border-left:1px solid var(--rule-soft)}
+.ref-num{
+  font-family:var(--mono);font-size:13px;color:var(--cobalt);
+  display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;
+}
+.ref-num::after{content:"";width:34px;height:1px;background:var(--cobalt);opacity:.45;transform:rotate(-18deg);transform-origin:left}
+.step h3{font-weight:500;font-size:18px;margin-bottom:8px}
+.step p{font-size:15px;color:var(--ink-soft)}
+
+/* ---------- drawings ---------- */
+.fig-main{
+  margin-top:52px;background:var(--card);border:1px solid var(--rule-soft);
+  border-radius:8px;padding:48px 40px 30px;position:relative;
+}
+.fig-main .sheet-corner{position:absolute;top:14px;right:18px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.fig-caption{font-family:var(--serif);font-style:italic;text-align:center;color:var(--ink-soft);font-size:15.5px;margin-top:22px}
+svg .draw{fill:none;stroke:var(--ink);stroke-width:1.5}
+svg .draw.blue{stroke:var(--cobalt)}
+svg .lead{fill:none;stroke:var(--ink-faint);stroke-width:1;stroke-dasharray:3 3}
+svg .num{font-family:var(--mono);font-size:12px;fill:var(--cobalt)}
+svg .lbl{font-family:var(--sans);font-size:12.5px;fill:var(--ink)}
+svg .lbl-s{font-family:var(--sans);font-size:11px;fill:var(--ink-soft)}
+.fig-anim .draw,.fig-anim .lead{stroke-dasharray:var(--len) var(--len);stroke-dashoffset:var(--len);transition:stroke-dashoffset 1.1s var(--ease-inout)}
+.fig-anim .num,.fig-anim .lbl,.fig-anim .lbl-s{opacity:0;transition:opacity .5s ease}
+.fig-anim.drawn .draw,.fig-anim.drawn .lead{stroke-dashoffset:0}
+.fig-anim.drawn .num,.fig-anim.drawn .lbl,.fig-anim.drawn .lbl-s{opacity:1;transition-delay:1s}
+.fig-thumbs{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:28px}
+.fig-thumb{background:var(--card);border:1px solid var(--rule-soft);border-radius:8px;padding:28px 24px 20px;transition:transform .2s var(--ease-out),box-shadow .2s ease}
+.fig-thumb:hover{transform:translateY(-3px);box-shadow:0 16px 32px -20px rgba(24,27,44,.3)}
+
+/* ---------- claims ---------- */
+.claims{margin-top:48px;max-width:760px}
+.claim{display:flex;gap:20px;padding:26px 0;border-bottom:1px solid var(--rule-soft)}
+.claim:first-child{border-top:1px solid var(--rule-soft)}
+.claim-no{font-family:var(--mono);font-size:15px;color:var(--cobalt);min-width:28px;padding-top:2px}
+.claim p{font-size:17.5px}
+.claim p .dep{color:var(--ink-faint);font-style:italic}
+.claim.indep p{font-size:20px;line-height:1.5}
+
+/* ---------- proof ---------- */
+.proof{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:48px}
+.metric{background:var(--card);border:1px solid var(--rule-soft);border-radius:8px;padding:28px}
+.metric .val{font-family:var(--serif);font-size:38px;font-weight:500;letter-spacing:-.02em}
+.metric .val em{font-style:italic;color:var(--cobalt)}
+.metric .cap{font-family:var(--sans);font-size:13.5px;color:var(--ink-soft);margin-top:6px}
+.footnote{font-family:var(--sans);font-size:12px;color:var(--ink-faint);margin-top:18px}
+
+/* ---------- final CTA ---------- */
+.grant{text-align:center;padding:110px 0 120px;position:relative}
+.grant h2{margin:0 auto 20px}
+.grant .abstract{margin:0 auto 38px}
+.stamp{
+  display:inline-block;font-family:var(--mono);color:var(--stamp);
+  border:3px double var(--stamp);border-radius:8px;
+  padding:10px 26px;letter-spacing:.28em;font-size:18px;font-weight:500;
+  transform:rotate(-7deg);margin-bottom:36px;position:relative;
+  opacity:.92;
+}
+.stamp small{display:block;font-size:10px;letter-spacing:.18em;margin-top:2px}
+.stamp.pre{opacity:0;transform:rotate(-7deg) scale(2.4)}
+.stamp.stamped{opacity:.92;transform:rotate(-7deg) scale(1);transition:transform .3s cubic-bezier(.3,1.4,.5,1),opacity .25s ease}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--rule-soft);padding:36px 0 48px;font-family:var(--sans);font-size:13px;color:var(--ink-faint);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+footer .wrap{display:contents}
+
+/* ---------- reveals ---------- */
+.reveal{opacity:0;transform:translateY(18px);transition:opacity .55s var(--ease-out),transform .55s var(--ease-out);transition-delay:var(--d,0ms)}
+.reveal.in{opacity:1;transform:none}
+
+@media (prefers-reduced-motion:reduce){
+  .reveal{opacity:1;transform:none;transition:none}
+  .sheet.turning{transition:none}
+  .fig-anim .draw,.fig-anim .lead{stroke-dasharray:none;stroke-dashoffset:0}
+  .fig-anim .num,.fig-anim .lbl,.fig-anim .lbl-s{opacity:1}
+  .stamp.pre{opacity:.92;transform:rotate(-7deg)}
+  html{scroll-behavior:auto}
+}
+@media (max-width:900px){
+  .hero-grid{grid-template-columns:1fr;gap:48px}
+  .stack-scene{order:-1}
+  .stack{width:260px;height:360px}
+  .paras,.steps,.proof{grid-template-columns:1fr}
+  .step+.step{border-left:none;border-top:1px solid var(--rule-soft)}
+  .fig-thumbs{grid-template-columns:1fr}
+  .wrap{padding:0 22px}
+  .nav{padding:12px 22px}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <a class="wordmark" href="#">Patent<span>Nest</span></a>
+  <div class="nav-right">
+    <a href="#drawings">Drawings</a>
+    <a href="#claims">Claims</a>
+    <a href="#">Sign in</a>
+    <a class="btn" href="#grant">File your first draft</a>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <div class="hero-grid">
+    <div>
+      <div class="form-line reveal"><span>Form 2</span><span>The Patents Act, 1970</span><span>Complete specification</span></div>
+      <span class="inid reveal" style="--d:60ms">(54) Title of the invention</span>
+      <h1 class="reveal" style="--d:120ms">A system for drafting complete patent specifications in <em>hours, not weeks.</em></h1>
+      <span class="inid reveal" style="--d:180ms">(57) Abstract</span>
+      <p class="abstract reveal" style="--d:220ms">PatentNest reads an invention disclosure and returns a filing-ready draft — claims, description, and drawings, numbered and cross-referenced — with every examination report answered from the same workspace.</p>
+      <div class="cta-row reveal" style="--d:280ms">
+        <a class="btn" href="#grant">File your first draft</a>
+        <a class="btn-ghost" href="#claims">Read the claims ↓</a>
+      </div>
+      <p class="risk reveal" style="--d:340ms">No credit card. Your drafts stay privileged, and yours.</p>
+    </div>
+
+    <div class="stack-scene reveal" style="--d:200ms">
+      <div class="stack" id="stack">
+        <div class="sheet-wrap"><div class="sheet">
+          <div class="sheet-meta"><span>Form 2 · Sheet 1</span><span>[0001]</span></div>
+          <h3>A system for drafting complete patent specifications</h3>
+          <div class="line" style="width:92%"></div>
+          <div class="line" style="width:86%"></div>
+          <div class="line" style="width:90%"></div>
+          <div class="line c" style="width:64%"></div>
+          <div class="line" style="width:88%"></div>
+          <div class="line" style="width:71%"></div>
+          <div class="line" style="width:89%"></div>
+          <div class="line" style="width:83%"></div>
+          <div class="line c" style="width:52%"></div>
+          <div class="line" style="width:87%"></div>
+          <div class="line" style="width:44%"></div>
+        </div></div>
+        <div class="sheet-wrap"><div class="sheet">
+          <div class="sheet-meta"><span>Drawings · Sheet 2</span><span>[0014]</span></div>
+          <svg width="230" height="240" viewBox="0 0 230 240" aria-hidden="true">
+            <rect x="55" y="14" width="120" height="34" rx="2" fill="none" stroke="#181b2c" stroke-width="1.4"/>
+            <line x1="115" y1="48" x2="115" y2="74" stroke="#181b2c" stroke-width="1.4"/>
+            <path d="M110 68 L115 76 L120 68" fill="none" stroke="#181b2c" stroke-width="1.4"/>
+            <rect x="35" y="78" width="160" height="52" rx="2" fill="none" stroke="#1d4ed8" stroke-width="1.6"/>
+            <line x1="115" y1="130" x2="115" y2="156" stroke="#181b2c" stroke-width="1.4"/>
+            <path d="M110 150 L115 158 L120 150" fill="none" stroke="#181b2c" stroke-width="1.4"/>
+            <rect x="55" y="160" width="120" height="34" rx="2" fill="none" stroke="#181b2c" stroke-width="1.4"/>
+            <text x="185" y="24" font-family="IBM Plex Mono" font-size="11" fill="#1d4ed8">100</text>
+            <text x="203" y="96" font-family="IBM Plex Mono" font-size="11" fill="#1d4ed8">200</text>
+            <text x="185" y="176" font-family="IBM Plex Mono" font-size="11" fill="#1d4ed8">300</text>
+          </svg>
+          <div class="fig-label">FIG. 2</div>
+        </div></div>
+        <div class="sheet-wrap"><div class="sheet">
+          <div class="sheet-meta"><span>Claims · Sheet 3</span><span>[0042]</span></div>
+          <p style="margin-bottom:14px"><span class="claim-n">We claim:</span></p>
+          <p style="margin-bottom:10px"><span class="claim-n">1.</span></p>
+          <div class="line" style="width:88%"></div>
+          <div class="line" style="width:92%"></div>
+          <div class="line" style="width:76%"></div>
+          <p style="margin:14px 0 10px"><span class="claim-n">2.</span></p>
+          <div class="line c" style="width:84%"></div>
+          <div class="line" style="width:69%"></div>
+          <p style="margin:14px 0 10px"><span class="claim-n">3.</span></p>
+          <div class="line" style="width:90%"></div>
+          <div class="line c" style="width:57%"></div>
+        </div></div>
+        <div class="sheet-wrap"><div class="sheet">
+          <div class="sheet-meta"><span>Abstract · Sheet 4</span><span>(57)</span></div>
+          <h3>Abstract of the disclosure</h3>
+          <div class="line" style="width:90%"></div>
+          <div class="line" style="width:85%"></div>
+          <div class="line c" style="width:78%"></div>
+          <div class="line" style="width:88%"></div>
+          <div class="line" style="width:61%"></div>
+          <div class="line" style="width:86%"></div>
+          <div class="line" style="width:74%"></div>
+          <div class="line c" style="width:47%"></div>
+        </div></div>
+      </div>
+      <div class="stack-caption">The specification, in progress</div>
+    </div>
+  </div>
+</header>
+
+<section class="section-rule wrap" id="background">
+  <div class="kicker reveal"><b>[0001]</b> Background of the invention</div>
+  <h2 class="reveal" style="--d:80ms">The prior art: three weeks of drafting, per application.</h2>
+  <div class="paras">
+    <p class="reveal" style="--d:120ms"><span class="para-num">[0001]</span><strong>The blank page problem.</strong>A disclosure arrives as a call transcript and four photos of a whiteboard. Turning it into a specification is skilled work — but most of those hours are structure, boilerplate, and formatting, not judgment.</p>
+    <p class="reveal" style="--d:200ms"><span class="para-num">[0002]</span><strong>The FER pile.</strong>First Examination Reports arrive on the examiner's schedule, not yours. Each response means re-reading the file, chasing citations, and drafting under a six-month clock.</p>
+    <p class="reveal" style="--d:280ms"><span class="para-num">[0003]</span><strong>The drawings bottleneck.</strong>Figures are drawn last, numbered by hand, and cross-referenced at midnight. One renumbered component means an evening of find-and-replace.</p>
+  </div>
+</section>
+
+<section class="section-rule wrap" id="summary">
+  <div class="kicker reveal">Summary of the invention</div>
+  <h2 class="reveal" style="--d:80ms">From disclosure to filing-ready specification in one afternoon.</h2>
+  <div class="steps">
+    <div class="step reveal" style="--d:120ms">
+      <span class="ref-num">100</span>
+      <h3>Upload the disclosure</h3>
+      <p>A document, a transcript, even rough notes. PatentNest reads what the inventor actually said.</p>
+    </div>
+    <div class="step reveal" style="--d:200ms">
+      <span class="ref-num">200</span>
+      <h3>Review the draft</h3>
+      <p>Claims, description, and drawings arrive together — numbered, cross-referenced, and consistent. You edit judgment, not formatting.</p>
+    </div>
+    <div class="step reveal" style="--d:280ms">
+      <span class="ref-num">300</span>
+      <h3>Export and file</h3>
+      <p>Form 2-ready output, with every antecedent and reference numeral checked before it leaves the nest.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section-rule wrap" id="drawings">
+  <div class="kicker reveal">Brief description of the drawings</div>
+  <h2 class="reveal" style="--d:80ms">The invention, illustrated.</h2>
+  <div class="fig-main reveal" style="--d:140ms">
+    <span class="sheet-corner">Sheet 1 of 3</span>
+    <svg id="fig1" class="fig-anim" viewBox="0 0 900 380" width="100%" role="img" aria-label="FIG. 1 — system diagram: an invention disclosure enters the PatentNest drafting core and exits as a filing-ready specification; an FER response engine sits alongside.">
+      <rect class="draw" x="40" y="150" width="180" height="80" rx="3"/>
+      <text class="lbl" x="130" y="185" text-anchor="middle">Invention</text>
+      <text class="lbl" x="130" y="203" text-anchor="middle">disclosure</text>
+      <path class="draw" d="M220 190 H300"/>
+      <path class="draw" d="M292 184 L302 190 L292 196"/>
+      <rect class="draw blue" x="305" y="95" width="290" height="190" rx="3"/>
+      <text class="lbl" x="450" y="128" text-anchor="middle">PatentNest drafting core</text>
+      <rect class="draw" x="330" y="148" width="240" height="30" rx="2"/>
+      <text class="lbl-s" x="450" y="167" text-anchor="middle">Claims engine · 210</text>
+      <rect class="draw" x="330" y="188" width="240" height="30" rx="2"/>
+      <text class="lbl-s" x="450" y="207" text-anchor="middle">Description writer · 220</text>
+      <rect class="draw" x="330" y="228" width="240" height="30" rx="2"/>
+      <text class="lbl-s" x="450" y="247" text-anchor="middle">Drawings generator · 230</text>
+      <path class="draw" d="M595 190 H675"/>
+      <path class="draw" d="M667 184 L677 190 L667 196"/>
+      <rect class="draw" x="680" y="150" width="180" height="80" rx="3"/>
+      <text class="lbl" x="770" y="185" text-anchor="middle">Filing-ready</text>
+      <text class="lbl" x="770" y="203" text-anchor="middle">specification</text>
+      <rect class="draw" x="330" y="320" width="240" height="44" rx="3"/>
+      <text class="lbl" x="450" y="347" text-anchor="middle">FER response engine</text>
+      <path class="lead" d="M450 285 V320"/>
+      <path class="lead" d="M130 150 C130 110, 160 90, 195 84"/>
+      <text class="num" x="200" y="82">100</text>
+      <path class="lead" d="M595 110 C625 100, 640 92, 655 84"/>
+      <text class="num" x="660" y="82">200</text>
+      <path class="lead" d="M800 150 C815 122, 828 108, 840 98"/>
+      <text class="num" x="845" y="94">300</text>
+      <path class="lead" d="M570 342 C610 342, 630 330, 645 318"/>
+      <text class="num" x="650" y="316">400</text>
+    </svg>
+    <p class="fig-caption">FIG. 1 — the invention, reduced to practice.</p>
+  </div>
+  <div class="fig-thumbs">
+    <div class="fig-thumb reveal" style="--d:120ms">
+      <svg viewBox="0 0 360 150" width="100%" aria-hidden="true">
+        <path d="M30 20 C18 45, 18 105, 30 130" fill="none" stroke="#181b2c" stroke-width="1.5"/>
+        <text x="48" y="34" font-family="IBM Plex Mono" font-size="12" fill="#1d4ed8">1.</text>
+        <rect x="70" y="26" width="240" height="8" rx="2" fill="rgba(24,27,44,.1)"/>
+        <rect x="70" y="44" width="200" height="8" rx="2" fill="rgba(24,27,44,.1)"/>
+        <text x="48" y="80" font-family="IBM Plex Mono" font-size="12" fill="#1d4ed8">2.</text>
+        <rect x="70" y="72" width="220" height="8" rx="2" fill="rgba(29,78,216,.12)"/>
+        <rect x="70" y="90" width="160" height="8" rx="2" fill="rgba(24,27,44,.1)"/>
+        <text x="48" y="126" font-family="IBM Plex Mono" font-size="12" fill="#1d4ed8">3.</text>
+        <rect x="70" y="118" width="230" height="8" rx="2" fill="rgba(24,27,44,.1)"/>
+      </svg>
+      <p class="fig-caption">FIG. 2 — claims, with antecedents that survive amendment.</p>
+    </div>
+    <div class="fig-thumb reveal" style="--d:200ms">
+      <svg viewBox="0 0 360 150" width="100%" aria-hidden="true">
+        <rect x="30" y="30" width="90" height="36" rx="2" fill="none" stroke="#181b2c" stroke-width="1.5"/>
+        <line x1="120" y1="48" x2="160" y2="48" stroke="#181b2c" stroke-width="1.5"/>
+        <path d="M153 43 L162 48 L153 53" fill="none" stroke="#181b2c" stroke-width="1.5"/>
+        <rect x="165" y="30" width="90" height="36" rx="2" fill="none" stroke="#1d4ed8" stroke-width="1.5"/>
+        <line x1="210" y1="66" x2="210" y2="96" stroke="#181b2c" stroke-width="1.5"/>
+        <path d="M205 90 L210 98 L215 90" fill="none" stroke="#181b2c" stroke-width="1.5"/>
+        <rect x="165" y="100" width="90" height="36" rx="2" fill="none" stroke="#181b2c" stroke-width="1.5"/>
+        <path d="M280 40 C296 44, 300 52, 300 64" fill="none" stroke="#8b8d9c" stroke-width="1" stroke-dasharray="3 3"/>
+        <text x="290" y="34" font-family="IBM Plex Mono" font-size="12" fill="#1d4ed8">230</text>
+      </svg>
+      <p class="fig-caption">FIG. 3 — drawings that generate, number, and cross-reference themselves.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section-rule wrap" id="claims">
+  <div class="kicker reveal">Claims</div>
+  <h2 class="reveal" style="--d:80ms">We claim:</h2>
+  <div class="claims">
+    <div class="claim indep reveal" style="--d:100ms">
+      <span class="claim-no">1.</span>
+      <p>A method of preparing a complete patent specification, comprising: receiving an invention disclosure in any form; and returning, within hours, claims, description, and drawings ready to file.</p>
+    </div>
+    <div class="claim reveal" style="--d:140ms">
+      <span class="claim-no">2.</span>
+      <p><span class="dep">The method of claim 1, wherein</span> the drawings generate themselves — numbered, captioned, and cross-referenced to every paragraph that cites them.</p>
+    </div>
+    <div class="claim reveal" style="--d:180ms">
+      <span class="claim-no">3.</span>
+      <p><span class="dep">The method of claim 1, wherein</span> First Examination Reports are answered in the same workspace, with the examiner's citations in view.</p>
+    </div>
+    <div class="claim reveal" style="--d:220ms">
+      <span class="claim-no">4.</span>
+      <p><span class="dep">The method of claim 1, wherein</span> every antecedent, reference numeral, and formatting rule is checked before export — so the objection never gets written.</p>
+    </div>
+    <div class="claim reveal" style="--d:260ms">
+      <span class="claim-no">5.</span>
+      <p><span class="dep">The method of any preceding claim,</span> performed while the attorney does the work only an attorney can do.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section-rule wrap" id="proof">
+  <div class="kicker reveal">(56) References cited</div>
+  <h2 class="reveal" style="--d:80ms">Evidence of record.</h2>
+  <div class="proof">
+    <div class="metric reveal" style="--d:120ms">
+      <div class="val">3 wks → <em>1 day</em></div>
+      <div class="cap">Median time from disclosure to reviewable first draft</div>
+    </div>
+    <div class="metric reveal" style="--d:200ms">
+      <div class="val"><em>100%</em></div>
+      <div class="cap">Exports conforming to Form 2 formatting on first pass</div>
+    </div>
+    <div class="metric reveal" style="--d:280ms">
+      <div class="val"><em>6 days</em></div>
+      <div class="cap">Median FER response turnaround, citations included</div>
+    </div>
+  </div>
+  <p class="footnote">Sample figures for design preview.</p>
+</section>
+
+<section class="grant section-rule" id="grant">
+  <div class="wrap">
+    <div class="kicker reveal" style="justify-content:center">Grant</div>
+    <h2 class="reveal" style="--d:60ms;max-width:26ch">The backlog is not novel. Clearing it is.</h2>
+    <p class="abstract reveal" style="--d:120ms;max-width:46ch">Bring one live disclosure. Leave with a specification you'd put your name on.</p>
+    <div class="stamp pre" id="stamp">GRANTED<small>28 · JUL · 2026</small></div>
+    <div class="cta-row reveal" style="--d:200ms;justify-content:center">
+      <a class="btn" href="#">File your first draft</a>
+    </div>
+    <p class="risk reveal" style="--d:260ms">Free for your first specification. No credit card.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 PatentNest. Pricing, security, and terms are incorporated herein by reference.</span>
+    <span>This page is a design sample.</span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+    });
+  },{rootMargin:'-60px 0px'});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+
+  var fig = document.getElementById('fig1');
+  if(fig){
+    fig.querySelectorAll('.draw,.lead').forEach(function(p,i){
+      var len = 600;
+      try{ len = Math.ceil(p.getTotalLength()); }catch(err){}
+      p.style.setProperty('--len', len);
+      p.style.transitionDelay = (i*90)+'ms';
+    });
+    var figIo = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){ fig.classList.add('drawn'); figIo.disconnect(); }
+      });
+    },{threshold:.35});
+    figIo.observe(fig);
+  }
+
+  var stamp = document.getElementById('stamp');
+  if(stamp){
+    var sIo = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){
+          setTimeout(function(){ stamp.classList.remove('pre'); stamp.classList.add('stamped'); }, 250);
+          sIo.disconnect();
+        }
+      });
+    },{threshold:.6});
+    sIo.observe(stamp);
+  }
+
+  if(!reduce){
+    var stack = document.getElementById('stack');
+    if(stack){
+      var turning = false;
+      setInterval(function(){
+        if(turning || document.hidden) return;
+        var wraps = Array.prototype.slice.call(stack.children);
+        wraps.forEach(function(w,i){ w.style.zIndex = wraps.length - i; });
+        var top = wraps[0], sheet = top.querySelector('.sheet');
+        turning = true;
+        sheet.classList.add('turning');
+        setTimeout(function(){
+          sheet.style.transition = 'none';
+          sheet.classList.remove('turning');
+          stack.appendChild(top);
+          Array.prototype.slice.call(stack.children).forEach(function(w,i){
+            w.style.zIndex = stack.children.length - i;
+            w.style.transform = 'translate(' + (i*5) + 'px,' + (i*5) + 'px)';
+          });
+          requestAnimationFrame(function(){ requestAnimationFrame(function(){
+            sheet.style.transition = '';
+            turning = false;
+          });});
+        }, 1100);
+      }, 3400);
+      Array.prototype.slice.call(stack.children).forEach(function(w,i){
+        w.style.zIndex = stack.children.length - i;
+        w.style.transform = 'translate(' + (i*5) + 'px,' + (i*5) + 'px)';
+      });
+
+      var scene = stack.parentElement;
+      if(matchMedia('(pointer:fine)').matches){
+        scene.addEventListener('mousemove', function(ev){
+          var r = scene.getBoundingClientRect();
+          var x = (ev.clientX - r.left)/r.width - .5;
+          var y = (ev.clientY - r.top)/r.height - .5;
+          stack.style.transform = 'rotateX(' + (4 - y*5) + 'deg) rotateY(' + (-6 + x*7) + 'deg)';
+        });
+        scene.addEventListener('mouseleave', function(){
+          stack.style.transform = 'rotateX(4deg) rotateY(-6deg)';
+        });
+      }
+    }
+  }
+})();
+</script>
+</body>
+</html>

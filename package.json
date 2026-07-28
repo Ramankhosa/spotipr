@@ -40,6 +40,7 @@
     "novelty-search:worker:once": "tsx scripts/novelty-search-worker.ts --once",
     "patent-corpus:worker": "tsx scripts/patent-corpus-worker.ts",
     "patent-corpus:worker:once": "tsx scripts/patent-corpus-worker.ts --once",
+    "patent-corpus:cleanup": "tsx scripts/patent-corpus-cleanup-pdfs.ts",
     "patent-corpus:batch-embed": "tsx scripts/patent-corpus-batch-embed.ts",
     "patent-corpus:voyage-batch-embed": "tsx scripts/patent-corpus-voyage-batch-embed.ts",
     "patent-corpus:batch-embed:auto": "tsx scripts/patent-corpus-batch-embed.ts --watch --run",

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
+  AlertTriangle,
   ExternalLink,
   FileText,
   Loader2,
@@ -68,6 +69,10 @@ export default function BlogDeskPage() {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [canWrite, setCanWrite] = useState(false)
+  // "The list is empty" and "the list never loaded" look identical unless you
+  // keep them apart — and telling an editor there are no articles when the
+  // request actually failed sends them looking in the wrong place entirely.
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -78,18 +83,25 @@ export default function BlogDeskPage() {
       const res = await fetch(`/api/super-admin/blog?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` },
       })
+      // A 404 here means the route isn't in the running build — usually a dev
+      // server started from a different project directory.
+      if (res.status === 404) {
+        throw new Error(
+          'The endpoint /api/super-admin/blog was not found. Check that the dev server is running from this project.'
+        )
+      }
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load articles')
 
       setRows(data.posts)
       setCounts(data.counts)
       setCanWrite(data.canWrite)
+      setLoadError(null)
     } catch (error) {
-      toast({
-        title: 'Could not load the desk',
-        description: error instanceof Error ? error.message : 'Unknown error',
-        variant: 'error',
-      })
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setRows([])
+      setLoadError(message)
+      toast({ title: 'Could not load the desk', description: message, variant: 'error' })
     } finally {
       setLoading(false)
     }
@@ -114,7 +126,8 @@ export default function BlogDeskPage() {
               The Journal desk
             </h1>
             <p className="mt-1.5 text-sm text-ai-graphite-500">
-              {total} {total === 1 ? 'article' : 'articles'} · published at{' '}
+              {/* An unknown count is a dash, never a zero — see the load error state. */}
+              {loadError ? '—' : `${total} ${total === 1 ? 'article' : 'articles'}`} · published at{' '}
               <Link href="/blog" className="text-lamp-700 hover:underline">/blog</Link>
             </p>
           </div>
@@ -181,10 +194,31 @@ export default function BlogDeskPage() {
             <div className="flex items-center justify-center py-20">
               <Loader2 className="h-5 w-5 animate-spin text-ai-graphite-300" />
             </div>
+          ) : loadError ? (
+            <div className="px-6 py-16 text-center">
+              <AlertTriangle className="mx-auto h-7 w-7 text-wax-600" />
+              <p className="mt-3 text-sm font-medium text-ai-graphite-900">
+                The article list could not be loaded
+              </p>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-ai-graphite-500">
+                {loadError}
+              </p>
+              <button
+                type="button"
+                onClick={load}
+                className="mt-5 inline-flex items-center gap-2 rounded-lg border border-paper-300 px-4 py-2 text-sm font-medium text-ai-graphite-700 hover:bg-paper-50"
+              >
+                <RefreshCw className="h-4 w-4" /> Try again
+              </button>
+            </div>
           ) : rows.length === 0 ? (
             <div className="px-6 py-20 text-center">
               <FileText className="mx-auto h-7 w-7 text-ai-graphite-300" />
-              <p className="mt-3 text-sm text-ai-graphite-500">Nothing here yet.</p>
+              <p className="mt-3 text-sm text-ai-graphite-500">
+                {query || status !== 'ALL'
+                  ? 'No articles match this filter.'
+                  : 'No articles yet. Create one, or run scripts/seed-blog.ts.'}
+              </p>
             </div>
           ) : (
             <table className="w-full text-left text-sm">

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowLeft, CirclePause, Database, Download, Play, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CirclePause, Database, Download, Play, RefreshCw, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 
@@ -55,6 +55,7 @@ type ArchiveFile = {
     id: string
     batchId: string
     status: string
+    storedPath?: string | null
     totalPages: number
     patentPages: number
     patentsCreated: number
@@ -236,7 +237,7 @@ export default function IpIndiaPatentArchivePage() {
     return () => window.clearInterval(interval)
   }, [canAccess, fetchArchive, skip, user])
 
-  const runAction = async (action: 'sync' | 'queue' | 'check-latest' | 'historical' | 'process-one' | 'refresh-status' | 'pause' | 'resume') => {
+  const runAction = async (action: 'sync' | 'queue' | 'check-latest' | 'historical' | 'process-one' | 'refresh-status' | 'pause' | 'resume' | 'cleanup-pdfs') => {
     if (isViewer) return
     setActioning(action)
     setError(null)
@@ -257,7 +258,7 @@ export default function IpIndiaPatentArchivePage() {
           limit: settings?.latestCheckLimit || 1,
         }),
       })
-      const body = (await response.json().catch(() => ({}))) as ArchiveResponse & { result?: { queued?: number; sync?: { synced?: number } }; sync?: { synced?: number } }
+      const body = (await response.json().catch(() => ({}))) as ArchiveResponse & { result?: { queued?: number; sync?: { synced?: number } }; sync?: { synced?: number }; cleanup?: { checked?: number; deleted?: number } }
       if (!response.ok) throw new Error(body.error || 'IP India archive action failed')
       setFiles(body.files || [])
       setSummary(body.summary || null)
@@ -271,6 +272,8 @@ export default function IpIndiaPatentArchivePage() {
           ? 'Historical PDF downloading paused. The current in-flight file may finish before the queue stops.'
         : action === 'resume'
           ? 'Historical PDF downloading restarted.'
+        : action === 'cleanup-pdfs'
+          ? `Retention sweep checked ${body.cleanup?.checked ?? 0} file(s) and deleted ${body.cleanup?.deleted ?? 0} PDF(s) from disk.`
         : action === 'sync'
           ? `Synced ${synced || 0} journal PDF record(s).`
           : action === 'check-latest'
@@ -361,6 +364,15 @@ export default function IpIndiaPatentArchivePage() {
                 >
                   <RefreshCw className="h-4 w-4" />
                   {actioning === 'check-latest' ? 'Checking' : 'Check Latest'}
+                </button>
+                <button
+                  onClick={() => runAction('cleanup-pdfs')}
+                  disabled={Boolean(actioning)}
+                  title="Delete stored PDFs past the retention window. Extracted records and embeddings are kept."
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {actioning === 'cleanup-pdfs' ? 'Cleaning' : 'Clean Old PDFs'}
                 </button>
                 <button
                   onClick={() => runAction('historical')}
@@ -586,7 +598,7 @@ export default function IpIndiaPatentArchivePage() {
                       <EmbeddingCounts counts={file.embeddingCounts || {}} />
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {(file.storedPath || file.outputFile || file.patentImportFileId) ? (
+                      {(file.storedPath || file.patentImportFile?.storedPath) ? (
                         <button
                           onClick={() => downloadStoredPdf(file)}
                           disabled={downloading === `${file.id}-pdf`}
@@ -595,6 +607,9 @@ export default function IpIndiaPatentArchivePage() {
                           <Download className="h-3.5 w-3.5" />
                           PDF
                         </button>
+                      ) : file.patentImportFileId ? (
+                        // Retention sweep removed the PDF; the extracted records live on.
+                        <span className="text-xs text-slate-400">Deleted</span>
                       ) : (
                         <span className="text-xs text-slate-400">-</span>
                       )}

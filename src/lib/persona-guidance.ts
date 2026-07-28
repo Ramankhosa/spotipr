@@ -70,6 +70,90 @@ export function isHighImpact(sectionKey: string): boolean {
   return (HIGH_IMPACT_SECTIONS as readonly string[]).includes(sectionKey)
 }
 
+/** The jurisdiction code standing for "applies to every country". */
+export const UNIVERSAL_JURISDICTION = '*'
+
+/** The shape the persona API returns per sample — keys only, never the text. */
+export interface PersonaSampleRef {
+  sectionKey: string
+  jurisdiction: string
+}
+
+/**
+ * The sections a persona can actually supply for a given jurisdiction.
+ *
+ * This mirrors `findPrimaryPersonaSample` in the writing sample service, which
+ * only ever looks at `[jurisdiction, '*']`. The distinction is not cosmetic:
+ * five sections saved under "US" leave an Indian draft with nothing to mimic,
+ * so counting them as covered would promise a style the drafter cannot deliver.
+ *
+ * Passing '*' asks the narrower question — what works for every country — and
+ * deliberately ignores country-specific samples.
+ */
+export function resolveCoveredSections(
+  samples: PersonaSampleRef[] | undefined,
+  jurisdiction: string = UNIVERSAL_JURISDICTION
+): string[] {
+  const target = (jurisdiction || UNIVERSAL_JURISDICTION).toUpperCase()
+  const covered = new Set<string>()
+
+  for (const sample of samples || []) {
+    if (!sample?.sectionKey) continue
+    const code = (sample.jurisdiction || '').toUpperCase()
+    if (code === UNIVERSAL_JURISDICTION || code === target) {
+      covered.add(sample.sectionKey)
+    }
+  }
+
+  return Array.from(covered)
+}
+
+export interface PersonaCoverage {
+  /** The strongest readiness available, across the universal set and each country. */
+  readiness: PersonaReadiness
+  /** Where that readiness applies: '*' for every country, otherwise a country code. */
+  jurisdiction: string
+  /**
+   * Every country the persona is fully ready for. Empty once it is universally
+   * ready, since the qualifier would then add nothing.
+   */
+  readyJurisdictions: string[]
+}
+
+/**
+ * Readiness for surfaces with no jurisdiction in hand, such as the persona
+ * list. Universal wins when it is complete; otherwise the best country does,
+ * so a deliberately US-only persona reads as ready for US rather than as
+ * unfinished — while still never claiming to be ready everywhere.
+ */
+export function getPersonaCoverage(samples: PersonaSampleRef[] | undefined): PersonaCoverage {
+  const universal = getPersonaReadiness(resolveCoveredSections(samples, UNIVERSAL_JURISDICTION))
+  if (universal.level === 'ready') {
+    return { readiness: universal, jurisdiction: UNIVERSAL_JURISDICTION, readyJurisdictions: [] }
+  }
+
+  const countries = Array.from(new Set(
+    (samples || [])
+      .map(s => (s?.jurisdiction || '').toUpperCase())
+      .filter(code => code && code !== UNIVERSAL_JURISDICTION)
+  ))
+
+  let readiness = universal
+  let jurisdiction = UNIVERSAL_JURISDICTION
+  const readyJurisdictions: string[] = []
+
+  for (const code of countries) {
+    const forCountry = getPersonaReadiness(resolveCoveredSections(samples, code))
+    if (forCountry.level === 'ready') readyJurisdictions.push(code)
+    if (forCountry.covered > readiness.covered) {
+      readiness = forCountry
+      jurisdiction = code
+    }
+  }
+
+  return { readiness, jurisdiction, readyJurisdictions }
+}
+
 export type ReadinessLevel = 'empty' | 'partial' | 'ready'
 
 export interface PersonaReadiness {

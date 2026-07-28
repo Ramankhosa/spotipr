@@ -5609,6 +5609,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           isOpen={showPersonaManager}
           onClose={() => setShowPersonaManager(false)}
           showSelector={true}
+          jurisdiction={activeJurisdiction}
           currentSelection={personaSelection}
           onSelectPersona={(selection) => {
             void (async () => {

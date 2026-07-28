@@ -184,6 +184,46 @@ describe('writing sample persona resolution', () => {
     ])
   })
 
+  test('does not warn about sections outside the high-impact five', async () => {
+    mockPrisma.writingPersona.findMany.mockResolvedValue([
+      { id: 'persona-own', name: 'Own Style' }
+    ])
+
+    const warnings = await getPersonaCoverageWarnings(
+      'user-1',
+      'tenant-1',
+      ['title', 'fieldOfInvention', 'briefDescriptionOfDrawings'],
+      'US',
+      { primaryPersonaId: 'persona-own' }
+    )
+
+    expect(warnings).toEqual([])
+    // Nothing to check means no sample lookups at all.
+    expect(mockPrisma.writingSample.findMany).not.toHaveBeenCalled()
+  })
+
+  test('warns only about the high-impact sections in a mixed request', async () => {
+    mockPrisma.writingPersona.findMany.mockResolvedValue([
+      { id: 'persona-own', name: 'Own Style' }
+    ])
+    mockPrisma.writingSample.findMany
+      .mockResolvedValueOnce([]) // no persona sample for claims
+      .mockResolvedValueOnce([]) // and no personal fallback either
+
+    const warnings = await getPersonaCoverageWarnings(
+      'user-1',
+      'tenant-1',
+      ['title', 'claims', 'fieldOfInvention'],
+      'US',
+      { primaryPersonaId: 'persona-own' }
+    )
+
+    expect(warnings).toEqual([
+      expect.objectContaining({ sectionKey: 'claims', fallback: 'none' })
+    ])
+    expect(mockPrisma.writingSample.findMany).toHaveBeenCalledTimes(2)
+  })
+
   test('does not inject persona names as prompt style guidance', () => {
     const block = buildWritingSampleBlock({
       sampleText: 'A device comprising a processor and a memory.',

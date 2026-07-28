@@ -1,38 +1,43 @@
 import type { Metadata } from 'next'
-import PatentNestNav from '@/components/patentnest/PatentNestNav'
-import DocumentHero from '@/components/patentnest/DocumentHero'
-import PriorArtSection from '@/components/patentnest/PriorArtSection'
-import StudioSection from '@/components/patentnest/StudioSection'
-import FiguresSection from '@/components/patentnest/FiguresSection'
-import EmbodimentsSection from '@/components/patentnest/EmbodimentsSection'
-import ClaimsSection from '@/components/patentnest/ClaimsSection'
-import GrantSection from '@/components/patentnest/GrantSection'
-import PaperFooter from '@/components/patentnest/PaperFooter'
+import WorkspaceNav from '@/components/home-v2/WorkspaceNav'
+import WorkspaceHero from '@/components/home-v2/WorkspaceHero'
+import JourneySection from '@/components/home-v2/JourneySection'
+import FeatureGrid from '@/components/home-v2/FeatureGrid'
+import AudienceStrip from '@/components/home-v2/AudienceStrip'
+import ClosingBand from '@/components/home-v2/ClosingBand'
+import WorkspaceFooter from '@/components/home-v2/WorkspaceFooter'
 
 export const metadata: Metadata = {
-  title: 'PatentNest.ai — Where ideas become property',
+  title: 'PatentNest.ai — From invention to defensible application',
   description:
-    'The patent studio from disclosure to filing: prior-art search across 30M+ patents, AI-drafted specifications and claims, and filing-ready figures — validated before you pay a single fee.',
+    'Search prior art across 30M+ patent documents, engineer claims, draft complete specifications, generate patent drawings, and respond to office actions — all in one connected workspace.',
 }
 
-// The PatentNest document-style landing page, now the DEFAULT homepage.
-// The same composition remains available at /patentnest; the original dark
-// homepage is preserved at /classic-home. The global Header is hidden here
-// (see components/ConditionalHeader.tsx) — PatentNestNav is the chrome.
+// The "patent intelligence workspace" homepage: blue-tinted white ground
+// (#f6f8fd), white cards on paper-300 hairlines, cobalt (lamp-600) as the only
+// saturated colour, product-first hero. Built on the existing Cobalt & Oxford
+// ramps — it does not fork the token system.
+//
+// This REPLACED the document-style landing page as the default homepage; that
+// composition is unchanged and still served at /patentnest. /home-v2, where this
+// design was developed, now redirects here.
+//
+// Public entry points: signed-out visitors are sent to /free-trial (access is
+// requested and approved by a person, not self-serve) and /contact. Signed-in
+// visitors go straight to /patents/draft/new. The global Header is suppressed
+// for '/' in components/ConditionalHeader.tsx — WorkspaceNav is the chrome.
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-paper-200 font-sans text-ai-graphite-900 antialiased selection:bg-brass-600/20">
-      <PatentNestNav />
+    <div className="min-h-screen bg-[#f6f8fd] font-sans text-ai-graphite-900 antialiased selection:bg-lamp-600 selection:text-white">
+      <WorkspaceNav />
       <main>
-        <DocumentHero />
-        <PriorArtSection />
-        <StudioSection />
-        <FiguresSection />
-        <EmbodimentsSection />
-        <ClaimsSection />
-        <GrantSection />
+        <WorkspaceHero />
+        <JourneySection />
+        <FeatureGrid />
+        <AudienceStrip />
+        <ClosingBand />
       </main>
-      <PaperFooter />
+      <WorkspaceFooter />
     </div>
   )
 }
