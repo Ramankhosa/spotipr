@@ -112,8 +112,12 @@ export async function GET(request: NextRequest) {
         creator: {
           select: { id: true, name: true, email: true }
         },
-        _count: {
-          select: { samples: true }
+        // Coverage drives the readiness meter in the UI ("Ready to use" vs
+        // "2 of 5 key sections"). Only the keys are needed, never the text, so
+        // this stays cheap even for a persona with every section filled.
+        samples: {
+          where: { isActive: true },
+          select: { sectionKey: true, jurisdiction: true }
         }
       },
       orderBy: [
@@ -122,36 +126,34 @@ export async function GET(request: NextRequest) {
       ]
     })
 
+    const summarize = (p: (typeof personas)[number]) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      visibility: p.visibility,
+      isTemplate: p.isTemplate,
+      allowCopy: p.allowCopy,
+      sampleCount: p.samples.length,
+      // Distinct section keys across every jurisdiction: a section taught
+      // universally counts as taught, which is how generation resolves it.
+      coveredSections: Array.from(new Set(p.samples.map(s => s.sectionKey))),
+      jurisdictions: Array.from(new Set(p.samples.map(s => s.jurisdiction))),
+      createdAt: p.createdAt
+    })
+
     // Group by ownership
     const myPersonas = personas.filter(p => p.createdBy === user.id)
     const orgPersonas = personas.filter(p => p.createdBy !== user.id && p.visibility === 'ORGANIZATION')
 
     return NextResponse.json({
-      myPersonas: myPersonas.map(p => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        visibility: p.visibility,
-        isTemplate: p.isTemplate,
-        allowCopy: p.allowCopy,
-        sampleCount: p._count.samples,
-        isOwn: true,
-        createdAt: p.createdAt
-      })),
+      myPersonas: myPersonas.map(p => ({ ...summarize(p), isOwn: true })),
       orgPersonas: orgPersonas.map(p => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        visibility: p.visibility,
-        isTemplate: p.isTemplate,
-        allowCopy: p.allowCopy,
-        sampleCount: p._count.samples,
+        ...summarize(p),
         isOwn: false,
         createdBy: {
           id: p.creator.id,
           name: p.creator.name || p.creator.email
-        },
-        createdAt: p.createdAt
+        }
       })),
       total: personas.length
     })

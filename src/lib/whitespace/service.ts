@@ -311,11 +311,15 @@ async function narrateField(input: {
 // Run orchestration
 // ---------------------------------------------------------------------------
 
-export async function resolveStaleRun<T extends { id: string; status: string; createdAt: Date }>(
+export async function resolveStaleRun<T extends { id: string; status: string; createdAt: Date; heartbeatAt?: Date | null }>(
   row: T
 ): Promise<T> {
   const live = row.status === 'QUEUED' || row.status === 'PROCESSING'
-  if (!live || Date.now() - row.createdAt.getTime() < WHITESPACE_RUN_STALE_MS) return row
+  // Staleness is measured from the last heartbeat, not creation: legitimate long
+  // stages (a deep dive is many model calls) beat regularly, while a run lost to
+  // a restart goes silent and gets failed here on next read.
+  const lastSignal = Math.max(row.createdAt.getTime(), row.heartbeatAt?.getTime() ?? 0)
+  if (!live || Date.now() - lastSignal < WHITESPACE_RUN_STALE_MS) return row
   const failed = await prisma.whitespaceRun.update({
     where: { id: row.id },
     data: {
@@ -346,13 +350,18 @@ export async function startWhitespaceRun(input: {
   const runnable = scopeIsRunnable(input.scope)
   if (!runnable.runnable) throw new Error(runnable.reason || 'Scope is not runnable.')
 
-  const live = await prisma.whitespaceRun.findFirst({
+  // Dedupe live runs per stage AND per params: two deep dives on different
+  // clusters are different work, two on the same cluster are the same run.
+  const liveRuns = await prisma.whitespaceRun.findMany({
     where: { studyId: input.studyId, stage: input.stage, status: { in: ['QUEUED', 'PROCESSING'] } },
     orderBy: { createdAt: 'desc' },
   })
-  if (live) {
+  for (const live of liveRuns) {
     const resolved = await resolveStaleRun(live)
-    if (resolved.status === 'QUEUED' || resolved.status === 'PROCESSING') {
+    if (
+      (resolved.status === 'QUEUED' || resolved.status === 'PROCESSING') &&
+      JSON.stringify(resolved.params ?? null) === JSON.stringify(input.params ?? null)
+    ) {
       return { runId: resolved.id, existing: true }
     }
   }
@@ -395,40 +404,103 @@ async function executeRun(input: {
   stage: WhitespaceRunStage
   scope: WhitespaceScope
   requestHeaders: Record<string, string>
+  params?: Prisma.InputJsonValue
 }): Promise<void> {
   const startedAt = Date.now()
+  const params = (input.params ?? {}) as Record<string, unknown>
 
-  if (input.stage !== 'FIELD_MAP') {
-    throw new Error(`Stage ${input.stage} is not implemented yet.`)
+  let results: Prisma.InputJsonValue
+  let gateCounts: Prisma.InputJsonValue | undefined
+  let trailSummary: string
+
+  switch (input.stage) {
+    case 'FIELD_MAP': {
+      const result = await runFieldMap(input.scope)
+      const narrative = await narrateField({
+        scope: input.scope,
+        result,
+        requestHeaders: input.requestHeaders,
+      })
+      results = { ...result, narrative } as unknown as Prisma.InputJsonValue
+      gateCounts = result.gateCounts as unknown as Prisma.InputJsonValue
+      trailSummary = `Field map complete — ${result.familyCount.toLocaleString()} families, ${Math.round(
+        (result.textCoverage.withClaims / Math.max(1, result.familyCount)) * 100
+      )}% claim coverage`
+      break
+    }
+    case 'CLUSTER': {
+      const { runClusterStage } = await import('./cluster-stage')
+      const result = await runClusterStage({
+        runId: input.runId,
+        studyId: input.studyId,
+        scope: input.scope,
+        requestHeaders: input.requestHeaders,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `Area map complete — ${result.clusterCount} areas from a ${result.sampledFamilies.toLocaleString()}-family sample`
+      break
+    }
+    case 'SIGNALS': {
+      const { runSignalsStage } = await import('./signals-stage')
+      const result = await runSignalsStage({
+        runId: input.runId,
+        studyId: input.studyId,
+        scope: input.scope,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `Signals computed for ${result.clustersScored} areas${
+        result.divergence.some(entry => entry.divergent) ? ' — terminology divergence detected' : ''
+      }`
+      break
+    }
+    case 'DEEP_DIVE': {
+      const clusterId = typeof params.clusterId === 'string' ? params.clusterId : ''
+      if (!clusterId) throw new Error('A deep dive needs the area to read (clusterId).')
+      const { runDeepDiveStage } = await import('./deep-dive-stage')
+      const result = await runDeepDiveStage({
+        runId: input.runId,
+        studyId: input.studyId,
+        clusterId,
+        requestHeaders: input.requestHeaders,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `Deep dive on "${result.clusterLabel}" — ${result.familiesExtracted} of ${result.familiesConsidered} families read at claim level`
+      break
+    }
+    case 'VALIDATE': {
+      const hypothesisId = typeof params.hypothesisId === 'string' ? params.hypothesisId : ''
+      if (!hypothesisId) throw new Error('Validation needs the hypothesis to attack (hypothesisId).')
+      const { runValidateStage } = await import('./validate-stage')
+      const result = await runValidateStage({
+        runId: input.runId,
+        studyId: input.studyId,
+        hypothesisId,
+        scope: input.scope,
+        requestHeaders: input.requestHeaders,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `Validation finished — ${result.attacksRun} attacks run, outcome ${result.status}${
+        result.confidence !== null ? ` (confidence ${result.confidence})` : ''
+      }`
+      break
+    }
+    default:
+      throw new Error(`Stage ${input.stage} is not implemented yet.`)
   }
-
-  const result = await runFieldMap(input.scope)
-  const narrative = await narrateField({
-    scope: input.scope,
-    result,
-    requestHeaders: input.requestHeaders,
-  })
 
   await prisma.whitespaceRun.update({
     where: { id: input.runId },
     data: {
       status: 'COMPLETED',
-      results: { ...result, narrative } as unknown as Prisma.InputJsonValue,
-      gateCounts: result.gateCounts as unknown as Prisma.InputJsonValue,
+      results,
+      gateCounts,
       durationMs: Date.now() - startedAt,
       completedAt: new Date(),
       heartbeatAt: new Date(),
     },
   })
 
-  await appendTrail(
-    input.studyId,
-    'RUN',
-    'system',
-    `Field map complete — ${result.familyCount.toLocaleString()} families, ${Math.round(
-      (result.textCoverage.withClaims / Math.max(1, result.familyCount)) * 100
-    )}% claim coverage`
-  )
+  await appendTrail(input.studyId, 'RUN', 'system', trailSummary)
 }
 
 /** Client-facing shape for a run row, used by both the start and poll routes. */

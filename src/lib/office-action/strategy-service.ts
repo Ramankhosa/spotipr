@@ -5,6 +5,7 @@ import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, rend
 import type { ClassifiedObjection } from './objection-classifier'
 import type { ClaimChart } from './claim-chart-service'
 import type { Paragraph } from './document-intake'
+import { renderObjectionDoctrine } from './objection-doctrine'
 
 /**
  * Office Action Studio — Strategy stage (OA_STRATEGY)
@@ -134,8 +135,13 @@ export async function buildObjectionStrategy(
 
   const distinctions = chart?.distinctions?.map(d => `claim ${d.claimNumber}: ${d.feature}`) || []
 
+  // The office's own law for THIS objection — statute, sub-clause guidance,
+  // doctrine steps and the exhaustive authority whitelist.
+  const doctrine = renderObjectionDoctrine(ctx.profile, objection)
+
   const input = [
     `Invention digest:\n${renderDigest(ctx.digest)}`,
+    doctrine ? `\n${doctrine}` : '',
     distinctions.length ? `\nFeatures absent from ALL cited documents (your distinctions):\n- ${distinctions.join('\n- ')}` : '',
     basis.length ? `\nSpecification basis available (cite these ¶ tags for any amendment):\n${renderContextBlock(basis)}` : '',
     (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',

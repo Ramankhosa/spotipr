@@ -131,6 +131,172 @@ export interface TextCoverage {
   byJurisdiction: Array<{ country: string; families: number; withClaims: number }>
 }
 
+// ---------------------------------------------------------------------------
+// Cluster (stage 2) / signals (stage 3) output
+// ---------------------------------------------------------------------------
+
+/** One human status per area; raw geometry stays in the advanced disclosure. */
+export type ClusterGrade = 'well-defined' | 'usable' | 'diffuse'
+
+export interface ClusterMetrics {
+  /** log1p-scaled, P95-normalised family density in [0, ~1]. Null before SIGNALS. */
+  density: number | null
+  /** 5-year filing CAGR %, trailing publication lag excluded. Null when series too short. */
+  velocityPct: number | null
+  /** Herfindahl index over canonical assignees, 0..1. */
+  hhi: number | null
+  /** 0.5·D + 0.3·pct(V) + 0.2·(1−HHI) — see plan 10.3. */
+  crowdedness: number | null
+  /** Share of families filed in the last 5 complete years. */
+  recencyShare: number | null
+  jurisdictions: Array<{ country: string; families: number }>
+  topAssignees: Array<{ label: string; families: number }>
+  cpcMix: Array<{ code: string; families: number }>
+  /** Map coordinates in [0,1]² — a selector, never evidence. */
+  layout: { x: number; y: number }
+}
+
+export interface ClusterSummary {
+  id: string
+  label: string
+  description: string | null
+  keywords: string[]
+  grade: ClusterGrade
+  memberCount: number
+  /** Sample-weight extrapolation — always presented as an estimate. */
+  fieldEstimate: number
+  metrics: ClusterMetrics | null
+  cohesion: number | null
+  separation: number | null
+  silhouette: number | null
+}
+
+export interface ClusterStageResult {
+  clusterCount: number
+  sampledFamilies: number
+  fieldFamilies: number
+  /** fieldFamilies / sampledFamilies — the extrapolation factor. */
+  sampleWeight: number
+  k: number
+  iterations: number
+  coverageNotes: string[]
+  generatedAt: string
+}
+
+export interface TermDivergence {
+  concept: string
+  lexicalCount: number
+  semanticCount: number | null
+  /** Jaccard overlap % of top-N family sets; null when the semantic lane was unavailable. */
+  overlapPct: number | null
+  /** Titles from semantic-only hits, summarising the vocabulary the scope misses. */
+  semanticOnlyVocabulary: string | null
+  divergent: boolean
+}
+
+export interface SignalsStageResult {
+  clustersScored: number
+  divergence: TermDivergence[]
+  coverageNotes: string[]
+  generatedAt: string
+}
+
+// ---------------------------------------------------------------------------
+// Deep dive (stage 4) output
+// ---------------------------------------------------------------------------
+
+export interface ClaimElementFamily {
+  familyKey: string
+  publicationNumber: string
+  title: string
+  elements: string[]
+  problem: string | null
+  solution: string | null
+  constraint: string | null
+  claimsAvailability: string
+}
+
+export interface RarePair {
+  a: string
+  b: string
+  supportA: number
+  supportB: number
+  observed: number
+  expected: number
+  /** Standardised residual z; negative means rarer than chance. */
+  z: number
+  /** clamp(−z / 3, 0, 1) — valid only above the support floor. */
+  rarity: number
+}
+
+export interface DeepDiveResult {
+  clusterId: string
+  clusterLabel: string
+  familiesConsidered: number
+  familiesWithClaims: number
+  familiesExtracted: number
+  /** Support per normalised element string. */
+  elementSupport: Array<{ element: string; families: number }>
+  rarePairs: RarePair[]
+  supportFloor: number
+  problemSolution: Array<{ problem: string; solutions: string[]; families: number }>
+  coverageNotes: string[]
+  generatedAt: string
+}
+
+// ---------------------------------------------------------------------------
+// Hypotheses (stages 5-6)
+// ---------------------------------------------------------------------------
+
+export type WhitespaceType =
+  | 'UNDETERMINED'
+  | 'DATA_WHITESPACE'
+  | 'TERMINOLOGY_WHITESPACE'
+  | 'PATENT_WHITESPACE'
+  | 'CLAIM_WHITESPACE'
+  | 'SCIENTIFIC_WHITESPACE'
+  | 'PRODUCT_WHITESPACE'
+  | 'TECHNICAL_FEASIBILITY_WHITESPACE'
+  | 'COMMERCIAL_WHITESPACE'
+  | 'REGULATORY_WHITESPACE'
+  | 'GENUINE'
+
+export interface HypothesisScores {
+  density: number | null
+  rarity: number | null
+  semanticNovelty: number | null
+  evidenceQuality: number | null
+  confidence: number | null
+  crowdedness: number | null
+  /** Multiplicative rank score — any collapsed pillar collapses it. */
+  strength: number | null
+}
+
+export interface AttackRecord {
+  strategy: 'SYNONYM_SHIFTED' | 'SEMANTIC_PARAPHRASE' | 'CPC_ADJACENT' | 'ASSIGNEE_PIVOT' | 'RED_TEAM' | 'LITERATURE'
+  query: string
+  hits: number
+  /** CLEAN (nothing close), WEAKENING (partial matches), REFUTING (full combination present). */
+  outcome: 'CLEAN' | 'WEAKENING' | 'REFUTING' | 'NOT_RUN'
+  /** Why the attack could not run, when outcome is NOT_RUN. */
+  reason?: string
+}
+
+export interface GateOutcome {
+  gate: 'G1_DATA' | 'G2_TERMINOLOGY' | 'G3_ADJACENT_CLAIMS' | 'G4_FEASIBILITY' | 'G5_COMMERCIAL' | 'G6_REGULATORY'
+  outcome: 'PASSED' | 'PASSED_WITH_WEAKENING' | 'FAILED' | 'ADVISORY' | 'UNASSESSED'
+  basis: string
+}
+
+export interface ValidationRecord {
+  attacks: AttackRecord[]
+  gates: GateOutcome[]
+  attacksPlanned: number
+  attacksRun: number
+  redTeamNotes: string | null
+  validatedAt: string
+}
+
 export interface FieldMapResult {
   familyCount: number
   publicationCount: number

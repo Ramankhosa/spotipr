@@ -16,6 +16,20 @@ import { normalizeInvention, estimateTokens, extractClaimsText } from './documen
 export type CaseDocumentKind = 'SPECIFICATION' | 'CLAIMS' | 'DRAWINGS' | 'SUPPLEMENTARY'
 export type CaseDocumentSource = 'UPLOAD' | 'SPOTIPR_PROJECT' | 'PASTE'
 
+/**
+ * Kinds that are worth embedding — i.e. the only kinds anything ever runs a
+ * vector search over:
+ *   SPECIFICATION  retrieved per objection for s.59 amendment basis and for the
+ *                  drafted argument (response-drafter, strategy-service).
+ *   SUPPLEMENTARY  retrieved per objection as evidence; it has a deterministic
+ *                  fallback, but embedding is what ranks it when a case carries
+ *                  several documents.
+ * CLAIMS and DRAWINGS are deliberately excluded: nothing retrieves them. The
+ * claims reach the claim charts whole via OfficeActionCase.claimsText, so
+ * embedding them would cost tokens no reader ever consumes.
+ */
+const EMBEDDED_KINDS: ReadonlySet<string> = new Set<CaseDocumentKind>(['SPECIFICATION', 'SUPPLEMENTARY'])
+
 export interface AddDocumentInput {
   caseId: string
   kind: CaseDocumentKind
@@ -39,8 +53,9 @@ export interface AddDocumentResult {
 
 /**
  * Add a document to a case, chunk it, and queue/complete indexing.
- * Embedding is attempted once here; failure leaves indexStatus PENDING so a
- * retry can embed later — retrieval degrades to digest-only, never full-spec.
+ * Embedding is attempted once here for the retrievable kinds; failure leaves
+ * indexStatus PENDING so a retry can embed later — retrieval degrades to
+ * digest-only, never full-spec.
  */
 export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocumentResult> {
   const isAsFiled = input.kind === 'SPECIFICATION' || input.kind === 'CLAIMS'
@@ -90,10 +105,16 @@ export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocum
     await prisma.officeActionCase.update({ where: { id: input.caseId }, data: { claimsText: input.text } })
   }
 
-  const embedded = await embedChunks(doc.id).catch(() => false)
-  await prisma.oaCaseDocument.update({
-    where: { id: doc.id }, data: { indexStatus: embedded ? 'INDEXED' : 'PENDING' }
-  })
+  // Kinds nothing retrieves are marked NOT_REQUIRED rather than left PENDING —
+  // a permanent "indexing pending" on a claims document reads as a stuck job.
+  if (!EMBEDDED_KINDS.has(input.kind)) {
+    await prisma.oaCaseDocument.update({ where: { id: doc.id }, data: { indexStatus: 'NOT_REQUIRED' } })
+  } else {
+    const embedded = await embedChunks(doc.id).catch(() => false)
+    await prisma.oaCaseDocument.update({
+      where: { id: doc.id }, data: { indexStatus: embedded ? 'INDEXED' : 'PENDING' }
+    })
+  }
 
   return {
     documentId: doc.id,

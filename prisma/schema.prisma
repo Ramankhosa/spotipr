@@ -5232,7 +5232,9 @@ model OaCaseDocument {
   intentNote    String? // attorney's instruction for supplementary material
   targetCodes   Json? // canonical objection codes this doc serves
   newMatterSafe Boolean  @default(false) // true only for as-filed spec/claims
-  indexStatus   String   @default("PENDING") // PENDING | INDEXED | FAILED
+  // PENDING | INDEXED | FAILED | NOT_REQUIRED (kinds nothing retrieves — claims,
+  // drawings — are never embedded; see EMBEDDED_KINDS in case-document-service)
+  indexStatus   String   @default("PENDING")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -5755,4 +5757,150 @@ model AccessRequestEvent {
 
   @@index([requestId, createdAt])
   @@map("access_request_events")
+}
+
+// ============================================================================
+// EDITORIAL — the public blog at /blog
+// ============================================================================
+//
+// The blog is an acquisition surface, so the model carries the fields an SEO/AEO
+// audit actually grades rather than a generic title+body: the direct-answer block
+// that answer engines lift, the takeaways, the FAQ pairs that become FAQPage
+// JSON-LD, and the focus keyword the composer scores against. Body is HTML
+// because the admin composer is TipTap (same as the drafting editors) — storing
+// its output verbatim means what an author sees is what ships.
+//
+// Publication is a two-key affair: `status` says what the editor intends and
+// `publishedAt` says when the public may see it. Only PUBLISHED posts with a
+// past `publishedAt` are ever served, so scheduling needs no cron.
+
+enum BlogPostStatus {
+  DRAFT // Work in progress, never served publicly
+  SCHEDULED // Finished; appears automatically once publishedAt passes
+  PUBLISHED // Live
+  ARCHIVED // Unpublished after the fact; URL 404s but the row is kept
+}
+
+/// Bylines. Real people with real credentials — E-E-A-T is the whole point, so
+/// every post must have one and each author gets an indexable /blog/author page.
+model BlogAuthor {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  /// "Patent Attorney (IN/PCT)" — shown under the byline
+  title       String?
+  bio         String?  @db.Text
+  avatarUrl   String?
+  /// Registration numbers, degrees, bar admissions — rendered in the author card
+  credentials String[] @default([])
+  linkedinUrl String?
+  websiteUrl  String?
+  email       String?
+  isActive    Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  posts         BlogPost[] @relation("BlogPostAuthor")
+  reviewedPosts BlogPost[] @relation("BlogPostReviewer")
+
+  @@map("blog_authors")
+}
+
+/// Topic hubs. One category per post, chosen to match the pillar/cluster map in
+/// docs/BLOG_SEO_STRATEGY.md — each is an indexable landing page in its own right.
+model BlogCategory {
+  id             String  @id @default(cuid())
+  slug           String  @unique
+  name           String
+  description    String? @db.Text
+  /// Overrides for the hub page's <title>/<meta description>
+  seoTitle       String?
+  seoDescription String? @db.Text
+  sortOrder      Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  posts BlogPost[]
+
+  @@map("blog_categories")
+}
+
+model BlogPost {
+  id     String         @id @default(cuid())
+  slug   String         @unique
+  status BlogPostStatus @default(DRAFT)
+
+  // --- Editorial -----------------------------------------------------------
+  title    String
+  subtitle String? @db.Text
+  /// Card/summary text. Distinct from seoDescription: this one is for humans.
+  excerpt  String  @db.Text
+  /// TipTap HTML. Headings get anchor ids at render time, not on save.
+  content  String  @db.Text
+
+  // --- Answer-engine payload ----------------------------------------------
+  /// 40–70 words that answer the title question outright, rendered directly
+  /// under the H1 and reused as the meta description fallback. This is the
+  /// block AI Overviews / ChatGPT / Perplexity actually quote.
+  answerSummary String?  @db.Text
+  keyTakeaways  String[] @default([])
+  /// [{ question, answer }] — rendered as an accordion AND as FAQPage JSON-LD
+  faqs          Json?
+
+  // --- Search targeting ----------------------------------------------------
+  focusKeyword      String?
+  secondaryKeywords String[] @default([])
+  tags              String[] @default([])
+  /// ISO-ish codes the article speaks to: US, EP, IN, PCT… Drives the
+  /// jurisdiction chips and lets readers filter to their office.
+  jurisdictions     String[] @default([])
+
+  // --- Metadata ------------------------------------------------------------
+  seoTitle       String?
+  seoDescription String? @db.Text
+  canonicalUrl   String?
+  heroImageUrl   String?
+  heroImageAlt   String?
+  ogImageUrl     String?
+  noindex        Boolean @default(false)
+  featured       Boolean @default(false)
+
+  /// Computed on save from `content` so listings never parse HTML.
+  readingMinutes Int @default(0)
+  wordCount      Int @default(0)
+  viewCount      Int @default(0)
+
+  /// Last audit result from lib/blog/seo-audit.ts — 0-100 plus the per-check
+  /// detail, so the list view can flag posts that regressed after an edit.
+  seoScore  Int?
+  seoChecks Json?
+
+  /// Slugs of hand-picked related posts; the article page fills any remainder
+  /// from the same category.
+  relatedSlugs String[] @default([])
+
+  // --- Publication ---------------------------------------------------------
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdBy   String?
+  updatedBy   String?
+
+  categoryId String
+  authorId   String
+  /// Optional second byline: "Reviewed by" — a real E-E-A-T signal for
+  /// anything that reads like legal guidance.
+  reviewerId String?
+
+  category BlogCategory @relation(fields: [categoryId], references: [id])
+  author   BlogAuthor   @relation("BlogPostAuthor", fields: [authorId], references: [id])
+  reviewer BlogAuthor?  @relation("BlogPostReviewer", fields: [reviewerId], references: [id])
+
+  @@index([status, publishedAt])
+  @@index([categoryId, status, publishedAt])
+  @@index([featured, status, publishedAt])
+  @@index([authorId])
+  @@map("blog_posts")
 }

@@ -2271,13 +2271,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     const lines = (Array.isArray(warnings) ? warnings : [])
       .map((warning: any) => {
         const fallback = warning?.fallback === 'personal_sample'
-          ? 'personal non-persona sample will be used'
-          : 'no style block will be used'
-        return `- ${warning?.sectionKey || 'section'} (${warning?.jurisdiction || activeJurisdiction}): ${fallback}`
+          ? 'your default style will be used instead'
+          : 'this section will use the standard voice'
+        return `- ${warning?.sectionKey || 'section'}: ${fallback}`
       })
       .join('\n')
 
-    return `The selected persona is missing writing samples for this generation.\n\n${lines || '- One or more sections have no persona sample.'}\n\nContinue without persona style for those missing sections?`
+    return `This persona has not been taught every section you are about to generate.\n\n${lines || '- One or more sections have no sample in this persona.'}\n\nGenerate anyway? You can add the missing samples on the Writing Personas page and regenerate later.`
   }
 
   const generateSectionsWithPersonaHandling = async (payload: any) => {
@@ -3848,16 +3848,16 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           </div>
           <div className="p-4 max-h-96 overflow-y-auto text-sm space-y-4">
             <div>
-              <h4 className="font-semibold text-ai-graphite-900 mb-1">📝 Writing Style</h4>
-              <p className="text-ai-graphite-600 text-xs">Control how AI generates content. Enable "Style" to match your selected persona's writing patterns.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">📝 Style</h4>
+              <p className="text-ai-graphite-600 text-xs">Turn this on to draft in your own voice instead of the default one. It only changes the writing — never the technical substance.</p>
             </div>
             <div>
               <h4 className="font-semibold text-ai-graphite-900 mb-1">👤 Persona</h4>
-              <p className="text-ai-graphite-600 text-xs">Select a writing persona (CSE, Bio, Chemistry) to guide the technical language and style.</p>
+              <p className="text-ai-graphite-600 text-xs">Which saved style to write in. A persona only has an effect once it has writing samples — add them on the Writing Personas page.</p>
             </div>
             <div>
-              <h4 className="font-semibold text-ai-graphite-900 mb-1">✍️ Samples</h4>
-              <p className="text-ai-graphite-600 text-xs">Upload your own writing samples to train the AI on your preferred style.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">✍️ Default style</h4>
+              <p className="text-ai-graphite-600 text-xs">Samples that belong to you rather than to a persona. They fill in for any section the selected persona has not been taught.</p>
             </div>
             <div>
               <h4 className="font-semibold text-ai-graphite-900 mb-1">🚀 Auto Mode</h4>
@@ -3910,7 +3910,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             
             {/* Group 1: Writing Style Controls */}
             <div className="flex items-center gap-2 pr-3 border-r border-paper-300">
-              <Tooltip content="When enabled, AI will mimic the writing style of your selected persona, adapting tone, terminology, and structure to match." position="bottom">
+              <Tooltip content="Draft in your own voice: the selected persona's samples set the tone, terminology, and structure. Substance is unaffected." position="bottom">
                 <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors ${
                   usePersonaStyle ? 'bg-emerald-50' : 'bg-paper-100'
                 }`}>
@@ -3930,7 +3930,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 </div>
               </Tooltip>
 
-              <Tooltip content="Choose a writing persona (e.g., CSE, Bio, Chemistry) that defines the technical vocabulary and drafting patterns for your patent." position="bottom">
+              <Tooltip content="Which saved writing style to draft in. A persona has an effect only once it holds writing samples." position="bottom">
                 <button
                   onClick={() => setShowPersonaManager(true)}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
@@ -3949,13 +3949,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 </button>
               </Tooltip>
 
-              <Tooltip content="Upload and manage your own writing samples to train the AI on your unique drafting style." position="bottom">
+              <Tooltip content="Your own samples, not tied to any persona. They fill in for sections the selected persona has not been taught." position="bottom">
                 <button
                   onClick={() => setShowWritingSamplesModal(true)}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-white border border-paper-300 text-ai-graphite-600 hover:bg-paper-100 transition-colors"
                 >
                   <span>✍️</span>
-                  <span className="font-medium">Samples</span>
+                  <span className="font-medium">Default style</span>
                 </button>
               </Tooltip>
             </div>

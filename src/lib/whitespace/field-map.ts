@@ -3,9 +3,15 @@
  *
  * Pure SQL over the local corpus. No language model touches any number here,
  * which is what makes the landscape reproducible: same scope, same corpus, same
- * answer. The census is decomposed into independent facet queries, each under
- * its own statement timeout, so one slow facet degrades to a gap in the result
- * rather than failing the run.
+ * answer.
+ *
+ * The scope predicate is evaluated EXACTLY ONCE, into a temp table, and every
+ * facet then reads that staged set. The earlier shape — seven independent facet
+ * queries each repeating the predicate — paid for the full-text scan and the
+ * family de-duplication seven times over, which is what pushed the census past
+ * its statement timeout on a large corpus and failed the run with a raw
+ * `57014` from Postgres. Facets are read inside savepoints, so a slow facet
+ * still degrades to a gap in the result rather than killing the census.
  *
  * Counting conventions, fixed here and declared in every export:
  *   - Families, not publications. COALESCE("familyId", "publicationNumber").
@@ -19,28 +25,50 @@ import { prisma } from '@/lib/prisma'
 import type { FieldMapResult, LabelledCount, TextCoverage, WhitespaceScope, YearCount } from './types'
 import { CORPUS_FIRST_YEAR } from './types'
 
-/** Per-facet ceiling. A facet that overruns is reported as unavailable, not fatal. */
+/**
+ * Ceiling for the staging pass — the only statement that touches the corpus.
+ * Raise with WHITESPACE_CENSUS_TIMEOUT_MS on installations with a bigger corpus.
+ */
+const CENSUS_TIMEOUT_MS = Math.max(10_000, Number(process.env.WHITESPACE_CENSUS_TIMEOUT_MS) || 90_000)
+/** Per-facet ceiling. Facets read the staged temp table, so this is generous. */
 const FACET_TIMEOUT_MS = 20_000
 /** Assignee extraction reads a JSON column, so it runs over a capped sample. */
 const ASSIGNEE_SAMPLE_CAP = 25_000
 export const PUBLICATION_LAG_MONTHS = 18
 
-async function facet<T>(query: Prisma.Sql, timeoutMs = FACET_TIMEOUT_MS): Promise<T[]> {
-  // Sequential transaction rather than an interactive one: Prisma's interactive
-  // default expires at 5s, well under the statement timeout we want to allow.
-  const [, rows] = await prisma.$transaction([
-    prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`,
-    prisma.$queryRaw<T[]>(query),
-  ])
-  return rows
+type Tx = Prisma.TransactionClient
+
+/** Transaction-local, so it applies to the following statements and nothing else. */
+async function setStatementTimeout(tx: Tx, ms: number): Promise<void> {
+  await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(ms)}, true)`
 }
 
-/** Runs a facet, converting failure into a null so one bad facet cannot fail the census. */
-async function optionalFacet<T>(label: string, run: () => Promise<T>): Promise<T | null> {
+/** True for Postgres 57014 — query_canceled, i.e. the statement timeout fired. */
+function isStatementTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = (error as { meta?: { code?: string } })?.meta?.code
+  return code === '57014' || /57014|statement timeout|canceling statement/i.test(message)
+}
+
+/**
+ * Reads one facet off the staged census inside a savepoint.
+ *
+ * The savepoint matters: the census runs in a single transaction now, and in
+ * Postgres a failed statement poisons the whole transaction unless it is rolled
+ * back to a savepoint. Without this, one slow facet would take the entire map
+ * down — the failure mode this module explicitly promises not to have.
+ */
+async function facet<T>(tx: Tx, label: string, query: Prisma.Sql, gaps: string[]): Promise<T[] | null> {
+  const savepoint = `ws_facet_${label.replace(/[^a-z0-9_]/gi, '_')}`
+  await tx.$executeRawUnsafe(`SAVEPOINT ${savepoint}`)
   try {
-    return await run()
+    const rows = await tx.$queryRaw<T[]>(query)
+    await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${savepoint}`)
+    return rows
   } catch (error) {
+    await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${savepoint}`)
     console.error(`[Whitespace] Facet "${label}" failed:`, error instanceof Error ? error.message : error)
+    gaps.push(label)
     return null
   }
 }
@@ -161,7 +189,7 @@ export function canonicaliseAssignee(raw: string): string {
 }
 
 /** Pulls display strings out of the applicants JSON without assuming its shape. */
-function extractApplicantNames(value: unknown, depth = 0): string[] {
+export function extractApplicantNames(value: unknown, depth = 0): string[] {
   if (depth > 4 || value == null) return []
   if (typeof value === 'string') return value.trim() ? [value.trim()] : []
   if (Array.isArray(value)) return value.flatMap(v => extractApplicantNames(v, depth + 1))
@@ -180,6 +208,43 @@ function extractApplicantNames(value: unknown, depth = 0): string[] {
 export interface FieldMapOptions {
   /** Bounds the assignee facet. Beyond this the result is a sample, and says so. */
   assigneeSampleCap?: number
+  /** Ceiling for the staging pass. Defaults to WHITESPACE_CENSUS_TIMEOUT_MS or 90s. */
+  censusTimeoutMs?: number
+}
+
+/**
+ * Stages every row matching the scope into a temp table, carrying only the
+ * columns the facets need. Dropped when the transaction commits.
+ *
+ * `applicants` is deliberately NOT copied — it is an unbounded JSON blob and
+ * copying it for millions of rows would spill temp space for no reason. Only the
+ * capped assignee sample joins back to fetch it.
+ */
+function stageCensus(where: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+    CREATE TEMP TABLE ws_census ON COMMIT DROP AS
+    SELECT lp."id"                                         AS id,
+           ${FAMILY_KEY}                                   AS family_key,
+           lp."country"                                    AS country,
+           lp."kind"                                       AS kind,
+           EXTRACT(YEAR FROM lp."filingDate")::int         AS filing_year,
+           lp."publicationDate"                            AS publication_date,
+           lp."classifications"                            AS classifications,
+           (lp."applicants" IS NOT NULL)                   AS has_applicants
+    FROM "local_patents" lp
+    WHERE ${where}`
+}
+
+/**
+ * The message the user sees when the census cannot finish. It has to say what to
+ * do about it — "statement timeout" is true and useless.
+ */
+function tooBroadMessage(scope: WhitespaceScope, timeoutMs: number): string {
+  const classificationOnly = !buildConceptQuery(scope) && acceptedCpc(scope).length > 0
+  const advice = classificationOnly
+    ? 'This scope matches on classification alone, which cannot use the text index and so reads the whole corpus. Add a concept — even one — and the search becomes index-backed.'
+    : 'Narrow it: tighten the filing years, restrict jurisdictions, mark a concept as required, or accept fewer classifications.'
+  return `This field is too broad to count within ${Math.max(1, Math.round(timeoutMs / 1000))}s. ${advice}`
 }
 
 export async function runFieldMap(
@@ -188,88 +253,109 @@ export async function runFieldMap(
 ): Promise<FieldMapResult> {
   const where = buildScopeFilter(scope)
   const sampleCap = options.assigneeSampleCap ?? ASSIGNEE_SAMPLE_CAP
+  const censusTimeoutMs = options.censusTimeoutMs ?? CENSUS_TIMEOUT_MS
   const coverageNotes: string[] = []
+  const gaps: string[] = []
+
+  // One interactive transaction, because the temp table lives on a single
+  // connection and Prisma's pool would otherwise hand each facet a different one.
+  return prisma.$transaction(
+    async tx => {
+  // --- The single pass over the corpus -------------------------------------
+  await setStatementTimeout(tx, censusTimeoutMs)
+  try {
+    await tx.$executeRaw(stageCensus(where))
+  } catch (error) {
+    if (isStatementTimeout(error)) throw new Error(tooBroadMessage(scope, censusTimeoutMs))
+    throw error
+  }
+  await setStatementTimeout(tx, FACET_TIMEOUT_MS)
 
   // --- Facet 1: size -------------------------------------------------------
-  const totals = await facet<{ families: bigint; publications: bigint }>(
-    Prisma.sql`
-      SELECT COUNT(DISTINCT ${FAMILY_KEY})::bigint AS families,
-             COUNT(*)::bigint                      AS publications
-      FROM "local_patents" lp
-      WHERE ${where}`
-  )
+  // Not savepoint-tolerant: every other number is a proportion of this one, so a
+  // map without it would be a map of nothing.
+  let totals: Array<{ families: bigint; publications: bigint }>
+  try {
+    totals = await tx.$queryRaw<Array<{ families: bigint; publications: bigint }>>(
+      Prisma.sql`
+        SELECT COUNT(DISTINCT family_key)::bigint AS families,
+               COUNT(*)::bigint                   AS publications
+        FROM ws_census`
+    )
+  } catch (error) {
+    if (isStatementTimeout(error)) throw new Error(tooBroadMessage(scope, censusTimeoutMs))
+    throw error
+  }
   const familyCount = Number(totals[0]?.families ?? 0)
   const publicationCount = Number(totals[0]?.publications ?? 0)
 
   // --- Facet 2: filing trend ----------------------------------------------
   const yearRows =
-    (await optionalFacet('filingsByYear', () =>
-      facet<{ year: number; families: bigint }>(
-        Prisma.sql`
-          SELECT EXTRACT(YEAR FROM lp."filingDate")::int AS year,
-                 COUNT(DISTINCT ${FAMILY_KEY})::bigint   AS families
-          FROM "local_patents" lp
-          WHERE ${where}
-          GROUP BY 1
-          ORDER BY 1`
-      )
+    (await facet<{ year: number; families: bigint }>(
+      tx,
+      'filingsByYear',
+      Prisma.sql`
+        SELECT filing_year AS year, COUNT(DISTINCT family_key)::bigint AS families
+        FROM ws_census
+        WHERE filing_year IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1`,
+      gaps
     )) ?? []
   const filingsByYear: YearCount[] = yearRows.map(r => ({ year: Number(r.year), families: Number(r.families) }))
 
   // --- Facet 3: jurisdictions ---------------------------------------------
-  const jurisdictions =
-    (await optionalFacet('jurisdictions', async () =>
-      toLabelled(
-        await facet<{ label: string | null; families: bigint }>(
-          Prisma.sql`
-            SELECT lp."country" AS label, COUNT(DISTINCT ${FAMILY_KEY})::bigint AS families
-            FROM "local_patents" lp
-            WHERE ${where}
-            GROUP BY 1
-            ORDER BY 2 DESC
-            LIMIT 40`
-        )
-      )
+  const jurisdictions = toLabelled(
+    (await facet<{ label: string | null; families: bigint }>(
+      tx,
+      'jurisdictions',
+      Prisma.sql`
+        SELECT country AS label, COUNT(DISTINCT family_key)::bigint AS families
+        FROM ws_census
+        GROUP BY 1
+        ORDER BY 2 DESC
+        LIMIT 40`,
+      gaps
     )) ?? []
+  )
 
   // --- Facet 4: classifications -------------------------------------------
   // Truncated to subgroup level: full CPC codes are too granular to read, and
   // comparing counts across hierarchy depths is meaningless (parent codes are
   // structurally sparse because examiners push documents down the tree).
-  const classifications =
-    (await optionalFacet('classifications', async () =>
-      toLabelled(
-        await facet<{ label: string | null; families: bigint }>(
-          Prisma.sql`
-            SELECT split_part(c, '/', 1) AS label,
-                   COUNT(DISTINCT ${FAMILY_KEY})::bigint AS families
-            FROM "local_patents" lp, unnest(lp."classifications") c
-            WHERE ${where}
-            GROUP BY 1
-            ORDER BY 2 DESC
-            LIMIT 30`
-        )
-      )
+  const classifications = toLabelled(
+    (await facet<{ label: string | null; families: bigint }>(
+      tx,
+      'classifications',
+      Prisma.sql`
+        SELECT split_part(c, '/', 1) AS label,
+               COUNT(DISTINCT ws.family_key)::bigint AS families
+        FROM ws_census ws, unnest(ws.classifications) c
+        GROUP BY 1
+        ORDER BY 2 DESC
+        LIMIT 30`,
+      gaps
     )) ?? []
+  )
 
   // --- Facet 5: status proxy ----------------------------------------------
   // Kind codes only. This is a proxy and the UI must never call it legal status:
   // B/C are grants in most offices, A is an application, and the corpus has no
   // legal-event data of any kind.
   const statusRows =
-    (await optionalFacet('statusProxy', () =>
-      facet<{ bucket: string; families: bigint }>(
-        Prisma.sql`
-          SELECT CASE
-                   WHEN lp."kind" ~ '^[BC]' THEN 'granted'
-                   WHEN lp."kind" ~ '^[AU]' THEN 'pending'
-                   ELSE 'unknown'
-                 END AS bucket,
-                 COUNT(DISTINCT ${FAMILY_KEY})::bigint AS families
-          FROM "local_patents" lp
-          WHERE ${where}
-          GROUP BY 1`
-      )
+    (await facet<{ bucket: string; families: bigint }>(
+      tx,
+      'statusProxy',
+      Prisma.sql`
+        SELECT CASE
+                 WHEN kind ~ '^[BC]' THEN 'granted'
+                 WHEN kind ~ '^[AU]' THEN 'pending'
+                 ELSE 'unknown'
+               END AS bucket,
+               COUNT(DISTINCT family_key)::bigint AS families
+        FROM ws_census
+        GROUP BY 1`,
+      gaps
     )) ?? []
   const statusProxy = { granted: 0, pending: 0, unknown: 0 }
   for (const row of statusRows) {
@@ -285,29 +371,29 @@ export async function runFieldMap(
   // BigQuery, and this module is local-only by design. Reporting it as available
   // would overstate what claim-element analysis can actually see.
   const coverageRows =
-    (await optionalFacet('textCoverage', () =>
-      facet<{
-        country: string | null
-        families: bigint
-        with_claims: bigint
-        with_description: bigint
-      }>(
-        Prisma.sql`
-          SELECT lp."country" AS country,
-                 COUNT(DISTINCT ${FAMILY_KEY})::bigint AS families,
-                 COUNT(DISTINCT ${FAMILY_KEY}) FILTER (
-                   WHERE v."claimsAvailability" IN ('FULL_EPO', 'FULL', 'FIRST_CLAIM_ONLY')
-                 )::bigint AS with_claims,
-                 COUNT(DISTINCT ${FAMILY_KEY}) FILTER (
-                   WHERE v."descriptionAvailability" <> 'NONE'
-                 )::bigint AS with_description
-          FROM "local_patents" lp
-          JOIN "patent_text_availability" v ON v."id" = lp."id"
-          WHERE ${where}
-          GROUP BY 1
-          ORDER BY 2 DESC
-          LIMIT 40`
-      )
+    (await facet<{
+      country: string | null
+      families: bigint
+      with_claims: bigint
+      with_description: bigint
+    }>(
+      tx,
+      'textCoverage',
+      Prisma.sql`
+        SELECT ws.country AS country,
+               COUNT(DISTINCT ws.family_key)::bigint AS families,
+               COUNT(DISTINCT ws.family_key) FILTER (
+                 WHERE v."claimsAvailability" IN ('FULL_EPO', 'FULL', 'FIRST_CLAIM_ONLY')
+               )::bigint AS with_claims,
+               COUNT(DISTINCT ws.family_key) FILTER (
+                 WHERE v."descriptionAvailability" <> 'NONE'
+               )::bigint AS with_description
+        FROM ws_census ws
+        JOIN "patent_text_availability" v ON v."id" = ws.id
+        GROUP BY 1
+        ORDER BY 2 DESC
+        LIMIT 40`,
+      gaps
     )) ?? []
 
   const textCoverage: TextCoverage = {
@@ -326,21 +412,26 @@ export async function runFieldMap(
   // --- Facet 7: assignees --------------------------------------------------
   // applicants is an unnormalised JSON blob, so names are extracted and
   // canonicalised in TypeScript over a capped sample rather than parsed in SQL
-  // against a shape we do not control.
+  // against a shape we do not control. The sample is picked from the staged set
+  // and only then joined back for the JSON itself.
   let assignees: LabelledCount[] = []
   let assigneesSampled = false
   const applicantRows =
-    (await optionalFacet('assignees', () =>
-      facet<{ familyKey: string; applicants: unknown }>(
-        Prisma.sql`
-          SELECT DISTINCT ON (${FAMILY_KEY})
-                 ${FAMILY_KEY} AS "familyKey",
-                 lp."applicants" AS applicants
-          FROM "local_patents" lp
-          WHERE ${where} AND lp."applicants" IS NOT NULL
-          ORDER BY ${FAMILY_KEY}, lp."publicationDate" DESC NULLS LAST
-          LIMIT ${sampleCap}`
-      )
+    (await facet<{ familyKey: string; applicants: unknown }>(
+      tx,
+      'assignees',
+      Prisma.sql`
+        WITH picked AS (
+          SELECT DISTINCT ON (family_key) id, family_key
+          FROM ws_census
+          WHERE has_applicants
+          ORDER BY family_key, publication_date DESC NULLS LAST
+          LIMIT ${sampleCap}
+        )
+        SELECT p.family_key AS "familyKey", lp."applicants" AS applicants
+        FROM picked p
+        JOIN "local_patents" lp ON lp."id" = p.id`,
+      gaps
     )) ?? []
 
   if (applicantRows.length) {
@@ -387,6 +478,11 @@ export async function runFieldMap(
   if (assigneesSampled) {
     coverageNotes.push(`Assignee ranking computed from a ${sampleCap.toLocaleString()}-family sample.`)
   }
+  if (gaps.length) {
+    coverageNotes.push(
+      `These parts of the map could not be computed and are missing rather than empty: ${gaps.join(', ')}.`
+    )
+  }
   coverageNotes.push('No citation data, legal status or commercial evidence is available to this analysis.')
 
   return {
@@ -408,4 +504,9 @@ export async function runFieldMap(
     coverageNotes,
     generatedAt: new Date().toISOString(),
   }
+    },
+    // Must exceed the census plus every facet, or Prisma aborts a transaction the
+    // database is still happily working on.
+    { timeout: censusTimeoutMs + 7 * FACET_TIMEOUT_MS + 10_000, maxWait: 20_000 }
+  )
 }

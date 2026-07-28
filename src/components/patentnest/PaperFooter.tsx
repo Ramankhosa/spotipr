@@ -15,6 +15,7 @@ export default function PaperFooter() {
         </div>
 
         <nav className="flex flex-wrap items-center justify-center gap-x-7 gap-y-2 text-sm text-ai-graphite-500">
+          <Link href="/blog" className="transition-colors hover:text-ai-graphite-900">Journal</Link>
           <Link href="/pricing" className="transition-colors hover:text-ai-graphite-900">Pricing</Link>
           <Link href="/contact" className="transition-colors hover:text-ai-graphite-900">Contact</Link>
           <Link href="/terms" className="transition-colors hover:text-ai-graphite-900">Terms</Link>

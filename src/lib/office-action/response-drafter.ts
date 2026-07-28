@@ -4,6 +4,7 @@ import { renderDigest, type InventionDigest } from './invention-digest'
 import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, renderSupplementaryBlock } from './context-budget'
 import type { ClassifiedObjection } from './objection-classifier'
 import type { DraftedObjectionReply } from './reply-assembly'
+import { renderObjectionDoctrine } from './objection-doctrine'
 
 /**
  * Office Action Studio — Draft stage
@@ -40,8 +41,13 @@ export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedOb
     caseId: ctx.caseId, objectionCode: objection.canonicalCode, query
   })
 
+  // The system prompt tells the drafter to follow the jurisdiction doctrine and
+  // to cite only whitelisted authorities — this is what supplies both.
+  const doctrine = renderObjectionDoctrine(ctx.profile, objection)
+
   const input = [
     `Invention digest:\n${renderDigest(ctx.digest)}`,
+    doctrine ? `\n${doctrine}` : '',
     // The blocks are labelled with internal ¶ anchors; the reply must cite them
     // the way a filing does — "paragraph [0007]" — never with the ¶ marker.
     basis.length ? `\nRelevant specification basis (cite these paragraphs as [0007], dropping the ¶):\n${renderContextBlock(basis)}` : '',
@@ -100,7 +106,7 @@ function titleOf(o: ClassifiedObjection): string {
   const label: Record<string, string> = {
     NOVELTY: 'Lack of novelty', INVENTIVE_STEP: 'Lack of inventive step', ELIGIBILITY: 'Non-patentable subject matter',
     SUFFICIENCY: 'Insufficient disclosure', CLARITY: 'Claims not clearly worded', UNITY: 'Unity of invention',
-    PROCEDURAL_DISCLOSURE: 'Foreign-filing disclosure (Section 8)', FORMALITIES: 'Formal requirements', OTHER: 'Other requirements'
+    PROCEDURAL_DISCLOSURE: 'Statutory disclosure requirements', FORMALITIES: 'Formal requirements', OTHER: 'Other requirements'
   }
   return label[o.canonicalCode] || o.canonicalCode
 }

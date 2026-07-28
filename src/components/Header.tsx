@@ -368,6 +368,14 @@ export default function Header() {
                           <span>User Management</span>
                         </Link>
                         <Link
+                          href="/super-admin/blog"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>📝</span>
+                          <span>Journal Desk</span>
+                        </Link>
+                        <Link
                           href="/super-admin/jurisdiction-config"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
                           onClick={closeMenu}

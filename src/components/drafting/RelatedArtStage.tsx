@@ -90,9 +90,12 @@ type Phase = 'idle' | 'searching' | 'assessing'
 
 type ThreatLevel = 'anticipates' | 'obvious' | 'adjacent' | 'remote' | 'unknown'
 
-const THREAT_META: Record<ThreatLevel, { label: string; sub: string; badge: string; card: string; cardActive: string; number: string }> = {
+// `label` is the wording on the summary/filter cards; `badgeLabel` is the short,
+// uniform wording on each list row so the fixed-width badge column stays tidy.
+const THREAT_META: Record<ThreatLevel, { label: string; badgeLabel: string; sub: string; badge: string; card: string; cardActive: string; number: string }> = {
   anticipates: {
     label: 'High risk',
+    badgeLabel: 'High',
     sub: 'May anticipate',
     badge: 'bg-red-50 text-red-700 border border-red-200',
     card: 'border-paper-300 hover:border-red-300',
@@ -101,6 +104,7 @@ const THREAT_META: Record<ThreatLevel, { label: string; sub: string; badge: stri
   },
   obvious: {
     label: 'Obviousness risk',
+    badgeLabel: 'Obvious',
     sub: 'May be combinable',
     badge: 'bg-amber-50 text-amber-700 border border-amber-200',
     card: 'border-paper-300 hover:border-amber-300',
@@ -109,6 +113,7 @@ const THREAT_META: Record<ThreatLevel, { label: string; sub: string; badge: stri
   },
   adjacent: {
     label: 'Adjacent',
+    badgeLabel: 'Adjacent',
     sub: 'Citable context',
     badge: 'bg-green-50 text-green-700 border border-green-200',
     card: 'border-paper-300 hover:border-green-300',
@@ -117,6 +122,7 @@ const THREAT_META: Record<ThreatLevel, { label: string; sub: string; badge: stri
   },
   remote: {
     label: 'Remote',
+    badgeLabel: 'Remote',
     sub: 'Loosely related',
     badge: 'bg-paper-100 text-ai-graphite-600 border border-paper-300',
     card: 'border-paper-300 hover:border-paper-400',
@@ -125,6 +131,7 @@ const THREAT_META: Record<ThreatLevel, { label: string; sub: string; badge: stri
   },
   unknown: {
     label: 'Not assessed',
+    badgeLabel: 'Unknown',
     sub: 'Retry available',
     badge: 'bg-white text-ai-graphite-500 border border-dashed border-ai-graphite-300',
     card: 'border-paper-300',
@@ -174,6 +181,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [tags, setTags] = useState<Record<string, PatentTags>>({})
   const [manualRefs, setManualRefs] = useState<ManualRef[]>([])
   const [riskFilter, setRiskFilter] = useState<ThreatLevel | null>(null)
+  const [countryFilter, setCountryFilter] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [addFormOpen, setAddFormOpen] = useState(false)
   const [manualDraft, setManualDraft] = useState('')
@@ -271,6 +279,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     if (jurisdiction === 'IN' || pn.startsWith('IN')) return 'Indian patents'
     if (jurisdiction === 'EP' || jurisdiction === 'WO' || pn.startsWith('EP') || pn.startsWith('WO')) return 'European patents'
     return 'International patents'
+  }
+
+  // Two-letter jurisdiction for the per-result country filter. Prefers the
+  // explicit jurisdiction/country field, falling back to the patent-number prefix.
+  function getResultCountry(item: any): string {
+    const jurisdiction = String(item?.jurisdiction || item?.country || '').toUpperCase().replace(/[^A-Z]/g, '')
+    if (jurisdiction.length >= 2) return jurisdiction.slice(0, 2)
+    const pn = getPatentNumber(item).toUpperCase()
+    const match = pn.match(/^([A-Z]{2})/)
+    return match ? match[1] : 'XX'
   }
 
   function findStoredPatentDetails(item: any) {
@@ -383,6 +401,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setTags({})
       setManualRefs([])
       setRiskFilter(null)
+      setCountryFilter(null)
       setExpanded(new Set())
       setAddFormOpen(false)
       setManualDraft('')
@@ -610,16 +629,38 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results, aiAnalysis])
 
+  // Countries present in the current results, most common first — powers the
+  // per-result country filter chips.
+  const countryOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    results.forEach(r => {
+      const code = getResultCountry(r)
+      counts.set(code, (counts.get(code) || 0) + 1)
+    })
+    return Array.from(counts.entries())
+      .map(([code, count]) => ({
+        code,
+        count,
+        name: PATENT_COUNTRIES.find(c => c.code === code)?.name || code
+      }))
+      .sort((a, b) => b.count - a.count)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results])
+
   const filteredResults = useMemo(() => {
-    if (!riskFilter) return results
+    if (!riskFilter && !countryFilter) return results
     return results.filter(r => {
-      const analysis = getAnalysisForPatent(r)
-      const threat = (analysis?.noveltyThreat || 'unknown') as ThreatLevel
-      const effective = analysis?.analysisStatus === 'unknown' || !THREAT_META[threat] ? 'unknown' : threat
-      return effective === riskFilter
+      if (countryFilter && getResultCountry(r) !== countryFilter) return false
+      if (riskFilter) {
+        const analysis = getAnalysisForPatent(r)
+        const threat = (analysis?.noveltyThreat || 'unknown') as ThreatLevel
+        const effective = analysis?.analysisStatus === 'unknown' || !THREAT_META[threat] ? 'unknown' : threat
+        if (effective !== riskFilter) return false
+      }
+      return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, aiAnalysis, riskFilter])
+  }, [results, aiAnalysis, riskFilter, countryFilter])
 
   const getTagsFor = useCallback((key: string): PatentTags => {
     return tags[key] || { background: false, claims: false }
@@ -942,6 +983,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setPatentDetailsMap({})
       setTags({})
       setRiskFilter(null)
+      setCountryFilter(null)
       setExpanded(new Set())
       setIdeaBank([])
       setHasRestoredFromStorage(false)
@@ -1110,16 +1152,18 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const running = phase !== 'idle'
   const showTriage = results.length > 0 || manualRefs.length > 0
 
+  // On mobile the chips grow to split the row (bigger tap targets); on sm+ they
+  // shrink to their natural width and sit inline at the row's right edge.
   const TagChip = ({ on, label, onClick, disabled }: { on: boolean; label: string; onClick: () => void; disabled?: boolean }) => (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-pressed={on}
-      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors whitespace-nowrap ${
+      className={`flex-1 sm:flex-none text-center px-3 py-2 sm:py-1 rounded-full text-xs font-medium border transition-colors whitespace-nowrap ${
         on
           ? 'bg-ai-blue-50 border-ai-blue-300 text-ai-blue-700'
-          : 'bg-white border-paper-300 text-ai-graphite-400 hover:border-paper-400 hover:text-ai-graphite-600'
+          : 'bg-white border-paper-300 text-ai-graphite-500 hover:border-paper-400 hover:text-ai-graphite-600'
       } disabled:opacity-40`}
     >
       {on ? '✓ ' : ''}{label}
@@ -1127,13 +1171,15 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   )
 
   const ManualRow = ({ m }: { m: ManualRef }) => (
-    <div className={m.background || m.claims ? 'bg-ai-blue-50/30' : ''}>
-      <div className="flex items-start gap-3 p-4">
-        <span className="shrink-0 mt-0.5 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-white text-ai-graphite-600 border border-dashed border-ai-graphite-400">
-          Manual
-        </span>
+    <div>
+      <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:gap-4 sm:px-5">
+        <div className="sm:w-[84px] sm:shrink-0 sm:mt-0.5">
+          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap bg-white text-ai-graphite-600 border border-dashed border-ai-graphite-400">
+            Manual
+          </span>
+        </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm text-ai-graphite-800 whitespace-pre-wrap">{m.text}</p>
+          <p className="text-sm text-ai-graphite-800 whitespace-pre-wrap break-words">{m.text}</p>
           <div className="text-xs text-ai-graphite-500 mt-1 flex items-center gap-2">
             <span>Added manually · not assessed</span>
             <button
@@ -1145,7 +1191,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             </button>
           </div>
         </div>
-        <div className="flex gap-1.5 shrink-0">
+        <div className="flex gap-2 sm:gap-1.5 sm:shrink-0">
           <TagChip on={m.background} label="Background" onClick={() => toggleManualTag(m.id, 'background')} />
           <TagChip on={m.claims} label="Claims" onClick={() => toggleManualTag(m.id, 'claims')} />
         </div>
@@ -1196,7 +1242,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         </div>
       )}
 
-      <div className="max-w-5xl mx-auto px-4 py-6 pb-32">
+      <div className="max-w-5xl mx-auto px-4 py-6 pb-40 sm:pb-32">
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
           <div>
@@ -1308,7 +1354,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       ] as const).map(group => group.items.length ? (
                         <div key={group.key}>
                           <div className="text-[11px] uppercase tracking-wide text-ai-graphite-400 mb-1">{group.label}</div>
-                          <div className={`flex flex-wrap gap-1.5 ${group.key === 'other' ? 'max-h-28 overflow-y-auto' : ''}`}>
+                          <div className={`flex flex-wrap gap-1.5 ${group.key === 'other' ? 'max-h-36 sm:max-h-28 overflow-y-auto' : ''}`}>
                             {group.items.map(country => {
                               const selectedCountry = filterCountries.includes(country.code)
                               return (
@@ -1323,7 +1369,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                       ? prev.filter(code => code !== country.code)
                                       : [...prev, country.code]
                                   )}
-                                  className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors ${
+                                  className={`px-3 py-1.5 sm:px-2 sm:py-1 rounded-md text-xs font-medium border transition-colors ${
                                     selectedCountry
                                       ? 'bg-ai-blue-600 text-white border-ai-blue-600'
                                       : 'bg-white text-ai-graphite-700 border-paper-400 hover:border-ai-blue-400 hover:bg-ai-blue-50'
@@ -1499,12 +1545,55 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               </>
             )}
 
+            {/* Country filter on the returned results. Horizontally scrollable so a
+                long list of jurisdictions never breaks the layout on a phone. */}
+            {countryOptions.length > 1 && (
+              <div className="-mx-1 px-1">
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  <span className="shrink-0 text-xs font-medium text-ai-graphite-500">Country</span>
+                  <button
+                    type="button"
+                    onClick={() => setCountryFilter(null)}
+                    aria-pressed={countryFilter === null}
+                    className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                      countryFilter === null
+                        ? 'bg-ai-blue-600 border-ai-blue-600 text-white'
+                        : 'bg-white border-paper-300 text-ai-graphite-600 hover:border-ai-blue-300'
+                    }`}
+                  >
+                    All ({results.length})
+                  </button>
+                  {countryOptions.map(({ code, name, count }) => {
+                    const active = countryFilter === code
+                    return (
+                      <button
+                        key={code}
+                        type="button"
+                        onClick={() => setCountryFilter(active ? null : code)}
+                        aria-pressed={active}
+                        title={name}
+                        className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                          active
+                            ? 'bg-ai-blue-600 border-ai-blue-600 text-white'
+                            : 'bg-white border-paper-300 text-ai-graphite-600 hover:border-ai-blue-300'
+                        }`}
+                      >
+                        {code} ({count})
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* The one list: search results and manual references together. */}
             {(results.length > 0 || manualRefs.length > 0) && (
               <div className="bg-white rounded-2xl border border-paper-300 overflow-hidden">
                 <div className="divide-y divide-paper-200 max-h-[640px] overflow-y-auto">
                   {filteredResults.length === 0 && results.length > 0 && (
-                    <div className="p-6 text-sm text-ai-graphite-500">No references match this filter.</div>
+                    <div className="p-6 text-sm text-ai-graphite-500">
+                      No references match {countryFilter && riskFilter ? 'these filters' : 'this filter'}.
+                    </div>
                   )}
                   {filteredResults.map((r, i) => {
                     const key = getPatentKey(r, i)
@@ -1515,15 +1604,17 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     const t = getTagsFor(key)
                     const isExpanded = expanded.has(key)
                     return (
-                      <div key={key} className={t.background || t.claims ? 'bg-ai-blue-50/30' : ''}>
-                        <div className="flex items-start gap-3 p-4">
-                          <span className={`shrink-0 mt-0.5 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${meta.badge}`}>
-                            {meta.label}
-                          </span>
+                      <div key={key}>
+                        <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:gap-4 sm:px-5">
+                          <div className="sm:w-[84px] sm:shrink-0 sm:mt-0.5">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${meta.badge}`}>
+                              {meta.badgeLabel}
+                            </span>
+                          </div>
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm text-ai-graphite-900">{details.title}</div>
+                            <div className="font-medium text-sm text-ai-graphite-900 break-words">{details.title}</div>
                             <div className="text-xs text-ai-graphite-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                              <span className="font-mono">{details.pn}</span>
+                              <span className="font-mono break-all">{details.pn}</span>
                               <span>·</span>
                               <span>{details.sourceLabel}</span>
                               {details.score !== null && (
@@ -1542,17 +1633,19 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               </button>
                             </div>
                             {analysis?.aiSummary && !isExpanded && (
-                              <p className="text-xs text-ai-graphite-600 mt-1 line-clamp-1">{analysis.aiSummary}</p>
+                              <p className="text-xs text-ai-graphite-600 mt-1 line-clamp-2 sm:line-clamp-1">{analysis.aiSummary}</p>
                             )}
                           </div>
-                          <div className="flex gap-1.5 shrink-0">
+                          <div className="flex gap-2 sm:gap-1.5 sm:shrink-0">
                             <TagChip on={t.background} label="Background" onClick={() => togglePatentTag(key, 'background')} />
                             <TagChip on={t.claims} label="Claims" onClick={() => togglePatentTag(key, 'claims')} />
                           </div>
                         </div>
 
+                        {/* Mobile: align with row padding (px-4). Desktop: indent under the
+                            content column — px-5 (20) + badge col (84) + gap-4 (16) = 120. */}
                         {isExpanded && (
-                          <div className="px-4 pb-4">
+                          <div className="px-4 pb-4 sm:pr-5 sm:pl-[120px]">
                             <div className="rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
                               {details.abstract && (
                                 <div>
@@ -1620,8 +1713,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     )
                   })}
 
-                  {/* Manual references live in the same list (hidden while a risk filter is active). */}
-                  {!riskFilter && manualRefs.map(m => <ManualRow key={m.id} m={m} />)}
+                  {/* Manual references live in the same list (hidden while any filter is active). */}
+                  {!riskFilter && !countryFilter && manualRefs.map(m => <ManualRow key={m.id} m={m} />)}
                 </div>
               </div>
             )}
@@ -1673,7 +1766,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       {/* Sticky footer: one action. Skipping refinement is a consequence, not a button. */}
       {showTriage && (
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm border-t border-paper-300">
-          <div className="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="max-w-5xl mx-auto px-4 py-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3">
             <div className="text-sm text-ai-graphite-600">
               <span className="font-semibold text-ai-graphite-900">{backgroundCount}</span> for background
               {' · '}
@@ -1688,7 +1781,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             <button
               onClick={handleContinue}
               disabled={continuing || running || (!hasAIReview && manualRefs.length === 0)}
-              className="px-6 py-2.5 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
             >
               {continuing ? 'Saving...' : 'Continue'}
             </button>

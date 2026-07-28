@@ -12,6 +12,9 @@ import { useToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth-context'
 import { CORPUS_FIRST_YEAR, emptyWhitespaceScope } from '@/lib/whitespace/types'
 import type { FieldMapResult, WhitespaceScope } from '@/lib/whitespace/types'
+import { wsApi } from './api'
+import { ClustersPanel } from './ClustersPanel'
+import { HypothesesPanel } from './HypothesesPanel'
 
 interface StudyRow {
   id: string
@@ -46,27 +49,7 @@ interface RunPayload {
   currentScopeVersion?: number
 }
 
-function authHeaders(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
-  return token
-    ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-    : { 'Content-Type': 'application/json' }
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, headers: { ...authHeaders(), ...(init?.headers || {}) } })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const error = new Error(payload?.error || `Request failed (${response.status})`) as Error & {
-      status: number
-      code?: string
-    }
-    error.status = response.status
-    error.code = payload?.code
-    throw error
-  }
-  return payload as T
-}
+const api = wsApi
 
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0)
 const num = (value: number) => value.toLocaleString()
@@ -130,6 +113,9 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
   const [saving, setSaving] = useState(false)
   const [run, setRun] = useState<RunPayload | null>(null)
   const [running, setRunning] = useState(false)
+  // Bumped when a downstream panel changes shared state (e.g. re-clustering
+  // invalidates hypotheses' cluster labels), forcing the sibling to refetch.
+  const [panelEpoch, setPanelEpoch] = useState(0)
 
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoCompiled = useRef(false)
@@ -734,24 +720,28 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                 ))}
               </div>
 
-              <div>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  How the count narrows
-                </h3>
-                <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {[
-                    { label: 'Corpus', value: results.gateCounts.corpus },
-                    { label: 'After filters', value: results.gateCounts.afterFilters },
-                    { label: 'After concepts', value: results.gateCounts.afterConcepts },
-                    { label: 'Families', value: results.gateCounts.families },
-                  ].map(gate => (
-                    <li key={gate.label} className="rounded-md bg-muted/50 p-3">
-                      <p className="text-xs text-muted-foreground">{gate.label}</p>
-                      <p className="mt-0.5 text-sm tabular-nums text-foreground">{num(gate.value)}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              {/* The stage does not yet compute distinct gate counts — showing four
+                  identical numbers under a funnel heading would imply it does. */}
+              {new Set(Object.values(results.gateCounts)).size > 1 && (
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    How the count narrows
+                  </h3>
+                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {[
+                      { label: 'Corpus', value: results.gateCounts.corpus },
+                      { label: 'After filters', value: results.gateCounts.afterFilters },
+                      { label: 'After concepts', value: results.gateCounts.afterConcepts },
+                      { label: 'Families', value: results.gateCounts.families },
+                    ].map(gate => (
+                      <li key={gate.label} className="rounded-md bg-muted/50 p-3">
+                        <p className="text-xs text-muted-foreground">{gate.label}</p>
+                        <p className="mt-0.5 text-sm tabular-nums text-foreground">{num(gate.value)}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -845,6 +835,16 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
           )}
         </div>
       </section>
+
+      {/* Stages 2-4: areas, signals, deep dives. */}
+      <ClustersPanel
+        studyId={studyId}
+        fieldMapReady={Boolean(results)}
+        onChanged={() => setPanelEpoch(epoch => epoch + 1)}
+      />
+
+      {/* Stages 5-7: hypotheses, validation, concepts. */}
+      <HypothesesPanel key={panelEpoch} studyId={studyId} areasReady={Boolean(results)} />
     </div>
   )
 }

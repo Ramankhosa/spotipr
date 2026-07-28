@@ -18,7 +18,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { ACCEPTED_UPLOAD_EXTENSIONS, ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
 import { formatParagraphRefs } from '@/lib/office-action/document-intake'
 import {
-  AlertTriangle, ArrowLeft, BookOpen, CheckCircle2, ChevronRight, Clock,
+  AlertTriangle, ArrowLeft, BookOpen, Check, CheckCheck, CheckCircle2, ChevronRight, Clock,
   Download, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen,
   RefreshCw, Sparkles, Upload, X
 } from 'lucide-react'
@@ -67,7 +67,9 @@ const authHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem('auth
 const CODE_LABELS: Record<string, string> = {
   NOVELTY: 'Novelty', INVENTIVE_STEP: 'Inventive step', ELIGIBILITY: 'Non-patentability',
   SUFFICIENCY: 'Sufficiency', CLARITY: 'Clarity', UNITY: 'Unity',
-  PROCEDURAL_DISCLOSURE: 'Foreign filings (s.8)', FORMALITIES: 'Formalities', OTHER: 'Other requirements'
+  // Covers s.8 foreign filings and the biological-source / NBA requirements —
+  // the subtype chip (e.g. "· nba_approval") names which one.
+  PROCEDURAL_DISCLOSURE: 'Statutory disclosures', FORMALITIES: 'Formalities', OTHER: 'Other requirements'
 }
 // Objection taxonomy — a CATEGORICAL palette, deliberately separate from the
 // brand cobalt (which means action/AI) so a type badge never reads as a button.
@@ -1391,6 +1393,37 @@ function SourceViewer(props: {
 // ============================================================================
 // case file panel (invention + supplementary)
 
+/**
+ * Readiness of one case-file document, in the attorney's terms — "can the
+ * studio search this when it drafts?" — not the job state behind it.
+ * The double tick is the delivered signal; a single tick means the text is used
+ * whole and needs no search index.
+ */
+function IndexBadge({ status }: { status: string }) {
+  if (status === 'INDEXED') {
+    return (
+      <span className="flex items-center gap-1 text-xs text-primary mt-0.5" title="Searchable — the studio can pull the exact paragraphs it needs from this document">
+        <CheckCheck className="w-3.5 h-3.5" aria-hidden /> Searchable
+      </span>
+    )
+  }
+  if (status === 'NOT_REQUIRED') {
+    return (
+      <span className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5" title="Used in full, so it needs no search index">
+        <Check className="w-3.5 h-3.5" aria-hidden /> On file
+      </span>
+    )
+  }
+  // PENDING and FAILED read the same to the attorney: indexing runs once, at
+  // upload, and there is no background retry — so neither is "in progress".
+  // The document is on file and still used; only paragraph search is missing.
+  return (
+    <span className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5" title="The full text is on file and still used for drafting; only paragraph-level search is unavailable. Re-add the document to index it.">
+      <Check className="w-3.5 h-3.5" aria-hidden /> On file — not searchable
+    </span>
+  )
+}
+
 function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
   const { toast } = useToast()
   const [docs, setDocs] = useState<any[] | null>(null)
@@ -1474,9 +1507,7 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
                   <span className="min-w-0">
                     <span className="font-medium">{d.kind === 'SUPPLEMENTARY' ? (d.title || 'Supplementary document') : d.kind.toLowerCase()}</span>
                     {d.intentNote && <span className="block text-xs text-muted-foreground truncate">“{d.intentNote}”</span>}
-                    {d.indexStatus !== 'INDEXED' && (
-                      <span className="block text-xs text-amber-600 dark:text-amber-400">Indexing pending — retrieval may be limited until it completes</span>
-                    )}
+                    <IndexBadge status={d.indexStatus} />
                   </span>
                   <span className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[11px] px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground">

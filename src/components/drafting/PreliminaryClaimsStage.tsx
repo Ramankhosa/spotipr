@@ -506,12 +506,12 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     const lines = (Array.isArray(warnings) ? warnings : [])
       .map((warning: any) => {
         const fallback = warning?.fallback === 'personal_sample'
-          ? 'personal non-persona sample will be used'
-          : 'no style block will be used'
-        return `- ${warning?.sectionKey || 'section'} (${warning?.jurisdiction || activeJurisdiction}): ${fallback}`
+          ? 'your default style will be used instead'
+          : 'this section will use the standard voice'
+        return `- ${warning?.sectionKey || 'section'}: ${fallback}`
       })
       .join('\n')
-    return `The selected persona is missing writing samples for this generation.\n\n${lines || '- One or more sections have no persona sample.'}\n\nContinue without persona style for those missing sections?`
+    return `This persona has not been taught every section you are about to generate.\n\n${lines || '- One or more sections have no sample in this persona.'}\n\nGenerate anyway? You can add the missing samples on the Writing Personas page and regenerate later.`
   }
 
   const handleStyleToggle = async () => {

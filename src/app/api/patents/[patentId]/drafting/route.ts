@@ -12379,6 +12379,15 @@ async function handleGenerateReferenceDraft(
     }
   }
 
+  // Carry the session's writing-persona selection into the reference draft, the
+  // same way handleGenerateSections does for single-jurisdiction drafting. The
+  // toolbar shows one Style switch for every tab, so the reference superset has
+  // to honour it too.
+  const referencePersona = await resolveEffectivePersonaConfig(user, session, data)
+  ;(session as any).usePersonaStyle = referencePersona.enabled
+  ;(session as any).personaSelection = referencePersona.selection
+  ;(session as any).userId = user.id
+
   // Generate reference draft with ONLY the sections needed by selected jurisdictions
   const result = await generateReferenceDraft(session, jurisdictionsToUse, user.tenantId, requestHeaders, hasFrozenClaims ? frozenClaimsForDraft : undefined)
 
@@ -12691,6 +12700,12 @@ async function handleGenerateReferenceSection(
 
   // Import and use generateReferenceDraftSection
   const { generateReferenceDraftSection } = await import('@/lib/multi-jurisdiction-service')
+
+  // Same persona hand-off as the full reference draft above.
+  const sectionPersona = await resolveEffectivePersonaConfig(user, session, data)
+  ;(session as any).usePersonaStyle = sectionPersona.enabled
+  ;(session as any).personaSelection = sectionPersona.selection
+  ;(session as any).userId = user.id
 
   const result = await generateReferenceDraftSection(
     session,

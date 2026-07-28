@@ -1,11 +1,36 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+/**
+ * Writing Personas — teach the drafter your voice.
+ *
+ * The screen has one job: get an attorney from "what is a persona?" to a
+ * persona that is actually usable in drafting. Everything here serves that —
+ * the readiness meter states the goal, the section rows say what to paste, and
+ * Universal is presented as the default so nobody has to fill twenty countries.
+ */
+
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
-import { DEFAULT_LIMITS, SECTION_WORD_LIMITS } from '@/lib/writing-sample-limits'
+import { PageLoadingBird } from '@/components/ui/loading-bird'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { SECTION_WORD_LIMITS, DEFAULT_LIMITS } from '@/lib/writing-sample-limits'
+import {
+  getPersonaReadiness,
+  sectionBlurb,
+  isHighImpact,
+  countWords,
+  type PersonaReadiness
+} from '@/lib/persona-guidance'
 import { getFlagEmoji } from '@/lib/country-flags'
-import Link from 'next/link'
+import {
+  Feather, Plus, Check, Copy, Globe, Lock, Building2, Pencil, Trash2, X,
+  AlertTriangle, ChevronDown, Sparkles, Loader2, Eye, ArrowRight
+} from 'lucide-react'
 
 interface Persona {
   id: string
@@ -15,6 +40,8 @@ interface Persona {
   isTemplate: boolean
   allowCopy: boolean
   sampleCount: number
+  coveredSections?: string[]
+  jurisdictions?: string[]
   isOwn: boolean
   createdBy?: { id: string; name: string }
   createdAt: string
@@ -34,905 +61,1209 @@ interface SectionInfo {
   label: string
   displayOrder?: number
   isRequired?: boolean
-  usedBy?: string[] // Countries that use this section (for universal view)
+  usedBy?: string[]
 }
 
-// Fallback until the active drafting countries load from the API
-const DEFAULT_JURISDICTIONS = [
-  { code: '*', label: '🌐 Universal' },
-  { code: 'IN', label: '🇮🇳 India' },
-  { code: 'US', label: '🇺🇸 United States' },
-  { code: 'EP', label: '🇪🇺 Europe' },
-  { code: 'PCT', label: '🌍 PCT' }
+interface Jurisdiction {
+  code: string
+  label: string
+}
+
+// Fallback until the active drafting countries load from the API.
+const DEFAULT_COUNTRIES: Jurisdiction[] = [
+  { code: 'IN', label: 'India' },
+  { code: 'US', label: 'United States' },
+  { code: 'EP', label: 'Europe' },
+  { code: 'PCT', label: 'PCT' }
 ]
 
-// Word count indicator component with visual feedback
-function WordCountIndicator({ text, sectionKey }: { text: string; sectionKey: string }) {
-  const wordCount = text.trim().split(/\s+/).filter(w => w).length
-  const limits = SECTION_WORD_LIMITS[sectionKey] || DEFAULT_LIMITS
-  
-  // Determine status
-  let status: 'error' | 'warning' | 'good' | 'optimal' = 'good'
-  let message = ''
-  
-  if (wordCount < limits.min) {
-    status = 'error'
-    message = `Min ${limits.min} words required`
-  } else if (wordCount > limits.max) {
-    status = 'error'
-    message = `Max ${limits.max} words allowed`
-  } else if (wordCount < limits.recommended.min) {
-    status = 'warning'
-    message = `Below recommended (${limits.recommended.min}+)`
-  } else if (wordCount > limits.recommended.max) {
-    status = 'warning'
-    message = `Above recommended (${limits.recommended.max})`
-  } else {
-    status = 'optimal'
-    message = 'Good length ✓'
-  }
-  
-  const colors = {
-    error: 'text-red-500',
-    warning: 'text-yellow-600 dark:text-yellow-400',
-    good: 'text-gray-500',
-    optimal: 'text-green-600 dark:text-green-400'
-  }
-  
+const UNIVERSAL = '*'
+
+/* ------------------------------------------------------------------ */
+/* Small presentational pieces                                         */
+/* ------------------------------------------------------------------ */
+
+function ReadinessMeter({ readiness, size = 'sm' }: { readiness: PersonaReadiness; size?: 'sm' | 'lg' }) {
+  const tone =
+    readiness.level === 'ready'
+      ? 'bg-success'
+      : readiness.level === 'partial'
+        ? 'bg-primary'
+        : 'bg-border'
+
   return (
-    <div className="flex flex-col text-xs">
-      <span className={colors[status]}>
-        {wordCount} words
-        {(status === 'error' || status === 'warning') && (
-          <span className="ml-1">• {message}</span>
-        )}
-        {status === 'optimal' && (
-          <span className="ml-1">• {message}</span>
-        )}
-      </span>
-      <span className="text-gray-400 text-[10px]">
-        Recommended: {limits.recommended.min}-{limits.recommended.max} words
-      </span>
+    <div
+      className={`w-full overflow-hidden rounded-full bg-muted ${size === 'lg' ? 'h-1.5' : 'h-1'}`}
+      role="progressbar"
+      aria-valuenow={readiness.covered}
+      aria-valuemin={0}
+      aria-valuemax={readiness.total}
+      aria-label={`Persona readiness: ${readiness.label}`}
+    >
+      <div
+        className={`h-full rounded-full transition-[width] duration-300 ${tone}`}
+        style={{ width: `${Math.max(readiness.ratio * 100, readiness.level === 'empty' ? 0 : 8)}%` }}
+      />
     </div>
   )
 }
 
+function ReadinessLabel({ readiness }: { readiness: PersonaReadiness }) {
+  if (readiness.level === 'ready') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+        <Check className="h-3.5 w-3.5" aria-hidden />
+        Ready to use
+      </span>
+    )
+  }
+  return (
+    <span className="text-xs font-medium text-muted-foreground">
+      {readiness.label}
+    </span>
+  )
+}
+
+/** Live length feedback while typing a sample. */
+function WordMeter({ text, sectionKey }: { text: string; sectionKey: string }) {
+  const words = countWords(text)
+  const limits = SECTION_WORD_LIMITS[sectionKey] || DEFAULT_LIMITS
+
+  let tone = 'text-muted-foreground'
+  let message = `Aim for ${limits.recommended.min}–${limits.recommended.max} words`
+
+  if (words === 0) {
+    // Keep the neutral prompt.
+  } else if (words < limits.min) {
+    tone = 'text-destructive'
+    message = `Too short — at least ${limits.min} words`
+  } else if (words > limits.max) {
+    tone = 'text-destructive'
+    message = `Too long — ${limits.max} words maximum`
+  } else if (words < limits.recommended.min) {
+    tone = 'text-warning'
+    message = `A bit short — ${limits.recommended.min}+ words works better`
+  } else if (words > limits.recommended.max) {
+    tone = 'text-warning'
+    message = `Longer than needed — ${limits.recommended.max} words is plenty`
+  } else {
+    tone = 'text-success'
+    message = 'Good length'
+  }
+
+  return (
+    <p className={`text-xs ${tone}`}>
+      <span className="tabular-nums font-medium">{words}</span> word{words === 1 ? '' : 's'} · {message}
+    </p>
+  )
+}
+
+function PersonaListCard({
+  persona,
+  active,
+  onSelect
+}: {
+  persona: Persona
+  active: boolean
+  onSelect: () => void
+}) {
+  const readiness = getPersonaReadiness(persona.coveredSections)
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+      className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
+        active
+          ? 'border-primary bg-accent'
+          : 'border-border bg-card hover:border-primary/50 hover:bg-muted/50'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+          {persona.name}
+        </span>
+        {persona.isTemplate && (
+          <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Template
+          </span>
+        )}
+        {!persona.isTemplate && persona.visibility === 'ORGANIZATION' && persona.isOwn && (
+          <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Shared
+          </span>
+        )}
+      </div>
+
+      {persona.description && (
+        <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{persona.description}</p>
+      )}
+
+      <div className="mt-2.5">
+        <ReadinessMeter readiness={readiness} />
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <ReadinessLabel readiness={readiness} />
+          {!persona.isOwn && persona.createdBy && (
+            <span className="truncate text-[11px] text-muted-foreground">by {persona.createdBy.name}</span>
+          )}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+/** The three-step explainer. Shown as the empty state and behind a disclosure. */
+function HowItWorks({ compact = false }: { compact?: boolean }) {
+  const steps = [
+    {
+      title: 'Create a persona',
+      body: 'One per style you write in — Software, Life sciences, Mechanical. Most attorneys need two or three.'
+    },
+    {
+      title: 'Paste your own writing',
+      body: 'For each section, paste a passage from a patent you actually drafted. Five key sections is enough to start.'
+    },
+    {
+      title: 'Switch it on while drafting',
+      body: 'In the drafting toolbar set Style to On and pick the persona. New drafts follow your phrasing and structure.'
+    }
+  ]
+
+  return (
+    <ol className={compact ? 'grid gap-4 sm:grid-cols-3' : 'grid gap-5 sm:grid-cols-3'}>
+      {steps.map((step, i) => (
+        <li key={step.title}>
+          <div className="flex items-center gap-2">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+              {i + 1}
+            </span>
+            <span className="text-sm font-semibold text-foreground">{step.title}</span>
+          </div>
+          <p className="mt-1.5 pl-7 text-sm leading-relaxed text-muted-foreground">{step.body}</p>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
+
 export default function PersonasPage() {
-  const { token, user } = useAuth()
+  const { token, user, isLoading: authLoading } = useAuth()
+  const router = useRouter()
   const { toast } = useToast()
+
   const [myPersonas, setMyPersonas] = useState<Persona[]>([])
   const [orgPersonas, setOrgPersonas] = useState<Persona[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showGuide, setShowGuide] = useState(false)
 
-  // Create form
-  const [showCreateForm, setShowCreateForm] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newDescription, setNewDescription] = useState('')
-  const [newVisibility, setNewVisibility] = useState<'PRIVATE' | 'ORGANIZATION'>('PRIVATE')
+  // Create / edit persona details
+  const [personaForm, setPersonaForm] = useState<{
+    mode: 'create' | 'edit'
+    id?: string
+    name: string
+    description: string
+    visibility: 'PRIVATE' | 'ORGANIZATION'
+  } | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // Edit persona
-  const [editingPersona, setEditingPersona] = useState<Persona | null>(null)
+  // Selected persona + its samples
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [samples, setSamples] = useState<Sample[]>([])
   const [loadingSamples, setLoadingSamples] = useState(false)
-  const [activeJurisdiction, setActiveJurisdiction] = useState('*')
+  const [activeJurisdiction, setActiveJurisdiction] = useState(UNIVERSAL)
   const [editingSample, setEditingSample] = useState<{ sectionKey: string; text: string } | null>(null)
-  
-  // Jurisdiction-specific sections
-  const [sections, setSections] = useState<SectionInfo[]>([])
-  const [loadingSections, setLoadingSections] = useState(false)
-  
-  // Delete confirmation
-  const [showDeletePersonaModal, setShowDeletePersonaModal] = useState(false)
-  const [deleteConfirmText, setDeleteConfirmText] = useState('')
-  const [personaToDelete, setPersonaToDelete] = useState<Persona | null>(null)
-  
-  // Jurisdiction delete
-  const [showDeleteJurisdictionModal, setShowDeleteJurisdictionModal] = useState(false)
-  const [jurisdictionToDelete, setJurisdictionToDelete] = useState<string | null>(null)
-  
-  // Track which jurisdictions have samples (for tick marks)
-  const [jurisdictionSampleCounts, setJurisdictionSampleCounts] = useState<Record<string, number>>({})
+  const [addedCountries, setAddedCountries] = useState<string[]>([])
 
-  // Active drafting jurisdictions (dynamic — any imported country appears here)
-  const [jurisdictions, setJurisdictions] = useState(DEFAULT_JURISDICTIONS)
+  // Sections for the active jurisdiction
+  const [sections, setSections] = useState<SectionInfo[]>([])
+  const [sectionsError, setSectionsError] = useState<string | null>(null)
+  const [loadingSections, setLoadingSections] = useState(false)
+
+  // Destructive flows
+  const [personaToArchive, setPersonaToArchive] = useState<Persona | null>(null)
+  const [archiveConfirmText, setArchiveConfirmText] = useState('')
+  const [jurisdictionToClear, setJurisdictionToClear] = useState<string | null>(null)
+  const [duplicating, setDuplicating] = useState<{ source: Persona; name: string } | null>(null)
+
+  // Active drafting countries (any imported country shows up here)
+  const [countries, setCountries] = useState<Jurisdiction[]>(DEFAULT_COUNTRIES)
+
+  const isAdmin = user?.roles?.some((r: string) => ['OWNER', 'ADMIN'].includes(r))
+
+  const allPersonas = useMemo(() => [...myPersonas, ...orgPersonas], [myPersonas, orgPersonas])
+  const selectedPersona = useMemo(
+    () => allPersonas.find(p => p.id === selectedId) || null,
+    [allPersonas, selectedId]
+  )
+  const readOnly = !!selectedPersona && !selectedPersona.isOwn
+
+  const jurisdictionLabel = useCallback(
+    (code: string) => {
+      if (code === UNIVERSAL) return 'Universal'
+      return countries.find(c => c.code === code)?.label || code
+    },
+    [countries]
+  )
+
+  /* ---------------- data ---------------- */
 
   useEffect(() => {
     if (!token) return
-    const fetchJurisdictions = async () => {
+    let cancelled = false
+    ;(async () => {
       try {
-        const res = await fetch('/api/country-names', {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        if (res.ok) {
-          const data = await res.json()
-          const countries = (data.countries || []).map((c: any) => ({
-            code: c.code,
-            label: `${getFlagEmoji(c.code)} ${c.name}`
-          }))
-          if (countries.length > 0) {
-            setJurisdictions([{ code: '*', label: '🌐 Universal' }, ...countries])
-          }
-        }
+        const res = await fetch('/api/country-names', { headers: { Authorization: `Bearer ${token}` } })
+        if (!res.ok) return
+        const data = await res.json()
+        const list: Jurisdiction[] = (data.countries || []).map((c: any) => ({ code: c.code, label: c.name }))
+        if (!cancelled && list.length > 0) setCountries(list)
       } catch {
         // keep the static fallback
       }
-    }
-    fetchJurisdictions()
+    })()
+    return () => { cancelled = true }
   }, [token])
-
-  const isAdmin = user?.roles?.some((r: string) => ['OWNER', 'ADMIN'].includes(r))
-  
-  // Fetch sections when jurisdiction changes
-  const fetchSections = useCallback(async (jurisdiction: string) => {
-    if (!token) return
-    
-    setLoadingSections(true)
-    try {
-      const res = await fetch(`/api/sections/by-jurisdiction?jurisdiction=${jurisdiction}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      
-      if (res.ok) {
-        const data = await res.json()
-        setSections(data.sections || [])
-      }
-    } catch (err) {
-      console.error('Failed to fetch sections:', err)
-      // Fallback to empty array - will show message
-      setSections([])
-    } finally {
-      setLoadingSections(false)
-    }
-  }, [token])
-  
-  // Fetch sections when jurisdiction changes
-  useEffect(() => {
-    if (editingPersona) {
-      fetchSections(activeJurisdiction)
-    }
-  }, [activeJurisdiction, editingPersona, fetchSections])
 
   const fetchPersonas = useCallback(async () => {
     if (!token) return
-
     try {
-      setLoading(true)
-      const res = await fetch('/api/personas', {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-
-      if (!res.ok) throw new Error('Failed to fetch personas')
-
+      const res = await fetch('/api/personas', { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error('Could not load your personas')
       const data = await res.json()
       setMyPersonas(data.myPersonas || [])
       setOrgPersonas(data.orgPersonas || [])
+      setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
+      setError(err instanceof Error ? err.message : 'Could not load your personas')
     } finally {
       setLoading(false)
     }
   }, [token])
 
+  useEffect(() => { void fetchPersonas() }, [fetchPersonas])
+
+  // Without this the page sits on the loading state forever when signed out,
+  // because every fetch here short-circuits on a missing token.
   useEffect(() => {
-    fetchPersonas()
-  }, [fetchPersonas])
+    if (!authLoading && !user) router.push('/login')
+  }, [authLoading, user, router])
 
-  const fetchSamples = async (personaId: string) => {
+  const fetchSamples = useCallback(async (personaId: string) => {
     if (!token) return
-
     setLoadingSamples(true)
     try {
-      const res = await fetch(`/api/writing-samples?personaId=${personaId}&includeInactive=true`, {
+      const res = await fetch(`/api/writing-samples?personaId=${personaId}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
-      if (res.ok) {
-        const data = await res.json()
-        const fetchedSamples = data.samples || []
-        setSamples(fetchedSamples)
-        
-        // Calculate sample counts per jurisdiction
-        const counts: Record<string, number> = {}
-        for (const sample of fetchedSamples) {
-          if (sample.isActive) {
-            counts[sample.jurisdiction] = (counts[sample.jurisdiction] || 0) + 1
-          }
-        }
-        setJurisdictionSampleCounts(counts)
-      }
+      if (!res.ok) throw new Error('Could not load this persona’s samples')
+      const data = await res.json()
+      setSamples((data.samples || []).filter((s: Sample) => s.isActive))
     } catch (err) {
-      console.error('Failed to fetch samples:', err)
+      toast({ title: err instanceof Error ? err.message : 'Could not load samples', variant: 'error' })
+      setSamples([])
     } finally {
       setLoadingSamples(false)
     }
+  }, [token, toast])
+
+  const fetchSections = useCallback(async (jurisdiction: string) => {
+    if (!token) return
+    setLoadingSections(true)
+    setSectionsError(null)
+    try {
+      const res = await fetch(`/api/sections/by-jurisdiction?jurisdiction=${jurisdiction}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not load sections')
+      setSections(data.sections || [])
+    } catch (err) {
+      setSections([])
+      setSectionsError(err instanceof Error ? err.message : 'Could not load sections')
+    } finally {
+      setLoadingSections(false)
+    }
+  }, [token])
+
+  useEffect(() => {
+    if (selectedId) void fetchSections(activeJurisdiction)
+  }, [activeJurisdiction, selectedId, fetchSections])
+
+  /* ---------------- derived ---------------- */
+
+  const sampleCountsByJurisdiction = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const s of samples) counts[s.jurisdiction] = (counts[s.jurisdiction] || 0) + 1
+    return counts
+  }, [samples])
+
+  // Country tabs: those that already hold samples, plus any the user just added.
+  // Codes that are no longer in the active drafting list still appear (labelled
+  // by code) so their samples stay visible and removable.
+  const visibleCountries = useMemo(() => {
+    const codes = Array.from(new Set<string>([
+      ...Object.keys(sampleCountsByJurisdiction).filter(c => c !== UNIVERSAL),
+      ...addedCountries
+    ]))
+    return codes.map(code => countries.find(c => c.code === code) || { code, label: code })
+  }, [sampleCountsByJurisdiction, addedCountries, countries])
+
+  const availableCountries = useMemo(
+    () => countries.filter(c => !visibleCountries.some(v => v.code === c.code)),
+    [countries, visibleCountries]
+  )
+
+  const selectedReadiness = getPersonaReadiness(
+    selectedPersona ? Array.from(new Set(samples.map(s => s.sectionKey))) : []
+  )
+
+  /* ---------------- actions ---------------- */
+
+  const selectPersona = (persona: Persona) => {
+    setSelectedId(persona.id)
+    setEditingSample(null)
+    setActiveJurisdiction(UNIVERSAL)
+    setAddedCountries([])
+    setSamples([])
+    void fetchSamples(persona.id)
   }
 
-  const handleCreate = async () => {
-    if (!newName.trim() || !token) return
-
+  const savePersonaDetails = async () => {
+    if (!personaForm || !personaForm.name.trim() || !token) return
     setSaving(true)
     try {
+      const isEdit = personaForm.mode === 'edit'
       const res = await fetch('/api/personas', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
+        method: isEdit ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          name: newName.trim(),
-          description: newDescription.trim() || null,
-          visibility: newVisibility
+          ...(isEdit ? { id: personaForm.id } : {}),
+          name: personaForm.name.trim(),
+          description: personaForm.description.trim() || null,
+          // Only admins see the control, so only admins may move a persona
+          // between private and organization-wide.
+          ...(isAdmin ? { visibility: personaForm.visibility } : {})
         })
       })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not save the persona')
 
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || 'Failed to create persona')
+      await fetchPersonas()
+      if (!isEdit && data.persona?.id) {
+        setSelectedId(data.persona.id)
+        setActiveJurisdiction(UNIVERSAL)
+        setAddedCountries([])
+        setSamples([])
+        // Re-using an archived name reactivates that persona with its old
+        // samples intact, so load them rather than assuming a blank slate.
+        void fetchSamples(data.persona.id)
       }
-
-      setShowCreateForm(false)
-      setNewName('')
-      setNewDescription('')
-      setNewVisibility('PRIVATE')
-      fetchPersonas()
+      setPersonaForm(null)
+      toast({ title: isEdit ? 'Persona updated' : `“${personaForm.name.trim()}” created`, variant: 'success' })
     } catch (err) {
-      toast({ title: err instanceof Error ? err.message : 'Failed to create persona', variant: 'error' })
+      toast({ title: err instanceof Error ? err.message : 'Could not save the persona', variant: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
-  // Open delete persona confirmation modal
-  const openDeletePersonaModal = (persona: Persona) => {
-    setPersonaToDelete(persona)
-    setDeleteConfirmText('')
-    setShowDeletePersonaModal(true)
-  }
-  
-  // Confirm and delete entire persona
-  const handleDeletePersona = async () => {
-    if (!personaToDelete || !token) return
-    if (deleteConfirmText.toLowerCase() !== 'delete') {
-      toast({ title: 'Please type "delete" to confirm' })
-      return
-    }
-
-    try {
-      const res = await fetch(`/api/personas?id=${personaToDelete.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
-      })
-
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || 'Failed to delete persona')
-      }
-
-      if (editingPersona?.id === personaToDelete.id) {
-        setEditingPersona(null)
-        setSamples([])
-        setJurisdictionSampleCounts({})
-      }
-      setShowDeletePersonaModal(false)
-      setPersonaToDelete(null)
-      setDeleteConfirmText('')
-      fetchPersonas()
-    } catch (err) {
-      toast({ title: err instanceof Error ? err.message : 'Failed to delete persona', variant: 'error' })
-    }
-  }
-  
-  // Open delete jurisdiction samples modal
-  const openDeleteJurisdictionModal = (jurisdiction: string) => {
-    setJurisdictionToDelete(jurisdiction)
-    setShowDeleteJurisdictionModal(true)
-  }
-  
-  // Delete all samples for a specific jurisdiction
-  const handleDeleteJurisdictionSamples = async () => {
-    if (!editingPersona || !jurisdictionToDelete || !token) return
-
-    try {
-      // Delete all samples for this persona + jurisdiction
-      const res = await fetch(`/api/writing-samples/bulk-delete`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          personaId: editingPersona.id,
-          jurisdiction: jurisdictionToDelete
-        })
-      })
-
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || 'Failed to delete samples')
-      }
-
-      // Refresh samples
-      await fetchSamples(editingPersona.id)
-      fetchPersonas() // Update sample counts
-      setShowDeleteJurisdictionModal(false)
-      setJurisdictionToDelete(null)
-    } catch (err) {
-      toast({ title: err instanceof Error ? err.message : 'Failed to delete samples', variant: 'error' })
-    }
-  }
-
-  const handleSaveSample = async (sectionKey: string, text: string) => {
-    if (!editingPersona || !token) return
-
+  const saveSample = async (sectionKey: string, text: string) => {
+    if (!selectedPersona || !token) return
     setSaving(true)
     try {
       const res = await fetch('/api/writing-samples', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          personaId: editingPersona.id,
-          personaName: editingPersona.name,
+          personaId: selectedPersona.id,
+          personaName: selectedPersona.name,
           jurisdiction: activeJurisdiction,
           sectionKey,
           sampleText: text
         })
       })
-
       const data = await res.json()
 
       if (!res.ok) {
-        // Handle specific error codes
         if (data.code === 'ORG_PERSONA_READONLY') {
-          toast({ title: 'You cannot edit samples in organization personas you did not create', description: 'To customize this persona, click "Copy" to create your own version.', variant: 'warning' })
-          return
+          throw new Error('This persona belongs to someone else. Duplicate it to make your own version.')
         }
         if (data.code === 'PERSONA_NOT_FOUND') {
-          toast({ title: 'This persona was not found or you no longer have access to it', description: 'Please refresh the page.', variant: 'error' })
-          return
+          throw new Error('This persona is no longer available. Refresh the page.')
         }
-        
-        // Show validation details if available
-        let errorMessage = data.error || 'Failed to save sample'
         if (data.wordCount !== undefined && data.limits) {
-          errorMessage += `\n\nYour sample: ${data.wordCount} words\nAllowed: ${data.limits.min} - ${data.limits.max} words`
+          throw new Error(
+            `${data.error || 'That sample was rejected'} — yours is ${data.wordCount} words, allowed is ${data.limits.min}–${data.limits.max}.`
+          )
         }
-        
-        throw new Error(errorMessage)
-      }
-
-      // Show warning if sample was saved but with a suggestion
-      if (data.warning) {
-        console.log('[PersonaSample] Warning:', data.warning)
-        // Could show a toast/notification here in the future
+        throw new Error(data.error || 'Could not save the sample')
       }
 
       setEditingSample(null)
-      fetchSamples(editingPersona.id)
-      fetchPersonas() // Update sample counts
+      await fetchSamples(selectedPersona.id)
+      void fetchPersonas()
     } catch (err) {
-      toast({ title: err instanceof Error ? err.message : 'Failed to save sample', variant: 'error' })
+      toast({ title: err instanceof Error ? err.message : 'Could not save the sample', variant: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
-  const openPersonaEditor = (persona: Persona) => {
-    setEditingPersona(persona)
-    fetchSamples(persona.id)
+  const deleteSample = async (sample: Sample) => {
+    if (!token || !selectedPersona) return
+    try {
+      const res = await fetch(`/api/writing-samples?id=${sample.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Could not remove the sample')
+      await fetchSamples(selectedPersona.id)
+      void fetchPersonas()
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : 'Could not remove the sample', variant: 'error' })
+    }
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lamp-600"></div>
-      </div>
-    )
+  const archivePersona = async () => {
+    if (!personaToArchive || !token) return
+    try {
+      const res = await fetch(`/api/personas?id=${personaToArchive.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Could not archive the persona')
+
+      if (selectedId === personaToArchive.id) {
+        setSelectedId(null)
+        setSamples([])
+      }
+      toast({ title: `“${personaToArchive.name}” archived`, variant: 'success' })
+      setPersonaToArchive(null)
+      setArchiveConfirmText('')
+      void fetchPersonas()
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : 'Could not archive the persona', variant: 'error' })
+    }
   }
+
+  const clearJurisdiction = async () => {
+    if (!selectedPersona || !jurisdictionToClear || !token) return
+    try {
+      const res = await fetch('/api/writing-samples/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ personaId: selectedPersona.id, jurisdiction: jurisdictionToClear })
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Could not remove those samples')
+
+      setAddedCountries(prev => prev.filter(c => c !== jurisdictionToClear))
+      if (jurisdictionToClear !== UNIVERSAL) setActiveJurisdiction(UNIVERSAL)
+      setJurisdictionToClear(null)
+      await fetchSamples(selectedPersona.id)
+      void fetchPersonas()
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : 'Could not remove those samples', variant: 'error' })
+    }
+  }
+
+  const duplicatePersona = async () => {
+    if (!duplicating || !duplicating.name.trim() || !token) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/personas', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'copy', sourceId: duplicating.source.id, newName: duplicating.name.trim() })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not duplicate the persona')
+
+      await fetchPersonas()
+      if (data.persona?.id) {
+        setSelectedId(data.persona.id)
+        setActiveJurisdiction(UNIVERSAL)
+        setAddedCountries([])
+        void fetchSamples(data.persona.id)
+      }
+      toast({ title: data.message || 'Persona duplicated', variant: 'success' })
+      setDuplicating(null)
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : 'Could not duplicate the persona', variant: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /* ---------------- render ---------------- */
+
+  if (authLoading || (user && loading)) return <PageLoadingBird message="Loading your writing personas..." />
+  if (!user) return null
+
+  const hasAnyPersona = allPersonas.length > 0
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8 flex justify-between items-start">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              ✍️ Writing Personas
-            </h1>
-            <p className="mt-2 text-gray-600 dark:text-gray-400">
-              Create reusable writing styles for different patent types (CSE, Bio, Mechanical, etc.)
-            </p>
-            <p className="mt-1 text-sm text-lamp-600 dark:text-lamp-400">
-              💡 Tip: Select a persona when drafting to have the AI mimic your writing style
-            </p>
-          </div>
-          <button
-            onClick={() => setShowCreateForm(true)}
-            className="px-4 py-2 bg-lamp-600 text-white rounded-lg hover:bg-lamp-700 font-medium"
-          >
-            + New Persona
-          </button>
+    <div className="mx-auto max-w-6xl px-4 py-8">
+      {/* Header */}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-foreground">
+            <Feather className="h-6 w-6 text-primary" aria-hidden />
+            Writing Personas
+          </h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Teach the drafter to write the way you write. Paste passages from patents you have already
+            drafted, then switch the persona on from the drafting toolbar.
+          </p>
+          {hasAnyPersona && (
+            <button
+              type="button"
+              onClick={() => setShowGuide(v => !v)}
+              aria-expanded={showGuide}
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+            >
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showGuide ? 'rotate-180' : ''}`} aria-hidden />
+              How writing personas work
+            </button>
+          )}
         </div>
+        <Button onClick={() => setPersonaForm({ mode: 'create', name: '', description: '', visibility: 'PRIVATE' })}>
+          <Plus className="mr-1.5 h-4 w-4" aria-hidden /> New persona
+        </Button>
+      </div>
 
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg">
-            {error}
+      {hasAnyPersona && showGuide && (
+        <div className="mb-6 rounded-lg border border-border bg-muted/40 p-5">
+          <HowItWorks compact />
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {!hasAnyPersona ? (
+        /* First run: the page explains itself instead of showing two empty columns. */
+        <div className="rounded-lg border border-border bg-card p-8 sm:p-10">
+          <div className="mx-auto max-w-2xl text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent">
+              <Sparkles className="h-6 w-6 text-primary" aria-hidden />
+            </div>
+            <h2 className="text-lg font-semibold text-foreground">Create your first writing persona</h2>
+            <p className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
+              A persona is a saved writing style. You teach it once with passages from your own patents,
+              and every draft you generate with it follows your phrasing, structure, and claim habits.
+            </p>
           </div>
-        )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left: Persona List */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* My Personas */}
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                👤 My Personas
-                <span className="text-sm font-normal text-gray-500">({myPersonas.length})</span>
+          <div className="mx-auto mt-8 max-w-3xl border-t border-border pt-8">
+            <HowItWorks />
+          </div>
+
+          <div className="mt-8 text-center">
+            <Button onClick={() => setPersonaForm({ mode: 'create', name: '', description: '', visibility: 'PRIVATE' })}>
+              <Plus className="mr-1.5 h-4 w-4" aria-hidden /> Create a persona
+            </Button>
+            <p className="mt-3 text-xs text-muted-foreground">Takes about five minutes to fill in the key sections.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(240px,300px)_1fr]">
+          {/* ---------- Left: persona list ---------- */}
+          <div className="space-y-6">
+            <section>
+              <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Lock className="h-3 w-3" aria-hidden /> Yours ({myPersonas.length})
               </h2>
-
               {myPersonas.length === 0 ? (
-                <div className="p-6 bg-white dark:bg-gray-800 rounded-lg text-center text-gray-500 dark:text-gray-400">
-                  <p>No personas yet</p>
-                  <button
-                    onClick={() => setShowCreateForm(true)}
-                    className="mt-2 text-lamp-600 dark:text-lamp-400 hover:underline text-sm"
-                  >
-                    Create your first persona
-                  </button>
-                </div>
+                <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+                  You have none yet. Duplicate a shared one below, or create your own.
+                </p>
               ) : (
-                <div className="space-y-3">
-                  {myPersonas.map(persona => (
-                    <div
-                      key={persona.id}
-                      onClick={() => openPersonaEditor(persona)}
-                      className={`p-4 bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer transition-all hover:shadow-md ${
-                        editingPersona?.id === persona.id ? 'ring-2 ring-lamp-500' : ''
-                      }`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="font-medium text-gray-900 dark:text-white">{persona.name}</h3>
-                          {persona.description && (
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{persona.description}</p>
-                          )}
-                          <div className="flex gap-2 mt-2">
-                            <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">
-                              {persona.sampleCount} samples
-                            </span>
-                            {persona.visibility === 'ORGANIZATION' && (
-                              <span className="text-xs px-2 py-0.5 bg-lamp-100 dark:bg-lamp-900/30 text-lamp-700 dark:text-lamp-300 rounded">
-                                Shared
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openDeletePersonaModal(persona) }}
-                          className="text-red-500 hover:text-red-700 text-sm"
-                          title="Archive persona"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
+                <div className="space-y-2">
+                  {myPersonas.map(p => (
+                    <PersonaListCard
+                      key={p.id}
+                      persona={p}
+                      active={selectedId === p.id}
+                      onSelect={() => selectPersona(p)}
+                    />
                   ))}
                 </div>
               )}
-            </div>
+            </section>
 
-            {/* Organization Personas */}
             {orgPersonas.length > 0 && (
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                  🏢 Organization Personas
-                  <span className="text-sm font-normal text-gray-500">({orgPersonas.length})</span>
+              <section>
+                <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <Building2 className="h-3 w-3" aria-hidden /> Shared by your organization ({orgPersonas.length})
                 </h2>
-
-                <div className="space-y-3">
-                  {orgPersonas.map(persona => (
-                    <div
-                      key={persona.id}
-                      onClick={() => openPersonaEditor(persona)}
-                      className={`p-4 bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer transition-all hover:shadow-md ${
-                        editingPersona?.id === persona.id ? 'ring-2 ring-lamp-500' : ''
-                      }`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
-                            {persona.name}
-                            {persona.isTemplate && (
-                              <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded">Template</span>
-                            )}
-                          </h3>
-                          {persona.description && (
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{persona.description}</p>
-                          )}
-                          <div className="flex gap-2 mt-2">
-                            <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">
-                              {persona.sampleCount} samples
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              by {persona.createdBy?.name}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                <div className="space-y-2">
+                  {orgPersonas.map(p => (
+                    <PersonaListCard
+                      key={p.id}
+                      persona={p}
+                      active={selectedId === p.id}
+                      onSelect={() => selectPersona(p)}
+                    />
                   ))}
                 </div>
-              </div>
+              </section>
             )}
           </div>
 
-          {/* Right: Sample Editor */}
-          <div className="lg:col-span-2">
-            {editingPersona ? (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                      {editingPersona.name}
-                    </h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Add writing samples for each section to teach the AI your style
+          {/* ---------- Right: editor ---------- */}
+          <div className="min-w-0">
+            {!selectedPersona ? (
+              <div className="flex h-full min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-border p-10 text-center">
+                <Feather className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden />
+                <h2 className="font-semibold text-foreground">Pick a persona to teach</h2>
+                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                  Choose one on the left to add writing samples, or create a new one.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border bg-card">
+                {/* Editor header */}
+                <div className="border-b border-border p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-lg font-semibold text-foreground">{selectedPersona.name}</h2>
+                      {selectedPersona.description && (
+                        <p className="mt-0.5 text-sm text-muted-foreground">{selectedPersona.description}</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {selectedPersona.isOwn ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setPersonaForm({
+                                mode: 'edit',
+                                id: selectedPersona.id,
+                                name: selectedPersona.name,
+                                description: selectedPersona.description || '',
+                                visibility: selectedPersona.visibility
+                              })
+                            }
+                          >
+                            <Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Rename
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { setPersonaToArchive(selectedPersona); setArchiveConfirmText('') }}
+                            aria-label={`Archive ${selectedPersona.name}`}
+                            className="text-destructive hover:bg-destructive/5"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                          </Button>
+                        </>
+                      ) : selectedPersona.allowCopy ? (
+                        <Button
+                          size="sm"
+                          onClick={() => setDuplicating({ source: selectedPersona, name: `${selectedPersona.name} (my copy)` })}
+                        >
+                          <Copy className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Duplicate to edit
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Readiness */}
+                  <div className="mt-4 max-w-md">
+                    <div className="mb-1.5 flex items-center justify-between gap-3">
+                      <ReadinessLabel readiness={selectedReadiness} />
+                      <span className="text-xs text-muted-foreground">
+                        {samples.length} sample{samples.length === 1 ? '' : 's'} saved
+                      </span>
+                    </div>
+                    <ReadinessMeter readiness={selectedReadiness} size="lg" />
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      {selectedReadiness.level === 'ready' ? (
+                        <>
+                          Switch <strong className="font-medium text-foreground">Style: On</strong> in the drafting
+                          toolbar and pick this persona. Adding more sections keeps sharpening it.
+                        </>
+                      ) : (
+                        <>
+                          Sections marked <strong className="font-medium text-foreground">Key</strong> carry the most
+                          style. {selectedReadiness.nextStep} before switching this persona on.
+                        </>
+                      )}
                     </p>
                   </div>
-                  <button
-                    onClick={() => { setEditingPersona(null); setSamples([]) }}
-                    className="text-gray-400 hover:text-gray-600"
-                  >
-                    ✕
-                  </button>
                 </div>
 
-                {/* Jurisdiction Tabs */}
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {jurisdictions.map(j => {
-                    const sampleCount = jurisdictionSampleCounts[j.code] || 0
-                    const hasSamples = sampleCount > 0
-                    
-                    return (
+                {/* Read-only banner for shared personas */}
+                {readOnly && (
+                  <div className="flex items-start gap-2 border-b border-border bg-muted/50 px-5 py-3 text-sm">
+                    <Eye className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <p className="text-muted-foreground">
+                      {selectedPersona.createdBy?.name
+                        ? `Shared by ${selectedPersona.createdBy.name}.`
+                        : 'Shared with your organization.'}{' '}
+                      You can read it and use it while drafting.{' '}
+                      {selectedPersona.allowCopy
+                        ? 'To change it, duplicate it into your own personas.'
+                        : 'The owner has turned off copying, so it cannot be edited here.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Coverage / jurisdiction picker */}
+                <div className="border-b border-border px-5 py-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="mr-1 text-xs font-medium text-muted-foreground">Applies to</span>
+
+                    <button
+                      type="button"
+                      onClick={() => { setActiveJurisdiction(UNIVERSAL); setEditingSample(null) }}
+                      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                        activeJurisdiction === UNIVERSAL
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-card text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      <Globe className="h-3.5 w-3.5" aria-hidden />
+                      Every country
+                      {(sampleCountsByJurisdiction[UNIVERSAL] || 0) > 0 && (
+                        <span className={activeJurisdiction === UNIVERSAL ? 'opacity-80' : 'text-muted-foreground'}>
+                          {sampleCountsByJurisdiction[UNIVERSAL]}
+                        </span>
+                      )}
+                    </button>
+
+                    {visibleCountries.map(c => (
                       <button
-                        key={j.code}
-                        onClick={() => setActiveJurisdiction(j.code)}
-                        className={`px-3 py-1.5 text-sm rounded-lg whitespace-nowrap flex items-center gap-1.5 ${
-                          activeJurisdiction === j.code
-                            ? 'bg-lamp-600 text-white'
-                            : hasSamples
-                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50'
-                              : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                        key={c.code}
+                        type="button"
+                        onClick={() => { setActiveJurisdiction(c.code); setEditingSample(null) }}
+                        className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                          activeJurisdiction === c.code
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-card text-foreground hover:bg-muted'
                         }`}
                       >
-                        {j.label}
-                        {hasSamples && (
-                          <span className={`text-xs ${activeJurisdiction === j.code ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>
-                            ✓ {sampleCount}
+                        <span aria-hidden>{getFlagEmoji(c.code)}</span>
+                        {c.label}
+                        {(sampleCountsByJurisdiction[c.code] || 0) > 0 && (
+                          <span className={activeJurisdiction === c.code ? 'opacity-80' : 'text-muted-foreground'}>
+                            {sampleCountsByJurisdiction[c.code]}
                           </span>
                         )}
                       </button>
-                    )
-                  })}
+                    ))}
+
+                    {!readOnly && availableCountries.length > 0 && (
+                      <label className="inline-flex items-center">
+                        <span className="sr-only">Add a country-specific variant</span>
+                        <select
+                          value=""
+                          onChange={e => {
+                            const code = e.target.value
+                            if (!code) return
+                            setAddedCountries(prev => [...prev, code])
+                            setActiveJurisdiction(code)
+                            setEditingSample(null)
+                          }}
+                          className="h-[26px] cursor-pointer rounded-md border border-dashed border-border bg-card px-2 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <option value="">+ Country variant</option>
+                          {availableCountries.map(c => (
+                            <option key={c.code} value={c.code}>{c.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                    {activeJurisdiction === UNIVERSAL ? (
+                      <>
+                        These samples are used for every country. Start here — you only need a country variant
+                        when one patent office expects different phrasing.
+                      </>
+                    ) : (
+                      <>
+                        Used only when drafting for {jurisdictionLabel(activeJurisdiction)}. Sections you leave
+                        empty here fall back to your <strong className="font-medium text-foreground">Every country</strong> samples.
+                      </>
+                    )}
+                  </p>
                 </div>
-                
-                {/* Jurisdiction Actions */}
-                {jurisdictionSampleCounts[activeJurisdiction] > 0 && (
-                  <div className="flex justify-end mb-4">
-                    <button
-                      onClick={() => openDeleteJurisdictionModal(activeJurisdiction)}
-                      className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
-                    >
-                      🗑️ Clear {jurisdictions.find(j => j.code === activeJurisdiction)?.label} Samples
-                    </button>
-                  </div>
-                )}
 
-                {loadingSamples || loadingSections ? (
-                  <div className="flex justify-center py-8">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-lamp-600"></div>
-                  </div>
-                ) : sections.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                    <p>No sections configured for this jurisdiction.</p>
-                    <p className="text-sm mt-2">Try selecting a different jurisdiction or contact admin.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {sections.map((section) => {
-                      const sample = samples.find(
-                        s => s.sectionKey === section.key && s.jurisdiction === activeJurisdiction
-                      )
-                      const isEditing = editingSample?.sectionKey === section.key
+                {/* Sections */}
+                <div className="p-5">
+                  {loadingSamples || loadingSections ? (
+                    <div className="space-y-3" aria-busy="true" aria-label="Loading sections">
+                      {[0, 1, 2, 3].map(i => (
+                        <div key={i} className="h-[92px] animate-pulse rounded-lg bg-muted" />
+                      ))}
+                    </div>
+                  ) : sectionsError ? (
+                    <div className="rounded-lg border border-dashed border-border p-8 text-center">
+                      <p className="text-sm font-medium text-foreground">
+                        No sections are configured for {jurisdictionLabel(activeJurisdiction)}
+                      </p>
+                      <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+                        Use <strong className="font-medium text-foreground">Every country</strong> instead — those
+                        samples apply here too. If this country needs its own set, ask an administrator to configure it.
+                      </p>
+                      <Button variant="outline" size="sm" className="mt-4" onClick={() => setActiveJurisdiction(UNIVERSAL)}>
+                        <Globe className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Back to every country
+                      </Button>
+                    </div>
+                  ) : sections.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-muted-foreground">
+                      No sections available for {jurisdictionLabel(activeJurisdiction)}.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="text-xs text-muted-foreground">
+                          {sections.length} section{sections.length === 1 ? '' : 's'} ·{' '}
+                          {Object.keys(sampleCountsByJurisdiction).includes(activeJurisdiction)
+                            ? `${sampleCountsByJurisdiction[activeJurisdiction]} taught`
+                            : 'none taught yet'}
+                        </p>
+                        {!readOnly && (sampleCountsByJurisdiction[activeJurisdiction] || 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setJurisdictionToClear(activeJurisdiction)}
+                            className="text-xs text-muted-foreground transition-colors hover:text-destructive"
+                          >
+                            Clear all {jurisdictionLabel(activeJurisdiction)} samples
+                          </button>
+                        )}
+                      </div>
 
-                      return (
-                        <div key={section.key} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                          <div className="flex justify-between items-start mb-2">
-                            <div>
-                              <h3 className="font-medium text-gray-900 dark:text-white">
-                                {section.label}
-                                {section.isRequired === false && (
-                                  <span className="ml-2 text-xs text-gray-400">(optional)</span>
+                      <div className="space-y-2.5">
+                        {sections.map(section => {
+                          const sample = samples.find(
+                            s => s.sectionKey === section.key && s.jurisdiction === activeJurisdiction
+                          )
+                          const universalSample =
+                            activeJurisdiction !== UNIVERSAL
+                              ? samples.find(s => s.sectionKey === section.key && s.jurisdiction === UNIVERSAL)
+                              : undefined
+                          const isEditing = editingSample?.sectionKey === section.key
+                          const limits = SECTION_WORD_LIMITS[section.key] || DEFAULT_LIMITS
+                          const key = isHighImpact(section.key)
+
+                          return (
+                            <div
+                              key={section.key}
+                              className={`rounded-lg border p-4 transition-colors ${
+                                sample ? 'border-border bg-card' : 'border-dashed border-border bg-muted/20'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
+                                    {section.label}
+                                    {key && (
+                                      <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-foreground">
+                                        Key
+                                      </span>
+                                    )}
+                                    {section.isRequired === false && (
+                                      <span className="text-[11px] font-normal text-muted-foreground">optional</span>
+                                    )}
+                                  </h3>
+                                  {!isEditing && (
+                                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                                      {sectionBlurb(section.key)}
+                                    </p>
+                                  )}
+                                </div>
+                                {sample && !isEditing && (
+                                  <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-success">
+                                    <Check className="h-3.5 w-3.5" aria-hidden />
+                                    {sample.wordCount} words
+                                  </span>
                                 )}
-                              </h3>
-                              {/* Show which countries use this section (Universal view only) */}
-                              {activeJurisdiction === '*' && section.usedBy && section.usedBy.length > 0 && (
-                                <p className="text-xs text-gray-400 mt-0.5">
-                                  Applies to: {section.usedBy.map(code => {
-                                    const j = jurisdictions.find(j => j.code === code)
-                                    return j ? j.label.replace(/^[^\s]+\s/, '') : code
-                                  }).join(', ')}
-                                </p>
+                              </div>
+
+                              {isEditing ? (
+                                <div className="mt-3">
+                                  <Textarea
+                                    autoFocus
+                                    value={editingSample.text}
+                                    onChange={e => setEditingSample({ sectionKey: section.key, text: e.target.value })}
+                                    rows={8}
+                                    aria-label={`Writing sample for ${section.label}`}
+                                    className="min-h-[160px] resize-y font-normal leading-relaxed"
+                                    placeholder={`Paste the ${section.label.toLowerCase()} from a patent you drafted — ${limits.recommended.min}–${limits.recommended.max} words works best.\n\nUse real text, not a description of your style. The drafter learns from the wording itself.`}
+                                  />
+                                  <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                                    <WordMeter text={editingSample.text} sectionKey={section.key} />
+                                    <div className="flex items-center gap-2">
+                                      {sample && (
+                                        <button
+                                          type="button"
+                                          onClick={() => { void deleteSample(sample); setEditingSample(null) }}
+                                          className="text-xs text-muted-foreground transition-colors hover:text-destructive"
+                                        >
+                                          Remove
+                                        </button>
+                                      )}
+                                      <Button variant="ghost" size="sm" onClick={() => setEditingSample(null)}>
+                                        Cancel
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        onClick={() => void saveSample(section.key, editingSample.text)}
+                                        disabled={saving || countWords(editingSample.text) < limits.min}
+                                      >
+                                        {saving ? (
+                                          <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> Saving</>
+                                        ) : 'Save sample'}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : sample ? (
+                                <div className="mt-3">
+                                  <p className="line-clamp-3 whitespace-pre-wrap rounded-md bg-muted/60 p-3 text-xs leading-relaxed text-muted-foreground">
+                                    {sample.sampleText}
+                                  </p>
+                                  {!readOnly && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingSample({ sectionKey: section.key, text: sample.sampleText })}
+                                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                                    >
+                                      <Pencil className="h-3 w-3" aria-hidden /> Edit sample
+                                    </button>
+                                  )}
+                                </div>
+                              ) : readOnly ? (
+                                <p className="mt-3 text-xs italic text-muted-foreground">Not taught in this persona.</p>
+                              ) : (
+                                <div className="mt-3 flex flex-wrap items-center gap-3">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setEditingSample({ sectionKey: section.key, text: '' })}
+                                  >
+                                    <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Add sample
+                                  </Button>
+                                  <span className="text-xs text-muted-foreground">
+                                    {limits.recommended.min}–{limits.recommended.max} words
+                                  </span>
+                                  {universalSample && (
+                                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                                      <ArrowRight className="h-3 w-3" aria-hidden />
+                                      Falls back to your Every country sample
+                                    </span>
+                                  )}
+                                </div>
                               )}
                             </div>
-                            {sample && !isEditing && (
-                              <span className="text-xs text-green-600 dark:text-green-400 whitespace-nowrap">
-                                ✓ {sample.wordCount} words
-                              </span>
-                            )}
-                          </div>
-
-                          {isEditing ? (
-                            <div>
-                              <textarea
-                                value={editingSample.text}
-                                onChange={(e) => setEditingSample({ sectionKey: section.key, text: e.target.value })}
-                                rows={6}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm resize-y min-h-[100px]"
-                                placeholder={`Paste a sample of your writing style for ${section.label}...\n\nThis can be from a previous patent application or a draft you've written. The AI will learn to mimic your vocabulary, sentence structure, and formatting preferences.`}
-                              />
-                              <div className="flex justify-between items-center mt-2">
-                                <WordCountIndicator 
-                                  text={editingSample.text} 
-                                  sectionKey={section.key} 
-                                />
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => setEditingSample(null)}
-                                    className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400"
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    onClick={() => handleSaveSample(section.key, editingSample.text)}
-                                    disabled={saving || !editingSample.text.trim() || editingSample.text.trim().split(/\s+/).filter(w => w).length < 3}
-                                    className="px-3 py-1 text-sm bg-lamp-600 text-white rounded hover:bg-lamp-700 disabled:opacity-50"
-                                  >
-                                    {saving ? 'Saving...' : 'Save'}
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ) : sample ? (
-                            <div>
-                              <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
-                                {sample.sampleText}
-                              </p>
-                              <button
-                                onClick={() => setEditingSample({ sectionKey: section.key, text: sample.sampleText })}
-                                className="mt-2 text-xs text-lamp-600 dark:text-lamp-400 hover:underline"
-                              >
-                                Edit sample
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setEditingSample({ sectionKey: section.key, text: '' })}
-                              className="text-sm text-lamp-600 dark:text-lamp-400 hover:underline"
-                            >
-                              + Add sample
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
-                <div className="text-6xl mb-4">✍️</div>
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-                  Select a Persona
-                </h2>
-                <p className="text-gray-500 dark:text-gray-400 mb-4">
-                  Click on a persona from the left to add or edit writing samples
-                </p>
-                <p className="text-sm text-gray-400">
-                  Or create a new persona to get started
-                </p>
+                          )
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
+      )}
 
-        {/* Create Persona Modal */}
-        {showCreateForm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Create New Persona
-              </h3>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700"
-                    placeholder="e.g., CSE Patents, Bio Patents, Pharma Style"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Description
-                  </label>
-                  <textarea
-                    value={newDescription}
-                    onChange={(e) => setNewDescription(e.target.value)}
-                    rows={2}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700"
-                    placeholder="Optional: Describe when to use this style"
-                  />
-                </div>
-
-                {isAdmin && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Visibility
-                    </label>
-                    <select
-                      value={newVisibility}
-                      onChange={(e) => setNewVisibility(e.target.value as 'PRIVATE' | 'ORGANIZATION')}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700"
-                    >
-                      <option value="PRIVATE">🔒 Private (only me)</option>
-                      <option value="ORGANIZATION">🏢 Organization (everyone can use)</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => {
-                    setShowCreateForm(false)
-                    setNewName('')
-                    setNewDescription('')
-                  }}
-                  className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreate}
-                  disabled={saving || !newName.trim()}
-                  className="px-4 py-2 text-sm bg-lamp-600 text-white rounded-lg disabled:opacity-50"
-                >
-                  {saving ? 'Creating...' : 'Create Persona'}
-                </button>
-              </div>
+      {/* ---------------- Create / edit persona ---------------- */}
+      {personaForm && (
+        <Modal
+          title={personaForm.mode === 'create' ? 'New writing persona' : 'Persona details'}
+          onClose={() => setPersonaForm(null)}
+        >
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="persona-name">Name</Label>
+              <Input
+                id="persona-name"
+                autoFocus
+                value={personaForm.name}
+                onChange={e => setPersonaForm({ ...personaForm, name: e.target.value })}
+                className="mt-1.5"
+                placeholder="e.g. Software — my style"
+                maxLength={100}
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Name it after the technology you write in, so you can pick the right one while drafting.
+              </p>
             </div>
-          </div>
-        )}
-        
-        {/* Delete Persona Modal - Requires typing "delete" */}
-        {showDeletePersonaModal && personaToDelete && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
-              <h3 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-4 flex items-center gap-2">
-                ⚠️ Delete Persona
-              </h3>
-              
-              <div className="space-y-4">
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                  <p className="text-sm text-red-700 dark:text-red-300">
-                    <strong>Warning:</strong> This will archive the persona
-                    <strong className="mx-1">&quot;{personaToDelete.name}&quot;</strong> 
-                    and make its writing samples unavailable across <strong>ALL jurisdictions</strong>.
-                  </p>
-                  <p className="text-sm text-red-600 dark:text-red-400 mt-2">
-                    The samples are preserved for recovery if this persona is recreated later.
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Type <strong className="text-red-600">delete</strong> to confirm:
-                  </label>
-                  <input
-                    type="text"
-                    value={deleteConfirmText}
-                    onChange={(e) => setDeleteConfirmText(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700"
-                    placeholder="Type 'delete' here"
-                    autoComplete="off"
-                  />
-                </div>
-              </div>
-              
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => {
-                    setShowDeletePersonaModal(false)
-                    setPersonaToDelete(null)
-                    setDeleteConfirmText('')
-                  }}
-                  className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDeletePersona}
-                  disabled={deleteConfirmText.toLowerCase() !== 'delete'}
-                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Archive Persona
-                </button>
-              </div>
+
+            <div>
+              <Label htmlFor="persona-description">Description <span className="font-normal text-muted-foreground">(optional)</span></Label>
+              <Textarea
+                id="persona-description"
+                value={personaForm.description}
+                onChange={e => setPersonaForm({ ...personaForm, description: e.target.value })}
+                rows={2}
+                className="mt-1.5"
+                placeholder="When to reach for this one — e.g. software and data-processing cases"
+              />
             </div>
-          </div>
-        )}
-        
-        {/* Delete Jurisdiction Samples Modal */}
-        {showDeleteJurisdictionModal && jurisdictionToDelete && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
-              <h3 className="text-lg font-semibold text-orange-600 dark:text-orange-400 mb-4 flex items-center gap-2">
-                🗑️ Clear Jurisdiction Samples
-              </h3>
-              
-              <div className="space-y-4">
-                <p className="text-sm text-gray-700 dark:text-gray-300">
-                  This will delete all writing samples for 
-                  <strong className="mx-1">
-                    {jurisdictions.find(j => j.code === jurisdictionToDelete)?.label || jurisdictionToDelete}
-                  </strong>
-                  from persona <strong>&quot;{editingPersona?.name}&quot;</strong>.
-                </p>
-                
-                <div className="p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
-                  <p className="text-sm text-orange-700 dark:text-orange-300">
-                    The persona will remain, and samples for other jurisdictions will not be affected.
-                    You can re-add samples for this jurisdiction later.
-                  </p>
-                </div>
-                
-                <p className="text-sm text-gray-500">
-                  Samples to delete: <strong>{jurisdictionSampleCounts[jurisdictionToDelete] || 0}</strong>
+
+            {isAdmin && (
+              <div>
+                <Label htmlFor="persona-visibility">Who can use it</Label>
+                <select
+                  id="persona-visibility"
+                  value={personaForm.visibility}
+                  onChange={e => setPersonaForm({ ...personaForm, visibility: e.target.value as 'PRIVATE' | 'ORGANIZATION' })}
+                  className="mt-1.5 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="PRIVATE">Only me</option>
+                  <option value="ORGANIZATION">Everyone in my organization</option>
+                </select>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  {personaForm.visibility === 'ORGANIZATION'
+                    ? 'Colleagues can draft with it and duplicate it, but only you can edit the samples.'
+                    : 'Nobody else in your organization will see this persona.'}
                 </p>
               </div>
-              
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => {
-                    setShowDeleteJurisdictionModal(false)
-                    setJurisdictionToDelete(null)
-                  }}
-                  className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDeleteJurisdictionSamples}
-                  className="px-4 py-2 text-sm bg-orange-600 text-white rounded-lg"
-                >
-                  Clear Samples
-                </button>
-              </div>
-            </div>
+            )}
           </div>
-        )}
-      </div>
+
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setPersonaForm(null)}>Cancel</Button>
+            <Button onClick={() => void savePersonaDetails()} disabled={saving || !personaForm.name.trim()}>
+              {saving ? 'Saving…' : personaForm.mode === 'create' ? 'Create persona' : 'Save changes'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ---------------- Duplicate ---------------- */}
+      {duplicating && (
+        <Modal title="Duplicate persona" onClose={() => setDuplicating(null)}>
+          <p className="text-sm text-muted-foreground">
+            This copies “{duplicating.source.name}” and all its samples into your own personas, where you can
+            change them freely. The original stays untouched.
+          </p>
+          <div className="mt-4">
+            <Label htmlFor="duplicate-name">Name your copy</Label>
+            <Input
+              id="duplicate-name"
+              autoFocus
+              value={duplicating.name}
+              onChange={e => setDuplicating({ ...duplicating, name: e.target.value })}
+              className="mt-1.5"
+              maxLength={100}
+            />
+          </div>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setDuplicating(null)}>Cancel</Button>
+            <Button onClick={() => void duplicatePersona()} disabled={saving || !duplicating.name.trim()}>
+              {saving ? 'Duplicating…' : 'Duplicate'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ---------------- Archive persona ---------------- */}
+      {personaToArchive && (
+        <Modal title="Archive this persona?" onClose={() => setPersonaToArchive(null)}>
+          <p className="text-sm text-muted-foreground">
+            “{personaToArchive.name}” will stop appearing when you draft, for every country. Its samples are kept,
+            so recreating the persona with the same name brings them back.
+          </p>
+          <div className="mt-4">
+            <Label htmlFor="archive-confirm">
+              Type <span className="font-semibold text-destructive">delete</span> to confirm
+            </Label>
+            <Input
+              id="archive-confirm"
+              autoFocus
+              autoComplete="off"
+              value={archiveConfirmText}
+              onChange={e => setArchiveConfirmText(e.target.value)}
+              className="mt-1.5"
+              placeholder="delete"
+            />
+          </div>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setPersonaToArchive(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => void archivePersona()}
+              disabled={archiveConfirmText.trim().toLowerCase() !== 'delete'}
+            >
+              Archive persona
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ---------------- Clear jurisdiction ---------------- */}
+      {jurisdictionToClear && selectedPersona && (
+        <Modal title={`Clear ${jurisdictionLabel(jurisdictionToClear)} samples?`} onClose={() => setJurisdictionToClear(null)}>
+          <p className="text-sm text-muted-foreground">
+            This removes the {sampleCountsByJurisdiction[jurisdictionToClear] || 0} sample
+            {(sampleCountsByJurisdiction[jurisdictionToClear] || 0) === 1 ? '' : 's'} you saved for{' '}
+            {jurisdictionLabel(jurisdictionToClear)} in “{selectedPersona.name}”. Samples for other countries stay
+            as they are, and you can add these again later.
+          </p>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setJurisdictionToClear(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => void clearJurisdiction()}>Clear samples</Button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
 
+/* ------------------------------------------------------------------ */
+
+function Modal({
+  title,
+  onClose,
+  children
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[12vh]"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-lg">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <h3 className="text-base font-semibold text-foreground">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="-mr-1 -mt-1 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}

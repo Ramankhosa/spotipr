@@ -35,7 +35,7 @@ import {
 
 const PUBLIC_PREFIXES = [
   '/patentnest', '/classic-home',
-  '/pricing', '/contact', '/terms', '/privacy',
+  '/pricing', '/contact', '/terms', '/privacy', '/blog',
   '/login', '/register', '/forgot-password', '/reset-password', '/verify-email',
   '/institutional-access', '/unsubscribed', '/clear-cookies', '/share',
   '/developers', '/test', '/test-gif', '/email-drafting/download'

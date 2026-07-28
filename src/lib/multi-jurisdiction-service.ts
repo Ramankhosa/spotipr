@@ -28,6 +28,7 @@ import {
 } from '@/lib/section-injection-config'
 import { buildSupportDataSourcePromptBlock } from '@/lib/support-data-sources'
 import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
+import { getWritingSample, buildWritingSampleBlock } from '@/lib/writing-sample-service'
 import {
   areFiguresSkipped,
   filterDrawingSectionKeys,
@@ -35,6 +36,38 @@ import {
 } from '@/lib/figure-availability'
 import { cleanFigureDescriptionForDrafting } from '@/lib/diagram-image-analysis'
 import crypto from 'crypto'
+
+// ============================================================================
+// Persona style
+// ============================================================================
+
+/**
+ * Writing-persona style block for a reference-draft section.
+ *
+ * The reference draft is the jurisdiction-neutral superset, so it reads the
+ * user's Universal ('*') samples — the same ones the personas screen presents
+ * as "applies to every country". Country-specific samples come into play later,
+ * during translation to each jurisdiction.
+ *
+ * The caller (the drafting route) attaches `usePersonaStyle`, `personaSelection`
+ * and `userId` to the session, exactly as `handleGenerateSections` does for the
+ * single-jurisdiction path. With no persona configured this returns '' and the
+ * prompt is unchanged.
+ */
+async function getPersonaStyleBlock(session: any, sectionKey: string, tenantId?: string): Promise<string> {
+  const selection = session?.personaSelection
+  if (!session?.usePersonaStyle || !selection?.primaryPersonaId || !session?.userId) return ''
+
+  try {
+    const sample = await getWritingSample(session.userId, sectionKey, '*', selection, tenantId)
+    if (!sample?.sampleText) return ''
+    return buildWritingSampleBlock(sample, sectionKey)
+  } catch (error) {
+    // Style is an enhancement — never fail a draft because a sample lookup did.
+    console.warn(`[multi-jurisdiction] Persona style lookup failed for "${sectionKey}":`, error)
+    return ''
+  }
+}
 
 // ============================================================================
 // Types
@@ -1468,6 +1501,17 @@ export async function generateReferenceDraft(
       }
     }
 
+    // Writing-persona style, resolved up front because the instruction map below
+    // is synchronous. Empty map when persona style is off.
+    const personaStyleBySection = new Map<string, string>()
+    for (const key of dynamicSections) {
+      const block = await getPersonaStyleBlock(session, key, tenantId)
+      if (block) personaStyleBySection.set(key, block)
+    }
+    if (personaStyleBySection.size > 0) {
+      console.log(`[generateReferenceDraft] Applied persona style to: ${Array.from(personaStyleBySection.keys()).join(', ')}`)
+    }
+
     // Build section instructions using database prompts
     // Add section-specific context based on database-driven requirements
     const sectionInstructions = dynamicSections.map((key, idx) => {
@@ -1604,9 +1648,11 @@ ${supportBlock}`
         }
       }
       
+      const personaStyle = personaStyleBySection.get(key) || ''
+
       return `==== SECTION ${idx + 1}: ${prompt.label} (key: "${key}") ====
 Required by: ${requiredBy}
-${instructionText}${constraints}${contextAddendum}`
+${instructionText}${constraints}${contextAddendum}${personaStyle}`
     }).join('\n\n')
 
     // ======================================================================
@@ -2517,6 +2563,13 @@ ${additionalContextParts.join('\n')}`)
     const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(sectionKey)
     if (detailedDescriptionSourceLock) {
       promptParts.push(detailedDescriptionSourceLock)
+    }
+
+    // Writing-persona style, when the user has switched it on for this session.
+    const personaStyleBlock = await getPersonaStyleBlock(session, sectionKey, tenantId)
+    if (personaStyleBlock) {
+      promptParts.push(personaStyleBlock)
+      console.log(`[generateReferenceDraftSection] Applied persona style to "${sectionKey}"`)
     }
 
     // Section generation instructions

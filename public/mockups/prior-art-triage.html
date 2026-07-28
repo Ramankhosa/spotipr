@@ -96,9 +96,10 @@
   .filter-note a{color:var(--cobalt); cursor:pointer; text-decoration:none;}
 
   .list{overflow:hidden;}
-  .row{display:flex; gap:14px; padding:14px 18px; border-top:1px solid var(--line); align-items:flex-start;}
+  .row{display:flex; gap:16px; padding:16px 20px; border-top:1px solid var(--line); align-items:flex-start;}
   .row:first-child{border-top:none;}
-  .badge{flex:none; margin-top:2px; font-size:11px; font-weight:600; padding:3px 9px; border-radius:999px; white-space:nowrap;}
+  .badge-col{width:78px; flex:none; margin-top:1px;}
+  .badge{display:inline-block; font-size:11px; font-weight:600; padding:3px 9px; border-radius:999px; white-space:nowrap;}
   .b-high{background:var(--red-bg); color:var(--red); border:1px solid var(--red-line);}
   .b-obv{background:var(--amber-bg); color:var(--amber); border:1px solid var(--amber-line);}
   .b-adj{background:var(--green-bg); color:var(--green); border:1px solid var(--green-line);}
@@ -114,7 +115,7 @@
   .tag.on{border-color:var(--cobalt-line); background:var(--cobalt-bg); color:var(--cobalt); font-weight:500;}
   .tag.on::before{content:"✓ ";}
 
-  .drawer{margin:0 18px 14px 60px; border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:14px 16px; display:none;}
+  .drawer{margin:0 20px 14px 114px; border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:14px 16px; display:none;}
   .drawer.open{display:block;}
   .drawer h4{font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-3); margin:10px 0 4px;}
   .drawer h4:first-child{margin-top:0;}
@@ -299,7 +300,7 @@ const DATA = [
 let filter = null;
 let manualSeq = 0;
 
-const RISK = {high:['b-high','High risk'], obv:['b-obv','Obvious'], adj:['b-adj','Adjacent'], rem:['b-rem','Remote'], man:['b-man','Manual']};
+const RISK = {high:['b-high','High'], obv:['b-obv','Obvious'], adj:['b-adj','Adjacent'], rem:['b-rem','Remote'], man:['b-man','Manual']};
 
 function render(){
   const list = document.getElementById('list');
@@ -314,7 +315,7 @@ function render(){
          <h4>Assessment</h4><p>${d.assessment}</p>
        </div>`;
     return `<div class="row">
-      <span class="badge ${cls}">${label}</span>
+      <div class="badge-col"><span class="badge ${cls}">${label}</span></div>
       <div class="body">
         <div class="title">${d.title}</div>
         <div class="meta"><span class="mono">${d.pn}</span> · ${d.src} · ${d.meta}${d.risk==='man'?'':` · <a onclick="document.getElementById('dr${d.id}').classList.toggle('open')">View analysis</a>`}</div>

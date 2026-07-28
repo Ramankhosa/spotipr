@@ -82,7 +82,11 @@ const counterSchema = z.object({
 const caseLawSchema = z.object({
   name: z.string().min(1),
   citation: z.string().optional(),
-  point: z.string().optional()
+  point: z.string().optional(),
+  // Sub-clauses this authority speaks to (e.g. ["3d"]). Omit when it applies to
+  // the whole objection type — a Section 3(d) reply must not be handed the
+  // Section 3(k) authority just because both hang off ELIGIBILITY.
+  subTypes: z.array(z.string().min(1)).optional()
 })
 
 const objectionSchema = z.object({

@@ -3154,7 +3154,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   : serverImageUrl || previewUrl
 
                 return (
-              <Card key={`figure_${figNo}`} className="overflow-hidden hover:shadow-lg transition-all duration-300">
+              // No `overflow-hidden` on this Card: it clipped the actions menu
+              // that opens from the footer. The preview image sits between the
+              // header and footer rather than against a rounded corner, so
+              // nothing here needs clipping.
+              <Card key={`figure_${figNo}`} className="hover:shadow-lg transition-all duration-300">
                 <CardHeader className="pb-3">
                   {/* One status, in the attorney's terms. The pipeline's own
                       states — code generated, image analysed, raw override —
@@ -5315,9 +5319,13 @@ function FigureActionsMenu({ label, items }: FigureActionsMenuProps) {
         <MoreHorizontal className="w-4 h-4" />
       </button>
       {open && (
+        // Anchored with CSS rather than measured coordinates, so it can never
+        // drift away from its button on scroll. It opens upward because the
+        // trigger sits in the card footer: downward would run off the card
+        // (and, on the last row, off the page).
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1 z-30 min-w-[13rem] rounded-lg border border-paper-300 bg-white p-1 shadow-lg"
+          className="absolute right-0 bottom-full mb-1 z-40 w-56 rounded-lg border border-paper-300 bg-white p-1 shadow-lg"
         >
           {items.map(item => (
             <button
