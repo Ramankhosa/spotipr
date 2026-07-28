@@ -88,9 +88,16 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   // ---- 2. Create the draft row UP FRONT and persist incrementally after every
   // objection, so a timeout/crash mid-run loses at most one objection's work
   // (and the paid LLM calls behind the finished ones are never wasted).
+  //
+  // A run that died mid-way leaves its draft flagged inProgress. RESUME that row
+  // instead of opening a new version: a fresh version would become the "latest
+  // draft" the workspace renders, so a retry would blank the sections the
+  // attorney could already see, and every retry would re-buy the LLM calls
+  // behind the objections already drafted.
   const last = await prisma.oaResponseDraft.findFirst({ where: { caseId }, orderBy: { version: 'desc' } })
-  const version = (last?.version || 0) + 1
-  const draft = await prisma.oaResponseDraft.create({
+  const resumable = last && (last.sectionsJson as any)?.inProgress ? last : null
+  const version = resumable ? resumable.version : (last?.version || 0) + 1
+  const draft = resumable || await prisma.oaResponseDraft.create({
     data: {
       caseId,
       documentId: readyDocs[0]?.id || null,
@@ -101,11 +108,17 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     }
   })
 
-  const objectionReplies: DraftedObjectionReply[] = []
-  const allAmendments: AmendedClaim[] = []
-  const judgmentFlags: PrepareResult['judgmentFlags'] = []
+  const resumedSections = (resumable?.sectionsJson as any) || {}
+  const objectionReplies: DraftedObjectionReply[] = Array.isArray(resumedSections.objectionReplies)
+    ? [...resumedSections.objectionReplies] : []
+  const allAmendments: AmendedClaim[] = Array.isArray((resumable?.amendedClaimsJson as any)?.claims)
+    ? [...(resumable!.amendedClaimsJson as any).claims] : []
+  const judgmentFlags: PrepareResult['judgmentFlags'] = Array.isArray((resumable?.complianceJson as any)?.judgmentFlags)
+    ? [...(resumable!.complianceJson as any).judgmentFlags] : []
+  // Only sections that actually carry text count as done — a failed one is retried.
+  const alreadyDrafted = new Set(objectionReplies.filter(r => (r.bodyText || '').trim()).map(r => r.objectionId))
   let proposedCount = 0
-  let done = 0
+  let done = objectionReplies.length
 
   const persistPartial = async (finished: boolean) => {
     await prisma.oaResponseDraft.update({
@@ -120,85 +133,117 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   let namedSections: Record<string, string> = {}
 
   for (const { doc, row } of workItems) {
+    if (alreadyDrafted.has(row.id)) continue      // resumed run: keep what is already paid for
     await progress(`Objection ${done + 1} of ${workItems.length}`, done + 1, totalSteps)
 
-    // Citation full text available for charting (resolved by the worker). Only
-    // substantive records qualify — charting against a bare title/abstract
-    // produces false NOT_DISCLOSED verdicts the attorney would rely on.
-    const citationTexts: CitationText[] = doc.citations
-      .filter(c => {
-        const f = (c.passagesJson as any)?.fullDocument
-        return f && (f.claims || f.description)
-      })
-      .map(c => {
-        const f = (c.passagesJson as any).fullDocument
-        return { label: c.label, title: f.title, abstract: f.abstract, claims: f.claims, description: f.description }
-      })
-
-    const objection: ClassifiedObjection & { id: string } = {
-      id: row.id, sortOrder: row.sortOrder, canonicalCode: row.canonicalCode as any,
-      subTypeId: row.subTypeId || undefined, localBasis: row.localBasis || undefined,
-      officeNumber: (row.analysisJson as any)?.officeNumber || undefined,
-      examinerText: row.examinerText, quoteVerified: row.quoteVerified,
-      claimsAffected: (row.claimsAffected as any) || [], citationLabels: (row.citationLabels as any) || []
-    }
-
-    // ---- claim chart (only for citation-driven objections) ----
-    let chart
-    const usesCitations = (objection.citationLabels || []).length > 0 && citationTexts.length > 0
-    if (usesCitations && oaCase.claimsText) {
-      const relevant = citationTexts.filter(c => objection.citationLabels!.includes(c.label))
-      const built = await buildClaimChart(profile, {
-        claimsText: oaCase.claimsText,
-        claimNumbers: (objection.claimsAffected as number[]) || [],
-        citations: relevant.length ? relevant : citationTexts
-      }, { tenantId: opts.tenantId, userId: opts.userId, requestHeaders: opts.requestHeaders }, opts.gateway)
-      if (built.chart) {
-        chart = built.chart
-        await persistClaimChart(doc.id, built.chart)
-      }
-    }
-
-    // ---- strategy (+ deterministic s.59 basis guard) ----
-    const strat = await buildObjectionStrategy(ctxBase as any, objection, chart)
-    const strategy: ObjectionStrategy | undefined = strat.strategy
-    if (strategy) {
-      await prisma.oaObjection.update({
-        where: { id: row.id },
-        data: { strategyJson: strategy as any, status: 'STRATEGY_CHOSEN' }
-      })
-      proposedCount += strategy.amendments.length
-      for (const a of usableAmendments(strategy)) {
-        const verdict = strategy.basisVerdicts.find(v => v.claimNumber === a.claimNumber)
-        allAmendments.push({
-          claimNumber: a.claimNumber, markedText: a.markedText, cleanText: a.cleanText,
-          basisRefs: verdict?.refsResolved ? a.basisRefs : []
+    // Everything for ONE objection is isolated: a chart, strategy or draft that
+    // throws costs that objection its section, never the rest of the run.
+    try {
+      // Citation full text available for charting (resolved by the worker). Only
+      // substantive records qualify — charting against a bare title/abstract
+      // produces false NOT_DISCLOSED verdicts the attorney would rely on.
+      const citationTexts: CitationText[] = doc.citations
+        .filter(c => {
+          const f = (c.passagesJson as any)?.fullDocument
+          return f && (f.claims || f.description)
         })
-      }
-      if (strategy.judgmentFlag) judgmentFlags.push({ objectionId: row.id, flag: strategy.judgmentFlag })
-    }
+        .map(c => {
+          const f = (c.passagesJson as any).fullDocument
+          return { label: c.label, title: f.title, abstract: f.abstract, claims: f.claims, description: f.description }
+        })
 
-    // ---- draft the objection reply ----
-    const drafted = await draftObjectionReply(ctxBase as any, objection)
-    objectionReplies.push(drafted)
+      const objection: ClassifiedObjection & { id: string } = {
+        id: row.id, sortOrder: row.sortOrder, canonicalCode: row.canonicalCode as any,
+        subTypeId: row.subTypeId || undefined, localBasis: row.localBasis || undefined,
+        officeNumber: (row.analysisJson as any)?.officeNumber || undefined,
+        examinerText: row.examinerText, quoteVerified: row.quoteVerified,
+        claimsAffected: (row.claimsAffected as any) || [], citationLabels: (row.citationLabels as any) || []
+      }
+
+      // ---- claim chart (only for citation-driven objections) ----
+      let chart
+      const usesCitations = (objection.citationLabels || []).length > 0 && citationTexts.length > 0
+      if (usesCitations && oaCase.claimsText) {
+        const relevant = citationTexts.filter(c => objection.citationLabels!.includes(c.label))
+        const built = await buildClaimChart(profile, {
+          claimsText: oaCase.claimsText,
+          claimNumbers: (objection.claimsAffected as number[]) || [],
+          citations: relevant.length ? relevant : citationTexts
+        }, { tenantId: opts.tenantId, userId: opts.userId, requestHeaders: opts.requestHeaders }, opts.gateway)
+        if (built.chart) {
+          chart = built.chart
+          await persistClaimChart(doc.id, built.chart)
+        }
+      }
+
+      // ---- strategy (+ deterministic s.59 basis guard) ----
+      const strat = await buildObjectionStrategy(ctxBase as any, objection, chart)
+      const strategy: ObjectionStrategy | undefined = strat.strategy
+      if (strategy) {
+        await prisma.oaObjection.update({
+          where: { id: row.id },
+          data: { strategyJson: strategy as any, status: 'STRATEGY_CHOSEN' }
+        })
+        proposedCount += strategy.amendments.length
+        for (const a of usableAmendments(strategy)) {
+          const verdict = strategy.basisVerdicts.find(v => v.claimNumber === a.claimNumber)
+          allAmendments.push({
+            claimNumber: a.claimNumber, markedText: a.markedText, cleanText: a.cleanText,
+            basisRefs: verdict?.refsResolved ? a.basisRefs : []
+          })
+        }
+        if (strategy.judgmentFlag) judgmentFlags.push({ objectionId: row.id, flag: strategy.judgmentFlag })
+      }
+
+      // ---- draft the objection reply ----
+      const drafted = await draftObjectionReply(ctxBase as any, objection)
+      objectionReplies.push(drafted)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[OA prepare] objection ${row.id} (${row.canonicalCode}) failed:`, message)
+      // Record the failure as a section so the attorney sees which one to write,
+      // and so a later run retries only this objection.
+      objectionReplies.push({
+        objectionId: row.id,
+        sortOrder: row.sortOrder,
+        code: row.canonicalCode as any,
+        officeNumber: (row.analysisJson as any)?.officeNumber || undefined,
+        title: row.canonicalCode,
+        statuteBasis: row.localBasis || undefined,
+        examinerConcern: (row.examinerText || '').slice(0, 320),
+        bodyText: '',
+        draftError: message,
+        approved: false,
+        quoteVerified: row.quoteVerified
+      } as DraftedObjectionReply)
+    }
     done++
     await persistPartial(false)
   }
 
   // ---- named sections ----
+  // Isolated too: losing the prayer must not discard every drafted objection.
   await progress('Preliminary submissions and prayer', totalSteps - 1, totalSteps)
-  namedSections = {
-    preliminarySubmissions: await draftNamedSection(ctxBase as any, 'preliminarySubmissions',
-      'Acknowledge the report, summarize the invention in two sentences, and state that each objection is answered in turn.'),
-    conclusionAndPrayer: await draftNamedSection(ctxBase as any, 'conclusionAndPrayer',
-      'Close with the prayer for grant and a request for a hearing if any objection remains.')
+  namedSections = { ...(resumedSections.namedSections || {}) }
+  try {
+    namedSections = {
+      preliminarySubmissions: await draftNamedSection(ctxBase as any, 'preliminarySubmissions',
+        'Acknowledge the report, summarize the invention in two sentences, and state that each objection is answered in turn.'),
+      conclusionAndPrayer: await draftNamedSection(ctxBase as any, 'conclusionAndPrayer',
+        'Close with the prayer for grant and a request for a hearing if any objection remains.')
+    }
+  } catch (err) {
+    console.error('[OA prepare] named sections failed:', err instanceof Error ? err.message : err)
   }
+  // The run is finished either way — inProgress:false stops a later prepare from
+  // resuming this draft, and the attorney gets a fresh version next time.
   await persistPartial(true)
 
   const draftErrors = objectionReplies.filter(r => r.draftError).length
+  const bodiesDrafted = objectionReplies.filter(r => (r.bodyText || '').trim()).length
   return {
     draftId: draft.id, version,
-    objectionsDrafted: objectionReplies.length,
+    objectionsDrafted: bodiesDrafted,
     draftErrors,
     amendmentsProposed: proposedCount,
     amendmentsUsable: allAmendments.length,

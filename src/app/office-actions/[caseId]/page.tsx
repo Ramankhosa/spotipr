@@ -207,6 +207,71 @@ export default function OfficeActionWorkspacePage() {
     return () => clearInterval(t)
   }, [pendingCitations, load])
 
+  /**
+   * Follow the prepare job wherever it is running.
+   *
+   * The run lives in a background job, not in this tab, so the workspace has to
+   * pick it up on mount too: reload the page mid-run (or come back to the case
+   * later) and the sections must keep streaming in. Announcing completion is
+   * keyed on the job id so a refresh cannot toast the same run twice.
+   */
+  const announcedJobRef = useRef<string | null>(null)
+  const seenPollRef = useRef(false)
+  const [prepareActive, setPrepareActive] = useState(false)
+
+  const pollPrepare = useCallback(async () => {
+    if (!caseId) return
+    try {
+      const res = await fetch(`/api/office-actions/${caseId}/prepare`, { headers: authHeaders() })
+      if (!res.ok) return
+      const job = (await res.json()).job
+      if (!job) { setPrepareActive(false); return }
+
+      const running = job.status === 'QUEUED' || job.status === 'PROCESSING'
+      if (running) seenPollRef.current = true    // this run is live: announce its result
+      setPrepareActive(running)
+      setPrepareStep(running ? (job.currentStep || 'Working…') : null)
+      // Drive the toolbar's own busy state, without stomping on an upload that
+      // happens to be in flight.
+      setBusy(b => running ? (b === null ? 'prepare' : b) : (b === 'prepare' ? null : b))
+      // Pull the partial draft in on every tick — sections land one at a time.
+      if (running) { void load(); return }
+
+      if (announcedJobRef.current === job.id) return
+      // A run that was already finished when the workspace opened is history —
+      // record it as seen, but do not toast a result the attorney has had for
+      // hours every time they revisit the case.
+      const wasFirstLook = !seenPollRef.current
+      seenPollRef.current = true
+      announcedJobRef.current = job.id
+      if (wasFirstLook) return
+      if (job.status === 'COMPLETED') {
+        const r = job.result || {}
+        toast({
+          title: `Reply prepared — ${r.objectionsDrafted ?? ''} section${r.objectionsDrafted === 1 ? '' : 's'} drafted`,
+          description: [
+            r.judgmentFlags?.length ? `${r.judgmentFlags.length} objection(s) need your judgment.` : '',
+            r.draftErrors ? `${r.draftErrors} section(s) could not be drafted — write or retry them.` : ''
+          ].filter(Boolean).join(' ') || undefined,
+          variant: r.draftErrors ? 'warning' : 'success'
+        })
+        setTab('draft')
+        await load()
+      } else if (job.status === 'FAILED' || job.status === 'CANCELLED') {
+        toast({ title: 'Could not prepare the reply', description: job.lastError || undefined, variant: 'error' })
+        await load()
+      }
+    } catch { /* transient — the next tick retries */ }
+  }, [caseId, load, toast])
+
+  // Seed from any run already in flight when the workspace opens.
+  useEffect(() => { if (user) void pollPrepare() }, [user, pollPrepare])
+  useEffect(() => {
+    if (!prepareActive) return
+    const t = setInterval(() => void pollPrepare(), 4000)
+    return () => clearInterval(t)
+  }, [prepareActive, pollPrepare])
+
   const objections = useMemo(() =>
     (view?.case.documents || []).flatMap(d => d.objections).sort((a, b) => a.sortOrder - b.sortOrder), [view])
   const selected = objections.find(o => o.id === selectedObjectionId) || objections[0] || null
@@ -329,39 +394,16 @@ export default function OfficeActionWorkspacePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Preparation failed')
       if (data.alreadyRunning) toast({ title: 'Preparation already running — showing its progress', variant: 'warning' })
-
-      const deadline = Date.now() + 30 * 60_000
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 4000))
-        const sres = await fetch(`/api/office-actions/${caseId}/prepare`, { headers: authHeaders() })
-        if (!sres.ok) continue
-        const s = (await sres.json()).job
-        if (!s) continue
-        if (s.status === 'COMPLETED') {
-          const r = s.result || {}
-          toast({
-            title: `Reply prepared — ${r.objectionsDrafted ?? ''} sections drafted`,
-            description: [
-              r.judgmentFlags?.length ? `${r.judgmentFlags.length} objection(s) need your judgment.` : '',
-              r.draftErrors ? `${r.draftErrors} section(s) failed to draft — write or edit them manually.` : ''
-            ].filter(Boolean).join(' ') || undefined,
-            variant: r.draftErrors ? 'warning' : 'success'
-          })
-          setTab('draft')
-          await load()
-          return
-        }
-        if (s.status === 'FAILED' || s.status === 'CANCELLED') {
-          throw new Error(s.lastError || 'Preparation failed')
-        }
-        setPrepareStep(s.currentStep || 'Working…')
-        // Refresh the workspace occasionally so finished sections appear as they land.
-        if (s.status === 'PROCESSING') void load()
-      }
-      throw new Error('Preparation is taking unusually long — reopen the case later; the run continues in the background.')
+      // A new run must be announced even if a previous one was announced here.
+      announcedJobRef.current = null
+      // The poller owns progress from here: it survives a reload and keeps
+      // pulling in sections as they are persisted, one objection at a time.
+      setPrepareActive(true)
+      void pollPrepare()
     } catch (err) {
+      setBusy(null); setPrepareStep(null)
       toast({ title: 'Could not prepare the reply', description: err instanceof Error ? err.message : undefined, variant: 'error' })
-    } finally { setBusy(null); setPrepareStep(null) }
+    }
   }
 
   const dismissObjection = async (objectionId: string, dismiss: boolean) => {

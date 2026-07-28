@@ -170,26 +170,36 @@ export async function runOaStage<T = any>(
   args: RunOaStageArgs,
   gateway?: OaGateway
 ): Promise<RunOaStageResult<T>> {
-  const gw = gateway || (await getDefaultGateway())
   const prompt = assembleOaPrompt(args)
 
-  const result = await gw.executeLLMOperation(
-    { headers: args.requestHeaders || {} },
-    {
-      taskCode: 'LLM8_OA_RESPONSE',
-      stageCode: args.stageCode,
-      prompt,
-      parameters: {
-        ...(args.tenantId ? { tenantId: args.tenantId } : {}),
-        temperature: args.temperature ?? 0.0
-      },
-      idempotencyKey: crypto.randomUUID(),
-      metadata: {
-        purpose: args.purpose || `office_action:${args.stageCode.toLowerCase()}`,
-        ...(args.userId ? { userId: args.userId } : {})
+  // A stage failure must be DATA, never an exception: the reply pipeline runs
+  // dozens of these per case, and one throw used to abort the whole run — losing
+  // every paid section drafted before it and restarting from the first objection.
+  let result: Awaited<ReturnType<OaGateway['executeLLMOperation']>>
+  try {
+    const gw = gateway || (await getDefaultGateway())
+    result = await gw.executeLLMOperation(
+      { headers: args.requestHeaders || {} },
+      {
+        taskCode: 'LLM8_OA_RESPONSE',
+        stageCode: args.stageCode,
+        prompt,
+        parameters: {
+          ...(args.tenantId ? { tenantId: args.tenantId } : {}),
+          temperature: args.temperature ?? 0.0
+        },
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          purpose: args.purpose || `office_action:${args.stageCode.toLowerCase()}`,
+          ...(args.userId ? { userId: args.userId } : {})
+        }
       }
-    }
-  )
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[OA stage ${args.stageCode}] gateway threw:`, message)
+    return { success: false, error: message }
+  }
 
   if (!result.success || !result.response?.output) {
     return { success: false, error: result.error?.message || 'LLM stage failed' }
