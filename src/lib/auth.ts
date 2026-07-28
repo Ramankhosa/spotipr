@@ -79,8 +79,15 @@ export interface JWTPayload {
   exp: number
 }
 
-export function generateJWT(payload: Omit<JWTPayload, 'iat' | 'exp'>): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN })
+/**
+ * @param expiresIn overrides the 15-minute session default. Only for internal,
+ * server-side credentials that must outlive a browser session — a background
+ * job runs for the better part of an hour, and a token that dies mid-run makes
+ * every later step fail tenant resolution. Never widen this for a token that
+ * reaches a browser.
+ */
+export function generateJWT(payload: Omit<JWTPayload, 'iat' | 'exp'>, expiresIn: string = JWT_EXPIRES_IN): string {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn } as jwt.SignOptions)
 }
 
 export function verifyJWT(token: string): JWTPayload | null {

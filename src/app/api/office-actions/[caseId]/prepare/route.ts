@@ -66,7 +66,10 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
       status: 'QUEUED',
       payload: {
         tenantId: auth.user.tenantId || null,
-        objectionIds: Array.isArray(body.objectionIds) ? body.objectionIds : undefined
+        objectionIds: Array.isArray(body.objectionIds) ? body.objectionIds : undefined,
+        // 'resume' continues the latest draft and redrafts only its gaps;
+        // anything else opens a fresh version.
+        resume: body.action === 'resume'
       } as any
     }
   })

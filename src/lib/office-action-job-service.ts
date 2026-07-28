@@ -69,6 +69,15 @@ export interface ProcessOpts {
 /** Fresh internal JWT for the job's user — the metering gateway resolves the
  * tenant/plan from it exactly as it would for an interactive request. Nothing
  * sensitive is stored at rest (mirrors the drafting worker's pattern). */
+/**
+ * How long a job's internal credential lives, and how often it is re-minted.
+ * A prepare run is minutes-to-an-hour of LLM calls; the 15-minute session
+ * default expired mid-run and every stage after it failed with
+ * "Unable to resolve tenant context".
+ */
+const JOB_TOKEN_TTL = '90m'
+const JOB_TOKEN_REFRESH_MS = 10 * 60_000
+
 async function buildJobRequestHeaders(userId: string): Promise<Record<string, string>> {
   const user = await (prisma as any).user.findUnique({
     where: { id: userId },
@@ -84,8 +93,25 @@ async function buildJobRequestHeaders(userId: string): Promise<Record<string, st
     ati_id: user.tenant?.atiId || null,
     tenant_ati_id: user.tenant?.atiId || null,
     scope: user.tenant?.atiId === 'PLATFORM' ? 'platform' : 'tenant',
-  } as any)
+  } as any, JOB_TOKEN_TTL)
   return { authorization: `Bearer ${token}` }
+}
+
+/**
+ * Run `work` with a credential that stays valid for the whole job.
+ *
+ * The headers object is mutated in place and shared by every stage, so a
+ * re-mint reaches calls already in flight down the pipeline. Belt and braces
+ * with the longer TTL: a run that somehow outlives even that keeps working.
+ */
+async function withFreshAuth<T>(userId: string, work: (headers: Record<string, string>) => Promise<T>): Promise<T> {
+  const headers = await buildJobRequestHeaders(userId)
+  const timer = setInterval(() => {
+    void buildJobRequestHeaders(userId)
+      .then(fresh => Object.assign(headers, fresh))
+      .catch(err => console.warn('[OA jobs] could not refresh the job credential:', err instanceof Error ? err.message : err))
+  }, JOB_TOKEN_REFRESH_MS)
+  try { return await work(headers) } finally { clearInterval(timer) }
 }
 
 async function setStep(jobId: string, step: string) {
@@ -101,14 +127,14 @@ export async function processOfficeActionJob(job: any, workerId: string, opts: P
       return counts
     }
     case 'PREPARE_REPLY': {
-      const payload = (job.payload || {}) as { tenantId?: string | null; objectionIds?: string[] }
-      const requestHeaders = await buildJobRequestHeaders(job.userId)
+      const payload = (job.payload || {}) as { tenantId?: string | null; objectionIds?: string[]; resume?: boolean }
       const { prepareReply } = await import('./office-action/reply-pipeline')
-      return withHeartbeat(job.id, workerId, () =>
+      return withFreshAuth(job.userId, requestHeaders => withHeartbeat(job.id, workerId, () =>
         prepareReply(job.caseId, {
           tenantId: payload.tenantId || undefined,
           userId: job.userId,
           requestHeaders,
+          resume: payload.resume === true,
           objectionIds: Array.isArray(payload.objectionIds) && payload.objectionIds.length ? payload.objectionIds : undefined,
           onProgress: (step) => setStep(job.id, step),
           // The attorney's pause is a flag on the row; the pipeline reads it at
@@ -119,7 +145,7 @@ export async function processOfficeActionJob(job: any, workerId: string, opts: P
             })
             return Boolean(row?.cancelRequested)
           }
-        }))
+        })))
     }
     default:
       throw new Error(`Unknown office action job type: ${job.jobType}`)

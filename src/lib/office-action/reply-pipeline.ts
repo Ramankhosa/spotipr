@@ -34,6 +34,12 @@ export interface PrepareOptions {
    * continue with the new document in play.
    */
   shouldStop?: () => Promise<boolean> | boolean
+  /**
+   * Continue the latest draft instead of opening a new version: keep every
+   * section that has text and redraft only the ones that are missing or failed.
+   * Set by the workspace's "Resume preparation" / "Retry failed sections".
+   */
+  resume?: boolean
 }
 
 export interface PrepareResult {
@@ -105,8 +111,14 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   // draft" the workspace renders, so a retry would blank the sections the
   // attorney could already see, and every retry would re-buy the LLM calls
   // behind the objections already drafted.
+  // Resume when a run was interrupted, or when the attorney explicitly asks to
+  // continue a finished draft that has failed sections — redrafting only the
+  // gaps costs one LLM call per gap instead of re-buying the whole reply.
   const last = await prisma.oaResponseDraft.findFirst({ where: { caseId }, orderBy: { version: 'desc' } })
-  const resumable = last && (last.sectionsJson as any)?.inProgress ? last : null
+  const lastSections = (last?.sectionsJson as any) || {}
+  const lastHasGaps = Array.isArray(lastSections.objectionReplies)
+    && lastSections.objectionReplies.some((r: any) => !(r?.bodyText || '').trim())
+  const resumable = last && (lastSections.inProgress || (opts.resume && lastHasGaps)) ? last : null
   const version = resumable ? resumable.version : (last?.version || 0) + 1
   const draft = resumable || await prisma.oaResponseDraft.create({
     data: {
@@ -120,8 +132,12 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   })
 
   const resumedSections = (resumable?.sectionsJson as any) || {}
+  // Carry over only the sections that actually have text. An empty/failed one is
+  // dropped here and re-drafted below, so a retry replaces it rather than
+  // leaving the old failure sitting next to the new section.
   const objectionReplies: DraftedObjectionReply[] = Array.isArray(resumedSections.objectionReplies)
-    ? [...resumedSections.objectionReplies] : []
+    ? resumedSections.objectionReplies.filter((r: any) => (r?.bodyText || '').trim())
+    : []
   const allAmendments: AmendedClaim[] = Array.isArray((resumable?.amendedClaimsJson as any)?.claims)
     ? [...(resumable!.amendedClaimsJson as any).claims] : []
   const judgmentFlags: PrepareResult['judgmentFlags'] = Array.isArray((resumable?.complianceJson as any)?.judgmentFlags)

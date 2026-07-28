@@ -293,8 +293,9 @@ export default function OfficeActionWorkspacePage() {
    * still working. Preparing again resumes that draft — the finished sections
    * are kept and only the missing objections are drafted.
    */
+  const failedSections = replies.filter(r => !(r.bodyText || '').trim()).length
   const preparationInterrupted = Boolean(
-    (view?.latestDraft?.sectionsJson as any)?.inProgress && !prepareActive
+    ((view?.latestDraft?.sectionsJson as any)?.inProgress || failedSections > 0) && !prepareActive
   )
 
   // ---------- actions ----------
@@ -459,7 +460,9 @@ export default function OfficeActionWorkspacePage() {
     setPrepareStep('Starting…')
     try {
       const res = await fetch(`/api/office-actions/${caseId}/prepare`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: '{}'
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        // Continuing keeps the finished sections and redrafts only the gaps.
+        body: JSON.stringify(preparationInterrupted ? { action: 'resume' } : {})
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Preparation failed')
@@ -595,6 +598,7 @@ export default function OfficeActionWorkspacePage() {
         prepareStep={prepareStep}
         hasDraft={Boolean(view.latestDraft)}
         interrupted={preparationInterrupted}
+        failedSections={failedSections}
         hasReport={hasReport}
       />
 
@@ -746,8 +750,10 @@ function DeadlineStrip(props: {
   onOpenCaseFile: () => void; onAddDocument: () => void; onPrepare: () => void; onPreview: () => void; onExport: () => void
   onPause: () => void; pausing: boolean
   busy: string | null; prepareStep: string | null; hasDraft: boolean; hasReport: boolean
-  /** A previous run stopped part-way: its draft is still flagged in progress. */
+  /** A previous run stopped part-way, or left sections undrafted. */
   interrupted: boolean
+  /** Sections with no text — failures the next run should redraft. */
+  failedSections: number
 }) {
   const { view } = props
   const primary = view.deadlines.find(d => d.consequence) || view.deadlines[0]
@@ -803,11 +809,14 @@ function DeadlineStrip(props: {
                 <Upload className="w-4 h-4 mr-1.5" aria-hidden /> Add document
               </Button>
               <Button size="sm" onClick={props.onPrepare} disabled={props.busy !== null}
-                title={props.interrupted ? 'A previous run stopped part-way — this continues it and keeps the sections already drafted' : undefined}>
+                title={props.interrupted ? 'Continues the current draft: the finished sections are kept, only the missing ones are drafted' : undefined}>
                 {props.busy === 'prepare'
                   ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> {props.prepareStep || 'Preparing…'}</>
                   : props.interrupted
-                    ? <><RefreshCw className="w-4 h-4 mr-1.5" aria-hidden /> Resume preparation</>
+                    ? <><RefreshCw className="w-4 h-4 mr-1.5" aria-hidden />
+                        {props.failedSections
+                          ? `Draft the ${props.failedSections} missing section${props.failedSections === 1 ? '' : 's'}`
+                          : 'Resume preparation'}</>
                     : <><Sparkles className="w-4 h-4 mr-1.5" aria-hidden /> {props.hasDraft ? 'Re-prepare reply' : 'Prepare reply'}</>}
               </Button>
               {props.busy === 'prepare' && (
