@@ -651,9 +651,11 @@ export default function OfficeActionWorkspacePage() {
                           ? <span className="text-muted-foreground font-medium">Dismissed — not in the reply</span>
                           : r?.approved
                             ? <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium"><CheckCircle2 className="w-3 h-3" aria-hidden /> Approved</span>
-                            : r
-                              ? <span className="text-primary font-medium">Drafted — review</span>
-                              : <span className="text-muted-foreground">Awaiting preparation</span>}
+                            : r?.attorneyAction
+                              ? <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-medium"><AlertTriangle className="w-3 h-3" aria-hidden /> You must file this</span>
+                              : r
+                                ? <span className="text-primary font-medium">Drafted — review</span>
+                                : <span className="text-muted-foreground">Awaiting preparation</span>}
                         {!o.quoteVerified && !dismissed && <span className="text-destructive font-medium">· quote unverified</span>}
                       </div>
                     </button>
@@ -1333,7 +1335,25 @@ function ObjectionWorkbench(props: {
                       <div>Drafting this section failed ({reply.draftError}). Write it with &ldquo;Edit&rdquo;, or run &ldquo;Re-prepare reply&rdquo;.</div>
                     </div>
                   )}
-                  <div className="border rounded-md px-4 py-3 bg-card font-serif text-[15px] leading-relaxed whitespace-pre-wrap">
+                  {reply.attorneyAction && (
+                    <div className="mb-2 rounded-md border border-amber-400 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 text-sm">
+                      <div className="font-medium flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" aria-hidden />
+                        You must complete this one — it is a filing, not an argument
+                      </div>
+                      <p className="text-muted-foreground mt-1">
+                        The reply carries the standard undertaking below. Do the acts listed, then approve the
+                        section. It stays highlighted in the preview and the exported DOCX until you clear it.
+                      </p>
+                      {Boolean(reply.actionItems?.length) && (
+                        <ul className="mt-2 space-y-1 list-disc pl-5">
+                          {reply.actionItems.map((a: string, i: number) => <li key={i}>{a}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                  <div className={`border rounded-md px-4 py-3 font-serif text-[15px] leading-relaxed whitespace-pre-wrap ${
+                    reply.attorneyAction ? 'bg-amber-100/70 dark:bg-amber-950/60 border-amber-400' : 'bg-card'}`}>
                     {/* Shown as it will be filed: internal ¶ anchors read as [0007]. */}
                     {formatParagraphRefs(reply.bodyText) || <span className="text-muted-foreground font-sans text-sm">Empty section.</span>}
                   </div>

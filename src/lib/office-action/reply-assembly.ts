@@ -32,6 +32,14 @@ export interface DraftedObjectionReply {
   bodyText: string            // the approved argument (may contain paragraphs)
   /** Set when the drafting LLM call failed — the section needs attorney text. */
   draftError?: string
+  /**
+   * A procedural requirement (Form 3, annexure, declaration, NBA approval): the
+   * body is a fixed undertaking, and the act itself is the attorney's. Rendered
+   * highlighted everywhere so it is completed before the reply is filed.
+   */
+  attorneyAction?: boolean
+  /** What the attorney must do. Shown to them; never filed as prose. */
+  actionItems?: string[]
   approved: boolean
   quoteVerified: boolean
 }

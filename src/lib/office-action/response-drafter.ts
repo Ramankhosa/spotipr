@@ -5,6 +5,7 @@ import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, rend
 import type { ClassifiedObjection } from './objection-classifier'
 import type { DraftedObjectionReply } from './reply-assembly'
 import { renderObjectionDoctrine } from './objection-doctrine'
+import { isProceduralObjection, buildProceduralReply } from './procedural-reply'
 
 /**
  * Office Action Studio — Draft stage
@@ -27,6 +28,27 @@ interface DraftCtx {
 
 /** Draft one objection's argument section, retrieving only the basis it needs. */
 export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedObjection): Promise<DraftedObjectionReply> {
+  // Procedural requirements are complied with, not argued. No LLM call: the
+  // model cannot file a Form 3 or attach an annexure, and asking it to write
+  // around that produces an assertion of compliance nobody has performed.
+  if (isProceduralObjection(ctx.profile, objection.canonicalCode)) {
+    const procedural = buildProceduralReply(ctx.profile, objection)
+    return {
+      objectionId: (objection as any).id || String(objection.sortOrder),
+      sortOrder: objection.sortOrder,
+      code: objection.canonicalCode,
+      officeNumber: objection.officeNumber,
+      title: titleOf(objection),
+      statuteBasis: objection.localBasis || undefined,
+      examinerConcern: shorten(objection.examinerText),
+      bodyText: procedural.bodyText,
+      attorneyAction: true,
+      actionItems: procedural.actionItems,
+      approved: false,
+      quoteVerified: objection.quoteVerified
+    }
+  }
+
   const query = `${objection.canonicalCode} ${objection.localBasis || ''} ${objection.examinerText}`.slice(0, 800)
   // Retrieve spec basis relevant to this objection (top-K, token-capped).
   const basis = await retrieveContext({

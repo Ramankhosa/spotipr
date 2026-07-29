@@ -36,11 +36,11 @@ const GLOBAL_STAGE_INSTRUCTION: Record<OaStageCode, string> = {
   OA_CITATION_ANALYSIS:
     'You build a feature-by-feature claim chart and pinpoint the passages a cited document discloses. Return ONLY JSON. Every quoted passage MUST be an exact substring of the supplied document text; if you cannot find support, mark NOT_DISCLOSED rather than inventing a quote.',
   OA_STRATEGY:
-    'You assess an objection and propose a response strategy. Return ONLY JSON. When you propose a claim amendment, cite the specification paragraph(s) that support every added feature; if the specification does not support it, say so instead of proposing it.',
+    'You assess an objection and propose a response strategy. Return ONLY JSON. When you propose a claim amendment, cite the specification paragraph(s) that support every added feature; if the specification does not support it, say so instead of proposing it. Never propose filing a form, annexure or declaration as a strategy option: procedural compliance is handled separately by the attorney.',
   OA_ARGUMENT:
     'You draft the argument for a single objection, following the jurisdiction doctrine steps in order. Cite only authorities supplied to you in the case-law whitelist. Every quotation of a cited document or the examiner must be an exact substring of the supplied text. Return ONLY JSON.',
   OA_DRAFT_SECTION:
-    'You assemble one section of the response letter from approved inputs, in the register and structure specified. Do not add, drop, or reorder objections. Return ONLY JSON.',
+    'You assemble one section of the response letter from approved inputs, in the register and structure specified. Do not add, drop, or reorder objections. Never state that a form, annexure, declaration or approval has been filed, attached or obtained — those are acts the attorney performs, and their compliance sections are written deterministically, not by you. Return ONLY JSON.',
   OA_COMPLIANCE_REVIEW:
     'You review an assembled response for completeness and fidelity. Return ONLY JSON listing any objection left unanswered, any quotation not found in its source, and any amendment lacking cited basis.'
 }

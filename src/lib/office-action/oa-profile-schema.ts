@@ -102,10 +102,18 @@ const objectionSchema = z.object({
   argumentSkeleton: z.string().optional(),
   guidance: z.string().optional(),
   actions: z.array(z.string()).optional(),         // procedural to-dos, e.g. "File updated Form 3"
+  /**
+   * Procedural objections only. The exact sentence filed in reply — these are
+   * complied with, not argued, so the wording is fixed by the office's practice
+   * rather than written by a model.
+   */
+  replySentence: z.string().optional(),
   subTypes: z.array(z.object({
     id: z.string().min(1),
     basis: z.string().optional(),
-    guidance: z.string().optional()
+    guidance: z.string().optional(),
+    /** Overrides the objection-level replySentence for this sub-clause. */
+    replySentence: z.string().optional()
   })).optional(),
   // The ONLY authorities the drafter may cite for this objection type.
   caseLawWhitelist: z.array(caseLawSchema).optional()

@@ -59,6 +59,10 @@ export function renderReplyHtml(assembled: AssembledReply, profile: OfficeAction
   .fer-doc .concern{font-style:italic;color:var(--muted);background:var(--para);border-left:2px solid var(--rule);
     padding:7px 12px;border-radius:3px;margin:6px 0 8px 26px}
   .fer-doc .subhead{font-weight:700;margin:10px 0 4px 26px}
+  /* Procedural undertakings — the attorney must complete and clear these. */
+  .fer-doc .attn p{background:#fff3a3;padding:2px 4px}
+  .fer-doc .attn-do{background:#fff3a3;border-left:3px solid #d4a017;padding:8px 10px;margin-top:8px;font-size:.92em}
+  .fer-doc .attn-do ul{margin:6px 0 0 18px}
   .fer-doc .claim{margin-left:26px;text-align:justify}
   .fer-doc .claim .cn{font-weight:700}
   .fer-doc ins{text-decoration:none;border-bottom:1.5px solid currentColor}
@@ -72,7 +76,7 @@ export function renderReplyHtml(assembled: AssembledReply, profile: OfficeAction
 function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
   switch (block.type) {
     case 'addressBlock':
-      return `<div class="addr">${block.lines.map(l => l.startsWith('Re:') ? `<span class="re">${esc(l)}</span>` : esc(l)).join('\n')}</div>`
+      return `<div class="addr">${block.lines.filter(Boolean).map(l => l.startsWith('Re:') ? `<span class="re">${esc(l)}</span>` : esc(l)).join('\n')}</div>`
     case 'subjectLine':
       return `<div class="subject">Subject: ${esc(block.text)}</div>`
     case 'salutation':
@@ -85,7 +89,14 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
       const n = nextNo()
       const items = block.objections.map((o, i) => {
         const concern = o.examinerConcern ? `<div class="concern">Examiner's objection: ${esc(o.examinerConcern)}</div><div class="subhead">Applicant’s submission:</div>` : ''
-        return `<div class="obj"><div class="oh"><span class="no">${n}.${i + 1}</span>Objection ${esc(objectionLabel(o))} — ${esc(o.title)}${o.statuteBasis ? ` (${esc(o.statuteBasis)})` : ''}</div></div>${concern}<div class="indent">${paras(o.bodyText)}</div>`
+        // Procedural undertakings are highlighted exactly as they export, so the
+        // print preview shows the attorney what still has to be done by hand.
+        const bodyHtml = o.attorneyAction
+          ? `<div class="attn">${paras(o.bodyText)}${(o.actionItems || []).length
+              ? `<div class="attn-do"><strong>Attorney action — remove before filing:</strong><ul>${(o.actionItems || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
+              : ''}</div>`
+          : paras(o.bodyText)
+        return `<div class="obj"><div class="oh"><span class="no">${n}.${i + 1}</span>Objection ${esc(objectionLabel(o))} — ${esc(o.title)}${o.statuteBasis ? ` (${esc(o.statuteBasis)})` : ''}</div></div>${concern}<div class="indent">${bodyHtml}</div>`
       }).join('')
       return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${items}`
     }

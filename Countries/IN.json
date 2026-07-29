@@ -688,6 +688,7 @@
       {
         "canonical": "PROCEDURAL_DISCLOSURE",
         "localLabel": "Statutory disclosure requirements (Section 8; biological source)",
+        "replySentence": "The Applicant notes this statutory disclosure requirement and submits that the same stands complied with, the necessary document(s) being filed along with this reply.",
         "legalBasis": ["Section 8", "Rule 12", "Section 10(4)(d)(ii)(D)", "Biological Diversity Act 2002, Section 6"],
         "responseType": "PROCEDURAL",
         "track": "FORMAL",
@@ -698,16 +699,19 @@
           {
             "id": "s8_foreign_filings",
             "basis": "Section 8, Rule 12",
+            "replySentence": "The Applicant submits that the requirement under Section 8 stands complied with. An updated Form 3, setting out the particulars and current status of the corresponding applications filed outside India, is filed along with this reply.",
             "guidance": "Particulars of corresponding applications filed outside India. Post-2024 Rules, Form 3 is due once at the request for examination and thereafter within 3 months of the FER or on the Controller's direction; delay is condonable on Form 4. Answer with a complete status table, not a bare assertion of compliance."
           },
           {
             "id": "biological_source",
             "basis": "Section 10(4)(d)(ii)(D), Rule 13(3)",
+            "replySentence": "The Applicant submits that the source and geographical origin of the biological material used in the invention are disclosed in the complete specification, and that the declaration in Form 1 is in accordance therewith.",
             "guidance": "Where the invention uses biological material, the specification must disclose its source and geographical origin, and the Form 1 declaration must match. Point to the paragraph that discloses it, or amend the specification to add the source — a factual particular, permitted as a correction under Sections 57/59."
           },
           {
             "id": "nba_approval",
             "basis": "Biological Diversity Act 2002, Section 6",
+            "replySentence": "The Applicant notes the requirement under Section 6 of the Biological Diversity Act, 2002. The Applicant undertakes to obtain the approval of the National Biodiversity Authority and to place the same on record before the grant of the patent.",
             "guidance": "Approval of the National Biodiversity Authority is required before grant (not before filing) where the invention is based on a biological resource obtained from India. State the application status honestly; an undertaking to file the approval before grant is the accepted response. This is a grant blocker — an unanswered NBA requirement stalls the application even when every substantive objection has been met."
           }
         ],
@@ -721,6 +725,7 @@
       {
         "canonical": "FORMALITIES",
         "localLabel": "Formal requirements",
+        "replySentence": "The Applicant submits that the formal requirement raised is complied with, the corresponding form(s)/document(s) being filed along with this reply.",
         "legalBasis": ["Patents Rules 2003"],
         "responseType": "PROCEDURAL",
         "track": "FORMAL",
@@ -784,7 +789,8 @@
         "opening": "With reference to the First Examination Report dated {dateOfReport} issued in respect of Application No. {applicationNumber}, the Applicant respectfully submits as follows.",
         "objectionHeading": "Re: Objection {number} — {label}",
         "prayer": "In view of the foregoing submissions and amendments, the Applicant respectfully submits that the application is in order for grant, and requests the Learned Controller to allow the application to proceed to grant.",
-        "hearingRequest": "Should any objection remain outstanding despite the foregoing, the Applicant respectfully requests an opportunity of being heard under Section 14 of the Act before any adverse decision is taken."
+        "hearingRequest": "Should any objection remain outstanding despite the foregoing, the Applicant respectfully requests an opportunity of being heard under Section 14 of the Act before any adverse decision is taken.",
+        "proceduralCompliance": "The Applicant notes this requirement and submits that the same stands complied with, the necessary document(s) being filed along with this reply."
       },
       "export": {
         "formats": ["docx", "pdf"],

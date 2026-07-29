@@ -125,7 +125,8 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
   const { children, fmt, body, numberedHeading, subNumbered } = ctx
   switch (block.type) {
     case 'addressBlock':
-      for (const line of block.lines) children.push(new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: line, bold: line.startsWith('Re:') })] }))
+      // A case without agent details yields empty lines; skip them rather than crash the export.
+      for (const line of block.lines.filter(Boolean)) children.push(new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: line, bold: line.startsWith('Re:') })] }))
       children.push(new Paragraph({ spacing: { after: 80 }, children: [] }))
       break
     case 'subjectLine':
@@ -148,7 +149,29 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
           children.push(body(`Examiner's objection: ${o.examinerConcern}`, { italics: true, indent: 480, after: 80 }))
           children.push(body('Applicant’s submission:', { bold: true, indent: 480, after: 40 }))
         }
-        for (const p of splitParas(o.bodyText)) children.push(body(p, { indent: 480 }))
+        // A procedural undertaking is filed highlighted: the attorney must
+        // confirm the filing actually happened, and clear the highlight, before
+        // this reply leaves the office.
+        for (const p of splitParas(o.bodyText)) {
+          children.push(o.attorneyAction
+            ? new Paragraph({
+                children: [new TextRun({ text: p, highlight: 'yellow' })],
+                indent: { left: 480 }, spacing: { after: 120 }
+              })
+            : body(p, { indent: 480 }))
+        }
+        if (o.attorneyAction && o.actionItems?.length) {
+          children.push(new Paragraph({
+            children: [new TextRun({ text: 'ATTORNEY ACTION — remove before filing:', bold: true, highlight: 'yellow' })],
+            indent: { left: 480 }, spacing: { before: 80, after: 40 }
+          }))
+          for (const item of o.actionItems) {
+            children.push(new Paragraph({
+              children: [new TextRun({ text: `• ${item}`, highlight: 'yellow' })],
+              indent: { left: 720 }, spacing: { after: 40 }
+            }))
+          }
+        }
       }
       break
     }

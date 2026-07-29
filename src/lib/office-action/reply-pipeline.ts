@@ -5,6 +5,7 @@ import { buildInventionDigest, digestFromSpotiprDraft, type InventionDigest } fr
 import { buildClaimChart, persistClaimChart, type CitationText } from './claim-chart-service'
 import { buildObjectionStrategy, usableAmendments, type ObjectionStrategy } from './strategy-service'
 import { draftObjectionReply, draftNamedSection } from './response-drafter'
+import { isProceduralObjection } from './procedural-reply'
 import type { ClassifiedObjection } from './objection-classifier'
 import type { OaGateway } from './oa-llm-service'
 import type { DraftedObjectionReply, AmendedClaim } from './reply-assembly'
@@ -193,9 +194,14 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
         claimsAffected: (row.claimsAffected as any) || [], citationLabels: (row.citationLabels as any) || []
       }
 
+      // A procedural requirement takes neither a chart nor a strategy — there is
+      // nothing to distinguish and nothing to amend, only something to file.
+      // Skipping both saves two paid calls per formal objection.
+      const procedural = isProceduralObjection(profile, objection.canonicalCode)
+
       // ---- claim chart (only for citation-driven objections) ----
       let chart
-      const usesCitations = (objection.citationLabels || []).length > 0 && citationTexts.length > 0
+      const usesCitations = !procedural && (objection.citationLabels || []).length > 0 && citationTexts.length > 0
       if (usesCitations && oaCase.claimsText) {
         const relevant = citationTexts.filter(c => objection.citationLabels!.includes(c.label))
         const built = await buildClaimChart(profile, {
@@ -210,7 +216,9 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
       }
 
       // ---- strategy (+ deterministic s.59 basis guard) ----
-      const strat = await buildObjectionStrategy(ctxBase as any, objection, chart)
+      const strat = procedural
+        ? { success: true, strategy: undefined as ObjectionStrategy | undefined }
+        : await buildObjectionStrategy(ctxBase as any, objection, chart)
       const strategy: ObjectionStrategy | undefined = strat.strategy
       if (strategy) {
         await prisma.oaObjection.update({
