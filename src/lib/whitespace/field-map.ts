@@ -53,14 +53,31 @@ export const PUBLICATION_LAG_MONTHS = 18
 /**
  * Corpora whose rows the text lanes can read. Each entry has a partial FTS GIN
  * index over SEARCH_TSVECTOR with `"corpusSources" @> ARRAY['<tag>']` as its
- * predicate (migrations 20260619170000, 20260719120000 and 20260729190000),
- * which is why the text predicate below is written as an OR of per-corpus
- * arms: each arm is provable against its own partial index. 'pqai' rows are
- * deliberately not counted — that source is deprecated and its rows would skew
- * the census. European publications mostly arrive via the Google corpus; the
- * 'epo-ops' arm additionally covers documents fetched directly from the EPO.
+ * predicate (migrations 20260619170000 and 20260719120000), which is why the
+ * text predicate below is written as an OR of per-corpus arms: each arm is
+ * provable against its own partial index.
+ *
+ * Three sources are deliberately absent:
+ *   - 'pqai' is deprecated; its rows would skew the census.
+ *   - 'epo-ops' is an opportunistic cache of live EPO OPS API results, written
+ *     as a side effect of other users' searches. Counting it would make the
+ *     census irreproducible — the slice grows without anyone changing a scope.
+ *   - 'epo-docdb' / 'epo-ep-fulltext' are the BULK EPO import's created rows.
+ *     Neither loader writes "filingDate" (src/lib/epo-bdds/loader.ts, both
+ *     INSERT column lists), and this census is filing-year based, so its very
+ *     first predicate — filingDate IS NOT NULL — excludes every one of them.
+ *     An arm and an index for them would match exactly nothing. If filingDate
+ *     is ever backfilled for those rows, add the tags here AND build matching
+ *     partial FTS indexes; until then this is dead weight on a 46M-row table.
+ *
+ * European coverage therefore comes from EP/WO publications inside the Google
+ * corpus, which are bulk-loaded WITH filing dates. The EPO import's real
+ * contribution to this study is claim text NULL-filled onto existing Google and
+ * Indian rows — those keep their original tags, so they are already counted
+ * here, and the gained claims raise textCoverage.withClaims, which is the
+ * number gate G1 reads.
  */
-const TEXT_CORPORA = ['google-patents-corpus', 'indian-corpus', 'epo-ops'] as const
+const TEXT_CORPORA = ['google-patents-corpus', 'indian-corpus'] as const
 
 /**
  * The search document. MUST stay byte-identical to the expression of the
@@ -634,7 +651,7 @@ export async function runFieldMap(
   coverageNotes.push(`Corpus covers ${CORPUS_FIRST_YEAR}-present. No art before ${CORPUS_FIRST_YEAR} was searched.`)
   if (conceptQuery) {
     coverageNotes.push(
-      'Concept matching reads the Google Patents, Indian and EPO-fetched corpora; rows from other ingestion sources are not text-searchable and are not counted.'
+      'Concept matching reads the Google Patents and Indian corpora, which include European (EP/WO) publications. Publications added by the EPO bulk import carry no filing date and are not counted in this filing-year census; that import contributes claim text to families already counted, which is reflected in the claims-readable figure.'
     )
     const optionalCount = scope.concepts.filter(c => !c.required && c.label.trim()).length
     if (scope.concepts.some(c => c.required && c.label.trim()) && optionalCount > 0) {
