@@ -63,8 +63,13 @@ export function extractRawPlantUmlFacts(code: string, components: PatentDiagramC
         }
         seenReferences.add(referenceLabel)
         const normalized = normalizedReference(referenceLabel)
+        // An S###/D### label passes only when the figure's own semantic model
+        // already carries that identifier. The previous `!size ||` shortcut gave
+        // every S/D label a blanket exemption from the Component Planner check
+        // whenever no allow-list was supplied, which is exactly how invented
+        // step numbers reached a filed drawing.
         const processIdentifierAllowed = /^[SD]\d+$/i.test(referenceLabel)
-          && (!allowedProcessIdentifiers?.size || allowedProcessIdentifiers.has(normalized))
+          && !!allowedProcessIdentifiers?.has(normalized)
         if (!byReference.has(normalized) && !processIdentifierAllowed) {
           issues.push({ code: 'UNKNOWN_REFERENCE', severity: 'error', message: `Reference ${referenceLabel} is not in the Component Planner`, path: `line ${index + 1}` })
         }

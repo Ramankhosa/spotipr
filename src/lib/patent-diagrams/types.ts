@@ -46,6 +46,13 @@ export const figureSetPlanItemSchema = z.object({
   claimCriticalComponentIds: z.array(idText).default([]),
   orderedGroups: z.array(orderedGroupSchema).default([]),
   phaseHints: z.array(shortText).default([]),
+  // Which disclosed operations a PROCESS figure intends to depict. The detailer
+  // is required to cite an evidence ID for every step it draws, but planning
+  // used to run without ever seeing the catalog — so a figure could be planned
+  // around steps that are not disclosed anywhere, leaving the detailer to choose
+  // between an empty figure and an invented one. Naming them at plan time makes
+  // that contract checkable before anything is drawn.
+  evidenceIds: z.array(idText).default([]),
 })
 
 export const figureSetPlanSchema = z.object({
@@ -173,6 +180,13 @@ export interface PatentDiagramComponent {
   description?: string | null
   referenceLabel: string
   parentId?: string | null
+  // Which claims this component was matched to upstream (Stage 0 component/scope
+  // matching). Absent when that matching has not run — treat absence as unknown,
+  // never as "not claim-critical", and never require it before drawing figures.
+  claimSupport?: {
+    matchedClaims: number[]
+    claimRole?: 'claim_1' | 'dependent_claim' | null
+  } | null
 }
 
 export type DiagramIssueSeverity = 'error' | 'warning' | 'info'

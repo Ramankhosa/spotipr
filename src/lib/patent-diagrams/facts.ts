@@ -34,7 +34,11 @@ export function summarizePatentDiagram(diagram: PatentDiagram): string {
     return `${diagram.purpose} Ordered interactions: ${[...diagram.interactions].sort((a, b) => a.order - b.order).map(item => `${item.fromId} ${item.label} ${item.toId}`).join('; ')}.`
   }
   if (diagram.kind === 'PROCESS') {
-    return `${diagram.purpose} Ordered process: ${diagram.nodes.map(node => `${node.identifier || node.key}: ${node.label}`).join('; ')}.`
+    // Only a real reference sign is passed downstream. This used to fall back to
+    // the node's internal key ("stable-step-key"), which put a token that means
+    // nothing to a reader — and matches no component — into the drafted text.
+    return `${diagram.purpose} Ordered process: ${diagram.nodes.map(node =>
+      node.identifier ? `${node.identifier}: ${node.label}` : node.label).join('; ')}.`
   }
   return `${diagram.purpose} Constituents: ${diagram.constituents.map(item => `${item.componentId}${item.technicalRole ? ` (${item.technicalRole})` : ''}`).join('; ')}.`
 }

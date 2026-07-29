@@ -141,6 +141,8 @@ import {
 } from '@/lib/figure-availability'
 import {
   addManagedFigures,
+  evaluateFigureSetClaimCoverage,
+  extractReferenceMapComponents,
   generateManagedFigureSet,
   PatentDiagramPipelineError,
   planManagedFigureSet,
@@ -8005,7 +8007,22 @@ async function handlePlanFiguresManaged(user: any, patentId: string, data: any, 
   if (!data.sessionId) return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
   try {
     const plan = await planManagedFigureSet(managedPipelineInput(user, patentId, data, requestHeaders))
-    return NextResponse.json({ success: true, plan: compatiblePlan(plan), message: `Planned ${plan.figures.length} managed diagrams` })
+    // Coverage rides along with the plan so the attorney reviewing it can see a
+    // claimed component nothing depicts, and add a figure before approving.
+    // Reported only — never a reason to refuse the plan.
+    const session = await prisma.draftingSession.findFirst({
+      where: { id: String(data.sessionId), patent: { id: patentId, project: { userId: user.id } } },
+      include: { referenceMap: true },
+    })
+    const coverage = session
+      ? evaluateFigureSetClaimCoverage(plan, extractReferenceMapComponents(session.referenceMap))
+      : { missing: [], evaluated: false }
+    return NextResponse.json({
+      success: true,
+      plan: compatiblePlan(plan),
+      coverage,
+      message: `Planned ${plan.figures.length} managed diagrams`,
+    })
   } catch (error) {
     return patentDiagramPipelineError(error)
   }

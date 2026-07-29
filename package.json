@@ -52,7 +52,9 @@
     "patent-api:smoke": "tsx scripts/smoke-patent-api.ts",
     "patent-api:smoke-mcp": "tsx scripts/smoke-patent-api-mcp.ts",
     "test": "vitest run",
-    "migrate:check": "node scripts/check-migration-safety.mjs"
+    "migrate:check": "node scripts/check-migration-safety.mjs",
+    "oa:test:anchors": "tsx scripts/test-office-action-anchors.ts",
+    "oa:backfill-numbering": "tsx scripts/backfill-oa-paragraph-numbering.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

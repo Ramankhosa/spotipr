@@ -1,4 +1,7 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
+import type { ParagraphNumbering, Paragraph, SectionSpan } from './document-intake'
+import { resolveBasisRefs, sectionKeyForParagraph } from './document-intake'
+import type { ProceduralComplianceState } from './oa-json-schema'
 
 /**
  * Office Action Studio — reply assembly (deterministic)
@@ -18,6 +21,11 @@ export interface CaseMeta {
   reportDate?: string         // ISO
   agentName?: string
   agentRegNo?: string
+  /**
+   * How the as-filed specification is numbered. Both renderers read this to
+   * decide whether a paragraph anchor may be rendered as a filing citation.
+   */
+  numbering: ParagraphNumbering
 }
 
 export interface DraftedObjectionReply {
@@ -34,12 +42,20 @@ export interface DraftedObjectionReply {
   draftError?: string
   /**
    * A procedural requirement (Form 3, annexure, declaration, NBA approval): the
-   * body is a fixed undertaking, and the act itself is the attorney's. Rendered
-   * highlighted everywhere so it is completed before the reply is filed.
+   * act is the attorney's, not an argument. The section has no body until they
+   * confirm the act, and the lint blocks export until then — so the filing can
+   * never contain a statement of compliance nobody performed.
    */
   attorneyAction?: boolean
   /** What the attorney must do. Shown to them; never filed as prose. */
   actionItems?: string[]
+  /** The filed sentence asserts a document accompanies the reply. */
+  requiresSupportingDocument?: boolean
+  /**
+   * Whether the attorney has confirmed the act. Until CONFIRMED there is no
+   * bodyText at all — see procedural-reply.
+   */
+  compliance?: ProceduralComplianceState
   approved: boolean
   quoteVerified: boolean
 }
@@ -70,7 +86,13 @@ export type ReplyBlock =
   | { type: 'salutation'; text: string }
   | { type: 'namedSection'; key: string; title: string; body: string }
   | { type: 'objections'; title: string; objections: DraftedObjectionReply[] }
-  | { type: 'amendments'; title: string; marked: AmendedClaim[]; clean: AmendedClaim[]; basisRefs: string[] }
+  /**
+   * `basisSentence` is built here, deterministically, and is the ONLY thing the
+   * renderers print. They used to join `basisRefs` straight into the letter,
+   * which put a raw internal anchor — "find support … at ¶0004" — into the
+   * filed document.
+   */
+  | { type: 'amendments'; title: string; marked: AmendedClaim[]; clean: AmendedClaim[]; basisRefs: string[]; basisSentence: string }
   | { type: 'signatureBlock'; lines: string[] }
 
 export interface AssembledReply {
@@ -89,6 +111,61 @@ export interface AssembleInput {
   /** Drafted non-objection sections keyed by skeleton id (preliminarySubmissions, conclusionAndPrayer…). */
   namedSections: Record<string, string>
   amendedClaims: AmendedClaim[]
+  /** As-filed paragraphs — resolves basis refs so the sentence can name real locations. */
+  specParagraphs?: Paragraph[]
+  specSections?: SectionSpan[]
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  field: 'the Field of the Invention',
+  background: 'the Background',
+  objects: 'the Objects of the Invention',
+  summary: 'the Summary of the Invention',
+  detailedDescription: 'the Detailed Description',
+  briefDescriptionOfDrawings: 'the Brief Description of the Drawings',
+  preamble: 'the specification as filed'
+}
+
+/**
+ * The sentence that states where an amendment finds support.
+ *
+ * Authored numbering cites the document's own paragraph numbers. Derived
+ * numbering has none to cite, so it names sections (and pages, where the source
+ * had them) instead — an honest location the attorney can verify, rather than a
+ * number that would look right and be wrong.
+ */
+export function buildBasisSentence(
+  amendedClaims: AmendedClaim[],
+  numbering: ParagraphNumbering,
+  paragraphs?: Paragraph[],
+  sections?: SectionSpan[]
+): string {
+  const refs = uniq(amendedClaims.flatMap(c => c.basisRefs || []))
+  if (!refs.length) return ''
+
+  const tail = ', and fall wholly within the scope of the claims as originally filed (Section 59).'
+
+  if (numbering === 'AUTHORED') {
+    const cited = refs
+      .map(r => (r.match(/(\d{1,6})/) || [])[1])
+      .filter(Boolean)
+      .map(d => `[${String(d).padStart(4, '0')}]`)
+    if (!cited.length) return ''
+    return `The foregoing amendments find support in the specification as filed at ${uniq(cited).join(', ')}${tail}`
+  }
+
+  // Derived: name locations, never numbers.
+  const where: string[] = []
+  if (paragraphs?.length && sections?.length) {
+    const { resolved } = resolveBasisRefs(refs, paragraphs)
+    const keys = uniq(resolved.map(p => sectionKeyForParagraph(p, paragraphs, sections) || '').filter(Boolean))
+    for (const k of keys) where.push(SECTION_LABELS[k] || `the ${k} section`)
+    const pages = uniq(resolved.map(p => (p.pageNumber ? String(p.pageNumber) : '')).filter(Boolean))
+    if (pages.length) where.push(pages.length === 1 ? `page ${pages[0]}` : `pages ${pages.join(', ')}`)
+  }
+
+  const location = where.length ? ` (see ${where.join(' and ')})` : ''
+  return `The foregoing amendments find support in the specification as filed${location}${tail}`
 }
 
 function fill(tpl: string | undefined, vars: Record<string, string>): string {
@@ -133,8 +210,12 @@ export function assembleReply(input: AssembleInput): AssembledReply {
       case 'amendedClaimsMarked':
         // Collapse both claim slots into one "Amendments" block on first encounter.
         if (!blocks.some(b => b.type === 'amendments') && (marked.length || clean.length)) {
-          blocks.push({ type: 'amendments', title: titleFor(profile, 'amendments', 'Amendments to the Claims'),
-            marked, clean, basisRefs: uniq(input.amendedClaims.flatMap(c => c.basisRefs || [])) })
+          blocks.push({
+            type: 'amendments', title: titleFor(profile, 'amendments', 'Amendments to the Claims'),
+            marked, clean,
+            basisRefs: uniq(input.amendedClaims.flatMap(c => c.basisRefs || [])),
+            basisSentence: buildBasisSentence(input.amendedClaims, meta.numbering, input.specParagraphs, input.specSections)
+          })
         }
         break
       case 'amendedClaimsClean':

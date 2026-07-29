@@ -26,11 +26,28 @@ interface DraftCtx {
   gateway?: OaGateway
 }
 
+export interface RedraftInput {
+  /** What the attorney wants changed, in their own words. */
+  remarks: string
+  /** The section they are reacting to — the model revises it rather than starting blind. */
+  previousText?: string
+}
+
 /** Draft one objection's argument section, retrieving only the basis it needs. */
-export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedObjection): Promise<DraftedObjectionReply> {
+export async function draftObjectionReply(
+  ctx: DraftCtx,
+  objection: ClassifiedObjection,
+  redraft?: RedraftInput
+): Promise<DraftedObjectionReply> {
   // Procedural requirements are complied with, not argued. No LLM call: the
   // model cannot file a Form 3 or attach an annexure, and asking it to write
   // around that produces an assertion of compliance nobody has performed.
+  //
+  // The section is created with NO body. The profile's sentence asserts a
+  // completed act ("An updated Form 3 … is filed along with this reply"), so
+  // writing it down before the attorney has done anything would leave a
+  // misrepresentation sitting in the draft with only a gate between it and the
+  // Controller. It is generated on confirmation instead.
   if (isProceduralObjection(ctx.profile, objection.canonicalCode)) {
     const procedural = buildProceduralReply(ctx.profile, objection)
     return {
@@ -41,12 +58,14 @@ export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedOb
       title: titleOf(objection),
       statuteBasis: objection.localBasis || undefined,
       examinerConcern: shorten(objection.examinerText),
-      bodyText: procedural.bodyText,
+      bodyText: '',
       attorneyAction: true,
       actionItems: procedural.actionItems,
+      requiresSupportingDocument: procedural.requiresSupportingDocument,
+      compliance: { status: 'PENDING' },
       approved: false,
       quoteVerified: objection.quoteVerified
-    }
+    } as DraftedObjectionReply
   }
 
   const query = `${objection.canonicalCode} ${objection.localBasis || ''} ${objection.examinerText}`.slice(0, 800)
@@ -75,6 +94,15 @@ export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedOb
     basis.length ? `\nRelevant specification basis (cite these paragraphs as [0007], dropping the ¶):\n${renderContextBlock(basis)}` : '',
     (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',
     `\nObjection (${objection.canonicalCode}, ${objection.localBasis || ''}):\n"${objection.examinerText}"`,
+    // A redraft is a revision, not a fresh attempt: the attorney is reacting to
+    // specific words, so the model must see them and be told the direction is
+    // binding. Their instruction comes last, closest to the task.
+    redraft?.previousText
+      ? `\nThe section currently reads:\n"""\n${redraft.previousText}\n"""`
+      : '',
+    redraft?.remarks
+      ? `\nThe attorney has reviewed that draft and directs the following change. Follow it exactly, keep everything else that already works, and stay within the evidence and authorities supplied above — if the direction cannot be carried out on this record, say so plainly in the section instead of inventing support:\n"""\n${redraft.remarks}\n"""`
+      : '',
     `\nDraft the objection-wise reply for this single objection following the jurisdiction doctrine. Return JSON { heading, bodyText }. Cite specification support as paragraph numbers in square brackets, e.g. "paragraph [0007]" or "[0021]–[0022]" — never write the ¶ character. Do not fabricate quotes or authorities.`
   ].filter(Boolean).join('\n')
 

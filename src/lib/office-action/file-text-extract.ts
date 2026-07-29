@@ -115,13 +115,20 @@ async function docxTextFromZip(buf: Buffer): Promise<string> {
     if (!entry) return ''
     const xml: string = zip.readAsText(entry)
     return xml
-      .replace(/<\/w:p>/g, '</w:p>\n')            // keep paragraph breaks
+      // A BLANK line between paragraphs, not a single newline. With one newline
+      // the downstream splitter (which needs /\n\s*\n+/) never matches, so an
+      // entire specification collapsed into a single paragraph — which in turn
+      // made the amendment-basis word-overlap check vacuous, because every word
+      // in the document was "in" the one giant basis paragraph.
+      .replace(/<\/w:p>/g, '</w:p>\n\n')
+      .replace(/<w:p\s*\/>/g, '\n\n')             // empty self-closing paragraph
       .replace(/<w:tab\/>/g, '\t')
       .replace(/<w:br\/>/g, '\n')
       .replace(/<[^>]+>/g, '')
       .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
       .replace(/&amp;/g, '&')                     // last: an escaped &amp;lt; must not become <
+      .replace(/\n{3,}/g, '\n\n')
   } catch {
     return ''
   }

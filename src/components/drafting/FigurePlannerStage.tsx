@@ -422,6 +422,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [planningSeconds, setPlanningSeconds] = useState(0)
   const [planError, setPlanError] = useState<string | null>(null)
   const [planDirty, setPlanDirty] = useState(false)
+  // Claim-named components that no planned figure depicts. Shown for judgement,
+  // not as a blocker — the attorney may well have a reason to leave one out.
+  const [planCoverageGaps, setPlanCoverageGaps] = useState<
+    Array<{ id: string; name: string; referenceLabel: string; matchedClaims: number[] }>
+  >([])
   const planningMessageIndex = Math.min(
     Math.floor(planningSeconds / 5),
     FIGURE_PLANNING_MESSAGES.length - 1
@@ -1784,6 +1789,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         componentIds: figure.componentIds,
         claimCriticalComponentIds: figure.claimCriticalComponentIds
       })))
+      setPlanCoverageGaps(Array.isArray(res.coverage?.missing) ? res.coverage.missing : [])
       setPlanDirty(false)
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Planning failed'
@@ -1869,6 +1875,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       // the figures themselves become the subject of the page.
       setPlanFigures(null)
       setPlanDirty(false)
+      setPlanCoverageGaps([])
       setFigures([])
       await onRefresh()
     } catch (e) {
@@ -1948,11 +1955,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       }
       setGenerationWarning(formatDiagramGenerationWarnings(res))
 
-      // Log the plan result
+      // `res.plan.rationale` used to be logged here, but the planner's schema has
+      // no rationale field, so the line only ever printed `undefined`.
       console.log('[FigurePlanner] Generated', res.figures?.length, 'figures from plan')
-      if (res.plan) {
-        console.log('[FigurePlanner] Plan rationale:', res.plan.rationale)
-      }
 
       // Update sketch suggestions from the planning stage (if any)
       if (res.sketchSuggestions && Array.isArray(res.sketchSuggestions) && res.sketchSuggestions.length > 0) {
@@ -2845,6 +2850,35 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 </div>
               )}
 
+              {/* An actionable gap the attorney can fix before drawing, not a
+                  quality warning about the AI's own output. */}
+              {planCoverageGaps.length > 0 && (
+                <div className="px-5 pt-4">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                    <p className="text-sm font-medium text-amber-900">
+                      {planCoverageGaps.length === 1 ? 'One part named by your claims is not' : `${planCoverageGaps.length} parts named by your claims are not`} in any planned figure
+                    </p>
+                    <ul className="mt-2 space-y-1 text-sm text-amber-800">
+                      {planCoverageGaps.slice(0, 6).map(gap => (
+                        <li key={gap.id}>
+                          <span className="font-medium">{gap.name}</span>
+                          {gap.referenceLabel ? ` (${gap.referenceLabel})` : ''}
+                          {gap.matchedClaims.length > 0
+                            ? ` — claim${gap.matchedClaims.length === 1 ? '' : 's'} ${gap.matchedClaims.join(', ')}`
+                            : ''}
+                        </li>
+                      ))}
+                      {planCoverageGaps.length > 6 && (
+                        <li className="text-amber-700">…and {planCoverageGaps.length - 6} more</li>
+                      )}
+                    </ul>
+                    <p className="mt-2 text-xs text-amber-700">
+                      Add it to a figure&rsquo;s description below, or plan again. You can also approve as-is if the drawings don&rsquo;t need it.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <ul className="divide-y divide-paper-200">
                 {planFigures.map((figure, index) => (
                   <li key={figure.key} className="p-4 sm:p-5">
@@ -2946,7 +2980,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 </Button>
                 <Button
                   variant="ghost"
-                  onClick={() => { setPlanFigures(null); setPlanDirty(false) }}
+                  onClick={() => { setPlanFigures(null); setPlanDirty(false); setPlanCoverageGaps([]) }}
                   disabled={isGenerating}
                   className="w-full sm:w-auto"
                 >

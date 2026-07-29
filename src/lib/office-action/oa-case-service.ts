@@ -357,11 +357,30 @@ export async function getCaseView(caseId: string) {
     orderBy: { version: 'desc' }
   })
 
+  // How the as-filed specification is numbered, and whether it survived
+  // extraction. Surfaced to the attorney rather than left in a JSON field:
+  // a mis-read is the one failure no downstream check can catch, because the
+  // citation resolves in our own table and the lint passes. A human spots it
+  // in one glance.
+  const { analyzeParagraphMarkers, splitParagraphs, assessStructureUsable } = await import('./document-intake')
+  const specText = oaCase.specificationText || ''
+  const markerAnalysis = analyzeParagraphMarkers(specText)
+  const specParagraphs = splitParagraphs(specText, markerAnalysis)
+
   return {
     case: { ...oaCase, documents },
     deadlines: allDeadlines,
     mostUrgent: mostUrgentDeadline(allDeadlines),
     citedDocuments,
-    latestDraft
+    latestDraft,
+    numbering: {
+      mode: markerAnalysis.mode,
+      confidence: markerAnalysis.confidence,
+      reasons: markerAnalysis.reasons,
+      firstMarker: markerAnalysis.firstMarker,
+      lastMarker: markerAnalysis.lastMarker,
+      paragraphCount: specParagraphs.length,
+      structureUsable: specText ? assessStructureUsable(specText, specParagraphs) : true
+    }
   }
 }

@@ -45,6 +45,24 @@ export class PatentDiagramPipelineError extends Error {
   }
 }
 
+// Stage 0 stores richer claim-support metadata than figure planning needs; only
+// the two fields that decide coverage are carried through. Anything unparseable
+// becomes null, which downstream code reads as "unknown", not "not claimed".
+function normalizeComponentClaimSupport(value: any): PatentDiagramComponent['claimSupport'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const matchedClaims: number[] = Array.isArray(value.matchedClaims)
+    ? Array.from(new Set<number>(value.matchedClaims
+        .map((claim: unknown) => Number(claim))
+        .filter((claim: number) => Number.isInteger(claim) && claim > 0)))
+      .sort((a, b) => a - b)
+    : []
+  const claimRole = value.claimRole === 'claim_1' || value.claimRole === 'dependent_claim'
+    ? value.claimRole
+    : null
+  if (!matchedClaims.length && !claimRole) return null
+  return { matchedClaims, claimRole }
+}
+
 export function extractReferenceMapComponents(referenceMap: any): PatentDiagramComponent[] {
   const stored = referenceMap?.components
   const rows = Array.isArray(stored)
@@ -64,6 +82,10 @@ export function extractReferenceMapComponents(referenceMap: any): PatentDiagramC
       referenceLabel: String(component?.referenceLabel || component?.numeral || component?.range || index + 1),
       parentId: component?.parentId ? String(component.parentId) : component?.parent?.id ? String(component.parent.id) : null,
       parentName: typeof component?.parent === 'string' ? component.parent.trim() : null,
+      // Stage 0 already works out which components the claims name; this
+      // extraction used to drop that, so figure planning had no idea which
+      // components the claims actually depend on.
+      claimSupport: normalizeComponentClaimSupport(component?.claimSupport),
     }]
   })
   const idByName = new Map(candidates.map(component => [component.name.toLowerCase(), component.id]))
@@ -202,6 +224,42 @@ export interface PatentDiagramPipelineInput {
   instructions?: string
 }
 
+export interface FigureSetPlanCoverage {
+  /** Claim-named components that no planned figure depicts. */
+  missing: Array<{ id: string; name: string; referenceLabel: string; matchedClaims: number[] }>
+  /** False when Stage 0 claim matching has not run, so coverage is unknown. */
+  evaluated: boolean
+}
+
+// Coverage is reported, never enforced. Validation already checks that each
+// figure delivers the claim-critical components it declared, but nothing checked
+// the set as a whole — a claimed component the planner simply never mentioned
+// was invisible. This closes that, as information for the attorney approving the
+// plan rather than as a gate: claim matching is optional upstream, so a hard
+// failure here would block figures for anyone who has not run it.
+export function evaluateFigureSetClaimCoverage(
+  plan: FigureSetPlan,
+  components: PatentDiagramComponent[],
+): FigureSetPlanCoverage {
+  const claimed = components.filter(component => (component.claimSupport?.matchedClaims?.length || 0) > 0)
+  if (!claimed.length) return { missing: [], evaluated: false }
+  const depicted = new Set(plan.figures.flatMap(figure => [
+    ...figure.componentIds,
+    ...figure.orderedGroups.flatMap(group => group.componentIds),
+  ]))
+  return {
+    evaluated: true,
+    missing: claimed
+      .filter(component => !depicted.has(component.id))
+      .map(component => ({
+        id: component.id,
+        name: component.name,
+        referenceLabel: component.referenceLabel,
+        matchedClaims: component.claimSupport?.matchedClaims || [],
+      })),
+  }
+}
+
 export async function planManagedFigureSet(input: PatentDiagramPipelineInput): Promise<FigureSetPlan> {
   const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const prompt = buildFigureSetPlanningPrompt({
@@ -210,6 +268,7 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
     inventionContext: context.idea,
     claimsContext: context.claims,
     components: context.components,
+    evidenceCatalog: context.evidenceCatalog,
     figureCount: input.figureCount,
     instructions: input.instructions,
   })
@@ -223,6 +282,15 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
       code: z.ZodIssueCode.custom,
       message: `Unknown Component Planner ID: ${id}`,
     }))
+    // A planned step ID the catalog does not contain is the plan-time form of an
+    // invented step: the detailer would be told to cite something that does not
+    // exist. Rejecting it here costs one re-ask instead of a wasted render.
+    value.figures.flatMap(figure => figure.evidenceIds)
+      .filter(id => !context.supportedEvidenceIds.has(id))
+      .forEach(id => ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Unknown disclosed-step ID: ${id}`,
+      }))
   })
   const plan = await executeStructured({
     userHeaders: input.requestHeaders,
@@ -774,6 +842,9 @@ export async function regenerateManagedFigure(input: PatentDiagramPipelineInput 
       ? previous.groups.map(group => ({ id: group.id, label: group.label, componentIds: group.rows.flatMap(row => row.componentIds) }))
       : [],
     phaseHints: [],
+    // A regeneration keeps the disclosed operations the figure already cites, so
+    // redrawing it cannot quietly widen its factual basis.
+    evidenceIds: previous?.evidenceIds || [],
   }
   const diagram = await detailManagedFigure({ plan, context, pipeline: input, existingDiagram: previous })
   const decomposed = decomposeForResolvedPolicy(diagram, context.pagePolicy)

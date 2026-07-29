@@ -44,6 +44,26 @@ export interface AttorneyPatentView {
   examinerRelevance?: string     // the examiner's pinpoint (from the FER table)
   status: 'available' | 'awaiting-upload' | 'pending'
   sourceLabel: string            // neutral, e.g. "Full patent specification" — NEVER a provider name
+  /**
+   * Public page for the document itself, when one can be derived from what the
+   * report gave us: the patent register entry, or the DOI for a paper. Purely a
+   * convenience link for the attorney — it is never a retrieval route, and its
+   * absence says nothing about whether the text is on file.
+   */
+  externalUrl?: string
+}
+
+/** DOIs appear inline in the NPL citation the examiner typed, e.g. "doi: 10.3389/fpls.2019.01812". */
+const DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>,;)\]]+)/i
+
+function externalUrlFor(kind: string, docNumber?: string | null, publicationNumber?: string | null): string | undefined {
+  const patentNo = (kind === 'NPL' ? publicationNumber : (docNumber || publicationNumber)) || ''
+  if (kind !== 'NPL' && /[A-Z]{2}\s?\d{4,}/i.test(patentNo)) {
+    return `https://patents.google.com/patent/${encodeURIComponent(patentNo.toUpperCase().replace(/\s+/g, ''))}/en`
+  }
+  const doi = DOI_RE.exec(docNumber || '')
+  if (doi) return `https://doi.org/${doi[1].replace(/[.,;]$/, '')}`
+  return undefined
 }
 
 const EP_RE = /^EP\s?\d/i
@@ -143,10 +163,15 @@ export async function resolveCaseCitations(caseId: string, deps?: ResolverDeps):
   let resolved = 0, manual = 0, notFound = 0
   for (const c of citations) {
     const r = await resolveCitation({ label: c.label, kind: c.kind, docNumber: c.docNumber, normalizedKey: c.normalizedKey }, d)
+
+    // Every write is guarded on the row STILL being PENDING. Retrieval takes
+    // seconds per document, and in that window the attorney may have uploaded
+    // their own copy — an unguarded write marked that citation MANUAL_REQUIRED
+    // again, so a document that was on file showed as "to be provided".
     if (r.status === 'RESOLVED' && r.document) {
       resolved++
-      await prisma.oaCitation.update({
-        where: { id: c.id },
+      await prisma.oaCitation.updateMany({
+        where: { id: c.id, fetchStatus: 'PENDING' },
         data: {
           fetchStatus: 'RESOLVED',
           resolvedVia: r.document.resolvedVia,   // internal only
@@ -157,10 +182,10 @@ export async function resolveCaseCitations(caseId: string, deps?: ResolverDeps):
       })
     } else if (r.status === 'MANUAL_REQUIRED') {
       manual++
-      await prisma.oaCitation.update({ where: { id: c.id }, data: { fetchStatus: 'MANUAL_REQUIRED' } })
+      await prisma.oaCitation.updateMany({ where: { id: c.id, fetchStatus: 'PENDING' }, data: { fetchStatus: 'MANUAL_REQUIRED' } })
     } else {
       notFound++
-      await prisma.oaCitation.update({ where: { id: c.id }, data: { fetchStatus: 'NOT_FOUND' } })
+      await prisma.oaCitation.updateMany({ where: { id: c.id, fetchStatus: 'PENDING' }, data: { fetchStatus: 'NOT_FOUND' } })
     }
   }
   return { resolved, manual, notFound }
@@ -189,8 +214,13 @@ export function toAttorneyView(citation: {
 }): AttorneyPatentView {
   const full = citation.passagesJson?.fullDocument
   const seed = citation.passagesJson?.examinerSeed
+  // Text on file wins over the status flag. A document the attorney uploaded is
+  // available even if a concurrent retrieval pass later stamped the row
+  // MANUAL_REQUIRED — telling them to provide what they already provided is
+  // both wrong and infuriating.
+  const hasUsableText = Boolean(full && (full.claims || full.description || full.abstract))
   const status: AttorneyPatentView['status'] =
-    citation.fetchStatus === 'RESOLVED' ? 'available'
+    citation.fetchStatus === 'RESOLVED' || hasUsableText ? 'available'
     : citation.fetchStatus === 'MANUAL_REQUIRED' || citation.fetchStatus === 'NOT_FOUND' ? 'awaiting-upload'
     : 'pending'
   return {
@@ -207,7 +237,8 @@ export function toAttorneyView(citation: {
     sourceLabel: status === 'available'
       ? (full?.providedByAttorney ? 'Provided by you'
         : full?.claims && full?.description ? 'Full patent specification' : 'Patent record')
-      : status === 'awaiting-upload' ? 'Document to be provided' : 'Retrieving…'
+      : status === 'awaiting-upload' ? 'Document to be provided' : 'Retrieving…',
+    externalUrl: externalUrlFor(citation.kind, citation.docNumber, full?.publicationNumber)
   }
 }
 

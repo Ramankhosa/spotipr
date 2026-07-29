@@ -8,7 +8,8 @@ import { decomposePatentDiagram } from '@/lib/patent-diagrams/complexity'
 import { patentDiagramSchema, type PatentDiagramComponent } from '@/lib/patent-diagrams/types'
 import { cleanPlantUmlForRendering, inspectRenderedSvg, validateRenderedPatentSvg } from '@/lib/plantuml-renderer'
 import { extractRawPlantUmlFacts } from '@/lib/patent-diagrams/raw-source'
-import { semanticChecksum } from '@/lib/patent-diagrams/pipeline'
+import { evaluateFigureSetClaimCoverage, semanticChecksum } from '@/lib/patent-diagrams/pipeline'
+import { buildFigureSetPlanningPrompt } from '@/lib/patent-diagrams/prompts'
 import { validateDiagramExportReadiness } from '@/lib/patent-diagrams/export'
 
 const components: PatentDiagramComponent[] = Array.from({ length: 24 }, (_, index) => ({
@@ -145,10 +146,13 @@ describe('deterministic patent diagram builders', () => {
       ],
     })
     const builtProcess = buildPatentDiagram(process, components)
-    expect(builtProcess.plantumlCode).toMatch(/rectangle "S100\\nReceive invention\\ndisclosure" as M[A-Z0-9_]+/)
+    // These fixture components carry plain component reference signs (100, 200),
+    // not step signs, so no step numeral is derivable — and none may be minted.
+    expect(builtProcess.plantumlCode).toMatch(/rectangle "Receive invention\\ndisclosure" as M[A-Z0-9_]+/)
     // PlantUML rejects `diamond` in deployment syntax; decisions render as
     // stereotyped rectangles styled centrally by rectangle<<DECISION>>.
-    expect(builtProcess.plantumlCode).toMatch(/rectangle "D100\\nDisclosure complete" as M[A-Z0-9_]+ <<DECISION>>/)
+    expect(builtProcess.plantumlCode).toMatch(/rectangle "Disclosure complete" as M[A-Z0-9_]+ <<DECISION>>/)
+    expect(builtProcess.plantumlCode).not.toMatch(/rectangle "[SD]\d+/)
     expect(builtProcess.plantumlCode).not.toMatch(/^\s*diamond\b/m)
     expect(builtProcess.plantumlCode).not.toMatch(/^\s*(start|stop)\s*$/m)
     // Flowchart edge conventions: step-to-step arrows carry no labels (they
@@ -247,13 +251,13 @@ describe('deterministic normalization before validation', () => {
     expect(built.validation.claimCriticalCoverage.missing).toEqual([])
   })
 
-  test('reassigns duplicate and malformed process identifiers', () => {
+  test('discards model-supplied step identifiers instead of inventing numerals', () => {
     const diagram = patentDiagramSchema.parse({
       schemaVersion: 1, kind: 'PROCESS', key: 'proc', title: 'Process', purpose: 'Identifier fixture',
       detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
       nodes: [
         { key: 'n1', kind: 'STEP', label: 'First step', identifier: 'S100' },
-        { key: 'n2', kind: 'STEP', label: 'Second step', identifier: 'S100' },
+        { key: 'n2', kind: 'STEP', label: 'Second step', identifier: 'S140' },
         { key: 'n3', kind: 'DECISION', label: 'Check state', identifier: 'STEP-3' },
       ],
       transitions: [
@@ -264,10 +268,34 @@ describe('deterministic normalization before validation', () => {
     const built = buildPatentDiagram(diagram, components)
     expect(built.validation.issues.filter(i => i.severity === 'error')).toEqual([])
     if (built.diagram.kind !== 'PROCESS') throw new Error('expected process diagram')
-    const identifiers = built.diagram.nodes.map(n => n.identifier)
-    expect(new Set(identifiers).size).toBe(identifiers.length)
-    expect(built.diagram.nodes.find(n => n.key === 'n3')?.identifier).toMatch(/^D\d+$/)
+    // None of these steps names a component, so no reference sign is derivable
+    // and no numeral may be minted — S100/S140 were never disclosed anywhere.
+    expect(built.diagram.nodes.map(n => n.identifier)).toEqual([undefined, undefined, undefined])
+    // Anchored to the label so the hex node aliases (M0480A93D2E9B) can't match.
+    expect(built.plantumlCode).not.toMatch(/rectangle "[SD]\d+/)
+    expect(built.plantumlCode).not.toContain('STEP-3')
     expect(built.diagram.transitions).toHaveLength(1)
+  })
+
+  test('keeps a step identifier that is a real Component Planner reference sign', () => {
+    const stepComponents = [
+      ...components,
+      { id: 'cs1', name: 'Sampling routine', type: 'PROCESS', referenceLabel: 'S210', description: 'Disclosed step' },
+    ] as typeof components
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 1, kind: 'PROCESS', key: 'proc2', title: 'Process', purpose: 'Derived identifier fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      nodes: [
+        { key: 'n1', kind: 'STEP', label: 'Sample the fluid', componentId: 'cs1' },
+        { key: 'n2', kind: 'STEP', label: 'Second step', componentId: 'cs1' },
+      ],
+      transitions: [{ fromId: 'n1', toId: 'n2', label: '', category: 'PRIMARY' }],
+    })
+    const built = buildPatentDiagram(diagram, stepComponents)
+    if (built.diagram.kind !== 'PROCESS') throw new Error('expected process diagram')
+    // The sign is taken from the registry, and never repeated across two steps.
+    expect(built.diagram.nodes[0].identifier).toBe('S210')
+    expect(built.diagram.nodes[1].identifier).toBeUndefined()
   })
 
   test('records stripped invented component references and flags the step as ungrounded', () => {
@@ -492,5 +520,81 @@ describe('complexity and filing validation', () => {
   test('rejects non-filing source directives', () => {
     const issues = validatePatentPlantUmlSource('@startuml\nskinparam shadowing true\nrectangle A #FF0000\n@enduml')
     expect(issues.map(issue => issue.code)).toEqual(expect.arrayContaining(['COLOR_DIRECTIVE', 'SHADOW_DIRECTIVE']))
+  })
+})
+
+describe('figure-set planning grounding', () => {
+  const planningInput = {
+    inventionTitle: 'Irrigation controller',
+    patentType: 'SYSTEM',
+    inventionContext: {},
+    claimsContext: {},
+    components,
+  }
+
+  test('shows the planner the disclosed method steps it must plan against', () => {
+    const prompt = buildFigureSetPlanningPrompt({
+      ...planningInput,
+      evidenceCatalog: [
+        { id: 'SF-processSteps-1', value: 'Reading a moisture value from the probe' },
+        { id: 'SF-other-1', value: 'Housing is weatherproof' },
+      ],
+    })
+    expect(prompt).toContain('DISCLOSED METHOD STEPS')
+    expect(prompt).toContain('SF-processSteps-1')
+    expect(prompt).toContain('evidenceIds')
+  })
+
+  test('forbids planning a PROCESS figure when no operation is disclosed', () => {
+    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, evidenceCatalog: [] })
+    // Without disclosed steps a flowchart could only be invented downstream.
+    expect(prompt).toContain('Do NOT plan a PROCESS figure')
+    expect(prompt).toContain('DISCLOSED METHOD STEPS: none recorded')
+  })
+
+  test('tells the planner which components the claims name', () => {
+    const claimed: PatentDiagramComponent[] = [
+      { ...components[0], claimSupport: { matchedClaims: [1, 4], claimRole: 'claim_1' } },
+      components[1],
+    ]
+    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, components: claimed })
+    expect(prompt).toContain('must appear in the componentIds of at least one figure: c1')
+    expect(prompt).toContain('claims=1,4')
+  })
+
+  test('reports claim-named components that no planned figure depicts', () => {
+    const claimed: PatentDiagramComponent[] = [
+      { ...components[0], claimSupport: { matchedClaims: [1], claimRole: 'claim_1' } },
+      { ...components[1], claimSupport: { matchedClaims: [2], claimRole: 'dependent_claim' } },
+    ]
+    const plan = {
+      schemaVersion: 1 as const,
+      figures: [{
+        key: 'f1', kind: 'COMPONENT' as const, title: 'Overview', purpose: 'Overview',
+        detailLevel: 'OVERVIEW' as const, direction: 'TB' as const,
+        componentIds: ['c1'], claimCriticalComponentIds: ['c1'],
+        orderedGroups: [], phaseHints: [], evidenceIds: [],
+      }],
+    }
+    const coverage = evaluateFigureSetClaimCoverage(plan, claimed)
+    expect(coverage.evaluated).toBe(true)
+    expect(coverage.missing.map(item => item.id)).toEqual(['c2'])
+    expect(coverage.missing[0].matchedClaims).toEqual([2])
+  })
+
+  test('reports coverage as unknown when claim matching has not run', () => {
+    const plan = {
+      schemaVersion: 1 as const,
+      figures: [{
+        key: 'f1', kind: 'COMPONENT' as const, title: 'Overview', purpose: 'Overview',
+        detailLevel: 'OVERVIEW' as const, direction: 'TB' as const,
+        componentIds: ['c1'], claimCriticalComponentIds: [],
+        orderedGroups: [], phaseHints: [], evidenceIds: [],
+      }],
+    }
+    // Claim matching is optional upstream, so absence must never look like a gap.
+    const coverage = evaluateFigureSetClaimCoverage(plan, components)
+    expect(coverage.evaluated).toBe(false)
+    expect(coverage.missing).toEqual([])
   })
 })

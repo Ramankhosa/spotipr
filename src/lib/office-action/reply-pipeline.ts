@@ -81,7 +81,7 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   const totalSteps = workItems.length + 2 // + digest + named sections
 
   // ---- 1. Invention context (digest built once, reused by every objection) ----
-  await progress('Reading the invention', 0, totalSteps)
+  await progress('Reading the invention as filed and building the digest every section will work from', 0, totalSteps)
   const normalized = normalizeInvention(oaCase.specificationText || '', oaCase.claimsText || undefined)
   let digest = oaCase.inventionDigest as unknown as InventionDigest | null
   if (!digest) {
@@ -97,9 +97,26 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     }
   }
   const digestForRun = digest || digestFromSpotiprDraft({})   // empty but valid — this run still proceeds
+  // Counts the attorney can check against their own file — every figure here is
+  // read off the case, never estimated.
+  const citedOnFile = readyDocs.flatMap(d => d.citations).filter(c => {
+    const f = (c.passagesJson as any)?.fullDocument
+    return f && (f.claims || f.description)
+  }).length
+  const numberingNote = normalized.numbering.mode === 'AUTHORED'
+    ? `numbered [${normalized.numbering.firstMarker}]–[${normalized.numbering.lastMarker}] by the document`
+    : 'no paragraph numbering in the document, so the reply will cite sections and quoted wording'
+  await progress(
+    `Invention indexed — ${normalized.paragraphs.length} paragraph${normalized.paragraphs.length === 1 ? '' : 's'} available as amendment basis (${numberingNote}), ` +
+    `${workItems.length} objection${workItems.length === 1 ? '' : 's'} to answer, ` +
+    `${citedOnFile} cited document${citedOnFile === 1 ? '' : 's'} on file`,
+    0, totalSteps)
 
   const ctxBase = {
     profile, caseId, digest: digestForRun, paragraphs: normalized.paragraphs,
+    // How the specification numbers itself decides whether the drafter may cite
+    // paragraph numbers at all. Threaded from here so every stage agrees.
+    numbering: normalized.numbering.mode,
     tenantId: opts.tenantId, userId: opts.userId, requestHeaders: opts.requestHeaders, gateway: opts.gateway
   }
 
@@ -168,7 +185,10 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     // the middle of a paid stage and never leaves a half-written section.
     if (opts.shouldStop && await opts.shouldStop()) { stopped = true; break }
 
-    await progress(`Objection ${done + 1} of ${workItems.length}`, done + 1, totalSteps)
+    // The run is minutes long and every stage below is real work the attorney is
+    // paying for; report each one as it starts so the wait is legible.
+    const who = `Objection ${done + 1} of ${workItems.length} · ${objectionName(row.canonicalCode, row.subTypeId)}`
+    await progress(who, done + 1, totalSteps)
 
     // Everything for ONE objection is isolated: a chart, strategy or draft that
     // throws costs that objection its section, never the rest of the run.
@@ -183,7 +203,16 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
         })
         .map(c => {
           const f = (c.passagesJson as any).fullDocument
-          return { label: c.label, title: f.title, abstract: f.abstract, claims: f.claims, description: f.description }
+          return {
+            label: c.label, kind: c.kind,
+            title: f.title, abstract: f.abstract, claims: f.claims, description: f.description,
+            // A document the attorney uploaded is the whole document; one we
+            // retrieved may be a partial record. This is what lets an absence
+            // finding against a research paper mean anything — a paper has no
+            // claims section, so the patent-shaped completeness test would
+            // otherwise mark every cited paper incomplete.
+            suppliedAsCompleteDocument: c.resolvedVia === 'manual' || Boolean(f.providedByAttorney)
+          }
         })
 
       const objection: ClassifiedObjection & { id: string } = {
@@ -198,12 +227,14 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
       // nothing to distinguish and nothing to amend, only something to file.
       // Skipping both saves two paid calls per formal objection.
       const procedural = isProceduralObjection(profile, objection.canonicalCode)
+      if (procedural) await progress(`${who} — procedural requirement, no drafting needed`, done + 1, totalSteps)
 
       // ---- claim chart (only for citation-driven objections) ----
       let chart
       const usesCitations = !procedural && (objection.citationLabels || []).length > 0 && citationTexts.length > 0
       if (usesCitations && oaCase.claimsText) {
         const relevant = citationTexts.filter(c => objection.citationLabels!.includes(c.label))
+        await progress(`${who} — charting the claims against ${(relevant.length ? relevant : citationTexts).map(c => c.label).join(', ')}`, done + 1, totalSteps)
         const built = await buildClaimChart(profile, {
           claimsText: oaCase.claimsText,
           claimNumbers: (objection.claimsAffected as number[]) || [],
@@ -216,6 +247,12 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
       }
 
       // ---- strategy (+ deterministic s.59 basis guard) ----
+      if (!procedural) {
+        await progress(`${who} — searching the specification as filed for the passages that answer this objection`, done + 1, totalSteps)
+        await progress(`${who} — checking your supporting material for evidence on this point`, done + 1, totalSteps)
+        await progress(`${who} — applying ${profile.meta.lawVersion || profile.meta.office} and the authorities on record`, done + 1, totalSteps)
+        await progress(`${who} — weighing argue / amend against the cited art`, done + 1, totalSteps)
+      }
       const strat = procedural
         ? { success: true, strategy: undefined as ObjectionStrategy | undefined }
         : await buildObjectionStrategy(ctxBase as any, objection, chart)
@@ -226,6 +263,10 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
           data: { strategyJson: strategy as any, status: 'STRATEGY_CHOSEN' }
         })
         proposedCount += strategy.amendments.length
+        if (strategy.amendments.length) {
+          const passed = strategy.basisVerdicts.filter(v => v.verdict === 'pass').length
+          await progress(`${who} — verifying amendment basis in the specification as filed (${passed}/${strategy.basisVerdicts.length} within Section 59)`, done + 1, totalSteps)
+        }
         for (const a of usableAmendments(strategy)) {
           const verdict = strategy.basisVerdicts.find(v => v.claimNumber === a.claimNumber)
           allAmendments.push({
@@ -237,8 +278,12 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
       }
 
       // ---- draft the objection reply ----
+      if (!procedural) await progress(`${who} — drafting the submission, citing the specification paragraph by paragraph`, done + 1, totalSteps)
       const drafted = await draftObjectionReply(ctxBase as any, objection)
       objectionReplies.push(drafted)
+      await progress(
+        `${who} — section drafted (${(drafted.bodyText || '').split(/\s+/).filter(Boolean).length} words)`,
+        done + 1, totalSteps)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[OA prepare] objection ${row.id} (${row.canonicalCode}) failed:`, message)
@@ -280,7 +325,7 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
 
   // ---- named sections ----
   // Isolated too: losing the prayer must not discard every drafted objection.
-  await progress('Preliminary submissions and prayer', totalSteps - 1, totalSteps)
+  await progress('Writing the preliminary submissions and the prayer', totalSteps - 1, totalSteps)
   namedSections = { ...(resumedSections.namedSections || {}) }
   try {
     namedSections = {
@@ -306,6 +351,19 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     amendmentsUsable: allAmendments.length,
     judgmentFlags
   }
+}
+
+/**
+ * Short human name for an objection, for the progress line. The attorney should
+ * read "Inventive step", not "INVENTIVE_STEP".
+ */
+function objectionName(code: string, subTypeId?: string | null): string {
+  const label: Record<string, string> = {
+    NOVELTY: 'Novelty', INVENTIVE_STEP: 'Inventive step', ELIGIBILITY: 'Non-patentability',
+    SUFFICIENCY: 'Sufficiency', CLARITY: 'Clarity', UNITY: 'Unity',
+    PROCEDURAL_DISCLOSURE: 'Statutory disclosures', FORMALITIES: 'Formalities', OTHER: 'Other requirements'
+  }
+  return `${label[code] || code}${subTypeId ? ` (${subTypeId})` : ''}`
 }
 
 /** Last amendment per claim number wins (later objections may refine the same claim). */

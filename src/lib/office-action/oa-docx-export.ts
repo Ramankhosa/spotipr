@@ -3,7 +3,7 @@ import {
   LevelFormat, convertMillimetersToTwip
 } from 'docx'
 import { objectionLabel, type AssembledReply, type AmendedClaim, type DraftedObjectionReply, type ReplyBlock } from './reply-assembly'
-import { formatParagraphRefs } from './document-intake'
+import { formatParagraphRefsForFiling, type ParagraphNumbering } from './document-intake'
 import type { OfficeActionProfile } from './oa-profile-schema'
 import type { LintResult } from './compliance-lint'
 
@@ -46,7 +46,7 @@ const REF = 'oa-sections' // numbering reference id
 export async function buildReplyDocx(
   assembled: AssembledReply,
   profile: OfficeActionProfile,
-  opts: { includeComplianceNote?: boolean; lint?: LintResult } = {}
+  opts: { includeComplianceNote?: boolean; lint?: LintResult; citableIds?: Set<string> } = {}
 ): Promise<Buffer> {
   const fmt = resolveFmt(profile)
   const children: Paragraph[] = []
@@ -76,8 +76,9 @@ export async function buildReplyDocx(
       children: runs
     })
 
+  const filing = { numbering: assembled.meta.numbering, citableIds: opts.citableIds }
   for (const block of assembled.blocks) {
-    renderBlock(block, { children, fmt, body, numberedHeading, subNumbered })
+    renderBlock(block, { children, fmt, body, numberedHeading, subNumbered, filing })
   }
 
   if (opts.includeComplianceNote && opts.lint) {
@@ -119,10 +120,11 @@ interface Ctx {
   body: (t: string, o?: any) => Paragraph
   numberedHeading: (t: string) => Paragraph
   subNumbered: (runs: TextRun[]) => Paragraph
+  filing: { numbering: ParagraphNumbering; citableIds?: Set<string> }
 }
 
 function renderBlock(block: ReplyBlock, ctx: Ctx) {
-  const { children, fmt, body, numberedHeading, subNumbered } = ctx
+  const { children, fmt, body, numberedHeading, subNumbered, filing } = ctx
   switch (block.type) {
     case 'addressBlock':
       // A case without agent details yields empty lines; skip them rather than crash the export.
@@ -137,7 +139,7 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
       break
     case 'namedSection':
       children.push(numberedHeading(block.title))
-      for (const p of splitParas(block.body)) children.push(body(p))
+      for (const p of splitParas(block.body, filing)) children.push(body(p))
       break
     case 'objections': {
       children.push(numberedHeading(block.title))
@@ -149,29 +151,16 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
           children.push(body(`Examiner's objection: ${o.examinerConcern}`, { italics: true, indent: 480, after: 80 }))
           children.push(body('Applicant’s submission:', { bold: true, indent: 480, after: 40 }))
         }
-        // A procedural undertaking is filed highlighted: the attorney must
-        // confirm the filing actually happened, and clear the highlight, before
-        // this reply leaves the office.
-        for (const p of splitParas(o.bodyText)) {
-          children.push(o.attorneyAction
-            ? new Paragraph({
-                children: [new TextRun({ text: p, highlight: 'yellow' })],
-                indent: { left: 480 }, spacing: { after: 120 }
-              })
-            : body(p, { indent: 480 }))
-        }
-        if (o.attorneyAction && o.actionItems?.length) {
-          children.push(new Paragraph({
-            children: [new TextRun({ text: 'ATTORNEY ACTION — remove before filing:', bold: true, highlight: 'yellow' })],
-            indent: { left: 480 }, spacing: { before: 80, after: 40 }
-          }))
-          for (const item of o.actionItems) {
-            children.push(new Paragraph({
-              children: [new TextRun({ text: `• ${item}`, highlight: 'yellow' })],
-              indent: { left: 720 }, spacing: { after: 40 }
-            }))
-          }
-        }
+        // A procedural section reaches this renderer ONLY once the attorney has
+        // confirmed the act; until then its body is empty and the lint blocks the
+        // export. So there is nothing here to mark up and nothing to warn about.
+        //
+        // This renderer deliberately cannot see the profile's internal compliance
+        // checklist. That list is full of practice notes ("post-2024 Rules, Form 3
+        // is due once at RQ…") and used to be printed here under "ATTORNEY ACTION
+        // — remove before filing", i.e. straight into the document sent to the
+        // Controller. Marking such text up is not a safeguard; absence is.
+        for (const p of splitParas(o.bodyText, filing)) children.push(body(p, { indent: 480 }))
       }
       break
     }
@@ -185,8 +174,10 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
         children.push(subNumbered([new TextRun({ text: 'Clean copy of the amended claims:', bold: true })]))
         for (const c of block.clean) children.push(body(`${c.claimNumber}. ${c.cleanText}`, { indent: 480 }))
       }
-      if (block.basisRefs.length) {
-        children.push(body(`The foregoing amendments find support in the specification as filed at ${block.basisRefs.join(', ')}, and fall wholly within the scope of the claims as originally filed (Section 59).`, { indent: 480, italics: true }))
+      // Built deterministically in reply-assembly. Joining basisRefs here is what
+      // used to export a raw internal anchor ("… at ¶0004") to the Controller.
+      if (block.basisSentence) {
+        children.push(body(block.basisSentence, { indent: 480, italics: true }))
       }
       break
     }
@@ -197,9 +188,18 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
   }
 }
 
-function splitParas(text: string): string[] {
-  // formatParagraphRefs: internal ¶0007 anchors are filed as "[0007]".
-  return formatParagraphRefs(text).split(/\n{2,}/).map(s => s.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
+/**
+ * Internal anchors become filing citations here — or the render fails.
+ *
+ * formatParagraphRefsForFiling converts a valid authored ¶0038 to "[0038]" and
+ * THROWS on anything it cannot stand behind: a non-citable anchor, one that
+ * resolves to no real paragraph, or any anchor at all when the specification
+ * carries no numbering of its own. The lint catches these first in normal
+ * operation; this is the guarantee for when it does not run.
+ */
+function splitParas(text: string, filing: { numbering: ParagraphNumbering; citableIds?: Set<string> }): string[] {
+  return formatParagraphRefsForFiling(text, filing)
+    .split(/\n{2,}/).map((s: string) => s.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
 }
 
 function markedClaimParagraph(claim: AmendedClaim, fmt: Fmt): Paragraph {

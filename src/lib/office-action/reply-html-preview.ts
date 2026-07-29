@@ -1,5 +1,5 @@
 import { objectionLabel, type AssembledReply, type ReplyBlock, type AmendedClaim } from './reply-assembly'
-import { formatParagraphRefs } from './document-intake'
+import { formatParagraphRefsForPreview, type ParagraphNumbering } from './document-intake'
 import type { OfficeActionProfile } from './oa-profile-schema'
 
 /**
@@ -22,9 +22,15 @@ function markedClaimHtml(c: AmendedClaim): string {
   return `<p class="claim"><span class="cn">${c.claimNumber}.</span> ${marked}</p>`
 }
 
-function paras(text: string): string {
-  // formatParagraphRefs: internal ¶0007 anchors read as "[0007]" in the filing.
-  return formatParagraphRefs(text).split(/\n{2,}/).map(p => p.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
+/**
+ * The preview is a reading surface, not a filing artefact, so it uses the
+ * lenient formatter: an anchor that could not be filed is shown as a visible
+ * placeholder rather than throwing, which is what lets the attorney see what
+ * needs fixing instead of an error page.
+ */
+function paras(text: string, numbering: ParagraphNumbering): string {
+  return formatParagraphRefsForPreview(text, numbering)
+    .split(/\n{2,}/).map(p => p.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
     .map(p => `<p>${esc(p)}</p>`).join('')
 }
 
@@ -34,7 +40,8 @@ export function renderReplyHtml(assembled: AssembledReply, profile: OfficeAction
   let secNo = 0
   const parts: string[] = []
 
-  for (const block of assembled.blocks) parts.push(renderBlockHtml(block, () => ++secNo))
+  const numbering = assembled.meta.numbering
+  for (const block of assembled.blocks) parts.push(renderBlockHtml(block, () => ++secNo, numbering))
 
   const meta = assembled.meta
   return `<!-- generated preview: FER reply ${esc(meta.applicationNumber)} -->
@@ -73,7 +80,7 @@ export function renderReplyHtml(assembled: AssembledReply, profile: OfficeAction
 <div class="fer-doc">${parts.join('')}</div>`
 }
 
-function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
+function renderBlockHtml(block: ReplyBlock, nextNo: () => number, numbering: ParagraphNumbering): string {
   switch (block.type) {
     case 'addressBlock':
       return `<div class="addr">${block.lines.filter(Boolean).map(l => l.startsWith('Re:') ? `<span class="re">${esc(l)}</span>` : esc(l)).join('\n')}</div>`
@@ -83,7 +90,7 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
       return `<p class="salut">${esc(block.text)}</p>`
     case 'namedSection': {
       const n = nextNo()
-      return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${paras(block.body)}`
+      return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${paras(block.body, numbering)}`
     }
     case 'objections': {
       const n = nextNo()
@@ -92,10 +99,10 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
         // Procedural undertakings are highlighted exactly as they export, so the
         // print preview shows the attorney what still has to be done by hand.
         const bodyHtml = o.attorneyAction
-          ? `<div class="attn">${paras(o.bodyText)}${(o.actionItems || []).length
+          ? `<div class="attn">${paras(o.bodyText, numbering)}${(o.actionItems || []).length
               ? `<div class="attn-do"><strong>Attorney action — remove before filing:</strong><ul>${(o.actionItems || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
               : ''}</div>`
-          : paras(o.bodyText)
+          : paras(o.bodyText, numbering)
         return `<div class="obj"><div class="oh"><span class="no">${n}.${i + 1}</span>Objection ${esc(objectionLabel(o))} — ${esc(o.title)}${o.statuteBasis ? ` (${esc(o.statuteBasis)})` : ''}</div></div>${concern}<div class="indent">${bodyHtml}</div>`
       }).join('')
       return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${items}`
@@ -105,7 +112,9 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
       let h = `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>`
       if (block.marked.length) h += `<div class="subhead">Marked copy of the amended claims:</div>${block.marked.map(markedClaimHtml).join('')}`
       if (block.clean.length) h += `<div class="subhead">Clean copy of the amended claims:</div>${block.clean.map(c => `<p class="claim"><span class="cn">${c.claimNumber}.</span> ${esc(c.cleanText)}</p>`).join('')}`
-      if (block.basisRefs.length) h += `<p class="basis">The foregoing amendments find support in the specification as filed at ${esc(block.basisRefs.join(', '))}, and fall wholly within the scope of the claims as originally filed (Section 59).</p>`
+      // Built deterministically in reply-assembly. Joining basisRefs here is what
+      // used to put a raw "¶0004" in front of the Controller.
+      if (block.basisSentence) h += `<p class="basis">${esc(block.basisSentence)}</p>`
       return h
     }
     case 'signatureBlock':

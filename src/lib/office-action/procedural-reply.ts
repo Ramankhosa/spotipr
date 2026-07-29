@@ -8,16 +8,39 @@ import type { OfficeActionProfile } from './oa-profile-schema'
  * only assert that the act happened, and an asserted compliance that never took
  * place is a misrepresentation to the office over the attorney's signature.
  *
- * So these never reach the LLM. The reply carries a fixed undertaking drawn
- * from the jurisdiction profile's own compliance actions, and the section is
- * flagged for the attorney — highlighted in the workspace, the preview and the
- * exported DOCX — so it is confirmed and completed before the reply is filed.
+ * So these never reach the LLM. But not reaching the LLM is not enough on its
+ * own: the profile's sentences are themselves assertions of a completed act —
+ * "An updated Form 3 … is filed along with this reply" — and storing that text
+ * before the attorney has done anything means the only thing standing between
+ * it and the Controller is a gate. Gates get bypassed.
+ *
+ * So the sentence DOES NOT EXIST until the act is confirmed. Until then the
+ * section carries no body at all; the workspace renders "Compliance
+ * confirmation pending" from state. On confirmation the sentence is generated
+ * deterministically from the compliance type. An unconfirmed assertion cannot
+ * be in a filing artefact because it was never written down.
  */
 
-export interface ProceduralReply {
-  bodyText: string
-  /** What the attorney must actually do, shown highlighted. Never filed as prose. */
+export interface ComplianceRule {
+  /** The exact sentence filed, once the act is confirmed. Never stored before then. */
+  filingSentence: string
+  /**
+   * The sentence claims a document accompanies the reply, so confirming it
+   * without attaching one would state something untrue.
+   */
+  requiresSupportingDocument: boolean
+  /** What the attorney must actually do. Workspace only — never filed as prose. */
   actionItems: string[]
+}
+
+export interface ProceduralReply {
+  /**
+   * ALWAYS empty. The filed sentence is generated on confirmation, not drafted
+   * ahead of it — see the module note above.
+   */
+  bodyText: string
+  actionItems: string[]
+  requiresSupportingDocument: boolean
 }
 
 /** Objections the office resolves by a filing rather than by argument. */
@@ -31,46 +54,77 @@ const DEFAULT_SENTENCE =
   'The Applicant notes this requirement and confirms compliance. The document(s) required in this regard are filed with this reply.'
 
 /**
- * The fixed reply for a procedural objection.
+ * Does this sentence assert that something accompanies the reply?
  *
- * `response.phrases.proceduralCompliance` in the country profile is the filed
- * sentence; {actions} interpolates the profile's own compliance list so the
- * text names what is being furnished rather than promising in the abstract.
+ * Derived from the sentence the profile actually uses rather than a new profile
+ * field, so it stays correct for every jurisdiction without a profile re-sync —
+ * and it cannot drift out of step with the wording it governs.
+ *
+ * "An updated Form 3 … is filed along with this reply"  → a document is claimed.
+ * "…are disclosed in the complete specification"        → a location, not a document.
+ * "The Applicant undertakes to obtain NBA approval"     → forward-looking, nothing yet.
  */
-export function buildProceduralReply(
+export function assertsAccompanyingDocument(sentence: string): boolean {
+  const s = (sentence || '').toLowerCase()
+  if (/\bundertakes?\b|\bwill be\b|\bbefore the grant\b/.test(s)) return false
+  return /\bfiled (along |together )?(with|herewith)\b|\bfiled herewith\b|\baccompan(y|ies|ying)\b|\benclosed\b|\bannexed\b|\bfiled with this reply\b/.test(s)
+}
+
+/**
+ * The compliance rule for one procedural objection: the sentence that will be
+ * filed once confirmed, whether it obliges an attachment, and the attorney's
+ * checklist.
+ *
+ * The profile's `actions` are an INTERNAL checklist — full of conditionals and
+ * practice notes ("Note: post-2024 Rules, Form 3 is due once at RQ…"). They
+ * must never be poured into the letter: a reply to the Controller reciting a
+ * practice note is not a submission, it is a leaked worksheet. They are
+ * returned separately, for the workspace, and the filing renderer has no access
+ * to them at all.
+ */
+export function complianceRuleFor(
   profile: OfficeActionProfile,
-  objection: { canonicalCode: string; subTypeId?: string; examinerText?: string }
-): ProceduralReply {
-  const entry = (profile.objections || []).find(o => o.canonical === objection.canonicalCode)
-  const subType = objection.subTypeId
-    ? (entry?.subTypes || []).find(s => s.id === objection.subTypeId)
-    : undefined
+  canonicalCode: string,
+  subTypeId?: string | null
+): ComplianceRule {
+  const entry = (profile.objections || []).find(o => o.canonical === canonicalCode)
+  const subType = subTypeId ? (entry?.subTypes || []).find(s => s.id === subTypeId) : undefined
 
-  // Prefer the sub-clause's own actions where the profile scopes them; fall
-  // back to the objection type's list.
-  const actions = (entry?.actions || []).filter(a => a && a.trim())
-
-  /**
-   * The filed sentence is a fixed statement of compliance, most specific first.
-   * The profile's `actions` are an internal checklist — full of conditionals and
-   * practice notes — and must NEVER be poured into the letter: a reply to the
-   * Controller that recites "Note: post-2024 Rules, Form 3 is due once at RQ…"
-   * is not a submission, it is a leaked worksheet.
-   */
-  const bodyText = (
+  // Most specific wording first.
+  const filingSentence = (
     subType?.replySentence
     || (entry as any)?.replySentence
     || (profile.response as any)?.phrases?.proceduralCompliance
     || DEFAULT_SENTENCE
   ).replace(/\{actions\}/g, '').replace(/\s{2,}/g, ' ').trim()
 
-  // The checklist the attorney works from — the profile's actions, plus the
-  // sub-clause guidance when it names something specific (NBA approval, the
-  // source and geographical origin, the Form 3 status table).
   const actionItems = [
-    ...actions,
+    ...((entry?.actions || []).filter(a => a && a.trim())),
     ...(subType?.guidance ? [subType.guidance] : [])
   ]
 
-  return { bodyText, actionItems }
+  return {
+    filingSentence,
+    requiresSupportingDocument: assertsAccompanyingDocument(filingSentence),
+    actionItems
+  }
+}
+
+/**
+ * The reply shell for a procedural objection.
+ *
+ * Deliberately returns NO body. The section is a placeholder until the attorney
+ * confirms the act, at which point `complianceRuleFor().filingSentence` becomes
+ * its text.
+ */
+export function buildProceduralReply(
+  profile: OfficeActionProfile,
+  objection: { canonicalCode: string; subTypeId?: string; examinerText?: string }
+): ProceduralReply {
+  const rule = complianceRuleFor(profile, objection.canonicalCode, objection.subTypeId)
+  return {
+    bodyText: '',
+    actionItems: rule.actionItems,
+    requiresSupportingDocument: rule.requiresSupportingDocument
+  }
 }
