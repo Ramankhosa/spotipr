@@ -331,7 +331,7 @@ SEARCH TERMS ALREADY KNOWN: ${input.searchTerms.join(', ')}
 CPC CODES IN SCOPE: ${input.cpcCodes.join(', ') || 'none'}
 
 Produce disproof search queries across four strategies:
-1. "synonymShifted" — 3-4 full-text queries using vocabulary the hypothesis authors did NOT use: competitor jargon, older terminology, adjacent-discipline phrasing, acronyms. Each query is a websearch-style string (terms, OR groups in parentheses, quoted phrases).
+1. "synonymShifted" — 3-4 full-text queries using vocabulary the hypothesis authors did NOT use: competitor jargon, older terminology, adjacent-discipline phrasing, acronyms. Each query is a websearch-style string: quoted phrases and plain terms, where a space means AND and the word OR means OR. Parentheses do NOT group in this syntax — never use them; put each alternative phrasing in its own query instead.
 2. "semanticParaphrases" — 2-3 restatements of the hypothesis in completely different words, for embedding search.
 3. "cpcAdjacent" — 2-4 CPC codes at subclass or main-group level ADJACENT to the codes in scope, where the same combination might be classified by an examiner who read it differently.
 4. "assigneeCandidates" — 3-5 organisations most likely to have filed near this idea, by name as it appears on patents.

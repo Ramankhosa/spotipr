@@ -20,6 +20,7 @@
 
 import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { textMatchPredicate } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
 import { runWhitespaceLLM, parseModelJson } from './llm'
 import {
@@ -181,9 +182,8 @@ export async function runValidateStage(input: {
   await heartbeat(input.runId)
 
   // --- 3. element-map the closest hits --------------------------------------
-  const candidates = Array.from(allHits.values()).slice(0, MAPPING_CANDIDATES)
-  let mapped: MappedCandidate[] = []
-  if (candidates.length) {
+  const mapCandidates = async (candidates: AttackHit[]): Promise<MappedCandidate[]> => {
+    if (!candidates.length) return []
     const enriched = await enrichWithClaims(candidates)
     try {
       const response = await runWhitespaceLLM({
@@ -197,11 +197,14 @@ export async function runValidateStage(input: {
         requestHeaders: input.requestHeaders,
       })
       const parsed = parseModelJson<{ candidates: MappedCandidate[] }>(response.output, 'Element mapping')
-      mapped = (parsed.candidates ?? []).filter(candidate => candidate && typeof candidate.publicationNumber === 'string')
+      return (parsed.candidates ?? []).filter(candidate => candidate && typeof candidate.publicationNumber === 'string')
     } catch (error) {
       console.error('[Whitespace] Element mapping failed:', error)
+      return []
     }
   }
+
+  let mapped: MappedCandidate[] = await mapCandidates(Array.from(allHits.values()).slice(0, MAPPING_CANDIDATES))
 
   applyMappingOutcomes(attacks, allHits, mapped)
 
@@ -243,8 +246,24 @@ export async function runValidateStage(input: {
 
   if (redTeam.strongestRemainingAttack?.query) {
     const query = String(redTeam.strongestRemainingAttack.query)
+    const previouslySeen = new Set(Array.from(allHits.keys()))
     const hits = await lexicalAttack(query)
     recordAttack(attacks, allHits, 'RED_TEAM', query, hits)
+
+    // The red team's hits get the same element mapping as everyone else's.
+    // Without this, the strongest remaining attack could retrieve 25 documents
+    // and still be recorded CLEAN because nothing ever read them.
+    const fresh = (hits ?? []).filter(hit => !previouslySeen.has(hit.familyKey)).slice(0, MAPPING_CANDIDATES)
+    if (fresh.length) {
+      const alreadyMapped = new Set(mapped.map(candidate => candidate.publicationNumber))
+      const redTeamMapped = (await mapCandidates(fresh)).filter(
+        candidate => !alreadyMapped.has(candidate.publicationNumber)
+      )
+      if (redTeamMapped.length) {
+        mapped = [...mapped, ...redTeamMapped]
+        applyMappingOutcomes(attacks, allHits, mapped)
+      }
+    }
   }
 
   await heartbeat(input.runId)
@@ -340,13 +359,21 @@ export async function runValidateStage(input: {
 // Attack retrieval
 // ---------------------------------------------------------------------------
 
+/** Text-arm predicate for a single freeform websearch query, all readable corpora. */
+function attackTextPredicate(query: string): Prisma.Sql {
+  return textMatchPredicate({ groups: [query], groupLabels: [[]], exclusions: null })
+}
+
 /**
  * Full-text attack over the whole readable corpus. Deliberately UNSCOPED: the
  * refuting art may live outside the study's years, jurisdictions and CPC codes,
  * and constraining the attack to the scope would be defending the hypothesis.
+ *
+ * Returns NULL when the search itself failed — a failed search is not an empty
+ * result, and recording it as one would count a dead lane as a clean attack.
  */
-async function lexicalAttack(query: string): Promise<AttackHit[]> {
-  if (!query.trim()) return []
+async function lexicalAttack(query: string): Promise<AttackHit[] | null> {
+  if (!query.trim()) return null
   try {
     const rows = await withTimeout<{
       familyKey: string
@@ -361,13 +388,7 @@ async function lexicalAttack(query: string): Promise<AttackHit[]> {
              left(coalesce(lp."abstract", ''), 1500) AS abstract,
              left(coalesce(lp."claimsText", ''), 6000) AS "claimsText"
       FROM "local_patents" lp
-      WHERE to_tsvector('english'::regconfig,
-              coalesce(lp."ragText", '')   || ' ' ||
-              coalesce(lp."title", '')     || ' ' ||
-              coalesce(lp."abstract", '')  || ' ' ||
-              coalesce(lp."abstractOriginal", ''))
-            @@ websearch_to_tsquery('english'::regconfig, ${query})
-        AND lp."corpusSources" @> ARRAY['google-patents-corpus']::TEXT[]
+      WHERE ${attackTextPredicate(query)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
     return rows.map(row => ({
       familyKey: row.familyKey,
@@ -379,14 +400,14 @@ async function lexicalAttack(query: string): Promise<AttackHit[]> {
     }))
   } catch (error) {
     console.error('[Whitespace] Lexical attack failed:', error instanceof Error ? error.message : error)
-    return []
+    return null
   }
 }
 
 /** CPC-adjacent broadening: same combination, classified by a different reader. */
-async function cpcAttack(code: string, elements: string[]): Promise<AttackHit[]> {
+async function cpcAttack(code: string, elements: string[]): Promise<AttackHit[] | null> {
   const normalized = code.replace(/\s+/g, '').toUpperCase()
-  if (!normalized) return []
+  if (!normalized) return null
   const elementQuery = elements.map(element => `"${element.replace(/["\\]/g, ' ')}"`).join(' OR ')
   try {
     const rows = await withTimeout<{
@@ -403,21 +424,18 @@ async function cpcAttack(code: string, elements: string[]): Promise<AttackHit[]>
              left(coalesce(lp."claimsText", ''), 6000) AS "claimsText"
       FROM "local_patents" lp
       WHERE EXISTS (SELECT 1 FROM unnest(lp."classifications") c WHERE replace(upper(c), ' ', '') LIKE ${normalized + '%'})
-        AND to_tsvector('english'::regconfig,
-              coalesce(lp."ragText", '') || ' ' || coalesce(lp."title", '') || ' ' || coalesce(lp."abstract", ''))
-            @@ websearch_to_tsquery('english'::regconfig, ${elementQuery})
-        AND lp."corpusSources" @> ARRAY['google-patents-corpus']::TEXT[]
+        AND ${attackTextPredicate(elementQuery)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
     return rows.map(row => ({ ...row, title: row.title || row.publicationNumber, strategy: 'CPC_ADJACENT' as const }))
   } catch (error) {
     console.error('[Whitespace] CPC attack failed:', error instanceof Error ? error.message : error)
-    return []
+    return null
   }
 }
 
 /** Assignee pivot: follow the people nearest the idea through their portfolios. */
-async function assigneeAttack(assignee: string, elements: string[]): Promise<AttackHit[]> {
-  if (!assignee.trim()) return []
+async function assigneeAttack(assignee: string, elements: string[]): Promise<AttackHit[] | null> {
+  if (!assignee.trim()) return null
   const elementQuery = elements.map(element => `"${element.replace(/["\\]/g, ' ')}"`).join(' OR ')
   try {
     const rows = await withTimeout<{
@@ -434,14 +452,12 @@ async function assigneeAttack(assignee: string, elements: string[]): Promise<Att
              left(coalesce(lp."claimsText", ''), 6000) AS "claimsText"
       FROM "local_patents" lp
       WHERE lp."applicants"::text ILIKE ${'%' + assignee.trim() + '%'}
-        AND to_tsvector('english'::regconfig,
-              coalesce(lp."ragText", '') || ' ' || coalesce(lp."title", '') || ' ' || coalesce(lp."abstract", ''))
-            @@ websearch_to_tsquery('english'::regconfig, ${elementQuery})
+        AND ${attackTextPredicate(elementQuery)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
     return rows.map(row => ({ ...row, title: row.title || row.publicationNumber, strategy: 'ASSIGNEE_PIVOT' as const }))
   } catch (error) {
     console.error('[Whitespace] Assignee attack failed:', error instanceof Error ? error.message : error)
-    return []
+    return null
   }
 }
 
@@ -450,8 +466,14 @@ function recordAttack(
   allHits: Map<string, AttackHit>,
   strategy: AttackRecord['strategy'],
   query: string,
-  hits: AttackHit[]
+  hits: AttackHit[] | null
 ) {
+  // A search that could not run is recorded as NOT_RUN — it lowers disproof
+  // completeness instead of masquerading as a clean attack.
+  if (hits === null) {
+    attacks.push({ strategy, query, hits: 0, outcome: 'NOT_RUN', reason: 'The search failed or timed out.' })
+    return
+  }
   // Outcome is provisional CLEAN until mapping says otherwise.
   attacks.push({ strategy, query, hits: hits.length, outcome: 'CLEAN' })
   for (const hit of hits) {

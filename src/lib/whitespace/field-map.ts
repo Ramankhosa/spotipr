@@ -13,6 +13,12 @@
  * `57014` from Postgres. Facets are read inside savepoints, so a slow facet
  * still degrades to a gap in the result rather than killing the census.
  *
+ * The census is EXACT OR REFUSED. Staging stops at WHITESPACE_CENSUS_ROW_CAP
+ * publications; past that the run fails fast with the real number and concrete
+ * narrowing advice, because facets computed over an arbitrary prefix of the
+ * match set would be silently biased — the one failure mode this product must
+ * never have.
+ *
  * Counting conventions, fixed here and declared in every export:
  *   - Families, not publications. COALESCE("familyId", "publicationNumber").
  *   - Filing year, because it approximates R&D timing (WIPO Pub. 946 §8.3.4).
@@ -34,7 +40,39 @@ const CENSUS_TIMEOUT_MS = Math.max(10_000, Number(process.env.WHITESPACE_CENSUS_
 const FACET_TIMEOUT_MS = 20_000
 /** Assignee extraction reads a JSON column, so it runs over a capped sample. */
 const ASSIGNEE_SAMPLE_CAP = 25_000
+/**
+ * Ceiling on staged publications. The census is exact or it is refused: facets
+ * over an arbitrary prefix of the match set would be silently biased, so a
+ * field bigger than this fails fast with the real number instead of hanging
+ * until the statement timeout. ~250k publications is far beyond any field a
+ * study can usefully hypothesise over.
+ */
+const CENSUS_ROW_CAP = Math.max(10_000, Number(process.env.WHITESPACE_CENSUS_ROW_CAP) || 250_000)
 export const PUBLICATION_LAG_MONTHS = 18
+
+/**
+ * Corpora whose rows the text lanes can read. Each entry has a partial FTS GIN
+ * index over SEARCH_TSVECTOR with `"corpusSources" @> ARRAY['<tag>']` as its
+ * predicate (migrations 20260619170000, 20260719120000 and 20260729190000),
+ * which is why the text predicate below is written as an OR of per-corpus
+ * arms: each arm is provable against its own partial index. 'pqai' rows are
+ * deliberately not counted — that source is deprecated and its rows would skew
+ * the census. European publications mostly arrive via the Google corpus; the
+ * 'epo-ops' arm additionally covers documents fetched directly from the EPO.
+ */
+const TEXT_CORPORA = ['google-patents-corpus', 'indian-corpus', 'epo-ops'] as const
+
+/**
+ * The search document. MUST stay byte-identical to the expression of the
+ * partial FTS indexes and searchDocumentExpression() in
+ * indian-corpus-provider.ts — if they diverge, Postgres silently stops using
+ * the indexes and every text lane becomes a sequential scan of the corpus.
+ */
+const SEARCH_TSVECTOR = Prisma.sql`to_tsvector('english'::regconfig,
+        coalesce(lp."ragText", '')   || ' ' ||
+        coalesce(lp."title", '')     || ' ' ||
+        coalesce(lp."abstract", '')  || ' ' ||
+        coalesce(lp."abstractOriginal", ''))`
 
 type Tx = Prisma.TransactionClient
 
@@ -74,33 +112,126 @@ async function facet<T>(tx: Tx, label: string, query: Prisma.Sql, gaps: string[]
 }
 
 /**
- * Builds the websearch tsquery for the scope's concepts.
+ * The concept text query, as flat OR-of-phrases groups that are composed with
+ * the tsquery && / !! operators in SQL.
  *
- * websearch_to_tsquery treats whitespace as AND and understands OR and leading
- * "-" for negation. Required concepts are ANDed; each concept's synonyms are
- * ORed within a parenthesised group; exclusions become negated terms.
+ * This structure exists because websearch_to_tsquery has NO grouping syntax:
+ * parentheses are ignored as punctuation and OR binds LOWER than the implicit
+ * AND, so a single string '("a" OR "b") ("c" OR "d")' parses as
+ * a | (b & c) | d — any lone synonym of the first concept matches the whole
+ * corpus slice. (That mis-parse is what made every census of a multi-concept
+ * scope match millions of rows and time out.) Inside ONE group there is no AND,
+ * so '"a" OR "b" OR "c"' is safe; groups are then ANDed with the tsquery &&
+ * operator and exclusions negated with !!, which parse exactly as intended.
  *
- * Returns null when the scope has no usable text, in which case retrieval falls
- * back to classification only.
+ * Group semantics follow the scope contract: REQUIRED concepts must appear, so
+ * each becomes an AND group. Optional concepts must never narrow the field —
+ * with at least one required concept they add no predicate (they inform later
+ * stages); with none, the field is the union of all concepts, as one OR group.
  */
-export function buildConceptQuery(scope: WhitespaceScope): string | null {
-  const quote = (value: string) => `"${value.replace(/["\\]/g, ' ').trim()}"`
+export interface ConceptQueryPlan {
+  /** One websearch string per AND group: '"term" OR "term" OR ...'. */
+  groups: string[]
+  /** Concept labels behind each group, index-aligned, for error messages. */
+  groupLabels: string[][]
+  /** Exclusion terms as one OR group for the negated arm, or null. */
+  exclusions: string | null
+}
 
-  const groups: string[] = []
-  for (const concept of scope.concepts) {
-    const terms = [concept.label, ...concept.synonyms].map(t => t.trim()).filter(Boolean)
-    if (!terms.length) continue
-    const group = terms.map(quote).join(' OR ')
-    groups.push(terms.length > 1 ? `(${group})` : group)
+const quotePhrase = (value: string) => `"${value.replace(/["\\]/g, ' ').trim()}"`
+
+function conceptTerms(concept: { label: string; synonyms: string[] }): string[] {
+  const seen = new Set<string>()
+  const terms: string[] = []
+  for (const raw of [concept.label, ...concept.synonyms]) {
+    const term = raw.trim()
+    if (!term) continue
+    const key = term.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    terms.push(term)
   }
-  if (!groups.length) return null
+  return terms
+}
 
-  const negations = scope.exclusions
-    .map(e => e.term.trim())
-    .filter(Boolean)
-    .map(term => `-${quote(term)}`)
+export function buildConceptQuery(scope: WhitespaceScope): ConceptQueryPlan | null {
+  const usable = scope.concepts
+    .map(concept => ({ label: concept.label.trim(), required: concept.required, terms: conceptTerms(concept) }))
+    .filter(concept => concept.terms.length > 0)
+  if (!usable.length) return null
 
-  return [...groups, ...negations].join(' ')
+  const required = usable.filter(concept => concept.required)
+  const groups: string[] = []
+  const groupLabels: string[][] = []
+  if (required.length) {
+    for (const concept of required) {
+      groups.push(concept.terms.map(quotePhrase).join(' OR '))
+      groupLabels.push([concept.label])
+    }
+  } else {
+    // No required concept: the field is the union of every concept.
+    groups.push(usable.flatMap(concept => concept.terms).map(quotePhrase).join(' OR '))
+    groupLabels.push(usable.map(concept => concept.label))
+  }
+
+  const exclusionTerms = scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)
+  return {
+    groups,
+    groupLabels,
+    exclusions: exclusionTerms.length ? exclusionTerms.map(quotePhrase).join(' OR ') : null,
+  }
+}
+
+/** groups && groups && !!exclusions, as a single tsquery expression. */
+function composedTsquery(plan: ConceptQueryPlan): Prisma.Sql {
+  let query = plan.groups
+    .map(group => Prisma.sql`websearch_to_tsquery('english'::regconfig, ${group})`)
+    .reduce((acc, part) => Prisma.sql`${acc} && ${part}`)
+  if (plan.exclusions) {
+    query = Prisma.sql`${query} && !!websearch_to_tsquery('english'::regconfig, ${plan.exclusions})`
+  }
+  return Prisma.sql`(${query})`
+}
+
+/**
+ * The text-match predicate: one arm per readable corpus, OR'd.
+ *
+ * Each arm repeats the tsvector match AND carries its corpus tag as a LITERAL
+ * `@>` test — a bind parameter here would stop the planner proving the partial
+ * index predicates (the exact trap FIXED-6 removed from the search providers).
+ */
+export function textMatchPredicate(plan: ConceptQueryPlan): Prisma.Sql {
+  const query = composedTsquery(plan)
+  const arms = TEXT_CORPORA.map(
+    tag =>
+      Prisma.sql`(${SEARCH_TSVECTOR} @@ ${query}
+        AND lp."corpusSources" @> ${Prisma.raw(`ARRAY['${tag}']::TEXT[]`)})`
+  )
+  return Prisma.sql`(${Prisma.join(arms, ' OR ')})`
+}
+
+/**
+ * Verifies every group survives stemming/stopword removal. A group whose every
+ * term is stopwords ("the", "of") composes to an EMPTY tsquery, and the tsquery
+ * && operator treats empty as identity — the group would silently vanish from
+ * the predicate and the census would answer a broader question than the scope
+ * states. Refusing loudly is the honest behaviour.
+ */
+export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<void> {
+  const checks = await prisma.$queryRaw<Array<{ idx: number; nodes: number }>>(Prisma.sql`
+    SELECT idx::int AS idx, numnode(websearch_to_tsquery('english'::regconfig, q))::int AS nodes
+    FROM unnest(${plan.groups}::text[]) WITH ORDINALITY AS t(q, idx)`)
+  const dead = checks.filter(check => check.nodes === 0)
+  if (dead.length) {
+    const labels = dead.flatMap(check => plan.groupLabels[check.idx - 1] ?? [])
+    throw new Error(
+      `The concept${labels.length === 1 ? '' : 's'} ${labels.map(label => `"${label}"`).join(', ')} contain${
+        labels.length === 1 ? 's' : ''
+      } no searchable words after common-word removal. Reword ${labels.length === 1 ? 'it' : 'them'} or remove ${
+        labels.length === 1 ? 'it' : 'them'
+      } before running.`
+    )
+  }
 }
 
 /** Accepted CPC codes, normalised. Empty means "no classification constraint". */
@@ -139,21 +270,23 @@ export function buildScopeFilter(scope: WhitespaceScope): Prisma.Sql {
 
   const conceptQuery = buildConceptQuery(scope)
   if (conceptQuery) {
-    clauses.push(
-      Prisma.sql`to_tsvector('english'::regconfig,
-        coalesce(lp."ragText", '')   || ' ' ||
-        coalesce(lp."title", '')     || ' ' ||
-        coalesce(lp."abstract", '')  || ' ' ||
-        coalesce(lp."abstractOriginal", ''))
-        @@ websearch_to_tsquery('english'::regconfig, ${conceptQuery})`
-    )
-    // Required by the partial index predicate; without it the planner will not
-    // choose local_patents_google_search_tsv_idx.
-    clauses.push(Prisma.sql`lp."corpusSources" @> ARRAY['google-patents-corpus']::TEXT[]`)
+    clauses.push(textMatchPredicate(conceptQuery))
   }
 
   if (scope.filters.jurisdictions.length) {
     clauses.push(Prisma.sql`lp."country" = ANY(${scope.filters.jurisdictions}::text[])`)
+  }
+
+  // Assignee restriction, matched as case-insensitive substrings of the raw
+  // applicants JSON. Coarser than the canonicalised facet, and said so in the
+  // census coverage notes — but silently ignoring the filter, as this module
+  // once did, showed the whole field to a user who asked for one competitor.
+  const assigneePatterns = scope.filters.assignees
+    .map(name => name.trim().replace(/([\\%_])/g, '\\$1'))
+    .filter(name => name.length >= 2)
+    .map(name => `%${name}%`)
+  if (assigneePatterns.length) {
+    clauses.push(Prisma.sql`lp."applicants"::text ILIKE ANY(${assigneePatterns}::text[])`)
   }
 
   return Prisma.join(clauses, ' AND ')
@@ -210,17 +343,24 @@ export interface FieldMapOptions {
   assigneeSampleCap?: number
   /** Ceiling for the staging pass. Defaults to WHITESPACE_CENSUS_TIMEOUT_MS or 90s. */
   censusTimeoutMs?: number
+  /** Ceiling on staged publications. Defaults to WHITESPACE_CENSUS_ROW_CAP or 250k. */
+  censusRowCap?: number
 }
 
 /**
- * Stages every row matching the scope into a temp table, carrying only the
- * columns the facets need. Dropped when the transaction commits.
+ * Stages rows matching the scope into a temp table, carrying only the columns
+ * the facets need. Dropped when the transaction commits.
  *
  * `applicants` is deliberately NOT copied — it is an unbounded JSON blob and
  * copying it for millions of rows would spill temp space for no reason. Only the
  * capped assignee sample joins back to fetch it.
+ *
+ * The LIMIT is the row cap plus one: staging stops the moment the field proves
+ * bigger than the census will count exactly, instead of materialising millions
+ * of rows and dying on the statement timeout. One extra row is how the caller
+ * distinguishes "exactly at the cap" from "over it".
  */
-function stageCensus(where: Prisma.Sql): Prisma.Sql {
+function stageCensus(where: Prisma.Sql, rowCap: number): Prisma.Sql {
   return Prisma.sql`
     CREATE TEMP TABLE ws_census ON COMMIT DROP AS
     SELECT lp."id"                                         AS id,
@@ -232,7 +372,21 @@ function stageCensus(where: Prisma.Sql): Prisma.Sql {
            lp."classifications"                            AS classifications,
            (lp."applicants" IS NOT NULL)                   AS has_applicants
     FROM "local_patents" lp
-    WHERE ${where}`
+    WHERE ${where}
+    LIMIT ${rowCap + 1}`
+}
+
+/** Shared advice for a scope that must be narrowed before it can be counted. */
+function narrowingAdvice(scope: WhitespaceScope): string {
+  const plan = buildConceptQuery(scope)
+  if (!plan && acceptedCpc(scope).length > 0) {
+    return 'This scope matches on classification alone, which cannot use the text index and so reads the whole corpus. Add a concept — even one — and the search becomes index-backed.'
+  }
+  const hasRequired = scope.concepts.some(c => c.required && c.label.trim())
+  const requiredHint = hasRequired
+    ? 'mark more concepts as required'
+    : 'mark a concept as required (required concepts intersect; with none marked, the field is the union of every concept)'
+  return `Narrow it: ${requiredHint}, tighten the filing years, restrict jurisdictions, or add exclusions.`
 }
 
 /**
@@ -240,20 +394,29 @@ function stageCensus(where: Prisma.Sql): Prisma.Sql {
  * do about it — "statement timeout" is true and useless.
  */
 function tooBroadMessage(scope: WhitespaceScope, timeoutMs: number): string {
-  const classificationOnly = !buildConceptQuery(scope) && acceptedCpc(scope).length > 0
-  const advice = classificationOnly
-    ? 'This scope matches on classification alone, which cannot use the text index and so reads the whole corpus. Add a concept — even one — and the search becomes index-backed.'
-    : 'Narrow it: tighten the filing years, restrict jurisdictions, mark a concept as required, or accept fewer classifications.'
-  return `This field is too broad to count within ${Math.max(1, Math.round(timeoutMs / 1000))}s. ${advice}`
+  return `This field is too broad to count within ${Math.max(1, Math.round(timeoutMs / 1000))}s. ${narrowingAdvice(scope)}`
+}
+
+/** The field is countable but bigger than the exact-census ceiling. */
+function overCapMessage(scope: WhitespaceScope, rowCap: number): string {
+  return `This field matches more than ${rowCap.toLocaleString()} publications — bigger than the census will count exactly. ${narrowingAdvice(
+    scope
+  )}`
 }
 
 export async function runFieldMap(
   scope: WhitespaceScope,
   options: FieldMapOptions = {}
 ): Promise<FieldMapResult> {
+  const conceptQuery = buildConceptQuery(scope)
+  // Outside the transaction: a scope whose concepts stem away to nothing must
+  // fail with the concept named, not count a silently different field.
+  if (conceptQuery) await assertConceptQueryUsable(conceptQuery)
+
   const where = buildScopeFilter(scope)
   const sampleCap = options.assigneeSampleCap ?? ASSIGNEE_SAMPLE_CAP
   const censusTimeoutMs = options.censusTimeoutMs ?? CENSUS_TIMEOUT_MS
+  const rowCap = options.censusRowCap ?? CENSUS_ROW_CAP
   const coverageNotes: string[] = []
   const gaps: string[] = []
 
@@ -264,7 +427,7 @@ export async function runFieldMap(
   // --- The single pass over the corpus -------------------------------------
   await setStatementTimeout(tx, censusTimeoutMs)
   try {
-    await tx.$executeRaw(stageCensus(where))
+    await tx.$executeRaw(stageCensus(where, rowCap))
   } catch (error) {
     if (isStatementTimeout(error)) throw new Error(tooBroadMessage(scope, censusTimeoutMs))
     throw error
@@ -283,11 +446,22 @@ export async function runFieldMap(
         FROM ws_census`
     )
   } catch (error) {
-    if (isStatementTimeout(error)) throw new Error(tooBroadMessage(scope, censusTimeoutMs))
+    if (isStatementTimeout(error)) {
+      throw new Error(
+        `The field staged but could not be counted within ${Math.round(FACET_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
+      )
+    }
     throw error
   }
   const familyCount = Number(totals[0]?.families ?? 0)
   const publicationCount = Number(totals[0]?.publications ?? 0)
+
+  // Over the exact-census ceiling: the staged rows are an arbitrary subset, and
+  // facets over an arbitrary subset would be quietly biased. Refuse with the
+  // real number rather than publish proportions of an unknown population.
+  if (publicationCount > rowCap) {
+    throw new Error(overCapMessage(scope, rowCap))
+  }
 
   // --- Facet 2: filing trend ----------------------------------------------
   const yearRows =
@@ -458,6 +632,28 @@ export async function runFieldMap(
   // --- Coverage notes ------------------------------------------------------
   // These travel onto every hypothesis this study later produces.
   coverageNotes.push(`Corpus covers ${CORPUS_FIRST_YEAR}-present. No art before ${CORPUS_FIRST_YEAR} was searched.`)
+  if (conceptQuery) {
+    coverageNotes.push(
+      'Concept matching reads the Google Patents, Indian and EPO-fetched corpora; rows from other ingestion sources are not text-searchable and are not counted.'
+    )
+    const optionalCount = scope.concepts.filter(c => !c.required && c.label.trim()).length
+    if (scope.concepts.some(c => c.required && c.label.trim()) && optionalCount > 0) {
+      coverageNotes.push(
+        `${optionalCount} optional concept${optionalCount === 1 ? '' : 's'} did not restrict this count — only required concepts define the field. Optional concepts inform clustering and validation.`
+      )
+    } else if (!scope.concepts.some(c => c.required && c.label.trim())) {
+      coverageNotes.push(
+        'No concept is marked required, so this field is the union of every concept. Mark concepts as required to intersect them.'
+      )
+    }
+  }
+  if (scope.filters.assignees.length) {
+    coverageNotes.push(
+      `Restricted to ${scope.filters.assignees.length} assignee name${
+        scope.filters.assignees.length === 1 ? '' : 's'
+      }, matched as substrings of applicant records — subsidiaries filed under other names are not caught.`
+    )
+  }
   if (familyCount > 0) {
     const pct = Math.round((textCoverage.withClaims / familyCount) * 100)
     coverageNotes.push(`Claim text readable for ${pct}% of families in this field.`)

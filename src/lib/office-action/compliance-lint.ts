@@ -393,13 +393,13 @@ function proceduralChecks(input: LintInput): LintCheck[] {
   const procedural = input.objectionReplies.filter(r => r.attorneyAction)
   if (!procedural.length) return []
 
+  // Only one question is asked here: has the attorney confirmed the act?
+  //
+  // We deliberately do NOT also require a copy of the document. The filing
+  // happens at the office, outside this system, so an attachment would prove
+  // nothing — and a warning that fires on every procedural confirmation, which
+  // nobody can act on, only teaches people to ignore the lint panel.
   const unconfirmed = procedural.filter(r => !isComplianceConfirmed(r as any))
-  const missingDoc = procedural.filter(r => {
-    if (!isComplianceConfirmed(r as any)) return false
-    const rule = input.profile ? complianceRuleFor(input.profile, r.code, (r as any).subTypeId) : undefined
-    if (!rule?.requiresSupportingDocument) return false
-    return !((r as any).compliance?.supportingDocumentIds || []).length
-  })
 
   const checks: LintCheck[] = []
   checks.push(unconfirmed.length === 0
@@ -408,13 +408,6 @@ function proceduralChecks(input: LintInput): LintCheck[] {
         id: 'procedural', label: 'Procedural requirements confirmed', status: 'fail',
         detail: `${unconfirmed.length} section(s) state compliance you have not confirmed. These are acts you perform, not arguments — confirm each one before this reply is filed.`
       })
-
-  if (missingDoc.length) {
-    checks.push({
-      id: 'proceduralDocs', label: 'Documents that accompany the reply are attached', status: 'fail',
-      detail: `${missingDoc.length} section(s) state that a document is filed with this reply, but none is attached.`
-    })
-  }
 
   return checks
 }

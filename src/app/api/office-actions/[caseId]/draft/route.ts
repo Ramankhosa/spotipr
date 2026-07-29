@@ -109,12 +109,19 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
             where: { id: edit.objectionId }, select: { canonicalCode: true, subTypeId: true }
           })
           if (profile && row) {
+            // The attorney's word is the control here, deliberately.
+            //
+            // Filing a Form 3 happens on the office's portal — this system has
+            // no visibility into it and never will, so requiring a copy here
+            // would verify only that SOME file exists in our database, not that
+            // the act occurred. That is ceremony, and it costs them time on a
+            // deadline. We accept one click as approval for the substantive
+            // legal arguments; demanding documentary proof for the clerical act
+            // while trusting them on the law would be backwards.
+            //
+            // What IS enforced is that this sentence did not exist until they
+            // said so. That was the defect; this is the control.
             const rule = complianceRuleFor(profile, row.canonicalCode, row.subTypeId)
-            if (rule.requiresSupportingDocument && !supportingDocumentIds.length) {
-              return NextResponse.json({
-                error: 'This statement says a document is filed with the reply. Attach it before confirming.'
-              }, { status: 400 })
-            }
             target.bodyText = rule.filingSentence
           }
         } else {

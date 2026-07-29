@@ -47,6 +47,10 @@ export const PATENT_CORPUS_EMBEDDING_SQL_TYPE: 'vector' | 'halfvec' | 'bit' =
     : PATENT_CORPUS_EMBEDDING_COLUMN === 'embeddingHalf' ? 'halfvec' : 'bit'
 // Distance operator: cosine (<=>) for real vectors, Hamming (<~>) for bit vectors.
 export const PATENT_CORPUS_EMBEDDING_DISTANCE_OP = PATENT_CORPUS_EMBEDDING_DTYPE === 'binary' ? '<~>' : '<=>'
+// Coverage/readiness must test the column the configured dtype writes to; the
+// legacy float column stays NULL on halfvec/binary corpora, so checking it there
+// reads a fully embedded corpus as 0% and 503s the public API (CORPUS_NOT_READY).
+const EMBEDDING_PRESENCE_CONDITION = Prisma.raw(`e."${PATENT_CORPUS_EMBEDDING_COLUMN}" IS NOT NULL`)
 export const PATENT_CORPUS_SOURCE_INDIAN = 'indian-corpus'
 export const PATENT_CORPUS_SOURCE_PQAI = 'pqai'
 export const PATENT_CORPUS_SOURCE_EPO = 'epo-ops'
@@ -1443,7 +1447,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
           WHERE e."localPatentId" = p."id"
             AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
             AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
-            AND e."embedding" IS NOT NULL
+            AND ${EMBEDDING_PRESENCE_CONDITION}
         )
       )::int AS "patentsWithCompletedEmbedding",
       COUNT(*) FILTER (
@@ -1488,7 +1492,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
           WHERE e."localPatentId" = p."id"
             AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
             AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
-            AND e."embedding" IS NOT NULL
+            AND ${EMBEDDING_PRESENCE_CONDITION}
         ) AS "hasCompletedEmbedding"
       FROM "local_patents" p
     )

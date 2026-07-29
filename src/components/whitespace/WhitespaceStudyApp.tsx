@@ -265,6 +265,13 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
       })
       void loadRun(data.runId)
     } catch (error) {
+      // 409 means this stage is already running — attach to it instead of
+      // reporting a failure for work that is in fact under way.
+      if ((error as { status?: number })?.status === 409) {
+        toast({ variant: 'default', title: 'Already mapping', description: 'Showing the run in progress.' })
+        void load()
+        return
+      }
       setRunning(false)
       toast({
         variant: 'error',
@@ -272,7 +279,7 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
         description: error instanceof Error ? error.message : 'Try again.',
       })
     }
-  }, [studyId, loadRun, toast])
+  }, [studyId, loadRun, load, toast])
 
   const runnable = useMemo(
     () => scope.concepts.some(c => c.label.trim()) || scope.classifications.some(c => c.accepted && c.code.trim()),

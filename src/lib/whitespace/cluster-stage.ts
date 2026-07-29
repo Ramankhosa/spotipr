@@ -61,15 +61,15 @@ export async function runClusterStage(input: {
   const where = buildScopeFilter(input.scope)
   const coverageNotes: string[] = []
 
-  // --- field size + sample, one pass each -----------------------------------
-  const [fieldCountRows, sampleRows] = await Promise.all([
-    withTimeout<{ families: bigint }>(
-      Prisma.sql`
-        SELECT COUNT(DISTINCT COALESCE(lp."familyId", lp."publicationNumber"))::bigint AS families
-        FROM "local_patents" lp
-        WHERE ${where}`
-    ),
-    withTimeout<SampleRow>(
+  // --- field size + sample ---------------------------------------------------
+  // Field size comes from the completed census when one exists — re-counting the
+  // corpus here would repeat the most expensive query in the studio for a number
+  // the study already holds. The direct count is only the fallback.
+  const censusFamilies = await familyCountFromCensus(input.studyId, input.scope)
+
+  let sampleRows: SampleRow[]
+  try {
+    sampleRows = await withTimeout<SampleRow>(
       Prisma.sql`
         SELECT t.*
         FROM (
@@ -90,10 +90,33 @@ export async function runClusterStage(input: {
         ) t
         ORDER BY md5(t.id::text)
         LIMIT ${SAMPLE_CAP}`
-    ),
-  ])
+    )
+  } catch (error) {
+    if (isStatementTimeout(error)) {
+      throw new Error(
+        `Sampling this field timed out after ${Math.round(STAGE_TIMEOUT_MS / 1000)}s — the scope matches too many families to draw a uniform sample from. Narrow the scope (mark concepts as required, tighten years or jurisdictions) and re-run.`
+      )
+    }
+    throw error
+  }
 
-  const fieldFamilies = Number(fieldCountRows[0]?.families ?? 0)
+  let fieldFamilies = censusFamilies ?? 0
+  if (censusFamilies === null) {
+    try {
+      const fieldCountRows = await withTimeout<{ families: bigint }>(
+        Prisma.sql`
+          SELECT COUNT(DISTINCT COALESCE(lp."familyId", lp."publicationNumber"))::bigint AS families
+          FROM "local_patents" lp
+          WHERE ${where}`
+      )
+      fieldFamilies = Number(fieldCountRows[0]?.families ?? 0)
+    } catch (error) {
+      if (!isStatementTimeout(error)) throw error
+      throw new Error(
+        'The field size could not be counted — run the field map first so this stage can reuse its census.'
+      )
+    }
+  }
   const n = sampleRows.length
 
   if (n < 20) {
@@ -281,6 +304,29 @@ async function withTimeout<T>(query: Prisma.Sql): Promise<T[]> {
     prisma.$queryRaw<T[]>(query),
   ])
   return rows
+}
+
+/** True for Postgres 57014 — query_canceled, i.e. the statement timeout fired. */
+function isStatementTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = (error as { meta?: { code?: string } })?.meta?.code
+  return code === '57014' || /57014|statement timeout|canceling statement/i.test(message)
+}
+
+/**
+ * Family count from the newest completed census OF THE SAME SCOPE. A census of
+ * an earlier scope version answers a different question, so it is ignored and
+ * the stage falls back to counting directly (accepting the cost).
+ */
+async function familyCountFromCensus(studyId: string, scope: WhitespaceScope): Promise<number | null> {
+  const run = await prisma.whitespaceRun.findFirst({
+    where: { studyId, stage: 'FIELD_MAP', status: 'COMPLETED' },
+    orderBy: { createdAt: 'desc' },
+    select: { results: true, scopeSnapshot: true },
+  })
+  if (!run || JSON.stringify(run.scopeSnapshot ?? null) !== JSON.stringify(scope)) return null
+  const familyCount = (run.results as { familyCount?: unknown } | null)?.familyCount
+  return typeof familyCount === 'number' && familyCount > 0 ? familyCount : null
 }
 
 async function heartbeat(runId: string): Promise<void> {

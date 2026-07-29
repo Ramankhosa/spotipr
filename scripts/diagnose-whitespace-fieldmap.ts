@@ -105,7 +105,13 @@ async function main() {
   console.log(`  classifications: ${scope.classifications.filter(c => c.accepted).length} accepted`)
   console.log(`  years:           ${scope.filters.yearFrom}-${scope.filters.yearTo}`)
   console.log(`  jurisdictions:   ${scope.filters.jurisdictions.join(', ') || '(all)'}`)
-  console.log(`  tsquery:         ${buildConceptQuery(scope) ?? '(none — classification only)'}`)
+  const conceptPlan = buildConceptQuery(scope)
+  if (conceptPlan) {
+    conceptPlan.groups.forEach((group, index) => console.log(`  tsquery group ${index + 1}: ${group.slice(0, 200)}`))
+    if (conceptPlan.exclusions) console.log(`  tsquery NOT:     ${conceptPlan.exclusions.slice(0, 200)}`)
+  } else {
+    console.log('  tsquery:         (none — classification only)')
+  }
 
   // --- corpus size and server timeouts -------------------------------------
   const [size] = await withTimeout<{ approx_rows: number; total_bytes: string }>(

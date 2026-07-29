@@ -16,7 +16,7 @@
 
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { buildScopeFilter } from './field-map'
+import { buildScopeFilter, textMatchPredicate } from './field-map'
 import { PUBLICATION_LAG_MONTHS } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
 import type { SignalsStageResult, TermDivergence, WhitespaceScope } from './types'
@@ -186,7 +186,11 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
   for (const concept of scope.concepts.slice(0, 6)) {
     const terms = [concept.label, ...concept.synonyms].map(term => term.trim()).filter(Boolean)
     if (!terms.length) continue
+    // One OR group over the concept's terms, matched with the same per-corpus
+    // arms the census uses — so the two lanes disagree only in vocabulary,
+    // never in which corpus slice they were allowed to see.
     const tsquery = terms.map(term => `"${term.replace(/["\\]/g, ' ').trim()}"`).join(' OR ')
+    const textPredicate = textMatchPredicate({ groups: [tsquery], groupLabels: [[concept.label]], exclusions: null })
 
     let lexical: string[] = []
     try {
@@ -195,13 +199,7 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
           SELECT DISTINCT COALESCE(lp."familyId", lp."publicationNumber") AS "familyKey"
           FROM "local_patents" lp
           WHERE ${baseFilter}
-            AND to_tsvector('english'::regconfig,
-                  coalesce(lp."ragText", '')   || ' ' ||
-                  coalesce(lp."title", '')     || ' ' ||
-                  coalesce(lp."abstract", '')  || ' ' ||
-                  coalesce(lp."abstractOriginal", ''))
-                @@ websearch_to_tsquery('english'::regconfig, ${tsquery})
-            AND lp."corpusSources" @> ARRAY['google-patents-corpus']::TEXT[]
+            AND ${textPredicate}
           LIMIT ${PROBE_TOP_N}`
       )
       lexical = rows.map(row => row.familyKey)

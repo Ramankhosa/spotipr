@@ -1825,9 +1825,7 @@ function ObjectionWorkbench(props: {
                         ) : (
                           <Button size="sm" disabled={props.busy !== null}
                             onClick={() => props.onConfirmCompliance(true)}>
-                            {reply.requiresSupportingDocument
-                              ? 'I have done this and the document accompanies the reply'
-                              : 'I have done this'}
+                            I have done this
                           </Button>
                         )}
                       </div>

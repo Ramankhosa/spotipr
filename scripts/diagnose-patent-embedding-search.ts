@@ -15,6 +15,10 @@ import {
 
 const PREFIX = '[EmbeddingSearchDiagnostic]'
 
+// The configured dtype decides which physical column holds vectors; testing the
+// legacy float column against a halfvec/binary corpus reads healthy rows as empty.
+const EMBEDDING_PRESENCE_CONDITION = Prisma.raw(`e."${PATENT_CORPUS_EMBEDDING_COLUMN}" IS NOT NULL`)
+
 function json(value: unknown) {
   return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? Number(item) : item)
 }
@@ -145,7 +149,9 @@ async function main() {
       e."status"::text AS "status",
       e."dimensions",
       COUNT(*)::int AS "rowCount",
-      COUNT(*) FILTER (WHERE e."embedding" IS NOT NULL)::int AS "nonNullVectorCount",
+      COUNT(*) FILTER (
+        WHERE e."embedding" IS NOT NULL OR e."embeddingHalf" IS NOT NULL OR e."embeddingBinary" IS NOT NULL
+      )::int AS "nonNullVectorCount",
       MIN(e."createdAt") AS "oldestCreatedAt",
       MAX(e."updatedAt") AS "latestUpdatedAt"
     FROM "local_patent_embeddings" e
@@ -193,7 +199,7 @@ async function main() {
       COUNT(DISTINCT ps."id") FILTER (
         WHERE e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
           AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
-          AND e."embedding" IS NOT NULL
+          AND ${EMBEDDING_PRESENCE_CONDITION}
       )::int AS "searchablePatentCount"
     FROM patent_sources ps
     LEFT JOIN "local_patent_embeddings" e ON e."localPatentId" = ps."id"
