@@ -8,7 +8,7 @@ import { assembleReply, type DraftedObjectionReply, type AmendedClaim, type Case
 import { lintReply } from '@/lib/office-action/compliance-lint'
 import { buildReplyDocx } from '@/lib/office-action/oa-docx-export'
 import {
-  analyzeParagraphMarkers, splitParagraphs, splitSections, citableIdSet, FilingValidationError
+  analyzeParagraphMarkers, splitParagraphs, splitSections, citableIdSet
 } from '@/lib/office-action/document-intake'
 import { normalizeLegacyDraftJson, normalizeLegacyCompliance, normalizeLegacyClaimChart, hashDocumentText } from '@/lib/office-action/oa-json-schema'
 
@@ -173,10 +173,20 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     identityOverride: compliance.identityOverride
   })
 
-  // Persist the lint result on the draft either way.
+  // Persist the lint result on the draft either way. When the attorney accepts
+  // outstanding findings, record WHO accepted WHAT and WHEN — server-assigned,
+  // never taken from the request.
+  const acknowledgement = (!body.preview && body.acknowledgeSignature === lint.signature)
+    ? {
+        signature: lint.signature,
+        acknowledgedBy: auth.user.id,
+        acknowledgedAt: new Date().toISOString(),
+        items: lint.checks.filter(c => c.status !== 'pass').map(c => ({ id: c.id, status: c.status, detail: c.detail }))
+      }
+    : (compliance as any).acknowledgement
   await prisma.oaResponseDraft.update({
     where: { id: draft.id },
-    data: { complianceJson: { ...compliance, lint } as any }
+    data: { complianceJson: { ...compliance, lint, ...(acknowledgement ? { acknowledgement } : {}) } as any }
   })
 
   if (body.preview) {
@@ -191,24 +201,35 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     })
   }
 
-  if (!lint.pass) {
-    return NextResponse.json({ error: 'Compliance lint failed — resolve blocking items before export', lint }, { status: 422 })
+  /**
+   * The checks inform; they do not decide.
+   *
+   * Several findings are things only the attorney can settle, and some are
+   * settled outside this system entirely — a Form 3 filed on the office portal,
+   * an applicant name that differs for a reason we cannot see, a citation they
+   * know is right. Refusing to produce the document would not make any of those
+   * go away; it would just leave them with a deadline and no draft.
+   *
+   * So export is gated on ACKNOWLEDGEMENT rather than absence of findings: they
+   * confirm they have read this exact set, and that is recorded. The
+   * acknowledgement is bound to the findings' signature, so accepting once
+   * cannot silently carry over to a different set of problems later.
+   */
+  const outstanding = lint.checks.filter(c => c.status !== 'pass')
+  if (outstanding.length && body.acknowledgeSignature !== lint.signature) {
+    return NextResponse.json({
+      requiresAcknowledgement: true,
+      signature: lint.signature,
+      error: body.acknowledgeSignature
+        ? 'The checks have changed since you reviewed them — read them again before exporting.'
+        : 'Confirm you have read the outstanding items, then export.',
+      lint
+    }, { status: 409 })
   }
 
-  let buffer: Buffer
-  try {
-    buffer = await buildReplyDocx(assembled, profile, {
-      includeComplianceNote: body.includeVerificationNote === true, lint, citableIds
-    })
-  } catch (err) {
-    // The filing renderer refuses text it cannot stand behind. The lint should
-    // have caught it first; if it did not, that is a defect worth surfacing
-    // plainly rather than turning into a 500.
-    if (err instanceof FilingValidationError) {
-      return NextResponse.json({ error: err.message, lint }, { status: 422 })
-    }
-    throw err
-  }
+  const buffer = await buildReplyDocx(assembled, profile, {
+    includeComplianceNote: body.includeVerificationNote === true, lint, citableIds
+  })
 
   // The reply has been produced and passed the lint — reflect it on the docket.
   await prisma.officeActionCase.update({

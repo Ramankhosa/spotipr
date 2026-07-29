@@ -666,17 +666,25 @@ export default function OfficeActionWorkspacePage() {
     } finally { setBusy(null) }
   }
 
-  const exportDocx = async () => {
+  const exportDocx = async (acknowledgeSignature?: string) => {
     setBusy('export')
     try {
       const res = await fetch(`/api/office-actions/${caseId}/export`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: '{}'
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(acknowledgeSignature ? { acknowledgeSignature } : {})
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
+        // Outstanding findings do not block the export — they ask to be read
+        // first. Keep whatever document is already on screen; replacing it with
+        // an empty pane would hide the very thing they need to review.
+        if (data.requiresAcknowledgement) {
+          setPreview(prev => ({ lint: data.lint, html: prev?.html || '' }))
+          throw new Error(data.error || 'Review the outstanding items, then export.')
+        }
         if (data.lint) {
-          setPreview({ lint: data.lint, html: '' })
-          throw new Error('The compliance check found blocking items — review them below.')
+          setPreview(prev => ({ lint: data.lint, html: prev?.html || '' }))
+          throw new Error(data.error || 'Export failed')
         }
         throw new Error(data.error || 'Export failed')
       }
@@ -687,7 +695,7 @@ export default function OfficeActionWorkspacePage() {
       URL.revokeObjectURL(url)
       toast({ title: 'Reply exported', variant: 'success' })
     } catch (err) {
-      toast({ title: 'Export blocked', description: err instanceof Error ? err.message : undefined, variant: 'error' })
+      toast({ title: 'Not exported yet', description: err instanceof Error ? err.message : undefined, variant: 'error' })
     } finally { setBusy(null) }
   }
 
@@ -971,7 +979,8 @@ function NumberingNotice(props: {
 
 function DeadlineStrip(props: {
   view: CaseView; approved: number; total: number
-  onOpenCaseFile: () => void; onAddDocument: () => void; onPrepare: () => void; onPreview: () => void; onExport: () => void
+  onOpenCaseFile: () => void; onAddDocument: () => void; onPrepare: () => void; onPreview: () => void
+  onExport: (acknowledgeSignature?: string) => void
   onPause: () => void; pausing: boolean
   /** Every section is drafted and at least one is still unapproved. */
   canApproveAll: boolean; pendingApproval: number; onApproveAll: () => void
@@ -1065,7 +1074,7 @@ function DeadlineStrip(props: {
               <Button variant="outline" size="sm" onClick={props.onPreview} disabled={props.busy !== null || !props.hasDraft}>
                 <BookOpen className="w-4 h-4 mr-1.5" aria-hidden /> Preview
               </Button>
-              <Button variant="outline" size="sm" onClick={props.onExport} disabled={props.busy !== null || !props.hasDraft}>
+              <Button variant="outline" size="sm" onClick={() => props.onExport()} disabled={props.busy !== null || !props.hasDraft}>
                 <Download className="w-4 h-4 mr-1.5" aria-hidden /> Export
               </Button>
             </>
@@ -2413,7 +2422,7 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
 function PreviewModal(props: {
   preview: { lint: any; html: string }
   onClose: () => void
-  onExport: () => void
+  onExport: (acknowledgeSignature?: string) => void
   busy: boolean
   agent: { name?: string; regNo?: string }
   onSaveAgent: (agent: { name?: string; regNo?: string }) => Promise<any> | void
@@ -2423,6 +2432,10 @@ function PreviewModal(props: {
   const [agentName, setAgentName] = useState(props.agent?.name || '')
   const [agentRegNo, setAgentRegNo] = useState(props.agent?.regNo || '')
   const form3Blocked = (lint?.checks || []).some((c: any) => c.id === 'form3' && c.status === 'fail')
+  const outstanding = (lint?.checks || []).filter((c: any) => c.status !== 'pass')
+  const [acknowledged, setAcknowledged] = useState(false)
+  // A new set of findings is a new thing to read — an earlier tick cannot cover it.
+  useEffect(() => { setAcknowledged(false) }, [lint?.signature])
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 pt-[6vh]" onClick={e => { if (e.target === e.currentTarget) props.onClose() }}>
       <div className="bg-background border rounded-lg shadow-xl w-full max-w-3xl max-h-[88vh] flex flex-col" role="dialog" aria-label="Reply preview">
@@ -2470,11 +2483,23 @@ function PreviewModal(props: {
         <div className="flex-1 overflow-y-auto p-5 bg-muted/30">
           {html
             ? <div dangerouslySetInnerHTML={{ __html: html }} />
-            : <p className="text-sm text-muted-foreground">Resolve the blocking items above, then preview again.</p>}
+            : <p className="text-sm text-muted-foreground">Run Preview to see the reply document.</p>}
         </div>
         <div className="px-5 py-3.5 border-t flex justify-end gap-2">
           <Button variant="outline" onClick={props.onClose}>Close</Button>
-          <Button onClick={props.onExport} disabled={props.busy || !lint?.pass}>
+          {outstanding.length > 0 && (
+            <label className="flex items-start gap-2 text-sm mr-auto max-w-xl cursor-pointer">
+              <input type="checkbox" className="mt-0.5 shrink-0" checked={acknowledged}
+                onChange={e => setAcknowledged(e.target.checked)} />
+              <span>
+                I have read the {outstanding.length} item{outstanding.length === 1 ? '' : 's'} above and will deal with
+                {outstanding.length === 1 ? ' it' : ' them'}.
+                <span className="text-muted-foreground"> Some are resolved outside this system; exporting records that you reviewed them.</span>
+              </span>
+            </label>
+          )}
+          <Button onClick={() => props.onExport(outstanding.length ? lint?.signature : undefined)}
+            disabled={props.busy || (outstanding.length > 0 && !acknowledged)}>
             {props.busy ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Exporting…</> : <><Download className="w-4 h-4 mr-1.5" aria-hidden /> Export DOCX</>}
           </Button>
         </div>

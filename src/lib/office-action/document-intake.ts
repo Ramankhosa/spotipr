@@ -24,8 +24,10 @@
  *              usable internally for retrieval and basis resolution, and
  *              NEVER renderable as a filing citation.
  *
- * `citable` is the single flag that governs the difference, and the filing
- * renderer throws rather than emitting anything it cannot stand behind.
+ * `citable` is the single flag that governs the difference. The filing renderer
+ * never emits a number it cannot stand behind — it substitutes a visible
+ * placeholder instead. It does not refuse to render: whether to file is the
+ * attorney's decision, and the lint has already told them what is unresolved.
  */
 
 export type ParagraphNumbering = 'AUTHORED' | 'DERIVED'
@@ -320,12 +322,21 @@ export class FilingValidationError extends Error {
   }
 }
 
+/** Stands in for a reference the system will not vouch for. Obvious on the page. */
+export const UNVERIFIED_REF_PLACEHOLDER = '[reference to verify]'
+
 /**
  * Render internal anchors for the filed document.
  *
- * CONVERTS valid authored anchors — authored mode is exactly when `¶0038` must
- * become "[0038]". THROWS on anything else, rather than trusting the lint to
- * have run first: the lint is a sequencing assumption, this is a guarantee.
+ * CONVERTS a valid authored anchor — authored mode is exactly when `¶0038` must
+ * become "[0038]".
+ *
+ * Anything it cannot stand behind becomes a VISIBLE PLACEHOLDER rather than a
+ * number. It does not block: whether to file is the attorney's call, and the
+ * lint has already told them what is unresolved. But it will not emit a
+ * citation that looks authoritative and is not — a glaring
+ * "[reference to verify]" they can fix in Word is strictly better than a
+ * fabricated "[0007]" that reads as correct.
  */
 export function formatParagraphRefsForFiling(
   text: string,
@@ -333,39 +344,19 @@ export function formatParagraphRefsForFiling(
 ): string {
   const src = text || ''
 
-  const nonCitable = src.match(/§\s?\d{1,6}/)
-  if (nonCitable) {
-    throw new FilingValidationError(
-      `A non-citable anchor (${nonCitable[0]}) is still present in text bound for the filing.`
-    )
-  }
+  // A non-citable anchor is never a filing citation, in either mode.
+  let out = src.replace(/§\s?\d{1,6}/g, UNVERIFIED_REF_PLACEHOLDER)
 
   if (opts.numbering === 'DERIVED') {
-    const anchor = src.match(/¶\s?\d{1,6}/)
-    if (anchor) {
-      throw new FilingValidationError(
-        'The specification as filed carries no paragraph numbers, so a paragraph citation cannot be minted for it.'
-      )
-    }
-    return src
+    // The document numbers nothing, so no number here can be its own.
+    return out.replace(/¶\s?\d{1,6}/g, UNVERIFIED_REF_PLACEHOLDER)
   }
 
-  if (opts.citableIds) {
-    const unresolved: string[] = []
-    for (const m of Array.from(src.matchAll(/¶\s?(\d{1,6})/g))) {
-      const id = `¶${padNum(m[1])}`
-      if (!opts.citableIds.has(id)) unresolved.push(`[${padNum(m[1])}]`)
-    }
-    if (unresolved.length) {
-      throw new FilingValidationError(
-        `Cited paragraph(s) ${Array.from(new Set(unresolved)).join(', ')} do not exist in the specification as filed.`
-      )
-    }
-  }
-
-  return src
-    .replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => `[${inner.replace(/¶\s?/g, '')}]`)
-    .replace(/¶\s?(\d{1,6})/g, '[$1]')
+  out = out.replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => `[${inner.replace(/¶\s?/g, '')}]`)
+  return out.replace(/¶\s?(\d{1,6})/g, (_m, digits: string) => {
+    if (opts.citableIds && !opts.citableIds.has(`¶${padNum(digits)}`)) return UNVERIFIED_REF_PLACEHOLDER
+    return `[${padNum(digits)}]`
+  })
 }
 
 /**

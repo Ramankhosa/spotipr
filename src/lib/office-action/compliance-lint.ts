@@ -10,12 +10,25 @@ import { findContradictions, type ChartFact } from './contradiction-lint'
 import type { OfficeActionProfile } from './oa-profile-schema'
 
 /**
- * Office Action Studio — compliance lint (deterministic, blocking)
+ * Office Action Studio — compliance lint (deterministic, advisory)
  *
- * The final gate before export. Every check here is a hard rule that would make
- * a filed reply defective; a FAIL blocks the DOCX export. This is the structural
- * enforcement of the plan's trust guarantees — coverage, quote fidelity,
- * amendment basis, citation integrity, case identity, and the forms checklist.
+ * The last read-through before a reply is filed: coverage, quote fidelity,
+ * amendment basis, citation integrity, case identity, prior-art consistency and
+ * the forms checklist.
+ *
+ * It INFORMS; it does not decide. Several findings are things only the attorney
+ * can settle — an applicant name that differs for a reason we cannot see, a
+ * citation they know is right — and some are settled outside this system
+ * entirely, like a Form 3 filed on the office portal. Refusing to produce the
+ * document would not resolve any of them; it would leave an attorney holding a
+ * deadline and no draft.
+ *
+ * So export is gated on ACKNOWLEDGEMENT rather than on absence of findings, and
+ * `signature` binds that acknowledgement to the exact set they read — accepting
+ * once cannot silently carry over to a different set of problems later.
+ *
+ * `status` still means what it says. A 'fail' is a real defect, not a
+ * suggestion; the difference is who decides what to do about it.
  */
 
 export interface LintCheck {
@@ -26,10 +39,35 @@ export interface LintCheck {
 }
 
 export interface LintResult {
-  pass: boolean               // false if any 'fail'
+  /** No blocking findings. NOT a permission to export — see `signature`. */
+  pass: boolean
   blocking: number
   warnings: number
   checks: LintCheck[]
+  /**
+   * Fingerprint of the current findings.
+   *
+   * The export records the attorney's acknowledgement against this, so an
+   * acknowledgement cannot silently carry over to a DIFFERENT set of problems.
+   * Accept once, and it covers what you actually read — nothing more.
+   */
+  signature: string
+}
+
+/**
+ * Fingerprint the findings that matter — id, status and detail, since the same
+ * check can fire for a different reason and must be re-read when it does.
+ */
+export function lintSignature(checks: LintCheck[]): string {
+  const material = checks
+    .filter(c => c.status !== 'pass')
+    .map(c => `${c.id}:${c.status}:${c.detail || ''}`)
+    .sort()
+    .join('|')
+  if (!material) return 'clean'
+  let h = 0x811c9dc5
+  for (let i = 0; i < material.length; i++) h = Math.imul(h ^ material.charCodeAt(i), 0x01000193) >>> 0
+  return h.toString(16).padStart(8, '0')
 }
 
 export interface FormsStatus {
@@ -220,7 +258,7 @@ export function lintReply(input: LintInput): LintResult {
 
   const blocking = checks.filter(c => c.status === 'fail').length
   const warnings = checks.filter(c => c.status === 'warn').length
-  return { pass: blocking === 0, blocking, warnings, checks }
+  return { pass: blocking === 0, blocking, warnings, checks, signature: lintSignature(checks) }
 }
 
 // ---------------------------------------------------------------------------
