@@ -43,8 +43,8 @@ export interface DraftedObjectionReply {
   /**
    * A procedural requirement (Form 3, annexure, declaration, NBA approval): the
    * act is the attorney's, not an argument. The section has no body until they
-   * confirm the act, and the lint blocks export until then — so the filing can
-   * never contain a statement of compliance nobody performed.
+   * confirm the act — so the filing can never contain a statement of compliance
+   * nobody performed, whatever the attorney decides at the export gate.
    */
   attorneyAction?: boolean
   /** What the attorney must do. Shown to them; never filed as prose. */
@@ -77,6 +77,13 @@ export interface AmendedClaim {
   markedText: string          // with <ins>/<del> markup
   cleanText: string
   basisRefs: string[]         // ¶ ids supporting each inserted feature (s.59)
+  /**
+   * What the textual-support check established. Carried through rather than
+   * used to discard: an amendment the model proposed and the attorney never
+   * saw is worse than one they saw and rejected.
+   */
+  basisVerdict?: 'pass' | 'risk' | 'fail'
+  basisNote?: string
 }
 
 /** A block in the assembled reply, in skeleton order. */
@@ -87,10 +94,16 @@ export type ReplyBlock =
   | { type: 'namedSection'; key: string; title: string; body: string }
   | { type: 'objections'; title: string; objections: DraftedObjectionReply[] }
   /**
-   * `basisSentence` is built here, deterministically, and is the ONLY thing the
-   * renderers print. They used to join `basisRefs` straight into the letter,
-   * which put a raw internal anchor — "find support … at ¶0004" — into the
-   * filed document.
+   * The amended claims, in the body of the letter — marked-up and clean.
+   *
+   * Deliberately inline rather than annexed: the Controller reads the argument
+   * on a claim and sees that claim's amendment immediately, without opening a
+   * separate document.
+   *
+   * `basisSentence` is built deterministically and is the ONLY thing the
+   * renderers print for basis. They used to join `basisRefs` straight into the
+   * letter, which put a raw internal anchor — "find support … at ¶0004" — into
+   * the filed document.
    */
   | { type: 'amendments'; title: string; marked: AmendedClaim[]; clean: AmendedClaim[]; basisRefs: string[]; basisSentence: string }
   | { type: 'signatureBlock'; lines: string[] }
@@ -208,10 +221,13 @@ export function assembleReply(input: AssembleInput): AssembledReply {
         blocks.push({ type: 'objections', title: titleFor(profile, key, 'Response to the Objections'), objections: ordered })
         break
       case 'amendedClaimsMarked':
-        // Collapse both claim slots into one "Amendments" block on first encounter.
+        // Both claim slots collapse into one block on first encounter: the
+        // marked copy and the clean copy belong under a single heading, in the
+        // body of the letter.
         if (!blocks.some(b => b.type === 'amendments') && (marked.length || clean.length)) {
           blocks.push({
-            type: 'amendments', title: titleFor(profile, 'amendments', 'Amendments to the Claims'),
+            type: 'amendments',
+            title: titleFor(profile, 'amendments', 'Amendments to the Claims'),
             marked, clean,
             basisRefs: uniq(input.amendedClaims.flatMap(c => c.basisRefs || [])),
             basisSentence: buildBasisSentence(input.amendedClaims, meta.numbering, input.specParagraphs, input.specSections)

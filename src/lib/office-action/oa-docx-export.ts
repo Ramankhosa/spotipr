@@ -165,9 +165,14 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
       break
     }
     case 'amendments': {
+      // In the body of the letter, immediately after the objection-wise reply,
+      // so the Controller reads the argument on a claim and sees that claim's
+      // amendment without opening a separate document.
       children.push(numberedHeading(block.title))
       if (block.marked.length) {
         children.push(subNumbered([new TextRun({ text: 'Marked copy of the amended claims:', bold: true })]))
+        children.push(body('Insertions are underlined; deletions are struck through.',
+          { italics: true, indent: 480, after: 100 }))
         for (const c of block.marked) children.push(markedClaimParagraph(c, fmt))
       }
       if (block.clean.length) {

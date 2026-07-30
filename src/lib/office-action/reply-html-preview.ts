@@ -110,8 +110,15 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number, numbering: Par
     case 'amendments': {
       const n = nextNo()
       let h = `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>`
-      if (block.marked.length) h += `<div class="subhead">Marked copy of the amended claims:</div>${block.marked.map(markedClaimHtml).join('')}`
-      if (block.clean.length) h += `<div class="subhead">Clean copy of the amended claims:</div>${block.clean.map(c => `<p class="claim"><span class="cn">${c.claimNumber}.</span> ${esc(c.cleanText)}</p>`).join('')}`
+      if (block.marked.length) {
+        h += `<div class="subhead">Marked copy of the amended claims:</div>`
+        h += `<p class="basis">Insertions are underlined; deletions are struck through.</p>`
+        h += block.marked.map(markedClaimHtml).join('')
+      }
+      if (block.clean.length) {
+        h += `<div class="subhead">Clean copy of the amended claims:</div>`
+        h += block.clean.map(c => `<p class="claim"><span class="cn">${c.claimNumber}.</span> ${esc(c.cleanText)}</p>`).join('')
+      }
       // Built deterministically in reply-assembly. Joining basisRefs here is what
       // used to put a raw "¶0004" in front of the Controller.
       if (block.basisSentence) h += `<p class="basis">${esc(block.basisSentence)}</p>`

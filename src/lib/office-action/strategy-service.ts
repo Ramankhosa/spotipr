@@ -4,7 +4,7 @@ import { renderDigest, type InventionDigest } from './invention-digest'
 import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, renderSupplementaryBlock } from './context-budget'
 import type { ClassifiedObjection } from './objection-classifier'
 import type { ClaimChart } from './claim-chart-service'
-import type { Paragraph } from './document-intake'
+import { resolveBasisRefs, type Paragraph } from './document-intake'
 import { renderObjectionDoctrine } from './objection-doctrine'
 
 /**
@@ -37,9 +37,18 @@ export interface ProposedAmendment {
 
 export interface BasisVerdict {
   claimNumber: number
-  refsResolved: boolean         // every ¶ id exists in the as-filed spec
+  refsResolved: boolean         // every cited ¶ resolves in the as-filed spec
   supported: boolean            // inserted wording is supported by those ¶s
   unsupportedInsertions: string[]
+  /**
+   * What the check ESTABLISHED, named honestly.
+   *
+   * This is a textual-support heuristic — word overlap against the cited
+   * paragraphs. It can still pass an unsupported combination of features drawn
+   * from separate parts of the specification, so calling its output a Section 59
+   * clearance would overclaim. Combination support and added-matter compliance
+   * remain the attorney's judgement.
+   */
   verdict: 'pass' | 'risk' | 'fail'
   note: string
 }
@@ -70,20 +79,28 @@ export function checkAmendmentBasis(
   paragraphs: Paragraph[],
   minCoverage = 0.7
 ): BasisVerdict {
-  const byId = new Map(paragraphs.map(p => [p.id, p.text]))
   const refs = amendment.basisRefs || []
-  const refsResolved = refs.length > 0 && refs.every(r => byId.has(r))
 
-  if (!refsResolved) {
+  // Accept every form the drafting stages actually emit.
+  //
+  // Retrieval labels each chunk with a RANGE — "[¶0038-¶0041]" — and the prompt
+  // tells the model to cite those tags. A model that does exactly as instructed
+  // returned "¶0038-¶0041", which a plain map lookup rejected, so the amendment
+  // was marked unsupported and silently dropped from the reply. resolveBasisRefs
+  // expands ranges and tolerates "0038" / "[0038]" as well.
+  const { resolved, unresolved } = resolveBasisRefs(refs, paragraphs)
+  const refsResolved = refs.length > 0 && unresolved.length === 0 && resolved.length > 0
+
+  if (!resolved.length) {
     return {
       claimNumber: amendment.claimNumber, refsResolved: false, supported: false,
       unsupportedInsertions: [], verdict: 'fail',
       note: refs.length === 0 ? 'No specification basis cited for the amendment (Section 59).'
-                              : `Cited basis not found in the specification as filed: ${refs.filter(r => !byId.has(r)).join(', ')}`
+                              : `Cited basis not found in the specification as filed: ${unresolved.join(', ')}`
     }
   }
 
-  const basisWords = new Set(refs.flatMap(r => words(byId.get(r) || '')))
+  const basisWords = new Set(resolved.flatMap(p => words(p.text)))
   const insertions = Array.from(amendment.markedText.matchAll(INS_RE)).map(m => m[1])
   const unsupported: string[] = []
 
@@ -95,13 +112,33 @@ export function checkAmendmentBasis(
   }
 
   const supported = unsupported.length === 0
+  const cited = resolved.map(p => p.id).join(', ')
+
+  // Some refs resolved and some did not, or the basis spans widely separated
+  // parts of the specification: real textual support, but a combination the
+  // attorney has to stand behind. Neither a clean pass nor a rejection.
+  const partial = unresolved.length > 0
+  const indexes = resolved.map(p => p.index)
+  const spread = indexes.length > 1 && (Math.max(...indexes) - Math.min(...indexes)) > 15
+
+  if (supported && (partial || spread)) {
+    return {
+      claimNumber: amendment.claimNumber, refsResolved, supported: true,
+      unsupportedInsertions: [],
+      verdict: 'risk',
+      note: partial
+        ? `Textual support located at ${cited}, but ${unresolved.join(', ')} could not be resolved. Check the basis before filing.`
+        : `Textual support located, but it is drawn from widely separated parts of the specification (${cited}). Potential combination-support risk — confirm the features are disclosed together.`
+    }
+  }
+
   return {
-    claimNumber: amendment.claimNumber, refsResolved: true, supported,
+    claimNumber: amendment.claimNumber, refsResolved, supported,
     unsupportedInsertions: unsupported,
     verdict: supported ? 'pass' : 'fail',
     note: supported
-      ? `Amendment supported by ${refs.join(', ')}; within the scope of the claims as filed (Section 59).`
-      : `Inserted wording is not supported by the cited basis (${refs.join(', ')}). Cite the correct paragraph or revise the amendment — new matter is not permitted (Section 59).`
+      ? `Textual basis located at ${cited}. Combination support and added-matter compliance still need your review (Section 59).`
+      : `Inserted wording is not supported by the cited basis (${cited}). Cite the correct paragraph or revise the amendment — new matter is not permitted (Section 59).`
   }
 }
 

@@ -1,8 +1,10 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
+  corpusHasSearchableVectors,
   getPatentCorpusCoverageStats,
   hasSearchEmbeddingApiKey,
+  peekPatentCorpusCoverageStats,
   PATENT_CORPUS_EMBEDDING_MODEL,
   PATENT_CORPUS_SOURCE_INDIAN,
 } from '@/lib/patent-corpus-service'
@@ -93,34 +95,92 @@ export function patentPublicApiEnabled() {
   return String(process.env.PATENT_PUBLIC_API_ENABLED || '').toLowerCase() === 'true'
 }
 
-export async function getPatentApiReadiness(options: { forceRefresh?: boolean } = {}) {
-  const coverage = await getPatentCorpusCoverageStats(options)
-  const indianCoverage = coverage.sourceCoverage?.[PATENT_CORPUS_SOURCE_INDIAN] || {
-    totalPatents: 0,
-    patentsWithCompletedEmbedding: 0,
-    patentsWithoutCompletedEmbedding: 0,
-    coveragePercent: 0,
+const EMPTY_INDIAN_COVERAGE = {
+  totalPatents: 0,
+  patentsWithCompletedEmbedding: 0,
+  patentsWithoutCompletedEmbedding: 0,
+  coveragePercent: 0,
+}
+
+function minimumCoveragePercent() {
+  return Math.max(0, Math.min(100, Number(process.env.PATENT_PUBLIC_API_MIN_EMBEDDING_COVERAGE || 99)))
+}
+
+// pgvector cannot appear or disappear while the process runs, so this is cached
+// instead of being re-queried on the path of every single search.
+let pgvectorAvailableCache: { value: boolean; expiresAt: number } | null = null
+
+async function pgvectorAvailable() {
+  if (pgvectorAvailableCache && pgvectorAvailableCache.expiresAt > Date.now()) {
+    return pgvectorAvailableCache.value
   }
-  const minimumCoverage = Math.max(0, Math.min(100, Number(process.env.PATENT_PUBLIC_API_MIN_EMBEDDING_COVERAGE || 99)))
-  let pgvectorAvailable = false
+  let available = false
   try {
     const rows = await prisma.$queryRaw<Array<{ available: boolean }>>`
       SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS "available"
     `
-    pgvectorAvailable = rows[0]?.available === true
+    available = rows[0]?.available === true
   } catch {
-    pgvectorAvailable = false
+    available = false
   }
+  // A negative may just be a transient database problem, so it is cached only
+  // briefly rather than pinning the API into an unavailable state.
+  pgvectorAvailableCache = { value: available, expiresAt: Date.now() + (available ? 600_000 : 15_000) }
+  return available
+}
+
+/**
+ * Full readiness, including the corpus census. This is the admin/reporting view:
+ * the census is several full-table scans, so on a large corpus it is slow by
+ * nature and must not be called from a request a user is waiting on. The search
+ * path uses getPatentApiSearchReadiness() instead.
+ */
+export async function getPatentApiReadiness(options: { forceRefresh?: boolean } = {}) {
+  const coverage = await getPatentCorpusCoverageStats(options)
+  const indianCoverage = coverage.sourceCoverage?.[PATENT_CORPUS_SOURCE_INDIAN] || EMPTY_INDIAN_COVERAGE
+  const minimumCoverage = minimumCoveragePercent()
+  const pgvectorReady = await pgvectorAvailable()
   const embeddingApiKeyAvailable = hasSearchEmbeddingApiKey()
   const coverageReady = indianCoverage.totalPatents > 0 && indianCoverage.coveragePercent >= minimumCoverage
   return {
     enabled: patentPublicApiEnabled(),
-    ready: patentPublicApiEnabled() && embeddingApiKeyAvailable && pgvectorAvailable && coverageReady,
+    ready: patentPublicApiEnabled() && embeddingApiKeyAvailable && pgvectorReady && coverageReady,
     embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
     embeddingApiKeyAvailable,
-    pgvectorAvailable,
+    pgvectorAvailable: pgvectorReady,
     minimumCoveragePercent: minimumCoverage,
     coverageReady,
+    indianCorpus: indianCoverage,
+  }
+}
+
+/**
+ * Readiness for the search hot path, which must never block on the census. Uses
+ * the cached census when one exists; until the first background census lands it
+ * falls back to a constant-time index probe for "does this corpus have usable
+ * vectors at all". Without this, a corpus large enough to make the census slow
+ * makes every search slow — and with no statement timeout, hang outright.
+ */
+export async function getPatentApiSearchReadiness() {
+  const census = peekPatentCorpusCoverageStats()
+  const indianCoverage = census?.sourceCoverage?.[PATENT_CORPUS_SOURCE_INDIAN] || null
+  const minimumCoverage = minimumCoveragePercent()
+  const [pgvectorReady, probedVectors] = await Promise.all([
+    pgvectorAvailable(),
+    indianCoverage ? Promise.resolve(false) : corpusHasSearchableVectors(PATENT_CORPUS_SOURCE_INDIAN),
+  ])
+  const coverageReady = indianCoverage
+    ? indianCoverage.totalPatents > 0 && indianCoverage.coveragePercent >= minimumCoverage
+    : probedVectors
+  return {
+    enabled: patentPublicApiEnabled(),
+    embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
+    embeddingApiKeyAvailable: hasSearchEmbeddingApiKey(),
+    pgvectorAvailable: pgvectorReady,
+    minimumCoveragePercent: minimumCoverage,
+    coverageReady,
+    // Null until the first census completes. These numbers are reporting detail,
+    // not a gate, so a search is never held up waiting for them.
     indianCorpus: indianCoverage,
   }
 }
@@ -137,13 +197,16 @@ export function assertPatentPublicApiEnabled() {
  * is semantically indexed. Backed by the cached corpus coverage stats.
  */
 export async function getPublicSearchCoverage() {
-  const readiness = await getPatentApiReadiness()
+  const readiness = await getPatentApiSearchReadiness()
   return {
     corpus: 'indian-patent-journal',
     description: 'Indian patent corpus sourced from IP India Patent Journal publications.',
     jurisdiction: 'IN',
-    documents: readiness.indianCorpus.totalPatents,
-    semanticCoveragePercent: readiness.indianCorpus.coveragePercent,
+    // Null while the first background census is still running: the corpus size is
+    // informational, and blocking a search to count a multi-million-row table is
+    // never the right trade.
+    documents: readiness.indianCorpus?.totalPatents ?? null,
+    semanticCoveragePercent: readiness.indianCorpus?.coveragePercent ?? null,
     searchMode: 'hybrid-semantic-text',
     embeddingModel: readiness.embeddingModel,
   }
@@ -151,7 +214,7 @@ export async function getPublicSearchCoverage() {
 
 export async function assertPatentSearchReady() {
   assertPatentPublicApiEnabled()
-  const readiness = await getPatentApiReadiness()
+  const readiness = await getPatentApiSearchReadiness()
   if (!readiness.embeddingApiKeyAvailable) {
     throw new PatentApiError('SEMANTIC_SEARCH_UNAVAILABLE', 'The query embedding service is unavailable.', 503)
   }
@@ -161,7 +224,9 @@ export async function assertPatentSearchReady() {
   if (!readiness.coverageReady) {
     throw new PatentApiError(
       'CORPUS_NOT_READY',
-      `Indian corpus embedding coverage is ${readiness.indianCorpus.coveragePercent}%; ${readiness.minimumCoveragePercent}% is required.`,
+      readiness.indianCorpus
+        ? `Indian corpus embedding coverage is ${readiness.indianCorpus.coveragePercent}%; ${readiness.minimumCoveragePercent}% is required.`
+        : 'The Indian corpus has no completed embeddings for the configured model.',
       503
     )
   }

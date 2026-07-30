@@ -221,6 +221,22 @@ export function lintReply(input: LintInput): LintResult {
     ? { id: 'basis', label: 'Amendments cite specification basis (s.59)', status: 'pass', detail: amendedClaims.length ? `${amendedClaims.length} amended` : 'no amendments' }
     : { id: 'basis', label: 'Amendments cite specification basis (s.59)', status: 'fail', detail: `${noBasis.length} amendment(s) lack basis` })
 
+  // 3b. Amendments whose basis we located but cannot fully vouch for. These now
+  // reach the draft rather than being discarded — an amendment the attorney
+  // never saw is worse than one they saw and rejected — so the check is here to
+  // make sure they are looked at rather than carried along unnoticed.
+  const needsReview = amendedClaims.filter(c => c.basisVerdict === 'risk' || c.basisVerdict === 'fail')
+  if (needsReview.length) {
+    const detail = needsReview.slice(0, 3)
+      .map(c => `claim ${c.claimNumber}: ${c.basisNote || 'basis not established'}`).join(' ')
+    checks.push({
+      id: 'amendmentBasisReview',
+      label: 'Proposed amendments have verified basis',
+      status: needsReview.some(c => c.basisVerdict === 'fail') ? 'fail' : 'warn',
+      detail: `${needsReview.length} amendment(s) need your judgement before filing. ${detail}`
+    })
+  }
+
   // 4. Marked/clean consistency — same claim numbers in both copies.
   const markedNums = new Set(amendedClaims.filter(c => c.markedText?.trim()).map(c => c.claimNumber))
   const cleanNums = new Set(amendedClaims.filter(c => c.cleanText?.trim()).map(c => c.claimNumber))

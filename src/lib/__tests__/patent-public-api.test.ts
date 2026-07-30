@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   coverage: vi.fn(),
+  peekCoverage: vi.fn(),
+  hasSearchableVectors: vi.fn(),
   findMany: vi.fn(),
   findFirst: vi.fn(),
   queryRaw: vi.fn(),
@@ -17,6 +19,8 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('@/lib/patent-corpus-service', () => ({
   getPatentCorpusCoverageStats: mocks.coverage,
+  peekPatentCorpusCoverageStats: mocks.peekCoverage,
+  corpusHasSearchableVectors: mocks.hasSearchableVectors,
   hasSearchEmbeddingApiKey: () => true,
   PATENT_CORPUS_EMBEDDING_MODEL: 'text-embedding-3-small',
   PATENT_CORPUS_SOURCE_INDIAN: 'indian-corpus',
@@ -38,7 +42,11 @@ describe('public patent API service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.PATENT_PUBLIC_API_ENABLED = 'true'
-    mocks.coverage.mockResolvedValue({ sourceCoverage: { 'indian-corpus': { totalPatents: 100, patentsWithCompletedEmbedding: 100, patentsWithoutCompletedEmbedding: 0, coveragePercent: 100 } } })
+    const coverage = { sourceCoverage: { 'indian-corpus': { totalPatents: 100, patentsWithCompletedEmbedding: 100, patentsWithoutCompletedEmbedding: 0, coveragePercent: 100 } } }
+    mocks.coverage.mockResolvedValue(coverage)
+    // The search path reads the census from cache only; it never computes one.
+    mocks.peekCoverage.mockReturnValue(coverage)
+    mocks.hasSearchableVectors.mockResolvedValue(true)
     mocks.queryRaw.mockResolvedValue([{ available: true }])
   })
 
@@ -55,6 +63,36 @@ describe('public patent API service', () => {
     expect(results[0]).toMatchObject({ publicationNumber: row.publicationNumber, country: 'IN', title: row.title, relevance: { score: 0.92 } })
     expect(results[0]).not.toHaveProperty('rawText')
     expect(results[0]).not.toHaveProperty('embeddingText')
+  })
+
+  // Regression: the search path used to await the full corpus census, which on a
+  // multi-million-row corpus is minutes of table scans with no statement timeout —
+  // production searches hung indefinitely while lookups stayed fast.
+  it('searches without waiting on the corpus census when no census has completed', async () => {
+    mocks.peekCoverage.mockReturnValue(null)
+    mocks.hasSearchableVectors.mockResolvedValue(true)
+    mocks.search.mockResolvedValue({
+      providerStats: [{ providerId: 'indian-corpus', enabled: true, requested: true, resultCount: 1 }],
+      results: [{ sourceProvider: 'indian-corpus', publicationNumber: row.publicationNumber, relevanceScore: 0.5, scores: {}, matchedFields: [] }],
+    })
+    mocks.findMany.mockResolvedValue([row])
+
+    const results = await searchPublicIndianPatents('thermal battery management', 10)
+
+    expect(results).toHaveLength(1)
+    expect(mocks.coverage).not.toHaveBeenCalled()
+    expect(mocks.hasSearchableVectors).toHaveBeenCalledWith('indian-corpus')
+  })
+
+  it('refuses search when the corpus has no usable vectors for the configured model', async () => {
+    mocks.peekCoverage.mockReturnValue(null)
+    mocks.hasSearchableVectors.mockResolvedValue(false)
+
+    await expect(searchPublicIndianPatents('thermal battery management', 10)).rejects.toMatchObject({
+      code: 'CORPUS_NOT_READY',
+      status: 503,
+    })
+    expect(mocks.search).not.toHaveBeenCalled()
   })
 
   it('normalizes publication numbers before exact Indian-corpus lookup', async () => {

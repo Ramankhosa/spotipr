@@ -3,7 +3,7 @@ import { loadOfficeActionProfile } from './oa-case-service'
 import { normalizeInvention } from './document-intake'
 import { buildInventionDigest, digestFromSpotiprDraft, type InventionDigest } from './invention-digest'
 import { buildClaimChart, persistClaimChart, type CitationText } from './claim-chart-service'
-import { buildObjectionStrategy, usableAmendments, type ObjectionStrategy } from './strategy-service'
+import { buildObjectionStrategy, type ObjectionStrategy } from './strategy-service'
 import { draftObjectionReply, draftNamedSection } from './response-drafter'
 import { isProceduralObjection } from './procedural-reply'
 import type { ClassifiedObjection } from './objection-classifier'
@@ -265,13 +265,33 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
         proposedCount += strategy.amendments.length
         if (strategy.amendments.length) {
           const passed = strategy.basisVerdicts.filter(v => v.verdict === 'pass').length
-          await progress(`${who} — verifying amendment basis in the specification as filed (${passed}/${strategy.basisVerdicts.length} within Section 59)`, done + 1, totalSteps)
+          const risky = strategy.basisVerdicts.filter(v => v.verdict === 'risk').length
+          const failed = strategy.basisVerdicts.filter(v => v.verdict === 'fail').length
+          const parts = [`${passed} with located basis`]
+          if (risky) parts.push(`${risky} needing your check`)
+          if (failed) parts.push(`${failed} without basis`)
+          await progress(
+            `${who} — ${strategy.amendments.length} claim amendment${strategy.amendments.length === 1 ? '' : 's'} proposed: ${parts.join(', ')}`,
+            done + 1, totalSteps)
         }
-        for (const a of usableAmendments(strategy)) {
+        /**
+         * EVERY proposed amendment reaches the draft, with what we established
+         * about its basis attached.
+         *
+         * These used to be filtered to the ones that passed the textual-support
+         * check, so an amendment whose basis did not resolve simply disappeared
+         * — no section in the reply, no note, nothing. The attorney could not
+         * accept it, reject it, or fix its basis, because they never knew the
+         * model had proposed it. Deciding what goes into the filing is their
+         * job; ours is to show them the options and what we could verify.
+         */
+        for (const a of strategy.amendments) {
           const verdict = strategy.basisVerdicts.find(v => v.claimNumber === a.claimNumber)
           allAmendments.push({
             claimNumber: a.claimNumber, markedText: a.markedText, cleanText: a.cleanText,
-            basisRefs: verdict?.refsResolved ? a.basisRefs : []
+            basisRefs: verdict?.refsResolved ? a.basisRefs : [],
+            basisVerdict: verdict?.verdict,
+            basisNote: verdict?.note
           })
         }
         if (strategy.judgmentFlag) judgmentFlags.push({ objectionId: row.id, flag: strategy.judgmentFlag })

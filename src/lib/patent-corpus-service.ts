@@ -79,7 +79,18 @@ const JOB_BACKOFF_BASE_MS = 2 * 60 * 1000
 const JOB_BACKOFF_MAX_MS = 60 * 60 * 1000
 const OPENAI_BACKOFF_BASE_MS = 750
 const OPENAI_BACKOFF_MAX_MS = 15_000
-const COVERAGE_STATS_CACHE_MS = Math.max(0, Number(process.env.PATENT_CORPUS_COVERAGE_STATS_CACHE_MS || '30000') || 30_000)
+// A 30s TTL means a low-traffic API re-runs the full-corpus census on almost every
+// request. The census is a whole-table scan of local_patents with correlated EXISTS
+// subqueries, so on a multi-million-row corpus that is minutes of work on the hot
+// path of every search. Cache for longer and refresh off the request (below).
+const COVERAGE_STATS_CACHE_MS = Math.max(0, Number(process.env.PATENT_CORPUS_COVERAGE_STATS_CACHE_MS || '600000') || 600_000)
+// Hard ceiling on the census itself. Without this the queries inherit the server's
+// statement_timeout (commonly none), so a slow census hangs the HTTP request
+// indefinitely — the request never even receives response headers.
+const COVERAGE_STATS_STATEMENT_TIMEOUT_MS = Math.max(
+  5000,
+  Number(process.env.PATENT_CORPUS_COVERAGE_STATS_TIMEOUT_MS || '120000') || 120_000
+)
 
 type UploadInput = {
   fileName: string
@@ -1431,8 +1442,26 @@ export async function requeuePatentImportFileEmbeddings(batchId: string, fileId:
   }
 }
 
+/**
+ * Runs a census query under a transaction-local statement_timeout. A sequential
+ * $transaction keeps both statements on the same connection, so the timeout
+ * applies to the query that follows it. Without this the census inherits the
+ * server's statement_timeout — commonly unset — and a slow scan hangs the HTTP
+ * request that triggered it rather than failing.
+ */
+async function coverageQuery<T = any>(
+  query: Prisma.Sql,
+  timeoutMs = COVERAGE_STATS_STATEMENT_TIMEOUT_MS
+): Promise<T[]> {
+  const [, rows] = await prisma.$transaction([
+    prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`,
+    prisma.$queryRaw<T[]>(query),
+  ])
+  return rows
+}
+
 async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageStats> {
-  const patentRows = await prisma.$queryRaw<any[]>`
+  const patentRows = await coverageQuery(Prisma.sql`
     SELECT
       COUNT(*)::int AS "totalPatents",
       COUNT(*) FILTER (
@@ -1467,7 +1496,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
         )
       )::int AS "patentsWithFailedEmbedding"
     FROM "local_patents" p
-  `
+  `)
   const embeddingRows = await (prisma as any).localPatentEmbedding.groupBy({
     by: ['status'],
     where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
@@ -1477,7 +1506,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
     by: ['status'],
     _count: { id: true },
   }).catch(() => [])
-  const sourceRows = await prisma.$queryRaw<any[]>`
+  const sourceRows = await coverageQuery(Prisma.sql`
     WITH patent_sources AS (
       SELECT
         p."id",
@@ -1502,7 +1531,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
       COUNT(*) FILTER (WHERE "hasCompletedEmbedding")::int AS "patentsWithCompletedEmbedding"
     FROM patent_sources
     GROUP BY "source"
-  `.catch(() => [])
+  `).catch(() => [])
 
   const patentStats = patentRows[0] || {}
   const embeddingCounts = embeddingRows.reduce((acc: Record<string, number>, row: any) => {
@@ -1554,20 +1583,86 @@ export async function getPatentCorpusCoverageStats(options: { forceRefresh?: boo
   if (!options.forceRefresh && coverageStatsCache && coverageStatsCache.expiresAt > now) {
     return coverageStatsCache.value
   }
-  if (!options.forceRefresh && coverageStatsInFlight) {
-    return coverageStatsInFlight
+
+  if (!coverageStatsInFlight) {
+    coverageStatsInFlight = computePatentCorpusCoverageStats()
+      .then(stats => {
+        coverageStatsCache = { value: stats, expiresAt: Date.now() + COVERAGE_STATS_CACHE_MS }
+        return stats
+      })
+      .finally(() => {
+        coverageStatsInFlight = null
+      })
+  }
+  const refresh = coverageStatsInFlight
+
+  // Stale-while-revalidate: once a census has succeeded once, an expired entry is
+  // still far better than making every caller wait behind a full-corpus scan. The
+  // refresh above replaces it in the background. Only a cold cache blocks, and the
+  // statement timeout bounds even that.
+  if (!options.forceRefresh && coverageStatsCache) {
+    refresh.catch(error => console.error('[PatentCorpus] Coverage stats refresh failed:', error))
+    return coverageStatsCache.value
   }
 
-  coverageStatsInFlight = computePatentCorpusCoverageStats()
-    .then(stats => {
-      coverageStatsCache = { value: stats, expiresAt: Date.now() + COVERAGE_STATS_CACHE_MS }
-      return stats
-    })
-    .finally(() => {
-      coverageStatsInFlight = null
-    })
+  return refresh
+}
 
-  return coverageStatsInFlight
+/**
+ * Cache-only read of the coverage census, for callers that must never block —
+ * above all the search hot path. Returns null until a census has completed once,
+ * and schedules a background refresh so a later request finds a value.
+ */
+export function peekPatentCorpusCoverageStats(): PatentCorpusCoverageStats | null {
+  const cached = coverageStatsCache
+  if (!cached || cached.expiresAt <= Date.now()) {
+    void getPatentCorpusCoverageStats().catch(error =>
+      console.error('[PatentCorpus] Background coverage census failed:', error))
+  }
+  return cached ? cached.value : null
+}
+
+const SEARCHABLE_VECTOR_PROBE_CACHE_MS = Math.max(
+  1000,
+  Number(process.env.PATENT_CORPUS_VECTOR_PROBE_CACHE_MS || '60000') || 60_000
+)
+const SEARCHABLE_VECTOR_PROBE_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.PATENT_CORPUS_VECTOR_PROBE_TIMEOUT_MS || '5000') || 5000
+)
+const searchableVectorProbeCache = new Map<string, { value: boolean; expiresAt: number }>()
+
+/**
+ * "Is this corpus semantically searchable under the configured model?" — the
+ * question the search gate actually needs. A single EXISTS probe stops at the
+ * first matching row, so it is effectively constant-time in corpus size, unlike
+ * the census (several full-table scans with correlated subqueries).
+ */
+export async function corpusHasSearchableVectors(corpusSource: string) {
+  const cached = searchableVectorProbeCache.get(corpusSource)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  try {
+    const rows = await coverageQuery<{ available: boolean }>(Prisma.sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM "local_patent_embeddings" e
+        JOIN "local_patents" p ON p."id" = e."localPatentId"
+        WHERE e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+          AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
+          AND ${EMBEDDING_PRESENCE_CONDITION}
+          AND p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]
+      ) AS "available"
+    `, SEARCHABLE_VECTOR_PROBE_TIMEOUT_MS)
+    const value = rows[0]?.available === true
+    searchableVectorProbeCache.set(corpusSource, {
+      value,
+      expiresAt: Date.now() + SEARCHABLE_VECTOR_PROBE_CACHE_MS,
+    })
+    return value
+  } catch (error) {
+    console.error('[PatentCorpus] Searchable vector probe failed:', error)
+    return false
+  }
 }
 
 export async function getNextPatentCorpusQueueAttemptAt() {
@@ -1930,6 +2025,18 @@ export async function requestOpenAIEmbedding(text: string, options: EmbeddingReq
 
 const VOYAGE_EMBEDDING_TIMEOUT_MS = Math.max(2000, Number(process.env.VOYAGE_EMBEDDING_TIMEOUT_MS || '45000') || 45000)
 const VOYAGE_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.VOYAGE_EMBEDDING_MAX_ATTEMPTS || '4') || 4)
+// Interactive budgets, mirroring the OpenAI path's search/corpus split. A batch
+// indexing job can afford 4 x 45s plus backoff; a search request that does the
+// same blocks for ~3 minutes — far past the route's 60s maxDuration — and the
+// caller sees a hung connection rather than an error.
+const VOYAGE_SEARCH_EMBEDDING_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.VOYAGE_SEARCH_EMBEDDING_TIMEOUT_MS || '15000') || 15_000
+)
+const VOYAGE_SEARCH_EMBEDDING_MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.VOYAGE_SEARCH_EMBEDDING_MAX_ATTEMPTS || '2') || 2
+)
 // voyage-3-lite is natively 512-dim; only send output_dimension when the configured
 // dimensionality differs (supported by voyage-3.5 family Matryoshka models).
 const VOYAGE_NATIVE_DIMENSIONS: Record<string, number> = {
@@ -1970,8 +2077,18 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
   // Expected element length: real vectors are dims-long; ubinary is dims/8 bytes.
   const expectedLength = binary ? PATENT_CORPUS_EMBEDDING_DIMENSIONS / 8 : PATENT_CORPUS_EMBEDDING_DIMENSIONS
 
-  const timeoutMs = Math.max(1000, options.timeoutMs || VOYAGE_EMBEDDING_TIMEOUT_MS)
-  const maxAttempts = Math.max(1, options.maxAttempts || VOYAGE_EMBEDDING_MAX_ATTEMPTS)
+  // Search queries are served synchronously inside an HTTP request, so they get the
+  // tight budget; corpus indexing keeps the patient one.
+  const interactive = purpose === 'search-query' || purpose === 'diagnostic'
+  const timeoutMs = Math.max(1000, options.timeoutMs || (
+    interactive ? VOYAGE_SEARCH_EMBEDDING_TIMEOUT_MS : VOYAGE_EMBEDDING_TIMEOUT_MS
+  ))
+  const maxAttempts = Math.max(1, options.maxAttempts || (
+    interactive ? VOYAGE_SEARCH_EMBEDDING_MAX_ATTEMPTS : VOYAGE_EMBEDDING_MAX_ATTEMPTS
+  ))
+  // A cooperative Retry-After of 30s+ is fine for a worker but is itself longer than
+  // an interactive request's whole budget, so cap the interactive backoff.
+  const maxBackoffMs = interactive ? 2000 : 30_000
   let lastError: Error | null = null
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const controller = new AbortController()
@@ -2004,7 +2121,7 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
         ;(lastError as Error & { externalUsageRecorded?: boolean }).externalUsageRecorded = true
         if (attempt < maxAttempts - 1 && shouldRetryVoyageEmbedding(response.status)) {
           const retryAfter = Number(response.headers.get('retry-after') || 0)
-          await sleep(retryAfter > 0 ? retryAfter * 1000 : Math.min(30000, 1000 * 2 ** attempt))
+          await sleep(Math.min(maxBackoffMs, retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt))
           continue
         }
         throw lastError
@@ -2050,7 +2167,7 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
         })
       }
       if (attempt < maxAttempts - 1 && (lastError.name === 'AbortError' || /fetch failed|network/i.test(lastError.message))) {
-        await sleep(Math.min(30000, 1000 * 2 ** attempt))
+        await sleep(Math.min(maxBackoffMs, 1000 * 2 ** attempt))
         continue
       }
       throw lastError
