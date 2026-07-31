@@ -201,14 +201,25 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Stats
+    // Stats — the unmapped count must compare like with like: only countries
+    // shown in the grid, and only mappings onto sections that exist in the
+    // superset catalog. (Counting ALL mapping rows against grid countries
+    // previously produced negative numbers, e.g. "-360 Unmapped".)
+    const gridCountryCodes = new Set(Object.keys(countries))
+    const supersetKeys = new Set(supersetSectionsWithMappings.map(s => s.sectionKey))
+    const gridMappings = allMappings.filter(
+      m => gridCountryCodes.has(m.countryCode) && supersetKeys.has(m.sectionKey)
+    ).length
     const stats = {
       totalSupersetSections: supersetSectionsWithMappings.length,
       activeSupersetSections: supersetSectionsWithMappings.filter(s => s.isActive).length,
       totalCountries: Object.keys(countries).length,
       totalMappings: allMappings.length,
       totalPrompts: allPrompts.length,
-      unmappedCombinations: supersetSectionsWithMappings.length * Object.keys(countries).length - allMappings.length
+      unmappedCombinations: Math.max(
+        0,
+        supersetSectionsWithMappings.length * gridCountryCodes.size - gridMappings
+      )
     }
 
     return NextResponse.json({
@@ -256,8 +267,9 @@ export async function POST(request: NextRequest) {
     switch (action) {
       // Create new superset section
       case 'createSupersetSection': {
-        const { 
+        const {
           sectionKey, label, displayOrder, description, instruction, constraints, isRequired,
+          aliases,
           requiresPriorArt, requiresFigures, requiresClaims, requiresComponents
         } = data
 
@@ -279,6 +291,38 @@ export async function POST(request: NextRequest) {
           )
         }
 
+        // Normalize + validate aliases so profile JSON keys (snake_case etc.)
+        // resolve to this section on import without a second trip to another tab
+        const cleanAliases: string[] = Array.from(new Set(
+          (Array.isArray(aliases) ? aliases : [])
+            .map((a: unknown) => String(a).trim())
+            .filter((a: string) => a.length > 0 && a !== sectionKey)
+        ))
+        if (cleanAliases.some(a => !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(a))) {
+          return NextResponse.json(
+            { error: 'Aliases may contain only letters, digits, underscores and hyphens, and must start with a letter' },
+            { status: 400 }
+          )
+        }
+        if (cleanAliases.length > 0) {
+          const clash = await prisma.supersetSection.findFirst({
+            where: {
+              OR: [
+                { sectionKey: { in: cleanAliases } },
+                { aliases: { hasSome: cleanAliases } }
+              ]
+            },
+            select: { sectionKey: true, aliases: true }
+          })
+          if (clash) {
+            const taken = cleanAliases.filter(a => a === clash.sectionKey || (clash.aliases || []).includes(a))
+            return NextResponse.json(
+              { error: `Alias${taken.length > 1 ? 'es' : ''} ${taken.map(t => `"${t}"`).join(', ')} already used by section "${clash.sectionKey}"` },
+              { status: 409 }
+            )
+          }
+        }
+
         const section = await prisma.supersetSection.create({
           data: {
             sectionKey,
@@ -287,6 +331,7 @@ export async function POST(request: NextRequest) {
             description: description || null,
             instruction,
             constraints: constraints || [],
+            aliases: cleanAliases,
             isRequired: isRequired ?? true,
             isActive: true,
             // Context injection flags (defaults to false if not provided)

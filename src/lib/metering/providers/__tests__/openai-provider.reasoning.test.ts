@@ -126,6 +126,30 @@ describe('OpenAIProvider reasoning-model failure handling', () => {
     ).rejects.toThrow(/no visible output|reasoning/i)
   })
 
+  it('throws when the model emits reasoning only and stops normally (empty content, finish_reason=stop)', async () => {
+    // Regression guard: the check used to require finish_reason==='length', so a
+    // reasoning-only completion that stopped normally returned '' as a success and
+    // silently broke every downstream JSON parse.
+    mockFetch({
+      choices: [{ message: { content: '' }, finish_reason: 'stop' }],
+      usage: { completion_tokens: 291, prompt_tokens: 4447, total_tokens: 4738, completion_tokens_details: { reasoning_tokens: 281 } },
+    })
+    await expect(
+      makeProvider('gpt-5.2').execute({ prompt: 'hi', modelClass: 'gpt-5.2' } as any, { maxTokensOut: 25000 } as any)
+    ).rejects.toThrow(/no visible output/i)
+  })
+
+  it('passes a terse but meaningful answer through untouched', async () => {
+    // "[]" is a real answer ("no figure suggestions apply") and must not be treated
+    // as an empty completion.
+    mockFetch({
+      choices: [{ message: { content: '[]' }, finish_reason: 'stop' }],
+      usage: { completion_tokens: 291, prompt_tokens: 4447, total_tokens: 4738, completion_tokens_details: { reasoning_tokens: 281 } },
+    })
+    const res = await makeProvider('gpt-5.2').execute({ prompt: 'hi', modelClass: 'gpt-5.2' } as any, { maxTokensOut: 25000 } as any)
+    expect(res.output).toBe('[]')
+  })
+
   it('throws when the Responses API returns status=incomplete with no text', async () => {
     mockFetch({
       output: [],

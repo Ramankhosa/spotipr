@@ -785,6 +785,7 @@ function AddSectionModal({
 }) {
   const [sectionKey, setSectionKey] = useState('')
   const [label, setLabel] = useState('')
+  const [aliasesText, setAliasesText] = useState('')
   const [displayOrder, setDisplayOrder] = useState(existingSections.length + 1)
   const [description, setDescription] = useState('')
   const [instruction, setInstruction] = useState('')
@@ -824,6 +825,7 @@ function AddSectionModal({
           action: 'createSupersetSection',
           sectionKey,
           label,
+          aliases: aliasesText.split(',').map(a => a.trim()).filter(Boolean),
           displayOrder,
           description: description || null,
           instruction,
@@ -892,6 +894,20 @@ function AddSectionModal({
             placeholder="Technical Problem"
             className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-amber-500"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1">Aliases</label>
+          <input
+            type="text"
+            value={aliasesText}
+            onChange={(e) => setAliasesText(e.target.value)}
+            placeholder="citation_list, prior_art_references"
+            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white font-mono placeholder-slate-500 focus:border-amber-500"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Comma-separated. Add the exact keys country profile JSONs use for this section (snake_case allowed) so imports resolve to it directly.
+          </p>
         </div>
 
         <div>

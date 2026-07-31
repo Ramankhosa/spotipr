@@ -41,6 +41,12 @@ export interface ImportOptions {
   disableExtras?: boolean
   /** When true, activate the profile after import (only if readiness passes) */
   activate?: boolean
+  /**
+   * Structure section ids the admin explicitly acknowledged dropping.
+   * Unresolved/duplicate sections are BLOCKING errors unless listed here —
+   * a section may only be lost from the import when someone said so.
+   */
+  skipSections?: string[]
 }
 
 export interface ImportIssue {
@@ -101,6 +107,8 @@ export interface ImportResult {
 export interface SupersetIndex {
   aliasMap: Map<string, string>
   byKey: Map<string, { sectionKey: string; label: string; displayOrder: number; instruction: string }>
+  /** All identifiers per section (key, label, aliases) — used for suggestion scoring */
+  namesByKey: Map<string, string[]>
 }
 
 // ============================================================================
@@ -113,6 +121,98 @@ function normalizeKey(key: string): string {
     .replace(/[^a-z0-9]/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_+|_+$/g, '')
+}
+
+/** Split camelCase humps before normalizing, so "summaryOfTheInvention" → "summary_of_the_invention" */
+function camelToSnake(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+}
+
+function snakeNorm(key: string): string {
+  return normalizeKey(camelToSnake(key))
+}
+
+/** Filler words that carry no meaning when comparing section identifiers */
+const KEY_STOPWORDS = new Set([
+  'the', 'of', 'a', 'an', 'to', 'for', 'is', 'are', 'be', 'by', 'we', 'and', 'in', 'on', 'out', 'what'
+])
+
+function tokensOf(key: string): string[] {
+  return snakeNorm(key).split('_').filter(t => t && !KEY_STOPWORDS.has(t))
+}
+
+/** Stopword-stripped canonical form: "title_of_the_invention" → "title_invention" */
+function strippedKey(key: string): string {
+  return tokensOf(key).join('_')
+}
+
+/**
+ * Import-time synonym vocabulary: stopword-stripped identifier → canonical
+ * superset sectionKey. Covers the names jurisdictions actually use for the
+ * standard specification sections, so a hand-written country_profile.json
+ * resolves without the author knowing the app's internal alias list.
+ * Only consulted when the key exists in the live superset index (no blind
+ * passthrough), so DB stays the source of truth for WHICH sections exist.
+ */
+const COMMON_SECTION_SYNONYMS: Record<string, string> = {
+  // title
+  title_invention: 'title', invention_title: 'title', name_invention: 'title',
+  // claims
+  patent_claims: 'claims', claimed: 'claims', claim: 'claims', claim_set: 'claims', claims_section: 'claims',
+  // abstract
+  abstract_disclosure: 'abstract', abstract_invention: 'abstract', abstract_specification: 'abstract',
+  // summary
+  summary_invention: 'summary', disclosure: 'summary', disclosure_invention: 'summary',
+  brief_summary: 'summary', brief_summary_invention: 'summary', summary_disclosure: 'summary',
+  // background
+  background_invention: 'background', state_art: 'background', related_art: 'background',
+  description_related_art: 'background', technical_background: 'background', background_technology: 'background',
+  // field of invention
+  technical_field_invention: 'fieldOfInvention', field_disclosure: 'fieldOfInvention',
+  field_technology: 'fieldOfInvention', area_invention: 'fieldOfInvention',
+  // brief description of drawings
+  description_drawings: 'briefDescriptionOfDrawings', description_figures: 'briefDescriptionOfDrawings',
+  brief_description_figures: 'briefDescriptionOfDrawings', list_drawings: 'briefDescriptionOfDrawings',
+  list_figures: 'briefDescriptionOfDrawings', drawing_descriptions: 'briefDescriptionOfDrawings',
+  // detailed description
+  description: 'detailedDescription', description_embodiments: 'detailedDescription',
+  modes_carrying_invention: 'detailedDescription', mode_carrying_invention: 'detailedDescription',
+  modes_carrying: 'detailedDescription', mode_carrying: 'detailedDescription',
+  detailed_description_embodiments: 'detailedDescription',
+  detailed_description_preferred_embodiments: 'detailedDescription',
+  description_preferred_embodiments: 'detailedDescription',
+  description_exemplary_embodiments: 'detailedDescription',
+  embodiments: 'detailedDescription', specific_embodiments: 'detailedDescription',
+  // best mode
+  best_mode_carrying_invention: 'bestMode', best_method_performing_invention: 'bestMode',
+  best_mode_invention: 'bestMode', best_mode_performing_invention: 'bestMode',
+  // industrial applicability
+  utility: 'industrialApplicability', industrial_application: 'industrialApplicability',
+  industrial_use: 'industrialApplicability', capable_industrial_application: 'industrialApplicability',
+  industrial_applicability_statement: 'industrialApplicability',
+  // list of reference numerals
+  reference_signs: 'listOfNumerals', reference_signs_list: 'listOfNumerals',
+  reference_numerals_list: 'listOfNumerals', list_reference_numerals: 'listOfNumerals',
+  list_reference_signs: 'listOfNumerals', reference_sign_list: 'listOfNumerals',
+  explanation_references: 'listOfNumerals', description_reference_numerals: 'listOfNumerals',
+  // cross reference
+  priority_claim: 'crossReference', cross_reference_related_applications: 'crossReference',
+  priority_data: 'crossReference', priority_information: 'crossReference',
+  related_application_data: 'crossReference', cross_references_related_applications: 'crossReference',
+  // objects of invention
+  objectives: 'objectsOfInvention', object_invention: 'objectsOfInvention',
+  objectives_invention: 'objectsOfInvention', aims_invention: 'objectsOfInvention', aim_invention: 'objectsOfInvention',
+  // technical problem
+  problem_solved: 'technicalProblem', problem_solved_invention: 'technicalProblem',
+  problem_statement: 'technicalProblem', problems_solved: 'technicalProblem', technical_problems: 'technicalProblem',
+  // technical solution
+  solution_problem: 'technicalSolution', means_solving_problem: 'technicalSolution',
+  means_solve_problem: 'technicalSolution', technical_solutions: 'technicalSolution',
+  solution_technical_problem: 'technicalSolution',
+  // advantageous effects
+  effects_invention: 'advantageousEffects', advantages: 'advantageousEffects',
+  beneficial_effects: 'advantageousEffects', advantageous_effects_invention: 'advantageousEffects',
+  advantages_invention: 'advantageousEffects', effect_invention: 'advantageousEffects'
 }
 
 /** Strip trailing qualifiers like "(optional)" from a display heading */
@@ -137,22 +237,51 @@ function levenshtein(a: string, b: string): number {
 }
 
 /**
- * Suggest the canonical superset key nearest to a candidate identifier,
- * searching canonical keys AND aliases (aliases often differ by one edit).
+ * Suggest the canonical superset key nearest to a candidate identifier.
+ * Scores every superset section by comparing the candidate against its key,
+ * label AND aliases using stopword-stripped token overlap (catches
+ * "title_of_invention" → title) plus edit distance (catches typos like
+ * "backgrund_art" → background). Only suggests a clear winner — a wrong
+ * suggestion is worse than none, because accepting it writes a global alias.
  */
-function nearestKey(candidate: string, aliasMap: Map<string, string>): string | undefined {
-  const normalized = normalizeKey(candidate)
-  let best: string | undefined
-  let bestDist = Infinity
-  aliasMap.forEach((canonical, key) => {
-    const dist = levenshtein(normalized, normalizeKey(key))
-    if (dist < bestDist) {
-      bestDist = dist
-      best = canonical
+function nearestKey(candidate: string, index: SupersetIndex): string | undefined {
+  const candTokens = tokensOf(candidate)
+  const candStripped = candTokens.join('_')
+  if (!candStripped) return undefined
+  const candSet = new Set(candTokens)
+
+  let bestKey: string | undefined
+  let bestScore = 0
+  let secondScore = 0
+
+  index.namesByKey.forEach((names, sectionKey) => {
+    let score = 0
+    for (const name of names) {
+      const nameTokens = tokensOf(name)
+      const nameStripped = nameTokens.join('_')
+      if (!nameStripped) continue
+      if (nameStripped === candStripped) { score = 1; break }
+      const nameSet = new Set(nameTokens)
+      let overlap = 0
+      candSet.forEach(t => { if (nameSet.has(t)) overlap++ })
+      const jaccard = overlap / (candSet.size + nameSet.size - overlap)
+      const dist = levenshtein(candStripped, nameStripped)
+      const levSim = 1 - dist / Math.max(candStripped.length, nameStripped.length)
+      score = Math.max(score, jaccard, levSim * 0.9)
+    }
+    if (score > bestScore) {
+      secondScore = bestScore
+      bestScore = score
+      bestKey = sectionKey
+    } else if (score > secondScore) {
+      secondScore = score
     }
   })
-  // Only suggest when reasonably close
-  return bestDist <= Math.max(3, Math.floor(normalized.length / 3)) ? best : undefined
+
+  if (!bestKey) return undefined
+  if (bestScore >= 0.8) return bestKey
+  if (bestScore >= 0.55 && bestScore - secondScore >= 0.1) return bestKey
+  return undefined
 }
 
 /**
@@ -187,23 +316,35 @@ export interface SupersetSectionInput {
 export function buildSupersetIndexFromSections(sections: SupersetSectionInput[]): SupersetIndex {
   const aliasMap = new Map<string, string>()
   const byKey = new Map<string, { sectionKey: string; label: string; displayOrder: number; instruction: string }>()
+  const namesByKey = new Map<string, string[]>()
+
+  // First-wins registration: if two sections ever declare the same identifier
+  // (a data error), the lower displayOrder keeps it deterministically.
+  const register = (name: string, canonical: string) => {
+    for (const variant of [name, normalizeKey(name), snakeNorm(name), strippedKey(name)]) {
+      if (variant && !aliasMap.has(variant)) aliasMap.set(variant, canonical)
+    }
+  }
 
   for (const section of sections) {
-    aliasMap.set(section.sectionKey, section.sectionKey)
-    aliasMap.set(normalizeKey(section.sectionKey), section.sectionKey)
-    for (const alias of section.aliases) {
-      aliasMap.set(alias, section.sectionKey)
-      aliasMap.set(normalizeKey(alias), section.sectionKey)
-    }
+    register(section.sectionKey, section.sectionKey)
+    for (const alias of section.aliases) register(alias, section.sectionKey)
+    // Labels are resolvable too — profiles often use display names as ids
+    // ("Title of the Invention" → title, also via its stripped form title_invention)
+    if (section.label) register(section.label, section.sectionKey)
     byKey.set(section.sectionKey, {
       sectionKey: section.sectionKey,
       label: section.label,
       displayOrder: section.displayOrder,
       instruction: section.instruction
     })
+    namesByKey.set(
+      section.sectionKey,
+      [section.sectionKey, section.label, ...section.aliases].filter(Boolean)
+    )
   }
 
-  return { aliasMap, byKey }
+  return { aliasMap, byKey, namesByKey }
 }
 
 async function buildSupersetIndex(): Promise<SupersetIndex> {
@@ -223,19 +364,32 @@ async function buildSupersetIndex(): Promise<SupersetIndex> {
 
 /**
  * Resolve a raw section identifier (structure id, canonical key, snake_case
- * alias, or prompt key) to a canonical SupersetSection.sectionKey.
+ * alias, camelCase variant, display label, prompt key, or common synonym) to
+ * a canonical SupersetSection.sectionKey.
  * Membership in the index is the test — no passthrough of unknown keys.
  */
 function resolveToSectionKey(index: SupersetIndex, rawKey: string): string | null {
   const raw = (rawKey || '').trim()
   if (!raw) return null
 
-  const direct = index.aliasMap.get(raw) ?? index.aliasMap.get(normalizeKey(raw))
-  if (direct) return direct
+  // 1. Direct/normalized/camel-split/stopword-stripped lookup against DB keys, aliases and labels
+  for (const candidate of [raw, normalizeKey(raw), snakeNorm(raw), strippedKey(raw)]) {
+    if (!candidate) continue
+    const direct = index.aliasMap.get(candidate)
+    if (direct) return direct
+  }
 
+  // 2. Legacy prompt-key mapping (e.g. "field" → fieldOfInvention)
   const viaPromptKey =
     PROMPT_KEY_TO_SECTION_KEY[raw.toLowerCase()] ?? PROMPT_KEY_TO_SECTION_KEY[normalizeKey(raw)]
   if (viaPromptKey && index.byKey.has(viaPromptKey)) return viaPromptKey
+
+  // 3. Common-vocabulary synonyms — only for sections that exist in the live index
+  for (const candidate of [normalizeKey(raw), snakeNorm(raw), strippedKey(raw)]) {
+    if (!candidate) continue
+    const viaSynonym = COMMON_SECTION_SYNONYMS[candidate]
+    if (viaSynonym && index.byKey.has(viaSynonym)) return viaSynonym
+  }
 
   return null
 }
@@ -260,9 +414,15 @@ function getDefaultVariant(profileData: any): { variant: any | null; issue: Impo
 // Mapping derivation
 // ============================================================================
 
+export interface DeriveOptions {
+  /** Structure section ids explicitly acknowledged as dropped by the admin */
+  skipSections?: string[]
+}
+
 export function deriveCountryMappings(
   profileData: any,
-  index: SupersetIndex
+  index: SupersetIndex,
+  opts: DeriveOptions = {}
 ): { mappings: DerivedMapping[]; issues: ImportIssue[] } {
   const issues: ImportIssue[] = []
   const mappings: DerivedMapping[] = []
@@ -271,6 +431,7 @@ export function deriveCountryMappings(
   const { variant, issue } = getDefaultVariant(profileData)
   if (issue) return { mappings, issues: [issue] }
 
+  const skipSet = new Set((opts.skipSections || []).map(s => String(s).trim()).filter(Boolean))
   const seenSectionKeys = new Set<string>()
   const seenSupersetCodes = new Set<string>()
   const sections = [...(variant.sections || [])].sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
@@ -285,22 +446,44 @@ export function deriveCountryMappings(
     }
 
     if (!sectionKey) {
+      if (skipSet.has(section.id)) {
+        issues.push({
+          severity: 'warning',
+          code: 'SECTION_SKIPPED',
+          message: `Section "${section.id}" (${section.label}) has no superset counterpart and was explicitly skipped by the admin.`,
+          sectionId: section.id,
+          candidates
+        })
+        continue
+      }
+      // BLOCKING: a section silently disappearing from a patent specification
+      // is legal data loss — the admin must alias it, create a superset
+      // section for it, or explicitly acknowledge the drop.
       issues.push({
-        severity: 'warning',
+        severity: 'error',
         code: 'UNRESOLVED_SECTION',
-        message: `Section "${section.id}" (${section.label}) could not be resolved to a superset section — it will be skipped. Add one of its keys as an alias to an existing superset section, or create a new superset section.`,
+        message: `Section "${section.id}" (${section.label}) could not be resolved to a superset section. Add one of its keys as an alias to an existing superset section, create a new superset section for it, or explicitly skip it.`,
         sectionId: section.id,
         candidates,
-        suggestion: nearestKey(candidates[0] || section.id, index.aliasMap)
+        suggestion: nearestKey(candidates[0] || section.id, index)
       })
       continue
     }
 
     if (seenSectionKeys.has(sectionKey)) {
+      if (skipSet.has(section.id)) {
+        issues.push({
+          severity: 'warning',
+          code: 'SECTION_SKIPPED',
+          message: `Section "${section.id}" resolves to superset key "${sectionKey}" already mapped by an earlier section, and was explicitly skipped by the admin.`,
+          sectionId: section.id
+        })
+        continue
+      }
       issues.push({
-        severity: 'warning',
+        severity: 'error',
         code: 'DUPLICATE_CANONICAL_KEY',
-        message: `Section "${section.id}" resolves to superset key "${sectionKey}" which is already mapped by an earlier section — keeping the first, skipping this one.`,
+        message: `Section "${section.id}" resolves to superset key "${sectionKey}" which is already mapped by an earlier section. Give the two sections distinct canonical keys, or explicitly skip one of them.`,
         sectionId: section.id
       })
       continue
@@ -378,7 +561,7 @@ function derivePrompts(
         code: 'UNRESOLVED_PROMPT_KEY',
         message: `Prompt key "${rawKey}" could not be resolved to a superset section — its top-up prompt will be skipped.`,
         sectionId: rawKey,
-        suggestion: nearestKey(rawKey, index.aliasMap)
+        suggestion: nearestKey(rawKey, index)
       })
       continue
     }
@@ -454,7 +637,7 @@ export async function planCountryImport(profileData: any, options: ImportOptions
   }
 
   // --- Mappings ---
-  const derived = deriveCountryMappings(profileData, index)
+  const derived = deriveCountryMappings(profileData, index, { skipSections: options.skipSections })
   issues.push(...derived.issues)
 
   const existingMappings = await prisma.countrySectionMapping.findMany({ where: { countryCode } })
@@ -567,7 +750,8 @@ export async function planCountryImport(profileData: any, options: ImportOptions
           severity: 'warning',
           code: 'UNRESOLVED_VALIDATION_KEY',
           message: `validation.sectionChecks key "${rawKey}" could not be resolved to a superset section — its limits will be skipped.`,
-          sectionId: rawKey
+          sectionId: rawKey,
+          suggestion: nearestKey(rawKey, index)
         })
         continue
       }
@@ -633,7 +817,7 @@ export async function applyCountryImport(
 
   const countryCode = plan.countryCode
   const index = await buildSupersetIndex()
-  const derived = deriveCountryMappings(profileData, index)
+  const derived = deriveCountryMappings(profileData, index, { skipSections: options.skipSections })
   const applyStructureKeyMap = new Map(derived.mappings.map(m => [m.structureId, m.sectionKey]))
   const derivedPrompts = derivePrompts(profileData, index, applyStructureKeyMap)
 

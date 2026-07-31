@@ -7,6 +7,12 @@ interface ImportDiffViewProps {
   plan: ImportPlan
   /** Called after an issue was resolved (e.g. alias added) so the parent can re-run preview */
   onIssueResolved?: () => void
+  /** Acknowledge dropping an unresolved/duplicate section, then re-preview */
+  onSkipSection?: (sectionId: string) => void
+  /** Undo a skip acknowledgment, then re-preview */
+  onUnskipSection?: (sectionId: string) => void
+  /** Section ids currently acknowledged as skipped */
+  skippedSections?: string[]
 }
 
 function OpBadge({ op }: { op: string }) {
@@ -39,7 +45,17 @@ function SummaryPill({ label, count, tone }: { label: string; count: number; ton
   )
 }
 
-function IssueRow({ issue, onResolved }: { issue: ImportIssue; onResolved?: () => void }) {
+function IssueRow({
+  issue,
+  onResolved,
+  onSkip,
+  onUnskip
+}: {
+  issue: ImportIssue
+  onResolved?: () => void
+  onSkip?: (sectionId: string) => void
+  onUnskip?: (sectionId: string) => void
+}) {
   const [resolving, setResolving] = useState(false)
   const [resolveError, setResolveError] = useState<string | null>(null)
   const [aliasTarget, setAliasTarget] = useState(issue.suggestion || '')
@@ -47,6 +63,14 @@ function IssueRow({ issue, onResolved }: { issue: ImportIssue; onResolved?: () =
   const canAddAlias =
     (issue.code === 'UNRESOLVED_SECTION' || issue.code === 'UNRESOLVED_PROMPT_KEY' || issue.code === 'UNRESOLVED_VALIDATION_KEY') &&
     Boolean(issue.sectionId)
+
+  const canSkip =
+    (issue.code === 'UNRESOLVED_SECTION' || issue.code === 'DUPLICATE_CANONICAL_KEY') &&
+    issue.severity === 'error' &&
+    Boolean(issue.sectionId) &&
+    Boolean(onSkip)
+
+  const canUnskip = issue.code === 'SECTION_SKIPPED' && Boolean(issue.sectionId) && Boolean(onUnskip)
 
   const handleAddAlias = async () => {
     if (!aliasTarget || !issue.sectionId) return
@@ -98,6 +122,35 @@ function IssueRow({ issue, onResolved }: { issue: ImportIssue; onResolved?: () =
               >
                 {resolving ? 'Adding…' : 'Add alias & re-check'}
               </button>
+              {issue.suggestion && aliasTarget !== issue.suggestion && (
+                <button
+                  onClick={() => setAliasTarget(issue.suggestion!)}
+                  className="px-2 py-1 border border-gray-300 rounded text-xs text-gray-600 hover:bg-gray-50"
+                >
+                  Use suggestion: {issue.suggestion}
+                </button>
+              )}
+            </div>
+          )}
+          {canSkip && (
+            <div className="mt-2 flex items-center space-x-2">
+              <button
+                onClick={() => onSkip!(issue.sectionId!)}
+                className="px-2 py-1 border border-red-300 text-red-700 rounded text-xs hover:bg-red-100"
+              >
+                Skip this section (drop it from the import)
+              </button>
+              <span className="text-xs text-gray-500">The section will NOT be drafted for this country.</span>
+            </div>
+          )}
+          {canUnskip && (
+            <div className="mt-2">
+              <button
+                onClick={() => onUnskip!(issue.sectionId!)}
+                className="px-2 py-1 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-50"
+              >
+                Restore (undo skip)
+              </button>
             </div>
           )}
           {resolveError && <div className="mt-1 text-xs text-red-700">{resolveError}</div>}
@@ -107,10 +160,11 @@ function IssueRow({ issue, onResolved }: { issue: ImportIssue; onResolved?: () =
   )
 }
 
-export function ImportDiffView({ plan, onIssueResolved }: ImportDiffViewProps) {
+export function ImportDiffView({ plan, onIssueResolved, onSkipSection, onUnskipSection, skippedSections }: ImportDiffViewProps) {
   const [showUnchanged, setShowUnchanged] = useState(false)
   const errors = plan.issues.filter(i => i.severity === 'error')
   const warnings = plan.issues.filter(i => i.severity === 'warning')
+  const acknowledgedSkips = skippedSections || []
 
   return (
     <div className="space-y-6">
@@ -146,11 +200,31 @@ export function ImportDiffView({ plan, onIssueResolved }: ImportDiffViewProps) {
           <h4 className="text-sm font-semibold text-gray-700 mb-2">
             Issues ({errors.length} blocking, {warnings.length} warnings)
           </h4>
+          {errors.length > 0 && (
+            <p className="text-xs text-gray-600 mb-2">
+              Blocking issues mean a section from the JSON would be lost. Resolve each one:
+              map it onto an existing superset section via an alias, create a new superset
+              section for it (Superset Sections tab), or explicitly skip it.
+            </p>
+          )}
           <div className="space-y-2">
             {[...errors, ...warnings].map((issue, i) => (
-              <IssueRow key={`${issue.code}-${issue.sectionId || i}`} issue={issue} onResolved={onIssueResolved} />
+              <IssueRow
+                key={`${issue.code}-${issue.sectionId || i}`}
+                issue={issue}
+                onResolved={onIssueResolved}
+                onSkip={onSkipSection}
+                onUnskip={onUnskipSection}
+              />
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Acknowledged skips with no matching issue row (e.g. after plan refresh) */}
+      {acknowledgedSkips.filter(id => !plan.issues.some(i => i.sectionId === id)).length > 0 && (
+        <div className="p-3 border border-yellow-200 bg-yellow-50 rounded-md text-sm text-yellow-800">
+          Skipped sections: {acknowledgedSkips.filter(id => !plan.issues.some(i => i.sectionId === id)).join(', ')}
         </div>
       )}
 

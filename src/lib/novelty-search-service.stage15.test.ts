@@ -555,6 +555,33 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     expect(selected.slice(0, 2).map((item: any) => item.rerankDecision)).toEqual(['accept', 'accept']);
   });
 
+  test('does not impose the legacy borderline count cap on an adaptive analysis frontier', () => {
+    const svc = service();
+    const retrievalCandidates = Array.from({ length: 15 }, (_, index) => ({
+      publicationNumber: `ADAPTIVE_${index + 1}`,
+      title: `Adaptive candidate ${index + 1}`,
+    }));
+    const byPn = Object.fromEntries(retrievalCandidates.map((candidate, index) => [
+      candidate.publicationNumber,
+      { pn: candidate.publicationNumber, decision: 'borderline', score: 0.7 - index * 0.01, reviewStatus: 'reviewed' },
+    ]));
+    const stage1Data = {
+      retrievalCandidates,
+      aiRelevance: {
+        accepted: [],
+        component: [],
+        borderline: retrievalCandidates.map(candidate => candidate.publicationNumber),
+        rejected: [],
+        byPn,
+        gateStatus: 'complete',
+      },
+    };
+
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, retrievalCandidates.length, undefined, true);
+
+    expect(selected).toHaveLength(15);
+  });
+
   test('does not let the five-item borderline UI quota cap deep analysis at five', () => {
     const svc = service();
     const retrievalCandidates = Array.from({ length: 20 }, (_, index) => ({

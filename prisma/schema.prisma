@@ -1690,6 +1690,28 @@ model LocalPatentEmbedding {
   @@map("local_patent_embeddings")
 }
 
+// Materialized corpus coverage census (migration 20260730060000).
+//
+// The census is several full-table scans of local_patents plus an aggregate over
+// local_patent_embeddings. On the multi-million-row corpus that is minutes of work,
+// so it must never run inside a request: the public search API used to await it and
+// hung indefinitely. It is computed by the corpus worker (or an explicit admin
+// refresh) and read from here, which also means the numbers survive a restart and
+// are shared by every app instance instead of living in per-process memory.
+//
+// Keyed by embedding model so switching PATENT_CORPUS_EMBEDDING_MODEL never reads
+// coverage computed for a different vector space.
+model PatentCorpusCoverageSnapshot {
+  model      String   @id
+  payload    Json
+  computedAt DateTime
+  durationMs Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@map("patent_corpus_coverage_snapshots")
+}
+
 // ---------------------------------------------------------------------------
 // EPO BDDS ingestion (migration 20260721120000).
 //

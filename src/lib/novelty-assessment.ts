@@ -1,6 +1,98 @@
 import { llmGateway } from './metering/gateway';
 import { NoveltyAssessmentStatus, NoveltyDetermination, NoveltyAssessmentStage, TaskCode } from '@prisma/client';
 import { prisma } from './prisma';
+import { z } from 'zod';
+
+const screeningPatentAssessmentSchema = z.object({
+  publication_number: z.string().trim().min(1),
+  relevance: z.enum(['HIGH', 'MEDIUM', 'LOW']),
+  reasoning: z.string().trim().min(1),
+});
+
+const screeningResultSchema = z.object({
+  overall_determination: z.enum(['NOVEL', 'NOT_NOVEL', 'DOUBT']),
+  patent_assessments: z.array(screeningPatentAssessmentSchema).min(1),
+  summary_remarks: z.string().trim().min(1),
+});
+
+const detailedAssessmentSchema = z.object({
+  determination: z.enum(['NOVEL', 'NOT_NOVEL', 'PARTIALLY_NOVEL']),
+  confidence_level: z.enum(['HIGH', 'MEDIUM', 'LOW']),
+  novel_aspects: z.array(z.string()).default([]),
+  non_novel_aspects: z.array(z.string()).default([]),
+  technical_reasoning: z.string().trim().min(1),
+  suggestions: z.union([z.string(), z.array(z.string())]).transform(value =>
+    Array.isArray(value) ? value.filter(Boolean).join('; ') : value
+  ),
+});
+
+type ValidatedScreeningResult = z.infer<typeof screeningResultSchema>;
+type ValidatedDetailedAssessment = z.infer<typeof detailedAssessmentSchema>;
+
+function canonicalPublicationNumber(value: unknown): string {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function parseJsonObject(value: unknown): unknown {
+  const responseText = String(value || '').trim();
+  const jsonMatch = responseText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
+  const jsonText = jsonMatch ? jsonMatch[1].trim() : responseText;
+  const startBrace = jsonText.indexOf('{');
+  const lastBrace = jsonText.lastIndexOf('}');
+  if (startBrace < 0 || lastBrace <= startBrace) throw new Error('No complete JSON object was returned');
+  return JSON.parse(jsonText.substring(startBrace, lastBrace + 1));
+}
+
+function validateScreeningResult(value: unknown, expectedPublicationNumbers: string[]): ValidatedScreeningResult {
+  const parsed = screeningResultSchema.parse(value);
+  const expected = expectedPublicationNumbers.map(canonicalPublicationNumber);
+  const expectedSet = new Set(expected);
+  const actual = parsed.patent_assessments.map(item => canonicalPublicationNumber(item.publication_number));
+  const actualSet = new Set(actual);
+  if (actual.some((item, index) => actual.indexOf(item) !== index)) {
+    throw new Error('Screening response contains duplicate patent assessments');
+  }
+  const missing = expected.filter(item => !actualSet.has(item));
+  const unexpected = actual.filter(item => !expectedSet.has(item));
+  if (missing.length || unexpected.length || actual.length !== expected.length) {
+    throw new Error(`Screening response patent set mismatch (missing=${missing.join(',') || 'none'}; unexpected=${unexpected.join(',') || 'none'})`);
+  }
+
+  const assessments = expected.map(expectedPn => {
+    const index = actual.indexOf(expectedPn);
+    return {
+      ...parsed.patent_assessments[index],
+      publication_number: expectedPublicationNumbers[expected.indexOf(expectedPn)],
+    };
+  });
+  const overall_determination: ValidatedScreeningResult['overall_determination'] = assessments.some(item => item.relevance === 'HIGH')
+    ? 'NOT_NOVEL'
+    : assessments.some(item => item.relevance === 'MEDIUM') ? 'DOUBT' : 'NOVEL';
+  return { ...parsed, patent_assessments: assessments, overall_determination };
+}
+
+function validateDetailedAssessment(value: unknown): ValidatedDetailedAssessment {
+  const parsed = detailedAssessmentSchema.parse(value);
+  const determination: ValidatedDetailedAssessment['determination'] = parsed.novel_aspects.length > 0 && parsed.non_novel_aspects.length > 0
+    ? 'PARTIALLY_NOVEL'
+    : parsed.non_novel_aspects.length > 0
+      ? 'NOT_NOVEL'
+      : parsed.novel_aspects.length > 0 ? 'NOVEL' : 'PARTIALLY_NOVEL';
+  return {
+    ...parsed,
+    determination,
+    confidence_level: determination === parsed.determination && (parsed.novel_aspects.length + parsed.non_novel_aspects.length) > 0
+      ? parsed.confidence_level
+      : 'LOW',
+  };
+}
+
+function weakestConfidence(values: unknown[]): 'HIGH' | 'MEDIUM' | 'LOW' {
+  const normalized = values.map(value => String(value || '').toUpperCase());
+  if (normalized.includes('LOW')) return 'LOW';
+  if (normalized.includes('MEDIUM')) return 'MEDIUM';
+  return normalized.length > 0 && normalized.every(value => value === 'HIGH') ? 'HIGH' : 'LOW';
+}
 
 // LLM Prompt Specification for Novelty Assessment (per user requirements)
 export const NOVELTY_SCREENING_PROMPT = `Analyze patent novelty. Output ONLY valid JSON.
@@ -312,13 +404,10 @@ export class NoveltyAssessmentService {
         // Aggregate results from all stage 2 assessments
         const allNovelAspects = stage2Data.flatMap((r: any) => r.novel_aspects || []);
         const allNonNovelAspects = stage2Data.flatMap((r: any) => r.non_novel_aspects || []);
-        const allRemarks = stage2Data.map((r: any) =>
-          r.remarks_novel || r.remarks_not_novel || r.remarks_partial || r.overall_assessment
-        ).filter(Boolean);
+        const allRemarks = stage2Data.map((r: any) => r.technical_reasoning).filter(Boolean);
         const allSuggestions = stage2Data.map((r: any) => r.suggestions).filter(Boolean);
         const confidenceLevels = stage2Data.map((r: any) => r.confidence_level);
-        const avgConfidence = confidenceLevels.includes('HIGH') ? 'HIGH' :
-                            confidenceLevels.includes('MEDIUM') ? 'MEDIUM' : 'LOW';
+        const avgConfidence = weakestConfidence(confidenceLevels);
 
         await prisma.noveltyAssessmentRun.update({
           where: { id: assessment.id },
@@ -423,7 +512,10 @@ Abstract: ${patent.abstract}`)
         const lastBrace = jsonText.lastIndexOf('}');
         const cleanJson = jsonText.substring(startBrace, lastBrace + 1);
 
-        assessmentData = JSON.parse(cleanJson);
+        assessmentData = validateScreeningResult(
+          JSON.parse(cleanJson),
+          request.intersectingPatents.map(patent => patent.publicationNumber)
+        );
       } catch (parseError) {
         console.error('Stage 1 JSON parse error:', parseError, 'Raw response:', responseText);
         return { success: false, error: 'Invalid LLM response format' };
@@ -467,7 +559,9 @@ Abstract: ${patent.abstract}`)
       const patentsToAssess = mediumAssessments
         .filter(assessment => assessment.relevance === 'MEDIUM')
         .map(assessment => {
-          const patent = request.intersectingPatents.find(p => p.publicationNumber === assessment.publication_number);
+          const patent = request.intersectingPatents.find(p =>
+            canonicalPublicationNumber(p.publicationNumber) === canonicalPublicationNumber(assessment.publication_number)
+          );
           return { assessment, patent };
         });
 
@@ -536,7 +630,7 @@ Abstract: ${patent.abstract}`)
             throw new Error('No JSON object found in Stage 2 response');
           }
           const cleanJson = jsonText.substring(startBrace, lastBrace + 1);
-          detailedAssessment = JSON.parse(cleanJson);
+          detailedAssessment = validateDetailedAssessment(JSON.parse(cleanJson));
         } catch (parseError) {
           console.error(`Stage 2 JSON parse error for ${patent!.publicationNumber}:`, parseError);
           failures.push({
@@ -569,7 +663,7 @@ Abstract: ${patent.abstract}`)
             tokensUsed: result.response.outputTokens,
             modelClass: result.response.modelClass,
             determination,
-            remarks: detailedAssessment.remarks_novel || detailedAssessment.remarks_not_novel || detailedAssessment.remarks_partial || detailedAssessment.overall_assessment,
+            remarks: detailedAssessment.technical_reasoning,
             suggestions: detailedAssessment.suggestions,
           },
         });
@@ -911,6 +1005,11 @@ Relevance: ${patent.relevance}%`;
         throw new Error(`LLM returned invalid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       }
 
+      level1Results = validateScreeningResult(
+        level1Results,
+        request.level1Patents.map(patent => patent.publicationNumber)
+      );
+
       // Determine if we need Level 2
       let determination: NoveltyDetermination;
       let patentsNeedingDetails: string[] = [];
@@ -1110,15 +1209,14 @@ Relevance: ${patent.relevance}%`;
           jsonText = jsonText.replace(/^\s*`{1,3}(?:json)?\s*/i, '').replace(/\s*`{1,3}\s*$/, '');
 
           console.log('🔧 Cleaned Level 2 JSON for parsing:', jsonText.substring(0, 200) + '...');
-          detailedResult = JSON.parse(jsonText);
+          detailedResult = validateDetailedAssessment(JSON.parse(jsonText));
         } catch (parseError) {
           console.error('❌ Level 2 assessment JSON parse error:', parseError);
           console.error('❌ Raw Level 2 response that failed:', llmResult.response.output);
           throw new Error(`Level 2 LLM returned invalid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
         }
 
-        detailedResult.publicationNumber = publicationNumber;
-        level2Results.push(detailedResult);
+        level2Results.push({ publicationNumber, ...detailedResult });
 
         // Create LLM call record
         await prisma.noveltyAssessmentLLMCall.create({
@@ -1155,8 +1253,10 @@ Relevance: ${patent.relevance}%`;
       const suggestions = level2Results.flatMap((r: any) => r.suggestions || []);
 
       const finalRemarks = level2Results.map((result: any) =>
-        `Patent ${result.publicationNumber}: ${result.overall_assessment}`
+        `Patent ${result.publicationNumber}: ${result.technical_reasoning}`
       ).join('\n');
+      const confidenceLevel = weakestConfidence(level2Results.map((result: any) => result.confidence_level));
+      const confidence = confidenceLevel === 'HIGH' ? 95 : confidenceLevel === 'MEDIUM' ? 75 : 50;
 
       // Update assessment record
       await prisma.noveltyAssessmentRun.update({
@@ -1178,7 +1278,7 @@ Relevance: ${patent.relevance}%`;
       return {
         determination: finalDetermination,
         level2Results,
-        confidence: 95, // Higher confidence after detailed analysis
+        confidence,
         remarks: finalRemarks,
       };
 

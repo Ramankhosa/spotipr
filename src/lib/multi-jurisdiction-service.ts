@@ -15,6 +15,11 @@ import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper'
 const DD_USER_DATA_LEGAL_WRAPPER = DD_USER_DATA_LLM_WRAPPER
 import type { LLMRequest } from '@/lib/metering'
 import { getCountryProfile } from '@/lib/country-profile-service'
+import {
+  getJurisdictionLanguage,
+  languageDisplayName,
+  resolveJurisdictionLanguage
+} from '@/lib/jurisdiction-language'
 import { getSectionStageCode } from '@/lib/metering/section-stage-mapping'
 import {
   buildUniversalDraftingBundle,
@@ -133,68 +138,15 @@ const SAFE_DEFAULT_CONTEXT: SectionContextRequirements = {
 // ============================================================================
 // Jurisdiction Language Mapping
 // ============================================================================
+// The canonical map and resolver live in '@/lib/jurisdiction-language' so that
+// client components can share them without pulling in prisma. Re-exported here
+// for backwards compatibility with existing importers.
 
-/**
- * Map jurisdiction code to ISO 639-1 language code
- * Used for selecting language-specific figures
- */
-const JURISDICTION_LANGUAGE_MAP: Record<string, string> = {
-  // Asia
-  JP: 'ja',    // Japan → Japanese
-  CN: 'zh',    // China → Chinese
-  KR: 'ko',    // Korea → Korean
-  IN: 'en',    // India → English (official patent language)
-  TW: 'zh',    // Taiwan → Chinese
-  MY: 'en',    // Malaysia → English
-  SG: 'en',    // Singapore → English
-  
-  // Europe
-  EP: 'en',    // European Patent → English (primary)
-  DE: 'de',    // Germany → German
-  FR: 'fr',    // France → French
-  ES: 'es',    // Spain → Spanish
-  IT: 'it',    // Italy → Italian
-  NL: 'nl',    // Netherlands → Dutch
-  CH: 'de',    // Switzerland → German (primary)
-  AT: 'de',    // Austria → German
-  SE: 'sv',    // Sweden → Swedish
-  PL: 'pl',    // Poland → Polish
-  
-  // Americas
-  US: 'en',    // United States → English
-  CA: 'en',    // Canada → English (primary)
-  BR: 'pt',    // Brazil → Portuguese
-  MX: 'es',    // Mexico → Spanish
-  AR: 'es',    // Argentina → Spanish
-  
-  // Other
-  AU: 'en',    // Australia → English
-  NZ: 'en',    // New Zealand → English
-  RU: 'ru',    // Russia → Russian
-  IL: 'he',    // Israel → Hebrew
-  SA: 'ar',    // Saudi Arabia → Arabic
-  UAE: 'ar',   // UAE → Arabic
-  ZA: 'en',    // South Africa → English
-  
-  // International
-  PCT: 'en',   // PCT → English (default)
-  WIPO: 'en',  // WIPO → English
-}
-
-/**
- * Get language code for a jurisdiction
- */
-export function getJurisdictionLanguage(jurisdiction: string): string {
-  return JURISDICTION_LANGUAGE_MAP[jurisdiction.toUpperCase()] || 'en'
-}
-
-/**
- * Whether the jurisdiction has an explicit language mapping
- * (unknown jurisdictions silently fall back to English)
- */
-export function hasJurisdictionLanguage(jurisdiction: string): boolean {
-  return jurisdiction.toUpperCase() in JURISDICTION_LANGUAGE_MAP
-}
+export {
+  getJurisdictionLanguage,
+  hasJurisdictionLanguage,
+  resolveJurisdictionLanguage
+} from '@/lib/jurisdiction-language'
 
 // ============================================================================
 // Language-Aware Figure Selection
@@ -2714,17 +2666,19 @@ export async function translateReferenceDraft(
   const code = targetJurisdiction.toUpperCase()
   const mappings = await getSectionMapping(code)
   
-  // Resolve the target language
+  // Resolve the target language.
+  // NOTE: meta.languages is an unordered catalogue of accepted languages, not a
+  // preference order — PCT lists ["ar","zh","en",...], so never fall back to
+  // availableLanguages[0]. resolveJurisdictionLanguage falls back to the
+  // office's canonical language and then to English.
   const profile = await getCountryProfile(code)
   const availableLanguages: string[] = Array.isArray(profile?.profileData?.meta?.languages)
     ? profile.profileData.meta.languages
-    : ['English']
-  const resolvedLanguage = targetLanguage && availableLanguages.includes(targetLanguage)
-    ? targetLanguage
-    : availableLanguages[0] || 'English'
-  
+    : []
+  const resolvedLanguage = resolveJurisdictionLanguage(code, availableLanguages, targetLanguage)
+
   // Warn if requested language is not available
-  if (targetLanguage && !availableLanguages.includes(targetLanguage)) {
+  if (targetLanguage && availableLanguages.length > 0 && !availableLanguages.includes(targetLanguage)) {
     console.warn(`[translateReferenceDraft] Requested language '${targetLanguage}' not available for ${code}. Using '${resolvedLanguage}' instead. Available: ${availableLanguages.join(', ')}`)
   }
 
@@ -3047,13 +3001,14 @@ ${topUpInstruction}${topUpConstraints}
 `
     }).join('\n')
 
-    const prompt = `You are translating a patent reference draft to ${code} jurisdiction format in ${targetLanguage}.
+    const languageName = languageDisplayName(targetLanguage)
+    const prompt = `You are translating a patent reference draft to ${code} jurisdiction format in ${languageName}.
 
 TASK: Translate/adapt the following ${sectionsToTranslate.length} sections according to ${code} patent office requirements.
 
 IMPORTANT RULES:
 1. Apply jurisdiction-specific formatting and terminology for ${code}
-2. Output MUST be in ${targetLanguage}
+2. Output MUST be in ${languageName}
 3. Maintain technical accuracy while adapting to local patent practice
 4. Apply any section-specific constraints provided below
 5. Keep reference numerals consistent with the original
@@ -3180,6 +3135,7 @@ async function translateSection(
     
     console.log(`[translateSection] Translating ${supersetKey} -> ${countryKey} for ${code}, TopUp: ${effectivePrompt ? 'YES' : 'NO'}`)
 
+    const languageName = languageDisplayName(targetLanguage)
     const prompt = `You are translating a patent section from reference draft to ${code} jurisdiction format.
 
 TASK: Translate/adapt the following section according to ${code} patent office requirements.
@@ -3192,7 +3148,7 @@ ${topUpInstruction}${topUpConstraints}
 
 IMPORTANT RULES:
 1. Apply jurisdiction-specific formatting and terminology for ${code}
-2. Output MUST be in ${targetLanguage}
+2. Output MUST be in ${languageName}
 3. Maintain technical accuracy while adapting to local patent practice
 4. Apply the jurisdiction-specific requirements above if provided
 5. Keep reference numerals consistent with the original

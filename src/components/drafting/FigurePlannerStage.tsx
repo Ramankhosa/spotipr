@@ -457,6 +457,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [sketchSuggestions, setSketchSuggestions] = useState<any[]>([])
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [suggestionsError, setSuggestionsError] = useState<string | null>(null)
+  // "Zero suggestions" is a normal outcome for abstract inventions, not an error.
+  // Held separately so it renders as an explanation rather than a red alert.
+  const [suggestionsNotice, setSuggestionsNotice] = useState<string | null>(null)
   const [sketchError, setSketchError] = useState<string | null>(null)
   const [sketchGenerating, setSketchGenerating] = useState(false)
   const [sketchMode, setSketchMode] = useState<'auto' | 'guided' | 'refine'>('auto')
@@ -1499,6 +1502,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     try {
       setSuggestionsLoading(true)
       setSuggestionsError(null)
+      setSuggestionsNotice(null)
 
       const res = await fetch(`/api/patents/${patent.id}/drafting`, {
         method: 'POST',
@@ -1514,13 +1518,36 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         })
       })
 
-      if (!res.ok) throw new Error('Failed to generate sketch suggestions')
+      const data = await res.json().catch(() => null)
 
-      const data = await res.json()
-      if (data.suggestions && Array.isArray(data.suggestions)) {
-        setSketchSuggestions(data.suggestions)
-        // Close reference selector after generating
+      if (!res.ok) {
+        throw new Error(data?.error || 'Couldn\'t reach the suggestion service. Please try again.')
+      }
+
+      const returned: any[] = Array.isArray(data?.suggestions) ? data.suggestions : []
+      setSketchSuggestions(returned)
+
+      if (returned.length > 0) {
         setShowReferenceSelector(false)
+        return
+      }
+
+      // Zero suggestions. Explain which of the three cases this is, instead of
+      // leaving the screen unchanged with no feedback at all.
+      const type = data?.inventionType && data.inventionType !== 'GENERAL'
+        ? ` Yours is recorded as ${String(data.inventionType).toLowerCase()}.`
+        : ''
+
+      if (data?.emptyReason === 'not_applicable') {
+        setSuggestionsNotice(
+          data?.hasExistingSketches
+            ? `No new sketch ideas — your ${data.existingSketchCount} existing sketch${data.existingSketchCount === 1 ? '' : 'es'} already cover the views worth drawing. Add a sketch manually below if you have a specific view in mind.`
+            : `Sketches aren't a good fit for this invention, so none were suggested.${type} Inventions that are mostly software, algorithms or business methods are better shown with the managed diagrams above. You can still add a sketch manually below.`
+        )
+      } else if (data?.emptyReason === 'incomplete') {
+        setSuggestionsError('The suggestions came back missing their titles or descriptions. Try again — if it keeps happening, the figure-planner model may need a higher output limit.')
+      } else {
+        setSuggestionsError('Couldn\'t read the model\'s reply, so there\'s nothing to show. Try again — if it keeps happening, check the figure-planner model configuration.')
       }
     } catch (err) {
       setSuggestionsError(err instanceof Error ? err.message : 'Failed to generate sketch suggestions')
@@ -4041,8 +4068,15 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Generate Suggestions Section */}
+              {/* Step 1 — deciding what to draw. Optional: skip straight to step 2. */}
               <div className="space-y-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-ai-graphite-900">Not sure what to draw?</h4>
+                  <p className="text-xs text-ai-graphite-500 mt-0.5">
+                    Grapsi reads your invention facts and proposes views worth illustrating. Optional —
+                    skip ahead if you already know what you want.
+                  </p>
+                </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Button
@@ -4056,7 +4090,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       ) : (
                         <Sparkles className="w-4 h-4" />
                       )}
-                      Generate Suggestions
+                      {suggestionsLoading ? 'Thinking…' : 'Suggest views'}
                     </Button>
                     <Button
                       onClick={() => setShowReferenceSelector(!showReferenceSelector)}
@@ -4173,49 +4207,20 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 )}
               </div>
 
-              {/* Mode Selector */}
-              <div className="flex items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit">
-                <button
-                  onClick={() => setSketchMode('auto')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                    sketchMode === 'auto'
-                      ? 'bg-white text-ai-blue-600 shadow-sm'
-                      : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-                  }`}
-                >
-                  <Sparkles className="w-4 h-4" />
-                  Auto Generate
-                </button>
-                <button
-                  onClick={() => setSketchMode('guided')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                    sketchMode === 'guided'
-                      ? 'bg-white text-ai-blue-600 shadow-sm'
-                      : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-                  }`}
-                >
-                  <Edit2 className="w-4 h-4" />
-                  With Instructions
-                </button>
-                <button
-                  onClick={() => setSketchMode('refine')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                    sketchMode === 'refine'
-                      ? 'bg-white text-ai-blue-600 shadow-sm'
-                      : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-                  }`}
-                >
-                  <Upload className="w-4 h-4" />
-                  Refine Upload
-                </button>
-              </div>
-
               {/* Suggestions Error */}
               {suggestionsError && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>{suggestionsError}</AlertDescription>
                 </Alert>
+              )}
+
+              {/* Nothing suggested, but nothing went wrong — explain why. */}
+              {suggestionsNotice && (
+                <div className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                  <Info className="h-4 w-4 shrink-0 mt-0.5 text-slate-500" />
+                  <p className="text-sm text-ai-graphite-700 leading-relaxed">{suggestionsNotice}</p>
+                </div>
               )}
 
               {/* Sketch Suggestions - with Generate Image buttons */}
@@ -4302,6 +4307,60 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   </div>
                 </div>
               )}
+
+              {/*
+                Step 2 — making the illustration. The mode selector belongs directly above
+                the fields it controls; it previously sat between "Get ideas" and the
+                suggestions that button produces, splitting one task in half.
+              */}
+              <div className="pt-4 border-t border-paper-200 space-y-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-ai-graphite-900">Make the illustration</h4>
+                  <p className="text-xs text-ai-graphite-500 mt-0.5">
+                    Pick a suggestion above, or describe your own view below.
+                  </p>
+                </div>
+
+                {/* Mode Selector */}
+                <div className="flex items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit">
+                  <button
+                    onClick={() => setSketchMode('auto')}
+                    title="Grapsi chooses the view and draws it from your invention facts."
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                      sketchMode === 'auto'
+                        ? 'bg-white text-ai-blue-600 shadow-sm'
+                        : 'text-ai-graphite-600 hover:text-ai-graphite-900'
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Draw it for me
+                  </button>
+                  <button
+                    onClick={() => setSketchMode('guided')}
+                    title="You describe the view you want — angle, components, detail level — and Grapsi draws that."
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                      sketchMode === 'guided'
+                        ? 'bg-white text-ai-blue-600 shadow-sm'
+                        : 'text-ai-graphite-600 hover:text-ai-graphite-900'
+                    }`}
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    I&apos;ll describe it
+                  </button>
+                  <button
+                    onClick={() => setSketchMode('refine')}
+                    title="Upload your own sketch or photo and have it redrawn as patent-style line art."
+                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                      sketchMode === 'refine'
+                        ? 'bg-white text-ai-blue-600 shadow-sm'
+                        : 'text-ai-graphite-600 hover:text-ai-graphite-900'
+                    }`}
+                  >
+                    <Upload className="w-4 h-4" />
+                    Clean up my drawing
+                  </button>
+                </div>
+              </div>
 
               {/* Mode-specific inputs */}
               <div className="space-y-4">

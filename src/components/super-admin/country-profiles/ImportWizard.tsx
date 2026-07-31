@@ -39,6 +39,8 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
 
   const [resetAdminState, setResetAdminState] = useState(false)
   const [disableExtras, setDisableExtras] = useState(false)
+  /** Structure section ids the admin explicitly acknowledged dropping */
+  const [skipSections, setSkipSections] = useState<string[]>([])
 
   const [busy, setBusy] = useState(false)
   const [stepError, setStepError] = useState<string | null>(null)
@@ -62,6 +64,8 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
     setClientValid(Boolean(repair.validationResult?.valid))
     setClientErrors(repair.validationResult?.errors || [])
     setClientWarnings(repair.validationResult?.warnings || [])
+    // Skip acknowledgments belong to one specific file — never carry them over
+    setSkipSections([])
   }, [])
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -110,7 +114,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
     }, 500)
   }
 
-  const runPreview = useCallback(async () => {
+  const runPreview = useCallback(async (skipOverride?: string[]) => {
     if (!profileData) return
     setBusy(true)
     setStepError(null)
@@ -121,7 +125,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
         body: JSON.stringify({
           action: 'preview',
           profileData,
-          options: { resetAdminState, disableExtras }
+          options: { resetAdminState, disableExtras, skipSections: skipOverride ?? skipSections }
         })
       })
       const result = await response.json()
@@ -142,7 +146,19 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
     } finally {
       setBusy(false)
     }
-  }, [profileData, resetAdminState, disableExtras])
+  }, [profileData, resetAdminState, disableExtras, skipSections])
+
+  const handleSkipSection = useCallback((sectionId: string) => {
+    const next = Array.from(new Set([...skipSections, sectionId]))
+    setSkipSections(next)
+    runPreview(next)
+  }, [skipSections, runPreview])
+
+  const handleUnskipSection = useCallback((sectionId: string) => {
+    const next = skipSections.filter(id => id !== sectionId)
+    setSkipSections(next)
+    runPreview(next)
+  }, [skipSections, runPreview])
 
   const runImport = async () => {
     if (!profileData) return
@@ -155,7 +171,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
         body: JSON.stringify({
           action: 'apply',
           profileData,
-          options: { resetAdminState, disableExtras }
+          options: { resetAdminState, disableExtras, skipSections }
         })
       })
       const result = await response.json()
@@ -360,7 +376,7 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
 
           <div className="flex justify-end">
             <button
-              onClick={runPreview}
+              onClick={() => runPreview()}
               disabled={!clientValid || busy}
               className="px-6 py-2 bg-lamp-600 text-white rounded-md hover:bg-lamp-700 disabled:opacity-50"
             >
@@ -378,7 +394,13 @@ export function ImportWizard({ onFinished }: ImportWizardProps) {
               {serverWarnings.length} schema warnings (non-blocking)
             </div>
           )}
-          <ImportDiffView plan={plan} onIssueResolved={runPreview} />
+          <ImportDiffView
+            plan={plan}
+            onIssueResolved={() => runPreview()}
+            onSkipSection={handleSkipSection}
+            onUnskipSection={handleUnskipSection}
+            skippedSections={skipSections}
+          />
           <div className="flex justify-between">
             <button onClick={() => setStep('source')} className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
               ← Back

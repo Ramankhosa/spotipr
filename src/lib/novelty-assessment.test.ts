@@ -113,6 +113,49 @@ describe('NoveltyAssessmentService.startAssessment', () => {
     }))
   })
 
+  it('uses technical_reasoning and the weakest Stage 2 confidence', async () => {
+    const twoPatentRequest = {
+      ...request,
+      intersectingPatents: [
+        ...request.intersectingPatents,
+        { publicationNumber: 'P2', title: 'Second prior widget', abstract: 'Another widget', relevance: 45 },
+      ],
+    }
+    llmGateway.executeLLMOperation
+      .mockResolvedValueOnce(llmResponse(JSON.stringify({
+        overall_determination: 'DOUBT',
+        patent_assessments: [
+          { publication_number: 'P1', relevance: 'MEDIUM', reasoning: 'Related' },
+          { publication_number: 'P2', relevance: 'MEDIUM', reasoning: 'Also related' },
+        ],
+        summary_remarks: 'Needs comparison',
+      })))
+      .mockResolvedValueOnce(llmResponse(JSON.stringify({
+        determination: 'NOVEL',
+        confidence_level: 'HIGH',
+        novel_aspects: ['feature A'],
+        non_novel_aspects: [],
+        technical_reasoning: 'P1 leaves feature A undisclosed',
+        suggestions: 'Proceed carefully',
+      })))
+      .mockResolvedValueOnce(llmResponse(JSON.stringify({
+        determination: 'PARTIALLY_NOVEL',
+        confidence_level: 'LOW',
+        novel_aspects: ['feature B'],
+        non_novel_aspects: ['feature C'],
+        technical_reasoning: 'P2 overlaps feature C but not feature B',
+        suggestions: 'Emphasize feature B',
+      })))
+
+    const { NoveltyAssessmentService } = await import('./novelty-assessment')
+    const result = await NoveltyAssessmentService.startAssessment(twoPatentRequest)
+
+    expect(result.success).toBe(true)
+    expect(result.confidenceLevel).toBe('LOW')
+    expect(result.remarks).toContain('P1 leaves feature A undisclosed')
+    expect(result.remarks).toContain('P2 overlaps feature C but not feature B')
+  })
+
   it('fails closed when a required Stage 2 comparison call fails', async () => {
     llmGateway.executeLLMOperation
       .mockResolvedValueOnce(llmResponse(JSON.stringify({
@@ -163,7 +206,7 @@ describe('NoveltyAssessmentService.startAssessment', () => {
     }))
   })
 
-  it('fails closed when Stage 2 has no matching patent to assess', async () => {
+  it('fails closed when Stage 1 returns an unexpected patent instead of the requested patent', async () => {
     llmGateway.executeLLMOperation.mockResolvedValueOnce(llmResponse(JSON.stringify({
       overall_determination: 'DOUBT',
       patent_assessments: [{ publication_number: 'MISSING', relevance: 'MEDIUM', reasoning: 'Related' }],
@@ -177,11 +220,27 @@ describe('NoveltyAssessmentService.startAssessment', () => {
     expect(prisma.noveltyAssessmentRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         status: NoveltyAssessmentStatus.FAILED,
-        finalDetermination: NoveltyDetermination.DOUBT,
-        stage2Results: expect.objectContaining({
-          incomplete: true,
-          failures: [expect.objectContaining({ publicationNumber: 'MISSING', reason: 'MATCHING_PATENT_NOT_FOUND' })],
-        }),
+      }),
+    }))
+    expect(llmGateway.executeLLMOperation).toHaveBeenCalledTimes(1)
+  })
+
+  it('recomputes a contradictory Stage 1 headline from the per-patent relevance rows', async () => {
+    llmGateway.executeLLMOperation.mockResolvedValueOnce(llmResponse(JSON.stringify({
+      overall_determination: 'NOVEL',
+      patent_assessments: [{ publication_number: 'P1', relevance: 'HIGH', reasoning: 'Teaches all elements' }],
+      summary_remarks: 'Contradictory model headline',
+    })))
+
+    const { NoveltyAssessmentService } = await import('./novelty-assessment')
+    const result = await NoveltyAssessmentService.startAssessment(request)
+
+    expect(result.success).toBe(true)
+    expect(result.determination).toBe(NoveltyDetermination.NOT_NOVEL)
+    expect(prisma.noveltyAssessmentRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: NoveltyAssessmentStatus.NOT_NOVEL,
+        finalDetermination: NoveltyDetermination.NOT_NOVEL,
       }),
     }))
   })

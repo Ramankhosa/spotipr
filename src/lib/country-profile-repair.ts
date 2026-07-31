@@ -150,6 +150,37 @@ const CANONICAL_KEYS_MAP: { [key: string]: string[] } = {
 }
 
 /**
+ * Recursively fill missing fields from a defaults object WITHOUT overwriting
+ * anything the author provided. This is what makes a half-written block
+ * (e.g. "diagrams": {} or a rules.claims missing two fields) importable —
+ * a partially-present block must never be treated worse than an absent one.
+ */
+function fillDefaults(target: any, defaults: any, path: string, repairs: RepairAction[]): void {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    const current = target[key]
+    if (current === undefined || current === null) {
+      target[key] = Array.isArray(defaultValue)
+        ? [...defaultValue]
+        : defaultValue && typeof defaultValue === 'object'
+          ? JSON.parse(JSON.stringify(defaultValue))
+          : defaultValue
+      repairs.push({
+        type: 'added',
+        field: `${path}.${key}`,
+        description: 'Added default value for missing field',
+        newValue: defaultValue
+      })
+    } else if (
+      defaultValue && typeof defaultValue === 'object' && !Array.isArray(defaultValue) &&
+      typeof current === 'object' && !Array.isArray(current)
+    ) {
+      fillDefaults(current, defaultValue, `${path}.${key}`, repairs)
+    }
+  }
+}
+
+/**
  * Attempt to repair a country profile JSON with non-essential fixes
  */
 export async function repairCountryProfile(originalProfile: any): Promise<RepairResult> {
@@ -248,6 +279,39 @@ function repairMetaSection(profile: any): RepairAction[] {
     }
   })
 
+  // Required arrays that hand-written profiles often omit
+  if (!Array.isArray(profile.meta.applicationTypes) || profile.meta.applicationTypes.length === 0) {
+    profile.meta.applicationTypes = ['ordinary', 'PCT national phase']
+    repairs.push({
+      type: 'added',
+      field: 'meta.applicationTypes',
+      description: 'Added default application types',
+      newValue: profile.meta.applicationTypes
+    })
+  }
+  if (!Array.isArray(profile.meta.languages) || profile.meta.languages.length === 0) {
+    profile.meta.languages = ['en']
+    repairs.push({
+      type: 'added',
+      field: 'meta.languages',
+      description: 'Added default languages',
+      newValue: profile.meta.languages
+    })
+  }
+
+  // A bare domain fails z.string().url() — prepend the protocol rather than reject
+  if (typeof profile.meta.officeUrl === 'string' && profile.meta.officeUrl.trim() && !/^[a-z][a-z0-9+.-]*:\/\//i.test(profile.meta.officeUrl.trim())) {
+    const fixed = `https://${profile.meta.officeUrl.trim()}`
+    repairs.push({
+      type: 'fixed',
+      field: 'meta.officeUrl',
+      description: 'Prefixed officeUrl with https://',
+      oldValue: profile.meta.officeUrl,
+      newValue: fixed
+    })
+    profile.meta.officeUrl = fixed
+  }
+
   return repairs
 }
 
@@ -303,21 +367,64 @@ function repairStructureSection(profile: any): RepairAction[] {
     }
   }
 
-  // Fix canonical keys for sections
+  // Fill missing per-variant and per-section required fields so a lean,
+  // hand-written structure block still passes schema validation.
   profile.structure.variants.forEach((variant: any, variantIndex: number) => {
+    const vPath = `structure.variants[${variantIndex}]`
+    if (variant && typeof variant === 'object') {
+      if (!variant.label && variant.id) {
+        variant.label = String(variant.id)
+        repairs.push({ type: 'added', field: `${vPath}.label`, description: 'Defaulted variant label to its id', newValue: variant.label })
+      }
+      if (!variant.description) {
+        variant.description = `${variant.label || variant.id || 'Standard'} specification structure`
+        repairs.push({ type: 'added', field: `${vPath}.description`, description: 'Added default variant description', newValue: variant.description })
+      }
+    }
+
     if (variant.sections && Array.isArray(variant.sections)) {
       variant.sections.forEach((section: any, sectionIndex: number) => {
+        const sPath = `${vPath}.sections[${sectionIndex}]`
         const sectionId = section.id
         const expectedKeys = CANONICAL_KEYS_MAP[sectionId]
 
-        if (expectedKeys && (!section.canonicalKeys || !Array.isArray(section.canonicalKeys))) {
-          section.canonicalKeys = expectedKeys
-          repairs.push({
-            type: 'fixed',
-            field: `structure.variants[${variantIndex}].sections[${sectionIndex}].canonicalKeys`,
-            description: `Fixed canonical keys for section ${sectionId}`,
-            newValue: expectedKeys
-          })
+        if (!Array.isArray(section.canonicalKeys) || section.canonicalKeys.length === 0) {
+          // Known ids get their catalog keys; unknown ids fall back to the id
+          // itself — the import resolver (aliases + synonyms) takes it from there.
+          const keys = expectedKeys || (sectionId ? [String(sectionId)] : undefined)
+          if (keys) {
+            section.canonicalKeys = keys
+            repairs.push({
+              type: 'fixed',
+              field: `${sPath}.canonicalKeys`,
+              description: `Fixed canonical keys for section ${sectionId}`,
+              newValue: keys
+            })
+          }
+        }
+
+        if (!section.label && sectionId) {
+          section.label = String(sectionId)
+            .replace(/[_-]+/g, ' ')
+            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+            .replace(/\b\w/g, (c: string) => c.toUpperCase())
+          repairs.push({ type: 'added', field: `${sPath}.label`, description: 'Derived section label from its id', newValue: section.label })
+        }
+        if (typeof section.order !== 'number' || section.order < 1) {
+          section.order = sectionIndex + 1
+          repairs.push({ type: 'fixed', field: `${sPath}.order`, description: 'Defaulted section order to its position', newValue: section.order })
+        }
+        if (typeof section.required !== 'boolean') {
+          section.required = ['title', 'claims', 'abstract'].includes(String(sectionId))
+          repairs.push({ type: 'added', field: `${sPath}.required`, description: 'Added default required flag', newValue: section.required })
+        }
+        if (!['header', 'body', 'claims', 'abstract'].includes(section.group)) {
+          const id = String(sectionId || '').toLowerCase()
+          section.group = id.includes('claim') ? 'claims'
+            : id.includes('abstract') ? 'abstract'
+            : (id === 'title' || id.includes('preamble') || id.includes('cross_reference') || id.includes('crossreference')) ? 'header'
+            : 'body'
+          repairs.push({ type: 'added', field: `${sPath}.group`, description: 'Inferred section group from its id', newValue: section.group })
         }
       })
     }
@@ -341,16 +448,20 @@ function repairRulesSection(profile: any): RepairAction[] {
     })
   }
 
-  // Add missing required rule blocks with defaults
+  // Add missing rule blocks with defaults, and fill missing fields inside
+  // partially-written blocks (a rules.claims with two fields must not fail
+  // schema validation over the other nine).
   Object.entries(DEFAULT_VALUES.rules).forEach(([ruleType, defaults]) => {
-    if (!profile.rules[ruleType]) {
-      profile.rules[ruleType] = { ...defaults }
+    if (!profile.rules[ruleType] || typeof profile.rules[ruleType] !== 'object') {
+      profile.rules[ruleType] = JSON.parse(JSON.stringify(defaults))
       repairs.push({
         type: 'added',
         field: `rules.${ruleType}`,
         description: `Added missing ${ruleType} rules with defaults`,
         newValue: defaults
       })
+    } else {
+      fillDefaults(profile.rules[ruleType], defaults, `rules.${ruleType}`, repairs)
     }
   })
 
@@ -419,6 +530,12 @@ function repairPromptsSection(profile: any): RepairAction[] {
       field: 'prompts.baseStyle',
       description: 'Added default baseStyle configuration'
     })
+  } else {
+    fillDefaults(profile.prompts.baseStyle, {
+      tone: 'technical, neutral, precise',
+      voice: 'impersonal_third_person',
+      avoid: ['marketing language', 'unsupported advantages']
+    }, 'prompts.baseStyle', repairs)
   }
 
   if (!profile.prompts.sections) {
@@ -469,12 +586,23 @@ function repairExportSection(profile: any): RepairAction[] {
     return repairs
   }
 
-  if (!Array.isArray(profile.export.documentTypes)) {
-    profile.export.documentTypes = DEFAULT_VALUES.export.documentTypes
+  if (!Array.isArray(profile.export.documentTypes) || profile.export.documentTypes.length === 0) {
+    // Schema requires >= 1 document type — an empty array must get the default
+    // just like a missing one, not fail validation.
+    profile.export.documentTypes = JSON.parse(JSON.stringify(DEFAULT_VALUES.export.documentTypes))
     repairs.push({
       type: 'fixed',
       field: 'export.documentTypes',
-      description: 'Fixed documentTypes to be an array'
+      description: 'Added default document type (documentTypes was missing or empty)'
+    })
+  }
+
+  if (!profile.export.sectionHeadings || typeof profile.export.sectionHeadings !== 'object') {
+    profile.export.sectionHeadings = { ...DEFAULT_VALUES.export.sectionHeadings }
+    repairs.push({
+      type: 'added',
+      field: 'export.sectionHeadings',
+      description: 'Added default section headings'
     })
   }
 
@@ -506,7 +634,7 @@ function repairDiagramsSection(profile: any): RepairAction[] {
   const repairs: RepairAction[] = []
 
   if (!profile.diagrams) {
-    profile.diagrams = DEFAULT_VALUES.diagrams
+    profile.diagrams = JSON.parse(JSON.stringify(DEFAULT_VALUES.diagrams))
     repairs.push({
       type: 'added',
       field: 'diagrams',
@@ -516,14 +644,18 @@ function repairDiagramsSection(profile: any): RepairAction[] {
   }
 
   // Ensure arrays are arrays
-  if (!Array.isArray(profile.diagrams.supportedDiagramTypes)) {
-    profile.diagrams.supportedDiagramTypes = DEFAULT_VALUES.diagrams.supportedDiagramTypes
+  if (!Array.isArray(profile.diagrams.supportedDiagramTypes) || profile.diagrams.supportedDiagramTypes.length === 0) {
+    profile.diagrams.supportedDiagramTypes = [...DEFAULT_VALUES.diagrams.supportedDiagramTypes]
     repairs.push({
       type: 'fixed',
       field: 'diagrams.supportedDiagramTypes',
-      description: 'Fixed supportedDiagramTypes to be an array'
+      description: 'Fixed supportedDiagramTypes to be a non-empty array'
     })
   }
+
+  // Fill any other missing fields — "diagrams": {} must behave like an
+  // omitted block, not fail schema validation on four required fields.
+  fillDefaults(profile.diagrams, DEFAULT_VALUES.diagrams, 'diagrams', repairs)
 
   return repairs
 }
@@ -535,7 +667,7 @@ function repairCrossChecksSection(profile: any): RepairAction[] {
   const repairs: RepairAction[] = []
 
   if (!profile.crossChecks) {
-    profile.crossChecks = DEFAULT_VALUES.crossChecks
+    profile.crossChecks = JSON.parse(JSON.stringify(DEFAULT_VALUES.crossChecks))
     repairs.push({
       type: 'added',
       field: 'crossChecks',
@@ -550,6 +682,16 @@ function repairCrossChecksSection(profile: any): RepairAction[] {
       type: 'fixed',
       field: 'crossChecks.checkList',
       description: 'Fixed checkList to be an array'
+    })
+  }
+
+  if (typeof profile.crossChecks.enableSemanticCrossCheck !== 'boolean') {
+    profile.crossChecks.enableSemanticCrossCheck = DEFAULT_VALUES.crossChecks.enableSemanticCrossCheck
+    repairs.push({
+      type: 'added',
+      field: 'crossChecks.enableSemanticCrossCheck',
+      description: 'Added default enableSemanticCrossCheck flag',
+      newValue: DEFAULT_VALUES.crossChecks.enableSemanticCrossCheck
     })
   }
 

@@ -27,12 +27,13 @@ const countryProfileSchema = z.object({
     status: z.enum(['active', 'inactive', 'draft']),
     inheritsFrom: z.string().nullable(),
     tags: z.array(z.string()),
+    // Informational only — the CountryProfile DB row carries real timestamps
     createdAt: z.string().refine((val) => !isNaN(Date.parse(val)), {
       message: "Invalid ISO date string"
-    }),
+    }).optional(),
     updatedAt: z.string().refine((val) => !isNaN(Date.parse(val)), {
       message: "Invalid ISO date string"
-    })
+    }).optional()
   }),
 
   structure: z.object({

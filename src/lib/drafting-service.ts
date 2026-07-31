@@ -31,6 +31,11 @@ import {
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import {
+  languageDisplayName,
+  orderLanguagesForJurisdiction,
+  resolveJurisdictionLanguage
+} from '@/lib/jurisdiction-language';
+import {
   buildIdeaNormalizationCorePrompt,
   buildIdeaNormalizationPrompt,
   buildIdeaNormalizationSupportPrompt,
@@ -988,11 +993,14 @@ export class DraftingService {
         : (rawRefMapComponents?.components && Array.isArray(rawRefMapComponents.components) ? rawRefMapComponents.components : [])
       const jurisdictionCode = (jurisdiction || (session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'IN').toUpperCase()
       let countryProfile: any = await getCountryProfile(jurisdictionCode)
-      if (preferredLanguage) {
+      if (countryProfile) {
+        // Always reorder: prompt builders read meta.languages[0] as "the"
+        // drafting language, but the stored list is an unordered catalogue of
+        // accepted languages (PCT starts with 'ar').
         const langs: string[] = Array.isArray((countryProfile as any)?.profileData?.meta?.languages)
           ? (countryProfile as any).profileData.meta.languages
           : []
-        const reordered = [preferredLanguage, ...langs.filter(l => l !== preferredLanguage)]
+        const reordered = orderLanguagesForJurisdiction(jurisdictionCode, langs, preferredLanguage)
         countryProfile = {
           ...countryProfile,
           profileData: {
@@ -1949,6 +1957,9 @@ export class DraftingService {
       base.target = `${min || '~'}-${max || '~'} words`
     } else if (sectionRules?.maxWords) {
       base.target = `<= ${sectionRules.maxWords} words`
+    } else if (typeof sectionRules?.wordLimit === 'number') {
+      // rules.abstract expresses its cap as wordLimit
+      base.target = `<= ${sectionRules.wordLimit} words`
     }
     return base
   }
@@ -2350,7 +2361,12 @@ Background drafting requirements:
     const jurisdiction = (ctx?.jurisdiction || 'IN').toUpperCase()
     const countryName = ctx?.countryProfile?.name || jurisdiction
     const officeName = ctx?.countryProfile?.profileData?.meta?.office || 'Patent Office'
-    const language = (ctx?.countryProfile?.profileData?.meta?.languages?.[0] || 'English')
+    // countryProfile.meta.languages has already been reordered for the chosen
+    // language by the caller; resolve defensively so an unordered catalogue can
+    // never leak the wrong language (e.g. PCT → Arabic) into the prompt.
+    const language = languageDisplayName(
+      resolveJurisdictionLanguage(jurisdiction, ctx?.countryProfile?.profileData?.meta?.languages)
+    )
     const tone = ctx?.baseStyle?.tone || 'technical, neutral, precise'
     const voice = this.describeVoice(ctx?.baseStyle?.voice || 'impersonal third person')
     const avoid = Array.isArray(ctx?.baseStyle?.avoid) ? ctx.baseStyle.avoid.join(', ') : (ctx?.baseStyle?.avoid || 'marketing language, unsupported advantages, unsubstantiated claims')
@@ -2463,6 +2479,33 @@ Background drafting requirements:
       } else if (cr.allowReferenceNumeralsInClaims === true) {
         ruleLines.push('- You may include reference numerals where helpful.')
       }
+    }
+    // Jurisdiction abstract rules (rules.abstract from the country profile)
+    if (section === 'abstract' && ctx?.sectionRules) {
+      const ar = ctx.sectionRules
+      if (typeof ar.wordLimit === 'number') ruleLines.push(`- Hard word limit: ${ar.wordLimit} words.`)
+      if (ar.singleParagraph) ruleLines.push('- Write as a single paragraph.')
+      if (ar.noBenefitsOrAdvantages) ruleLines.push('- Do not state benefits or advantages of the invention.')
+      if (ar.noClaimLanguage) ruleLines.push('- Do not use claim-style language ("said", "wherein", "comprising the steps of").')
+    }
+    // Jurisdiction description rules (rules.description from the country profile)
+    if (section === 'detailedDescription' && ctx?.sectionRules) {
+      const dr = ctx.sectionRules
+      if (dr.requireBestModeDisclosure) ruleLines.push('- Disclose the best mode contemplated for carrying out the invention.')
+      if (dr.avoidClaimLanguage) ruleLines.push('- Avoid claim-style language; describe embodiments in plain technical prose.')
+      if (dr.allowReferenceNumerals === false) ruleLines.push('- Do not use reference numerals in the description.')
+      if (dr.requireEmbodimentSupportForAllClaims) ruleLines.push('- Every claim element must be supported by at least one described embodiment.')
+    }
+    // Jurisdiction global rules (rules.global from the country profile).
+    // maxPagesRecommended is a document-level constraint with no honest
+    // per-section translation, so it is intentionally not injected here.
+    if (section !== 'title' && ctx?.globalRules) {
+      const gr = ctx.globalRules
+      if (gr.paragraphNumberingRequired) {
+        ruleLines.push('- Write in self-contained paragraphs suitable for automatic paragraph numbering; do not insert paragraph numbers yourself (they are added on export).')
+      }
+      if (gr.allowEquations === false) ruleLines.push('- Do not include mathematical equations; express relationships in prose.')
+      if (gr.allowTables === false) ruleLines.push('- Do not use tables; express the content in prose.')
     }
     const ruleBlock = ruleLines.length ? `Additional Rules:\n${ruleLines.join('\n')}` : ''
 
@@ -2784,6 +2827,9 @@ Use the Super Admin panel to add the missing prompt.
       max = sectionRules.wordRange.max
     } else if (sectionRules?.maxWords) {
       max = sectionRules.maxWords
+    } else if (typeof sectionRules?.wordLimit === 'number') {
+      // rules.abstract expresses its cap as wordLimit
+      max = sectionRules.wordLimit
     }
     if (!max) {
       const fallback: Record<string, number> = {
@@ -4036,12 +4082,13 @@ Use the Super Admin panel to add the missing prompt.
     }
 
     let profile = await getCountryProfile(jurisdiction)
-    if (profile && preferredLanguage) {
+    if (profile) {
+      // Always reorder — meta.languages is an unordered catalogue of accepted
+      // languages, not a preference order (PCT starts with 'ar').
       const langs: string[] = Array.isArray(profile?.profileData?.meta?.languages)
         ? profile.profileData.meta.languages
         : []
-      const normalizedPref = preferredLanguage.trim()
-      const reordered = [normalizedPref, ...langs.filter((l: string) => l !== normalizedPref)]
+      const reordered = orderLanguagesForJurisdiction(jurisdiction, langs, preferredLanguage)
       profile = {
         ...profile,
         profileData: {
@@ -4053,7 +4100,9 @@ Use the Super Admin panel to add the missing prompt.
         }
       }
     }
-    const primaryLanguage = (profile?.profileData?.meta?.languages?.[0]) || preferredLanguage || 'English'
+    const primaryLanguage = languageDisplayName(
+      resolveJurisdictionLanguage(jurisdiction, profile?.profileData?.meta?.languages, preferredLanguage)
+    )
     const baseStyle = profile ? await getBaseStyle(jurisdiction) : null
     const archetypeList = this.normalizeArchetypeList(
       (idea as any)?.normalizedData?.inventionType ?? (idea as any)?.inventionType,

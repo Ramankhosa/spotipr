@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
 
 interface CountryWiseDraftStageProps {
   session: any
@@ -98,7 +99,11 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
               const country = countries.find(c => c.code === code)
               const langs = country?.languages || []
               const savedLang = saved?.[code]?.language
-              const chosen = (savedLang && langs.includes(savedLang)) ? savedLang : (langs[0] || '')
+              // langs[0] is not a default — the catalogue is unordered (PCT
+              // starts with Arabic). Resolve through the canonical mapping.
+              const chosen = (savedLang && langs.includes(savedLang))
+                ? savedLang
+                : (langs.length ? defaultLanguageForJurisdiction(code, langs) : '')
               if (chosen) next[code] = chosen
             }
             return next
@@ -127,7 +132,7 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
         } else {
           const country = availableCountries.find(c => c.code === code)
           const langs = country?.languages || []
-          updated[code] = prevLangs[code] || langs[0] || ''
+          updated[code] = prevLangs[code] || (langs.length ? defaultLanguageForJurisdiction(code, langs) : '')
         }
         return updated
       })
@@ -149,7 +154,7 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
       const langs = country?.languages || []
       const chosen = languageByCode[code] && langs.includes(languageByCode[code])
         ? languageByCode[code]
-        : (langs[0] || '')
+        : (langs.length ? defaultLanguageForJurisdiction(code, langs) : '')
       if (chosen) languageByJurisdiction[code] = chosen
     }
     
@@ -288,7 +293,7 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
                               <div className="mt-2">
                                 <label className="text-xs text-ai-graphite-700 mr-2">Preferred language</label>
                                 <select
-                                  value={languageByCode[c.code] || c.languages[0]}
+                                  value={languageByCode[c.code] || defaultLanguageForJurisdiction(c.code, c.languages)}
                                   onChange={(e) => {
                                     const val = e.target.value
                                     setLanguageByCode(prev => ({ ...prev, [c.code]: val }))

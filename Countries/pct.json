@@ -7,7 +7,7 @@
       "office": "WIPO – International Bureau",
       "officeUrl": "https://www.wipo.int/pct/en/",
       "applicationTypes": ["international"],
-      "languages": ["ar", "zh", "en", "fr", "de", "ja", "ko", "pt", "ru", "es"],
+      "languages": ["en", "ar", "zh", "fr", "de", "ja", "ko", "pt", "ru", "es"],
       "version": 1,
       "status": "active",
       "inheritsFrom": null,

@@ -221,11 +221,25 @@ export class OpenAIProvider implements LLMProvider {
       const thoughtTokens = usage?.completion_tokens_details?.reasoning_tokens || 0
       const content = choice.message?.content ?? ''
 
-      // Reasoning models can burn the entire token budget on internal reasoning and return
-      // an empty completion with finish_reason 'length'. Surface this as an actionable error
-      // rather than returning '' (which silently breaks downstream JSON parsing / drafting).
-      if (isReasoningModel && !content.trim() && choice.finish_reason === 'length') {
-        throw new Error(`OpenAI reasoning model ${modelToUse} produced no visible output: the ${maxTokens}-token budget was exhausted by reasoning (${thoughtTokens} reasoning tokens, finish_reason=length). Increase the stage's max output tokens.`)
+      // A completion with no visible text is never a usable answer — it silently breaks
+      // downstream JSON parsing and drafting. Reasoning models hit this two ways: the
+      // token budget is exhausted by internal reasoning (finish_reason 'length'), or the
+      // model stops normally having emitted reasoning only (finish_reason 'stop'). Catch
+      // both; the previous check only covered 'length', so the 'stop' case fell through
+      // as an empty success.
+      //
+      // Note this deliberately keys on empty content, not short content: a terse but real
+      // answer such as "[]" is meaningful (e.g. "no figure suggestions apply") and must
+      // pass through untouched.
+      if (isReasoningModel && !content.trim()) {
+        const budgetExhausted = choice.finish_reason === 'length'
+        throw new Error(
+          `OpenAI reasoning model ${modelToUse} produced no visible output ` +
+          `(${thoughtTokens} reasoning tokens, finish_reason=${choice.finish_reason}). ` +
+          (budgetExhausted
+            ? `The ${maxTokens}-token budget was exhausted by reasoning. Increase the stage's max output tokens.`
+            : `The model returned reasoning only. Retry, or lower the stage's reasoning effort so budget goes to the answer.`)
+        )
       }
 
       return {

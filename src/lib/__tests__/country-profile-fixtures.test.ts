@@ -46,9 +46,20 @@ function loadSupersetFixture(): SupersetSectionInput[] {
   }))
 }
 
+/**
+ * Sections in shipped profiles with NO superset counterpart. Unresolved
+ * sections are blocking errors by design (no silent drops), so a shipped
+ * profile may only appear here with the exact ids an admin would have to
+ * acknowledge skipping in the wizard. Anything not listed must resolve.
+ */
+const KNOWN_UNMAPPED: Record<string, string[]> = {
+  'JP.json': ['citation_list']
+}
+
 describe.each(PROFILE_FILES)('country profile %s', (file) => {
   const index = buildSupersetIndexFromSections(loadSupersetFixture())
   const raw = loadJson(file)
+  const knownUnmapped = KNOWN_UNMAPPED[file] || []
 
   it('passes validation after repair', async () => {
     const repair = await repairCountryProfile(raw)
@@ -61,8 +72,15 @@ describe.each(PROFILE_FILES)('country profile %s', (file) => {
   it('derives importable section mappings with enabled title and abstract', async () => {
     const repair = await repairCountryProfile(raw)
     const profile = repair.success && repair.repairedProfile ? repair.repairedProfile : raw
-    const { mappings, issues } = deriveCountryMappings(profile, index)
 
+    // Without acknowledgments, the only blocking issues allowed are the
+    // documented unmappable sections — nothing else may be lost.
+    const unacknowledged = deriveCountryMappings(profile, index)
+    const errorIds = unacknowledged.issues.filter(i => i.severity === 'error').map(i => i.sectionId).sort()
+    expect(errorIds).toEqual([...knownUnmapped].sort())
+
+    // With those skips acknowledged (as the wizard would), the import is clean.
+    const { mappings, issues } = deriveCountryMappings(profile, index, { skipSections: knownUnmapped })
     expect(issues.filter(i => i.severity === 'error')).toEqual([])
     expect(mappings.length).toBeGreaterThanOrEqual(5)
 

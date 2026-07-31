@@ -4,7 +4,7 @@ import {
   corpusHasSearchableVectors,
   getPatentCorpusCoverageStats,
   hasSearchEmbeddingApiKey,
-  peekPatentCorpusCoverageStats,
+  readPatentCorpusCoverageStats,
   PATENT_CORPUS_EMBEDDING_MODEL,
   PATENT_CORPUS_SOURCE_INDIAN,
 } from '@/lib/patent-corpus-service'
@@ -162,7 +162,7 @@ export async function getPatentApiReadiness(options: { forceRefresh?: boolean } 
  * makes every search slow — and with no statement timeout, hang outright.
  */
 export async function getPatentApiSearchReadiness() {
-  const census = peekPatentCorpusCoverageStats()
+  const census = await readPatentCorpusCoverageStats()
   const indianCoverage = census?.sourceCoverage?.[PATENT_CORPUS_SOURCE_INDIAN] || null
   const minimumCoverage = minimumCoveragePercent()
   const [pgvectorReady, probedVectors] = await Promise.all([

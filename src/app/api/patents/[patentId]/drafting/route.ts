@@ -58,6 +58,7 @@ import { trackSectionDrafted, canDraftPatent, canTrackSectionDrafts, resolveSess
 import { resolveSourceOfTruth, computeJurisdictionStateOnDelete } from '@/lib/jurisdiction-state-service';
 import { cloneInstructionsBetweenSessions } from '@/lib/user-instruction-service';
 import { getSupersetSectionKeys, isNonApplicableHeading, getSectionContextRequirements } from '@/lib/multi-jurisdiction-service';
+import { orderLanguagesForJurisdiction, resolveJurisdictionLanguage } from '@/lib/jurisdiction-language';
 import { ANNEXURE_LEGACY_COLUMNS } from '@/lib/annexure-schema';
 import {
   DraftClaimsParseError,
@@ -425,11 +426,34 @@ function resolveSketchPublicImageUrl(
   return raw
 }
 
+/**
+ * Resolve the content language the user chose for a jurisdiction.
+ *
+ * In 'common' mode the wizard stores the single chosen language in
+ * `__commonLanguage`; the per-jurisdiction entry may be absent (sessions
+ * created by the batch/email/job/handoff paths) or may pre-date the language
+ * step. Reading only `status[code].language` therefore returns undefined and
+ * downstream code falls back to `meta.languages[0]` — which is Arabic for PCT.
+ * Always consider the common language before giving up.
+ */
 function getPreferredLanguageForJurisdiction(session: any, jurisdictionCode: string): string | undefined {
   try {
     const status = (session as any)?.jurisdictionDraftStatus || {}
-    const lang = status?.[jurisdictionCode]?.language
+    const code = (jurisdictionCode || '').toUpperCase()
+
+    // Common mode: one language for every jurisdiction — it wins over any
+    // stale per-jurisdiction entry left behind by an earlier selection.
+    if (status.__languageMode === 'common' && typeof status.__commonLanguage === 'string' && status.__commonLanguage.trim()) {
+      return status.__commonLanguage.trim()
+    }
+
+    const lang = status?.[code]?.language
     if (typeof lang === 'string' && lang.trim()) return lang.trim()
+
+    // No per-jurisdiction entry: fall back to the common language if one was set.
+    if (typeof status.__commonLanguage === 'string' && status.__commonLanguage.trim()) {
+      return status.__commonLanguage.trim()
+    }
   } catch {}
   return undefined
 }
@@ -494,39 +518,21 @@ function getFiguresLanguage(session: any): string {
 }
 
 /**
- * Get the content language for a specific jurisdiction.
- * In 'common' mode, returns the common language.
- * In 'individual_english_figures' mode, returns per-jurisdiction language.
+ * Put the effective drafting language first in the profile's language list,
+ * because prompt builders read `meta.languages[0]` as "the" language.
+ *
+ * Runs even when no preference was recorded: `meta.languages` is an unordered
+ * catalogue (PCT starts with 'ar'), so leaving it untouched is what made PCT
+ * drafts come out in Arabic.
  */
-function getContentLanguageForJurisdiction(session: any, jurisdictionCode: string): string {
-  try {
-    const status = (session as any)?.jurisdictionDraftStatus || {}
-    const languageMode = status.__languageMode
-
-    // Common mode: use common language for all
-    if (languageMode === 'common' && status.__commonLanguage) {
-      return status.__commonLanguage
-    }
-
-    // Individual mode or no mode set: use per-jurisdiction language
-    const lang = status?.[jurisdictionCode]?.language
-    if (typeof lang === 'string' && lang.trim()) {
-      return lang.trim()
-    }
-
-    // Fallback
-    return 'en'
-  } catch {
-    return 'en'
-  }
-}
-
-function applyPreferredLanguage(profile: any, preferred?: string) {
-  if (!preferred) return profile
+function applyPreferredLanguage(profile: any, preferred?: string, jurisdictionCode?: string) {
+  if (!profile) return profile
   const langs: string[] = Array.isArray(profile?.profileData?.meta?.languages)
     ? profile.profileData.meta.languages
     : []
-  const reordered = [preferred, ...langs.filter(l => l !== preferred)]
+  if (!langs.length && !preferred) return profile
+  const code = (jurisdictionCode || profile?.countryCode || '').toUpperCase()
+  const reordered = orderLanguagesForJurisdiction(code, langs, preferred)
   return {
     ...profile,
     profileData: {
@@ -2409,7 +2415,7 @@ async function handleRunReview(user: any, patentId: string, data: any) {
   const effectiveJurisdiction = (requestedJurisdiction || session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
   const preferredLanguage = getPreferredLanguageForJurisdiction(session, effectiveJurisdiction)
   const baseProfile = await getCountryProfile(effectiveJurisdiction)
-  const profile = applyPreferredLanguage(baseProfile, preferredLanguage)
+  const profile = applyPreferredLanguage(baseProfile, preferredLanguage, effectiveJurisdiction)
 
   const drafts = Array.isArray(session.annexureDrafts) ? session.annexureDrafts : []
   const last = drafts.find((d: any) => (d.jurisdiction || 'US').toUpperCase() === effectiveJurisdiction)
@@ -6417,7 +6423,16 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
     // Log for debugging
     console.log(`[handleSetStage] Jurisdictions: ${chosenListAll.join(', ') || 'none'}, Active: ${resolvedActive || 'none'}, MultiJurisdiction: ${updateData.isMultiJurisdiction ?? session.isMultiJurisdiction}`)
 
-    // Resolve preferred languages per jurisdiction (if provided)
+    // Resolve preferred languages per jurisdiction.
+    // meta.languages is an unordered catalogue of accepted languages, NOT a
+    // preference order (PCT lists ["ar","zh","en",...]), so an unresolved
+    // request must never fall through to langs[0]. Priority: the explicit
+    // per-jurisdiction choice → the requested common language → the office's
+    // canonical language → English.
+    const requestedCommonLanguage = (typeof commonLanguage === 'string' && commonLanguage.trim())
+      ? commonLanguage.trim().toLowerCase()
+      : ''
+    const supportedLanguagesByCode: Record<string, string[]> = {}
     for (const code of chosenListAll) {
       try {
         const profile = await getCountryProfile(code)
@@ -6425,11 +6440,11 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
           ? (profile as any).profileData.meta.languages
           : []
         if (!langs.length) continue
+        supportedLanguagesByCode[code] = langs
         const requestedLang = (languageByJurisdiction && typeof languageByJurisdiction[code] === 'string')
           ? String(languageByJurisdiction[code]).trim()
           : ''
-        const normalized = requestedLang && langs.includes(requestedLang) ? requestedLang : langs[0]
-        if (normalized) languagePrefs[code] = normalized
+        languagePrefs[code] = resolveJurisdictionLanguage(code, langs, requestedLang, [requestedCommonLanguage])
       } catch (err) {
         console.warn('Failed to resolve languages for', code, err)
       }
@@ -6513,9 +6528,30 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
         const firstLangs: string[] = Array.isArray((firstProfile as any)?.profileData?.meta?.languages)
           ? (firstProfile as any).profileData.meta.languages
           : []
-        const fallbackLang = firstLangs.includes('en') ? 'en' : (firstLangs[0] || 'en')
+        const fallbackLang = resolveJurisdictionLanguage(firstJurisdiction, firstLangs)
         statusMap.__commonLanguage = fallbackLang
         console.log(`[handleSetStage] Common language fallback to: ${fallbackLang}`)
+      }
+    }
+
+    // In common mode the per-jurisdiction entries must agree with the resolved
+    // common language, otherwise a stale entry from an earlier selection wins
+    // downstream and the jurisdiction is drafted in the wrong language.
+    // An explicit per-jurisdiction language in *this* request still wins — that
+    // is the caller deliberately overriding one jurisdiction.
+    if (resolvedLanguageMode === 'common' && typeof statusMap.__commonLanguage === 'string' && statusMap.__commonLanguage) {
+      for (const code of chosenListAll) {
+        const langs = supportedLanguagesByCode[code]
+        if (!langs) continue
+        const explicit = (languageByJurisdiction && typeof languageByJurisdiction[code] === 'string')
+          ? String(languageByJurisdiction[code]).trim()
+          : ''
+        if (explicit && langs.includes(explicit)) continue
+        const synced = resolveJurisdictionLanguage(code, langs, statusMap.__commonLanguage)
+        if (statusMap?.[code]?.language !== synced) {
+          console.log(`[handleSetStage] Synced ${code} language to common language: ${synced}`)
+          statusMap[code] = { ...(statusMap?.[code] || {}), language: synced }
+        }
       }
     }
 
@@ -9752,6 +9788,12 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
     // Parse AI response
     const suggestionText = result.response.output.trim()
     let suggestions: any[] = []
+    // Zero suggestions is a legitimate outcome — the prompt instructs the model to
+    // return [] for abstract inventions (algorithms, business methods, backend
+    // software). We must tell those apart from a response we simply failed to read,
+    // otherwise the UI can only show "nothing happened" for two very different cases.
+    let parsedCleanly = false
+    let droppedForMissingFields = 0
 
     try {
       // Try to parse as JSON array
@@ -9761,7 +9803,9 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
         const jsonStr = suggestionText.substring(start, end + 1)
         const parsed = JSON.parse(jsonStr)
         if (Array.isArray(parsed)) {
+          parsedCleanly = true
           suggestions = parsed.filter(s => s.title && s.description)
+          droppedForMissingFields = parsed.length - suggestions.length
         }
       }
     } catch {
@@ -9778,8 +9822,35 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
       }
     }
 
+    if (suggestions.length > 0) {
+      return NextResponse.json({ suggestions })
+    }
+
+    // Nothing to show — say why, so the client can render a real explanation.
+    const idea = session.ideaRecord?.normalizedData as any
+    const inventionTypes = Array.isArray(idea?.inventionType)
+      ? idea.inventionType
+      : (idea?.inventionType ? [idea.inventionType] : [])
+    const inventionTypeStr = inventionTypes.join(', ') || 'GENERAL'
+
+    const emptyReason = !parsedCleanly
+      ? 'unreadable'                                    // couldn't parse the model's reply
+      : droppedForMissingFields > 0
+        ? 'incomplete'                                  // items came back missing title/description
+        : 'not_applicable'                              // model deliberately returned []
+
+    console.log(
+      `[Sketch Suggestions] 0 suggestions for session ${sessionId} — reason=${emptyReason}, ` +
+      `inventionType=${inventionTypeStr}, outputChars=${suggestionText.length}, ` +
+      `dropped=${droppedForMissingFields}, raw=${JSON.stringify(suggestionText.slice(0, 200))}`
+    )
+
     return NextResponse.json({
-      suggestions: suggestions.length > 0 ? suggestions : []
+      suggestions: [],
+      emptyReason,
+      inventionType: inventionTypeStr,
+      hasExistingSketches: existingSketches.length > 0,
+      existingSketchCount: existingSketches.length
     })
 
   } catch (error) {
@@ -12915,15 +12986,14 @@ async function handleTranslateToJurisdiction(
   const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
   const finalClaimsText = normalizedData.claimsFinal || normalizedData.claimsProvisional || normalizedData.claims || referenceDraft.claims || ''
 
-  // Resolve target language - from request, session status, or profile default
+  // Resolve target language - from request, then the session's language config
+  // (common language or per-jurisdiction entry). If it is still undefined,
+  // translateReferenceDraft falls back to the jurisdiction's canonical language
+  // (PCT → English), never to meta.languages[0].
   const targetCode = targetJurisdiction.toUpperCase()
-  let resolvedLanguage = targetLanguage
-  if (!resolvedLanguage) {
-    // Try to get from session's jurisdiction draft status
-    const jurisdictionStatus = (session!.jurisdictionDraftStatus as any)?.[targetCode]
-    resolvedLanguage = jurisdictionStatus?.language
-  }
-  // Language will be further resolved by translateReferenceDraft if still undefined
+  const resolvedLanguage = (typeof targetLanguage === 'string' && targetLanguage.trim())
+    ? targetLanguage.trim()
+    : getPreferredLanguageForJurisdiction(session, targetCode)
 
   // Extract raw draft from extra sections - include all superset sections
   const extraSections = referenceDraft.extraSections as any || {}

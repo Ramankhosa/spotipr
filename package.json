@@ -49,6 +49,7 @@
     "patent-corpus:eval": "tsx scripts/eval-patent-retrieval.ts",
     "patent-corpus:diagnose-search": "tsx scripts/diagnose-patent-embedding-search.ts",
     "patent-api:cleanup": "tsx scripts/cleanup-patent-api-usage.ts",
+    "patent-corpus:refresh-coverage": "tsx scripts/refresh-patent-coverage.ts",
     "patent-api:smoke": "tsx scripts/smoke-patent-api.ts",
     "patent-api:smoke-mcp": "tsx scripts/smoke-patent-api-mcp.ts",
     "test": "vitest run",

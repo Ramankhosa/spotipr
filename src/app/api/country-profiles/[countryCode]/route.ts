@@ -67,7 +67,8 @@ function buildReferenceProfile(
     code: 'REFERENCE',
     name: 'Reference Draft (Multi-Jurisdiction)',
     meta: {
-      languages: ['English'],
+      // ISO 639-1 codes, like every stored profile — not display names.
+      languages: ['en'],
       description,
       isReferenceDraft: true,
       isOptimized,

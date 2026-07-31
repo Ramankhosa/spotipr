@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
+import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
 import Link from 'next/link'
 import { Check, Image as ImageIcon, Loader2, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -1200,7 +1201,7 @@ function NewPatentDraftPageContent() {
                                     <span className="text-sm font-medium text-ai-graphite-800 w-20 flex-shrink-0">{code}</span>
                                     <select
                                       className={`flex-1 border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ai-blue-500 ${hasNoDefinedLanguages ? 'border-amber-300 bg-amber-50' : 'border-paper-400'}`}
-                                      value={languageByJurisdiction[code] || langs[0] || 'en'}
+                                      value={languageByJurisdiction[code] || defaultLanguageForJurisdiction(code, langs)}
                                       onChange={(e) => setLanguageByJurisdiction(prev => ({ ...prev, [code]: e.target.value }))}
                                     >
                                       {langs.map(lang => (

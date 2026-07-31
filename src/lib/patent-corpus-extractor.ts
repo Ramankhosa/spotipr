@@ -565,10 +565,21 @@ export function parseApplicationNumber(text: string) {
   const match = normalizePatentText(text).match(/\(21\)\s*Application\s*No\.?\s*:?\s*([A-Z/]{0,8}\s*\d[\dA-Z/ -]{2,}\s*[A-Z]?)\b/i)
   if (!match) return { raw: null, kind: null, publicationNumber: null }
   const raw = compactWhitespace(match[1])
-  const kindMatch = raw.match(/([A-Z])$/)
-  const digits = raw.replace(/[^0-9]/g, '')
+  // A kind code is a single letter set off by whitespace ("… /2005 A"). The old
+  // /([A-Z])$/ also matched the last letter of an office code, so
+  // "IN/PCT/2000/738/CHE" was read as kind "E".
+  const kindMatch = raw.match(/\s([A-Z])$/)
   const kind = kindMatch?.[1] || null
-  const publicationNumber = digits ? `IN${digits}${kind || ''}` : null
+  // Keep the regional office code (DEL/MUM/CHE/KOL/MAS/...) in the identifier.
+  // Reducing the application number to digits alone collapsed 1456/CHE/2009 and
+  // 1456/KOL/2009 onto the same IN14562009A, so two unrelated patents shared one
+  // publication number and a lookup by it returned whichever row came back first.
+  const core = (kindMatch ? raw.slice(0, raw.length - kindMatch[0].length) : raw)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+  if (!/\d/.test(core)) return { raw, kind, publicationNumber: null }
+  // Some numbers already carry the country prefix (IN/PCT/...); don't double it.
+  const publicationNumber = `${core.startsWith('IN') ? '' : 'IN'}${core}${kind || ''}`
   return { raw, kind, publicationNumber }
 }
 

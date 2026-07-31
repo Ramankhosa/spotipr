@@ -9,7 +9,15 @@ import { checkServiceAccess } from './org-access-service';
 import { sendEmail } from './mailer';
 import crypto from 'crypto';
 import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchConceptGroup, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
-import { fetchLocalPatentClaims } from '@/lib/local-patent-claims-service';
+import {
+  fetchLocalPatentClaimEvidence,
+  type LocalPatentClaimsCompleteness,
+} from '@/lib/local-patent-claims-service';
+import {
+  allocateNoveltyClaimsCharacters,
+  findNoveltyClaimNumber,
+  selectNoveltyClaimExcerpt,
+} from '@/lib/novelty-claims-evidence';
 import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
   literatureSearchService,
@@ -27,9 +35,24 @@ import {
   normalizeRerankDecision,
   type PriorArtGateRecord,
 } from '@/lib/novelty-prior-art-visibility';
+import {
+  canonicalReportPublicationNumber,
+  selectNoveltyReportReferences,
+  type ReportReferenceCandidate,
+  type ReportReferenceSelectionV1,
+} from '@/lib/novelty-report-reference-selection';
 
-const FEATURE_MAPPING_CACHE_VERSION = 'v1.2';
+const FEATURE_MAPPING_CACHE_VERSION = 'v1.4-claim-aware-evidence';
 const STAGE15_GATE_CACHE_VERSION = 'stage15-gate-v3';
+const NOVELTY_CLAIMS_MIN_CHARS_PER_REFERENCE = 2000;
+const NOVELTY_CLAIMS_MAX_CHARS_PER_REFERENCE = Math.max(
+  NOVELTY_CLAIMS_MIN_CHARS_PER_REFERENCE,
+  Math.trunc(Number(process.env.NOVELTY_CLAIMS_MAX_CHARS || '6000') || 6000)
+);
+const NOVELTY_CLAIMS_MAX_CHARS_PER_BATCH = Math.max(
+  24000,
+  Math.trunc(Number(process.env.NOVELTY_CLAIMS_BATCH_MAX_CHARS || '24000') || 24000)
+);
 
 // How many LLM batches each novelty stage runs at once (per search). Tune via the
 // NOVELTY_LLM_CONCURRENCY env var; hard-capped so a bad value can't hammer the
@@ -486,6 +509,8 @@ NOVELTY EVIDENCE RULES
 - Broad abstract language capped by generic field terms should be Partial or Unknown unless the required interaction is expressly stated. Generic field terms include, by domain: engineering (system, module, device, platform, sensor, controller, circuit); chemical/materials (composition, compound, formulation, polymer, coating, excipient, carrier, solvent); biological (sequence, vector, construct, antibody, assay, marker, cell line); and broad method, process, model, or algorithm terms.
 - Absent requires a short reason.
 - Unknown must be used when evidence is weak; do not convert missing abstracts into positive novelty.
+- Missing optional claims alone never requires Unknown. When usable title or abstract text exists and the feature is not disclosed in the supplied record, use Absent.
+- Use Unknown only when no supplied title, abstract, or claims text is usable enough to compare the feature.
 - A feature marked Absent or Unknown in one patent is not automatically unique. It is only a potential differentiator if it is absent from the closest references and is not a generic field-common component.
 
 OUTPUT JSON SHAPE:
@@ -544,6 +569,7 @@ EVIDENCE RULES
 - patent_disclosure/evidence_quote must be based only on the supplied patent data.
 - Use Absent when the supplied patent data is adequate to compare and the feature is not disclosed.
 - Use Unknown when the supplied patent data is thin, vague, unavailable, translated poorly, or too generic to assess.
+- Missing optional claims alone never requires Unknown. Continue from title and abstract, and use Absent when that usable reviewed record does not disclose the feature.
 - Do not treat missing evidence as novelty.
 - A feature marked Absent or Unknown in one patent is not automatically unique. It is only a potential differentiator if it is absent from the closest references and is not a generic field-common component.
 - Generic field-common words are not enough unless the full mechanism is disclosed. These include, by domain: engineering (system, module, sensor, controller, battery, app, server); chemical/materials (composition, compound, polymer, coating, excipient, carrier, solvent); biological (sequence, vector, construct, antibody, assay, marker).
@@ -582,7 +608,7 @@ OUTPUT JSON SHAPE:
           "user_invention_disclosure": "what the user's invention has or does for this feature",
           "patent_disclosure": "what this patent discloses for the same feature, or why evidence is missing",
           "status": "Present|Partial|Absent|Unknown",
-          "evidence_quote": "verbatim quote copied exactly from the supplied title or abstract, or empty string",
+          "evidence_quote": "verbatim quote copied exactly from the supplied title, abstract, or claims evidence, or empty string",
           "evidence_source": "title|abstract|claims|none",
           "extent_score": 0.0,
           "confidence": 0.0,
@@ -1036,6 +1062,43 @@ OUTPUT JSON SHAPE:
   ]
 }`;
 
+function stage4PublicationKey(value: unknown): string {
+  return canonicalReportPublicationNumber(value);
+}
+
+export function buildStage4ReportPromptFromRemarksV3(input: {
+  inventionFeatures: string[];
+  perPatentRemarks: any[];
+  searchMetadata: Record<string, any>;
+  metrics: Record<string, any>;
+  mappedSupplementaryReferences?: any[];
+  shortlistedUnmappedReferences?: any[];
+  /** @deprecated Use mappedSupplementaryReferences. */
+  additionalPatentsStudied?: any[];
+}): string {
+  const metadata = input.searchMetadata || {};
+  const mappedSupplementaryReferences = input.mappedSupplementaryReferences || input.additionalPatentsStudied || [];
+  return STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
+    .replace(/SEARCH_ID/g, String(metadata.search_id || ''))
+    .replace(/GENERATION_DATE/g, new Date().toISOString().split('T')[0])
+    .replace(/SEARCH_JURISDICTION/g, String(metadata.jurisdiction || ''))
+    + `\ninvention_features=${JSON.stringify(input.inventionFeatures || [])}`
+    + `\nper_patent_remarks=${JSON.stringify(input.perPatentRemarks || [])}`
+    + `\nsearch_metadata=${JSON.stringify(metadata)}`
+    + `\nmetrics=${JSON.stringify(input.metrics || {})}`
+    + `\nmapped_supplementary_references=${JSON.stringify(mappedSupplementaryReferences)}`
+    + `\nshortlisted_unmapped_references=${JSON.stringify(input.shortlistedUnmappedReferences || [])}`
+    + '\n\nSERVER DETERMINATION RULES:'
+    + '\n- The metrics decision, confidence, and novelty_score are deterministic server values. Do not contradict or replace them.'
+    + '\n- Name every high_overlap reference supplied in per_patent_remarks and carry its risk into key_risks.'
+    + '\n- per_patent_remarks is the exclusive detailed-reference set; do not create detailed sections for either supplementary list.'
+    + '\n- mapped_supplementary_references were feature-mapped and may be summarized; shortlisted_unmapped_references were not feature-mapped and must not be described as analyzed.'
+    + '\n- A reference belongs to exactly one of these three report categories; do not duplicate it across sections.'
+    + '\n- Distributed component coverage is not single-reference anticipation.'
+    + '\n- Use verified evidence_source metadata internally, but do not identify claims availability or source-field type in public narrative.'
+    + '\n- Processing degradation or incomplete cluster coverage requires a cautious, incomplete assessment.';
+}
+
 export interface NoveltySearchConfig {
   jurisdiction: string;
   filingType: string;
@@ -1117,14 +1180,22 @@ export interface NoveltySearchConfig {
     importantCoverageThreshold: number;
     componentScoreThreshold: number;
     saturationPlateauBatches: number;
+    minMarginalCoverageGain?: number;
+    maxStableRiskDelta?: number;
+    safetyMaxElapsedMs?: number;
+    safetyMaxTokens?: number;
   };
   stage4: {
     reportFormat: 'PDF' | 'JSON' | 'HTML';
     includeExecutiveSummary: boolean;
     includeTechnicalDetails: boolean;
     colorCoding: boolean;
+    /** @deprecated Use mainReferenceTarget. Decisive-reference overflow is always allowed. */
     maxRefsForReportMain: number;
     maxRefsForUI: number;
+    mainReferenceTarget?: number;
+    minMainReferences?: number;
+    maxUnmappedSupplementaryReferences?: number;
   };
 }
 
@@ -1347,6 +1418,9 @@ export interface FeatureMapCell {
   quote?: string;
   field?: string;
   evidence_source?: string;
+  claim_number?: number;
+  claims_completeness?: NoveltyClaimsAvailability;
+  claims_content_hash?: string;
   reason?: string;
   attorney_remark?: string;
   novelty_impact?: string;
@@ -1393,26 +1467,50 @@ export interface PatentFeatureMap {
   genericityRiskReasons?: string[];
   genericFeatureOnlyMatch?: boolean;
   cooperativeRelationshipPresentInSameAbstract?: boolean;
+  cooperativeRelationshipPresentInSameRecord?: boolean;
   cooperativeRelationshipEvidenceQuote?: string;
+  cooperativeRelationshipEvidenceSource?: 'claims' | 'abstract' | 'none';
+  claimsAvailability?: NoveltyClaimsAvailability;
+  claimsSource?: string;
+  claimsContentHash?: string;
+  claimsClaimNumbers?: number[];
+  claimsExcerpted?: boolean;
   importantFeatureCoverage?: number;
   importantUnknownRatio?: number;
   queryClusterIds?: string[];
 }
 
-export type EvidenceDepth = 'TITLE_ONLY' | 'ABSTRACT_ONLY' | 'TITLE_AND_ABSTRACT' | 'FULL_TEXT' | 'CLAIMS_AND_SPECIFICATION' | 'NONE';
+export type NoveltyClaimsAvailability = LocalPatentClaimsCompleteness | 'NONE' | 'LOOKUP_FAILED';
+export interface NoveltyClaimsEvidenceDiagnostics {
+  lookupStatus: 'complete' | 'partial_failure';
+  patentsChecked: number;
+  claimsFound: number;
+  claimsMissing: number;
+  fullClaims: number;
+  firstClaimOnly: number;
+  partialClaims: number;
+  excerptsUsed: number;
+  truncatedExcerpts: number;
+  charactersIncluded: number;
+  lookupFailures: number;
+}
+export type EvidenceDepth = 'TITLE_ONLY' | 'ABSTRACT_ONLY' | 'TITLE_AND_ABSTRACT' | 'CLAIMS_ONLY' | 'CLAIMS_AND_ABSTRACT' | 'FULL_TEXT' | 'CLAIMS_AND_SPECIFICATION' | 'NONE';
 export type DomainTier = 1 | 2 | 3 | 4 | 5;
 export type GenericityRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 export type PatentScreeningMatchCategory =
+  | 'HIGH_RECORD_OVERLAP'
   | 'HIGH_ABSTRACT_OVERLAP'
   | 'COMPONENT_LEVEL_OVERLAP'
   | 'ADJACENT_DOMAIN_ANALOGY'
   | 'WEAK_ANALOGY'
   | 'NOT_RELEVANT';
 export type AdaptiveStopReason =
+  | 'high_record_overlap_candidate_confirmed'
   | 'abstract_level_high_overlap_candidate_confirmed'
   | 'coverage_saturation'
   | 'candidate_pool_exhausted'
   | 'hard_ceiling_reached'
+  | 'safety_budget_reached'
   | 'provider_or_cluster_coverage_incomplete'
   | 'safe_report_due_to_qa_failure';
 
@@ -1442,6 +1540,9 @@ export interface AdaptiveScreeningProgress {
   outputTokens: number;
   thoughtTokens: number;
   projectedTokensSaved: number;
+  degradedBatchCount?: number;
+  completeness?: 'complete' | 'incomplete' | 'degraded';
+  elapsedMs?: number;
 }
 
 type NoveltyStageProgress = {
@@ -1474,6 +1575,9 @@ export interface FeatureMapBatchResult {
   reviewedCount?: number;
   progress?: NoveltyStageProgress;
   adaptiveScreening?: AdaptiveScreeningProgress;
+  claimsEvidence?: NoveltyClaimsEvidenceDiagnostics;
+  degraded?: boolean;
+  degradedBatches?: Array<{ batchIndex: number; error: string }>;
 }
 
 export interface PerPatentCoverage {
@@ -1559,6 +1663,44 @@ export interface AggregationResult {
   message?: string;
 }
 
+export interface CanonicalNoveltyVerdict {
+  decision: AggregationResult['decision'];
+  confidence: AggregationResult['confidence'];
+  noveltyScore: number;
+  summary: string;
+  decisiveReferences: string[];
+  degraded: boolean;
+}
+
+export function buildCanonicalNoveltyVerdict(
+  aggregation: AggregationResult,
+  degraded = false
+): CanonicalNoveltyVerdict {
+  const decision: AggregationResult['decision'] = degraded ? 'Low Evidence' : aggregation.decision;
+  const confidence: AggregationResult['confidence'] = degraded ? 'Low' : aggregation.confidence;
+  const decisiveReferences = Array.from(new Set([
+    aggregation.integration_check?.integration_pn,
+    ...(aggregation.closest_mapped_references || []),
+  ].filter(Boolean) as string[]));
+  const summary = degraded
+    ? 'The assessment is incomplete because one or more detailed-analysis batches were degraded. Review or rerun those references before relying on a favorable conclusion.'
+    : decision === 'Not Novel'
+      ? 'The deterministic feature assessment identified a single-reference mapped-overlap risk that requires claim-level review.'
+      : decision === 'Partially Novel'
+        ? 'The deterministic feature assessment identified material overlap together with potential technical differentiators.'
+        : decision === 'Novel'
+          ? 'The reviewed references leave an apparent differentiation window, subject to full-record and claim-level review.'
+          : 'The available evidence is insufficient for a reliable mapped-overlap conclusion.';
+  return {
+    decision,
+    confidence,
+    noveltyScore: aggregation.novelty_score,
+    summary,
+    decisiveReferences,
+    degraded,
+  };
+}
+
 // Stage 3.5c / 3.5a per-patent remarks structure
 export interface PerPatentRemark {
   pn: string;
@@ -1591,6 +1733,9 @@ export interface PatentFeatureComparisonRow {
   status: FeatureMapCell['status'];
   evidence_quote?: string;
   evidence_source: 'title' | 'abstract' | 'title/abstract' | 'claims' | 'none';
+  claim_number?: number;
+  claims_completeness?: NoveltyClaimsAvailability;
+  claims_content_hash?: string;
   extent_score?: number;
   confidence?: number;
   crisp_remark: string;
@@ -1657,7 +1802,11 @@ export class NoveltySearchService extends BasePatentService {
       screeningConfidenceThreshold: 0.75,
       importantCoverageThreshold: 0.90,
       componentScoreThreshold: 0.55,
-      saturationPlateauBatches: 2
+      saturationPlateauBatches: 2,
+      minMarginalCoverageGain: 0.05,
+      maxStableRiskDelta: 0.05,
+      safetyMaxElapsedMs: 20 * 60 * 1000,
+      safetyMaxTokens: 250000
     },
     stage4: {
       reportFormat: 'PDF',
@@ -1665,7 +1814,10 @@ export class NoveltySearchService extends BasePatentService {
       includeTechnicalDetails: true,
       colorCoding: true,
       maxRefsForReportMain: 10,
-      maxRefsForUI: 12
+      maxRefsForUI: 12,
+      mainReferenceTarget: 10,
+      minMainReferences: 3,
+      maxUnmappedSupplementaryReferences: 20
     }
   };
 
@@ -4510,7 +4662,8 @@ RESPONSE:`;
   private selectRelevantPatentsForDeepAnalysis(
     stage1Data: any,
     maxCandidates = 20,
-    stage0Data?: NormalizedIdea
+    stage0Data?: NormalizedIdea,
+    adaptive = false
   ): any[] {
     const gate = stage1Data?.aiRelevance;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
@@ -4522,6 +4675,7 @@ RESPONSE:`;
     const deepAnalysisTarget = (acceptedCount: number, componentCount: number, borderlineCount: number) => {
       const reviewableCount = Math.max(0, acceptedCount + componentCount + borderlineCount);
       if (reviewableCount === 0 || safeMaxCandidates === 0) return 0;
+      if (adaptive) return Math.min(safeMaxCandidates, reviewableCount);
       const relativeTarget = Math.ceil(reviewableCount * BORDERLINE_FILL_RATIO);
       const boundedTarget = Math.min(
         MAX_DEEP_ANALYSIS_TARGET,
@@ -4615,7 +4769,10 @@ RESPONSE:`;
     }, 0);
     const targetCount = deepAnalysisTarget(gateAcceptedCount, gateComponentCount, gateBorderlineCount);
     const borderlineNeeded = Math.max(0, targetCount - promoted.length - accepted.length - component.length);
-    const borderline = selectByDecision('borderline', Math.min(MAX_BORDERLINE_FILL, borderlineNeeded));
+    const borderline = selectByDecision(
+      'borderline',
+      adaptive ? Math.min(safeMaxCandidates - promoted.length - accepted.length - component.length, borderlineNeeded) : Math.min(MAX_BORDERLINE_FILL, borderlineNeeded)
+    );
     const categorySelected = [...promoted, ...accepted, ...component, ...borderline].slice(0, safeMaxCandidates);
     if (categorySelected.length > 0) return categorySelected;
 
@@ -4654,7 +4811,9 @@ RESPONSE:`;
     if (selected.length < safeMaxCandidates) addBySet(componentPns);
     const fallbackTargetCount = deepAnalysisTarget(acceptedPns.length, componentPns.length, borderlinePns.length);
     const fallbackBorderlineNeeded = Math.max(0, fallbackTargetCount - selected.length);
-    if (selected.length < safeMaxCandidates) addBySet(borderlinePns, Math.min(MAX_BORDERLINE_FILL, fallbackBorderlineNeeded));
+    if (selected.length < safeMaxCandidates) {
+      addBySet(borderlinePns, adaptive ? fallbackBorderlineNeeded : Math.min(MAX_BORDERLINE_FILL, fallbackBorderlineNeeded));
+    }
 
     if (selected.length === 0) {
       return results.slice(0, safeMaxCandidates);
@@ -5129,7 +5288,13 @@ RESPONSE:`;
     rows: any,
     patentMap: PatentFeatureMap,
     stage0Data: NormalizedIdea,
-    patentSource?: { title?: string; abstract?: string; claimsText?: string },
+    patentSource?: {
+      title?: string;
+      abstract?: string;
+      claimsText?: string;
+      claimsAvailability?: NoveltyClaimsAvailability;
+      claimsContentHash?: string;
+    },
   ): PatentFeatureComparisonRow[] {
     const features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
     const details = this.normalizeFeatureDetails(stage0Data, stage0Data.inventionText || '');
@@ -5167,7 +5332,7 @@ RESPONSE:`;
       // The comparison rows come straight from the LLM and previously bypassed the
       // evidence verification applied to feature-map cells. When the source patent
       // text is available, reject any supplied quote that is not verbatim from the
-      // title/abstract: an unverifiable quote must never carry a Present/Partial
+      // title/abstract/claims: an unverifiable quote must never carry a Present/Partial
       // claim into the report, so the row falls back to the already-verified cell.
       const suppliedQuote = evidenceQuoteFrom(suppliedRow.evidence_quote, suppliedRow.evidence);
       const suppliedQuoteRejected = Boolean(
@@ -5247,6 +5412,14 @@ RESPONSE:`;
         status,
         evidence_quote: evidenceQuote,
         evidence_source: evidenceSource,
+        ...(evidenceSource === 'claims' ? {
+          claim_number: suppliedRow.claim_number || cell?.claim_number ||
+            findNoveltyClaimNumber(String(patentSource?.claimsText || ''), evidenceQuote),
+        } : {}),
+        claims_completeness: suppliedRow.claims_completeness || cell?.claims_completeness ||
+          patentMap.claimsAvailability || patentSource?.claimsAvailability,
+        claims_content_hash: suppliedRow.claims_content_hash || cell?.claims_content_hash ||
+          patentMap.claimsContentHash || patentSource?.claimsContentHash,
         extent_score: extentScore,
         confidence,
         crisp_remark: crispRemark,
@@ -5276,6 +5449,9 @@ RESPONSE:`;
       cell.user_invention_disclosure = row.user_invention_disclosure;
       cell.patent_disclosure = row.patent_disclosure;
       cell.evidence_source = row.evidence_source;
+      cell.claim_number = row.claim_number;
+      cell.claims_completeness = row.claims_completeness;
+      cell.claims_content_hash = row.claims_content_hash;
       cell.crisp_remark = row.crisp_remark;
       cell.attorney_remark = row.attorney_remark;
       cell.novelty_impact = row.novelty_impact;
@@ -5578,6 +5754,7 @@ RESPONSE:`;
     config: NoveltySearchConfig,
     requestHeaders?: Record<string, string>
   ): Promise<{ success: boolean; data?: { stage35Data: FeatureMapBatchResult; stage4Data: AggregationResult & Record<string, any>; aiRelevance?: any }; error?: string }> {
+    const adaptiveStartedAtMs = Date.now();
     const inventionFeatures = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
     if (inventionFeatures.length === 0) return { success: false, error: 'No invention features available.' };
     if (this.hasNoHighConfidencePriorArt(stage1Data)) {
@@ -5599,62 +5776,57 @@ RESPONSE:`;
     const inventionDisclosure = stage0Data.inventionText || searchRun?.inventionDescription || '';
     const featureDetails = this.normalizeFeatureDetails(stage0Data, inventionDisclosure);
 
-    const configuredMax = Number(config.consolidatedAnalysis?.maxPatentsForAttorneyReport || config.consolidatedAnalysis?.maxCandidates || 60);
-    const maxCandidates = Math.min(Math.max(Number.isFinite(configuredMax) ? configuredMax : 60, 1), 60);
     const adaptiveMode = config.adaptiveAnalysis?.mode || 'observe';
     const screeningClusters = this.buildScreeningQueryClusters(stage0Data);
-    if (adaptiveMode !== 'off' && stage1Data?.hasMoreCandidates) {
-      const promotedStage1 = this.promotePotentialTierCandidatesForGate(stage1Data, stage0Data, screeningClusters);
-      const previousCursor = Number(stage1Data?.aiRelevance?.nextBatchCursor ?? stage1Data?.nextBatchCursor ?? 0);
-      const gateCeiling = Math.min(
-        this.getStage1CandidatePool(promotedStage1).length,
-        Number(config.adaptiveAnalysis?.gateCeiling || 180)
-      );
-      if (previousCursor < gateCeiling && promotedStage1.preStopTierScan?.promotedTier12Count > 0) {
+    if (adaptiveMode === 'enforce' && stage1Data?.hasMoreCandidates) {
+      while (Date.now() - adaptiveStartedAtMs < Number(config.adaptiveAnalysis?.safetyMaxElapsedMs || 20 * 60 * 1000)) {
+        const promotedStage1 = this.promotePotentialTierCandidatesForGate(stage1Data, stage0Data, screeningClusters);
+        const previousCursor = Number(stage1Data?.aiRelevance?.nextBatchCursor ?? stage1Data?.nextBatchCursor ?? 0);
+        const candidateCount = this.getStage1CandidatePool(promotedStage1).length;
+        if (previousCursor >= candidateCount || promotedStage1.preStopTierScan?.promotedTier12Count <= 0) break;
         const nextGate = await this.performStage15(searchId, stage0Data, promotedStage1, config, requestHeaders, { appendNextBatch: true });
-        if (nextGate.success && nextGate.data) {
-          stage1Data = this.mergeStage15Visibility(promotedStage1, nextGate.data, config);
-          console.info('[AdaptiveScreening]', JSON.stringify({
-            event: 'pre_stop_tier_scan_gated',
-            searchId,
-            promotedTier12Count: promotedStage1.preStopTierScan.promotedTier12Count,
-            previousCursor,
-            nextCursor: stage1Data?.aiRelevance?.nextBatchCursor ?? stage1Data?.nextBatchCursor,
-          }));
-        }
+        if (!nextGate.success || !nextGate.data) break;
+        stage1Data = this.mergeStage15Visibility(promotedStage1, nextGate.data, config);
+        const nextCursor = Number(stage1Data?.aiRelevance?.nextBatchCursor ?? stage1Data?.nextBatchCursor ?? previousCursor);
+        console.info('[AdaptiveScreening]', JSON.stringify({
+          event: 'pre_stop_tier_scan_gated',
+          searchId,
+          promotedTier12Count: promotedStage1.preStopTierScan.promotedTier12Count,
+          previousCursor,
+          nextCursor,
+        }));
+        if (nextCursor <= previousCursor || !stage1Data?.hasMoreCandidates) break;
       }
     }
+    const configuredMax = Number(config.consolidatedAnalysis?.maxPatentsForAttorneyReport || config.consolidatedAnalysis?.maxCandidates || 60);
+    const legacyMaxCandidates = Math.min(Math.max(Number.isFinite(configuredMax) ? configuredMax : 60, 1), 60);
+    const maxCandidates = adaptiveMode === 'enforce'
+      ? this.getStage1CandidatePool(stage1Data).length
+      : legacyMaxCandidates;
     const selected = this.selectRelevantPatentsForDeepAnalysis(
       stage1Data,
       maxCandidates,
-      stage0Data
+      stage0Data,
+      adaptiveMode === 'enforce'
     );
     if (selected.length === 0) return { success: false, error: 'No relevant candidates available for consolidated analysis.' };
 
     const initialProfile = this.adaptiveComplexityProfile(stage0Data, []);
     const configuredBatchSize = Math.max(1, Math.min(12, Math.trunc(config.consolidatedAnalysis?.batchSize || 8)));
     const batchSize = adaptiveMode === 'off' ? configuredBatchSize : initialProfile.batchSize;
-    const adaptiveMaximum = adaptiveMode === 'enforce'
-      ? Math.min(maxCandidates, initialProfile.maximum, Number(config.adaptiveAnalysis?.deepAnalysisCeiling || 60))
-      : maxCandidates;
+    const adaptiveMaximum = adaptiveMode === 'enforce' ? selected.length : maxCandidates;
     const normalizedPatentsUnordered = this.normalizePatentsForFeatureMappingV2(selected, selected.length).slice(0, adaptiveMaximum);
     const normalizedPatents = adaptiveMode === 'off'
       ? normalizedPatentsUnordered
       : this.orderAdaptiveCandidates(normalizedPatentsUnordered, stage0Data, screeningClusters, batchSize);
-    // Claims-aware deep analysis: hydrate claims text for the primary candidates from
-    // the local corpus so the mapping can cite claim language — claims define the
-    // protected scope and are stronger evidence than abstract wording. Coverage is
-    // partial (see local-patent-claims-service); references without claims are mapped
-    // on title/abstract alone and are not distinguished anywhere downstream.
-    const claimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '6') || 6));
-    if (claimsTopN > 0) {
-      await this.hydrateClaimsForTopCandidates(normalizedPatents, claimsTopN);
-    }
+    // Claims are enriched per executed batch below. This avoids a fixed patent cap
+    // and avoids looking up candidates that adaptive enforcement never analyzes.
     const concurrency = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(config.consolidatedAnalysis?.concurrency || NOVELTY_LLM_CONCURRENCY)));
     // Only 'enforce' must run sequentially, so its saturation check can early-stop
     // after each batch. 'off' and 'observe' process every batch anyway → run in parallel.
     const executionConcurrency = adaptiveMode === 'enforce' ? 1 : concurrency;
     const batches = this.createBatches(normalizedPatents, batchSize);
+    const claimEvidenceTerms = this.claimsEvidenceTerms(stage0Data);
     const parsedBatches: any[] = [];
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -5690,7 +5862,7 @@ RESPONSE:`;
           `Type: ${patent.referenceType === 'paper' ? 'Scholarly paper' : 'Patent'}`,
           `Title: ${patent.title}`,
           `Abstract: ${abstractWords || 'N/A'}`,
-          ...(patent.claimsText ? [`Claims (excerpt): ${String(patent.claimsText).replace(/\s+/g, ' ').trim()}`] : []),
+          ...(patent.claimsText ? [`Claims evidence (${patent.claimsAvailability || 'PARTIAL'}${patent.claimsClaimNumbers?.length ? `; selected claims ${patent.claimsClaimNumbers.join(', ')}` : ''}): ${String(patent.claimsText).replace(/\s+/g, ' ').trim()}`] : []),
           ...(patent.referenceType === 'paper' ? [
             `Authors: ${(patent.authors || []).join(', ') || 'N/A'}`,
             `Year/Venue: ${patent.year || ''} ${patent.venue || ''}`.trim(),
@@ -5717,6 +5889,9 @@ RESPONSE:`;
           taskCode: TaskCode.LLM5_NOVELTY_ASSESS,
           stageCode: 'NOVELTY_CONSOLIDATED_ANALYSIS',
           prompt,
+          // Match the gateway's conservative JSON-prompt estimator so claims-rich
+          // batches are checked deterministically against the configured stage cap.
+          inputTokens: Math.ceil(prompt.length / 2.5),
           parameters: {
             temperature: 0,
             reasoning_effort: 'low',
@@ -5750,6 +5925,39 @@ RESPONSE:`;
       if (!Array.isArray(parsed.per_patent_remarks) || parsed.per_patent_remarks.length === 0) {
         throw new Error(`Consolidated analysis batch ${batchIndex + 1} did not return per-patent remarks.`);
       }
+      const expectedPns = batch.map(item => this.canonicalPatentNumber(item.canonicalPn)).filter(Boolean);
+      const validateExactPatentSet = (rows: any[], label: string) => {
+        const actualPns = rows.map(row => this.canonicalPatentNumber(row?.pn)).filter(Boolean);
+        const unique = new Set(actualPns);
+        const missing = expectedPns.filter(pn => !unique.has(pn));
+        const unexpected = actualPns.filter(pn => !expectedPns.includes(pn));
+        if (unique.size !== actualPns.length || missing.length > 0 || unexpected.length > 0 || actualPns.length !== expectedPns.length) {
+          throw new Error(`Consolidated analysis batch ${batchIndex + 1} returned an invalid ${label} patent set.`);
+        }
+      };
+      validateExactPatentSet(parsed.feature_map, 'feature-map');
+      validateExactPatentSet(parsed.per_patent_remarks, 'remarks');
+      for (const map of parsed.feature_map) {
+        const mappedFeatures = [
+          ...(Array.isArray(map?.present) ? map.present : []),
+          ...(Array.isArray(map?.partial) ? map.partial : []),
+          ...(Array.isArray(map?.absent) ? map.absent : []),
+          ...(Array.isArray(map?.unknown) ? map.unknown : []),
+          ...(Array.isArray(map?.feature_analysis) ? map.feature_analysis : []),
+        ].map((cell: any) => String(cell?.feature || '').trim().toLowerCase()).filter(Boolean);
+        const missingFeatures = inventionFeatures.filter(feature => !mappedFeatures.includes(String(feature).trim().toLowerCase()));
+        if (mappedFeatures.length !== inventionFeatures.length || new Set(mappedFeatures).size !== inventionFeatures.length || missingFeatures.length > 0) {
+          throw new Error(`Consolidated analysis batch ${batchIndex + 1} omitted or duplicated invention feature mappings.`);
+        }
+      }
+      for (const remark of parsed.per_patent_remarks) {
+        const rows = Array.isArray(remark?.comparison_rows) ? remark.comparison_rows : [];
+        const comparedFeatures = rows.map((row: any) => String(row?.feature || '').trim().toLowerCase()).filter(Boolean);
+        if (comparedFeatures.length !== inventionFeatures.length || new Set(comparedFeatures).size !== inventionFeatures.length ||
+          inventionFeatures.some(feature => !comparedFeatures.includes(String(feature).trim().toLowerCase()))) {
+          throw new Error(`Consolidated analysis batch ${batchIndex + 1} returned an incomplete comparison matrix.`);
+        }
+      }
 
       totalInputTokens += Number((response as any).inputTokens ?? response.metadata?.inputTokens ?? 0);
       totalOutputTokens += Number(response.outputTokens || 0);
@@ -5764,12 +5972,13 @@ RESPONSE:`;
     // still returns failure (and routes to the legacy 3.5a/3.5c chain as before).
     const CONSOLIDATED_BATCH_ATTEMPTS = 2;
     const processBatch = async (batch: any[], batchIndex: number) => {
+      const claimsEvidence = await this.safelyHydrateClaimsForAnalysisBatch(batch, claimEvidenceTerms);
       const prompt = buildPrompt(batch);
       let lastError: unknown;
       for (let attempt = 1; attempt <= CONSOLIDATED_BATCH_ATTEMPTS; attempt++) {
         try {
           const parsed = await executeBatchAttempt(batch, batchIndex, prompt);
-          parsedBatches[batchIndex] = { parsed, prompt, patentCount: batch.length };
+          parsedBatches[batchIndex] = { parsed, prompt, patentCount: batch.length, claimsEvidence };
           return;
         } catch (error) {
           lastError = error;
@@ -5786,6 +5995,7 @@ RESPONSE:`;
         },
         prompt,
         patentCount: batch.length,
+        claimsEvidence,
         fallback: true,
         error: lastError instanceof Error ? lastError.message : String(lastError || 'Unknown batch failure'),
       };
@@ -5826,6 +6036,8 @@ RESPONSE:`;
             outputTokens: totalOutputTokens,
             thoughtTokens: totalThoughtTokens,
             batchesCompleted: processedBatchCount,
+            degradedBatchCount: parsedBatches.filter(item => item?.fallback).length,
+            elapsedMs: Date.now() - adaptiveStartedAtMs,
           });
           console.info('[AdaptiveScreening]', JSON.stringify({
             event: 'wave_completed',
@@ -5980,7 +6192,8 @@ RESPONSE:`;
     const deterministicEvidenceQuality = this.titleAbstractEvidenceQuality(featureMaps, stage0Data, screeningClusters);
     const qualityFlags = {
       ...parsedQualityFlags,
-      low_evidence: parsedQualityFlags.low_evidence || deterministicEvidenceQuality.low || stage1Data?.aiRelevance?.gateStatus !== 'complete',
+      low_evidence: parsedQualityFlags.low_evidence || deterministicEvidenceQuality.low ||
+        stage1Data?.aiRelevance?.gateStatus !== 'complete' || fallbackBatchEntries.length > 0,
     };
     const stats = {
       ...this.calculateFeatureMappingStats(featureMaps, normalizedPatents),
@@ -5998,17 +6211,33 @@ RESPONSE:`;
       outputTokens: totalOutputTokens,
       thoughtTokens: totalThoughtTokens,
       batchesCompleted: executedBatchCount,
+      degradedBatchCount: fallbackBatchEntries.length,
+      elapsedMs: Date.now() - adaptiveStartedAtMs,
     });
     console.info('[AdaptiveScreening]', JSON.stringify({
       event: 'evaluation_completed',
       searchId,
       ...adaptiveScreening,
     }));
+    const claimsEvidence = this.mergeClaimsEvidenceDiagnostics(
+      processedBatchEntries.map(item => item.claimsEvidence)
+    );
+    console.info('[NoveltyClaimsEvidence]', JSON.stringify({
+      event: 'deep_analysis_completed',
+      searchId,
+      ...claimsEvidence,
+    }));
     const stage35Data: FeatureMapBatchResult = {
       feature_map: featureMaps,
       quality_flags: qualityFlags,
       stats,
+      claimsEvidence,
       adaptiveScreening,
+      degraded: fallbackBatchEntries.length > 0,
+      degradedBatches: fallbackBatchEntries.map((item, index) => ({
+        batchIndex: parsedBatches.indexOf(item) >= 0 ? parsedBatches.indexOf(item) : index,
+        error: item.error || 'Deterministic fallback used',
+      })),
       attorneyReportPatentLimit: maxCandidates,
       consolidatedBatchCount: executedBatchCount,
       progress: this.buildStageProgressSnapshot({
@@ -6018,7 +6247,7 @@ RESPONSE:`;
         totalPatents: normalizedPatents.length,
         processedBatches: executedBatchCount,
         batchCount: batches.length,
-        failedBatches: 0,
+        failedBatches: fallbackBatchEntries.length,
       })
     } as FeatureMapBatchResult & Record<string, any>;
 
@@ -6052,8 +6281,16 @@ RESPONSE:`;
     const noveltySignals = parsed.novelty_signals && typeof parsed.novelty_signals === 'object'
       ? parsed.novelty_signals
       : this.buildNoveltySignalsFromAnalysis(featureMaps, remarks, inventionFeatures);
+    const canonicalVerdict = buildCanonicalNoveltyVerdict(
+      aggregation.data,
+      fallbackBatchEntries.length > 0
+    );
     const stage4Data = {
       ...(aggregation.data as any),
+      canonical_verdict: canonicalVerdict,
+      decision: canonicalVerdict.decision,
+      confidence: canonicalVerdict.confidence,
+      analysis_degraded: canonicalVerdict.degraded,
       per_patent_remarks: remarks,
       novelty_signals: noveltySignals,
       per_patent_remarks_source: 'consolidated_deep_analysis',
@@ -6329,7 +6566,7 @@ RESPONSE:`;
         ? Math.max(0, Math.min(candidatePool.length, Number(existingGate.nextBatchCursor ?? existingGate.consideredCount ?? 0)))
         : 0;
 
-      if (options?.appendNextBatch && highConfidenceAlreadyGated > previousVisibleLimit) {
+      if (options?.appendNextBatch && config.adaptiveAnalysis?.mode !== 'enforce' && highConfidenceAlreadyGated > previousVisibleLimit) {
         startIndex = candidatePool.length;
       }
 
@@ -6701,10 +6938,16 @@ RESPONSE:`;
     try {
       console.log('ðŸ”¬ Starting Stage 3.5a: Feature Mapping Engine');
 
+      const adaptiveEnforce = config.adaptiveAnalysis?.mode === 'enforce';
+      const adaptiveStartedAtMs = Date.now();
+      const adaptiveCandidateLimit = adaptiveEnforce
+        ? this.getStage1CandidatePool(stage1Data).length
+        : Math.max(1, config.stage35a.maxRefsTotal || 20);
       const pqaiResults = this.selectRelevantPatentsForDeepAnalysis(
         stage1Data,
-        Math.max(1, config.stage35a.maxRefsTotal || 20),
-        stage0Data
+        adaptiveCandidateLimit,
+        stage0Data,
+        adaptiveEnforce
       );
       const inventionFeatures = stage0Data.inventionFeatures || [];
 
@@ -6727,15 +6970,14 @@ RESPONSE:`;
       // then borderline references. Keep that ordering and only enforce the
       // configured mapping cap here.
       const totalPatents = pqaiResults.length;
-      const selectedCount = Math.min(
-        totalPatents,
-        Math.max(1, Math.min(Math.trunc(config.stage35a.maxRefsTotal || 20), 20))
-      );
+      const selectedCount = adaptiveEnforce
+        ? totalPatents
+        : Math.min(totalPatents, Math.max(1, Math.min(Math.trunc(config.stage35a.maxRefsTotal || 20), 20)));
 
       console.log(`ðŸŽ¯ PATENT SELECTION LOGIC:`);
       console.log(`   - Total patents available: ${totalPatents}`);
       console.log(`   - Stage 1.5 ordered direct, component, then borderline matches`);
-      console.log(`   - Mapping cap applied: ${selectedCount} patents`);
+      console.log(`   - ${adaptiveEnforce ? 'Adaptive frontier prepared' : 'Mapping cap applied'}: ${selectedCount} patents`);
       console.log(`   - Selection percentage: ${((selectedCount/totalPatents)*100).toFixed(1)}%`);
 
       const gate = (stage1Data && (stage1Data as any).aiRelevance) ? (stage1Data as any).aiRelevance : null;
@@ -6775,23 +7017,23 @@ RESPONSE:`;
       // Normalize and canonicalize selected patents
       const normalizedPatents = this.normalizePatentsForFeatureMappingV2(selectedPatents, selectedCount);
 
-      // Same claims hydration as the consolidated path: this legacy route only runs when
-      // consolidated analysis fails, and a fallback must not silently produce weaker
-      // evidence than the primary route it stands in for.
-      const stage35aClaimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '6') || 6));
-      if (stage35aClaimsTopN > 0) {
-        await this.hydrateClaimsForTopCandidates(normalizedPatents, stage35aClaimsTopN);
-      }
-
-      // Process in batches with concurrency
+      // Process in batches with the same optional claims enrichment as the
+      // consolidated path.
       const batchSize = config.stage35a.batchSize;
       const batches = this.createBatches(normalizedPatents, batchSize);
+      const claimEvidenceTerms = this.claimsEvidenceTerms(stage0Data);
 
       console.log(`ðŸ“¦ Processing ${normalizedPatents.length} patents in ${batches.length} batches of ${batchSize}`);
 
       const allFeatureMaps: PatentFeatureMap[] = [];
-      const concurrencyLimit = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(config.stage35a.concurrency || NOVELTY_LLM_CONCURRENCY)));
+      const concurrencyLimit = adaptiveEnforce
+        ? 1
+        : Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(config.stage35a.concurrency || NOVELTY_LLM_CONCURRENCY)));
       let failedBatches = 0;
+      let processedBatches = 0;
+      const degradedBatches: Array<{ batchIndex: number; error: string }> = [];
+      const claimsEvidenceBatches: NoveltyClaimsEvidenceDiagnostics[] = [];
+      const screeningClusters = this.buildScreeningQueryClusters(stage0Data);
 
       await this.persistDeepAnalysisProgress(
         searchId,
@@ -6818,16 +7060,27 @@ RESPONSE:`;
             inventionFeatures,
             config,
             requestHeaders,
-            batchNumber
+            batchNumber,
+            claimEvidenceTerms
           );
         });
 
         const batchResults = await Promise.all(batchPromises);
+        processedBatches += batchSlice.length;
 
         // Collect successful results
-        for (const result of batchResults) {
+        for (let resultIndex = 0; resultIndex < batchResults.length; resultIndex += 1) {
+          const result = batchResults[resultIndex];
           if (result.success && result.featureMaps) {
             allFeatureMaps.push(...result.featureMaps);
+            if (result.claimsEvidence) claimsEvidenceBatches.push(result.claimsEvidence);
+            if (result.degraded) {
+              failedBatches += 1;
+              degradedBatches.push({
+                batchIndex: i + resultIndex,
+                error: result.error || 'Deterministic fallback used',
+              });
+            }
           } else {
             failedBatches += 1;
           }
@@ -6839,12 +7092,40 @@ RESPONSE:`;
             stage: 'deep_analysis',
             analyzedPatents: allFeatureMaps.length,
             totalPatents: normalizedPatents.length,
-            processedBatches: Math.min(batches.length, i + batchSlice.length),
+            processedBatches,
             batchCount: batches.length,
             failedBatches,
           }),
           { featureMaps: allFeatureMaps }
         );
+        if (adaptiveEnforce) {
+          const decoratedProgressMaps = allFeatureMaps.map(map => {
+            const patent = normalizedPatents.find(item => item.canonicalPn === map.pn) || {};
+            const gateRecord = this.getGateRecordForPublication(stage1Data?.aiRelevance?.byPn || {}, map.pn);
+            return this.decorateTitleAbstractScreeningMap(
+              map,
+              patent,
+              stage0Data,
+              gateRecord,
+              screeningClusters,
+              config.stage35a.criticalFeatures || []
+            );
+          });
+          const adaptiveProgress = this.buildAdaptiveScreeningProgress({
+            maps: decoratedProgressMaps,
+            stage0Data,
+            stage1Data,
+            clusters: screeningClusters,
+            config,
+            inputTokens: 0,
+            outputTokens: 0,
+            thoughtTokens: 0,
+            batchesCompleted: processedBatches,
+            degradedBatchCount: degradedBatches.length,
+            elapsedMs: Date.now() - adaptiveStartedAtMs,
+          });
+          if (adaptiveProgress.terminalStopReason) break;
+        }
       }
 
       // Preserve the LLM's semantic decision. Deterministic code supplies only a
@@ -6869,7 +7150,6 @@ RESPONSE:`;
         }
       } catch {}
 
-      const screeningClusters = this.buildScreeningQueryClusters(stage0Data);
       for (let index = 0; index < allFeatureMaps.length; index += 1) {
         const map = allFeatureMaps[index];
         const patent = normalizedPatents.find(item => item.canonicalPn === map.pn) || {};
@@ -6892,7 +7172,8 @@ RESPONSE:`;
       const deterministicEvidenceQuality = this.titleAbstractEvidenceQuality(allFeatureMaps, stage0Data, screeningClusters);
       const qualityFlags = {
         ...calculatedQualityFlags,
-        low_evidence: calculatedQualityFlags.low_evidence || deterministicEvidenceQuality.low || stage1Data?.aiRelevance?.gateStatus !== 'complete',
+        low_evidence: calculatedQualityFlags.low_evidence || deterministicEvidenceQuality.low ||
+          stage1Data?.aiRelevance?.gateStatus !== 'complete' || degradedBatches.length > 0,
       };
       const stats = this.calculateFeatureMappingStats(allFeatureMaps, normalizedPatents);
       const adaptiveScreening = this.buildAdaptiveScreeningProgress({
@@ -6904,20 +7185,31 @@ RESPONSE:`;
         inputTokens: 0,
         outputTokens: 0,
         thoughtTokens: 0,
-        batchesCompleted: batches.length,
+        batchesCompleted: processedBatches,
+        degradedBatchCount: degradedBatches.length,
+        elapsedMs: Date.now() - adaptiveStartedAtMs,
       });
+      const claimsEvidence = this.mergeClaimsEvidenceDiagnostics(claimsEvidenceBatches);
+      console.info('[NoveltyClaimsEvidence]', JSON.stringify({
+        event: 'legacy_deep_analysis_completed',
+        searchId,
+        ...claimsEvidence,
+      }));
 
       const result: FeatureMapBatchResult = {
         feature_map: allFeatureMaps,
         quality_flags: qualityFlags,
         stats: stats,
+        claimsEvidence,
         adaptiveScreening,
+        degraded: degradedBatches.length > 0,
+        degradedBatches,
         progress: this.buildStageProgressSnapshot({
           stage: 'deep_analysis',
           status: 'complete',
           analyzedPatents: allFeatureMaps.length,
           totalPatents: normalizedPatents.length,
-          processedBatches: batches.length,
+          processedBatches,
           batchCount: batches.length,
           failedBatches,
         })
@@ -7251,11 +7543,19 @@ RESPONSE:`;
     integrationCheck: any,
     decision: string
   ): any {
+    const canonicalVerdict = buildCanonicalNoveltyVerdict(
+      aggregationResult,
+      Boolean((aggregationResult as any).analysis_degraded)
+    );
     const score = (aggregationResult.novelty_score * 100).toFixed(1);
     const potentialDifferentiators = this.getPotentialDifferentiatorsFromAggregation(aggregationResult);
     const totalFeatures = perFeatureUniqueness.length;
 
     return {
+      canonical_verdict: canonicalVerdict,
+      decision: canonicalVerdict.decision,
+      confidence: canonicalVerdict.confidence,
+      novelty_score: canonicalVerdict.noveltyScore,
       integration: integrationCheck.any_single_patent_covers_majority === false
         ? "No reviewed patent record maps a majority of the identified features; this is an evidence-limited differentiation signal, not a novelty conclusion."
         : "At least one reviewed patent record maps a majority of the identified features, creating elevated overlap risk.",
@@ -7310,6 +7610,10 @@ RESPONSE:`;
     config: NoveltySearchConfig,
     selectedPatents?: any[]
   ): any {
+    const canonicalVerdict = buildCanonicalNoveltyVerdict(
+      aggregationResult,
+      Boolean((aggregationResult as any).analysis_degraded)
+    );
     const score = (aggregationResult.novelty_score * 100).toFixed(1);
     const potentialDifferentiators = this.getPotentialDifferentiatorsFromAggregation(aggregationResult);
     const totalFeatures = aggregationResult.per_feature_uniqueness.length;
@@ -7325,6 +7629,10 @@ RESPONSE:`;
     })) || [];
 
     return {
+      canonical_verdict: canonicalVerdict,
+      decision: canonicalVerdict.decision,
+      confidence: canonicalVerdict.confidence,
+      novelty_score: canonicalVerdict.noveltyScore,
       // Include search query from stage 0 data
       search_query: stage0Data?.searchQuery || '',
       table_of_contents: {
@@ -7353,7 +7661,7 @@ RESPONSE:`;
         search_date: searchRun.createdAt,
         jurisdiction: config.jurisdiction,
         total_patents_found: aggregationResult.per_patent_coverage.length,
-        selection_criteria: `Top 25% most relevant patents selected for detailed analysis (${selectedCount} patents)`
+        selection_criteria: `References selected from deterministic feature coverage for report presentation (${selectedCount} references)`
       },
       section_1_2_key_features: {
         anchor: "key-features",
@@ -7429,7 +7737,7 @@ RESPONSE:`;
       },
       concluding_remarks: {
         title: "Claim-Positioning Observations",
-        overall_novelty_assessment: aggregationResult.decision,
+        overall_novelty_assessment: canonicalVerdict.decision,
         key_strengths: [
           `Mapped differentiation score: ${score}%`,
           `${potentialDifferentiators.length} out of ${totalFeatures} features were flagged as possible differentiators for attorney review`
@@ -7457,6 +7765,15 @@ RESPONSE:`;
     aggregationResult: AggregationResult,
     reportInputs: any
   ): any {
+    const canonicalVerdict = buildCanonicalNoveltyVerdict(
+      aggregationResult,
+      Boolean(reportInputs?.analysis_degraded)
+    );
+    aggregationResult = {
+      ...aggregationResult,
+      decision: canonicalVerdict.decision,
+      confidence: canonicalVerdict.confidence,
+    };
     // Build deterministic summary explaining why novelty exists
     const totalFeatures = aggregationResult.per_feature_uniqueness.length;
     const moderateUnique = aggregationResult.per_feature_uniqueness
@@ -7490,7 +7807,7 @@ RESPONSE:`;
     delete existingCards["Unique Features"];
     const finalExec = {
       ...existingExec,
-      summary: existingExec.summary || existingExec.text || deterministicSummary,
+      summary: `${canonicalVerdict.summary} ${deterministicSummary}`.trim(),
       novelty_score: (score * 100).toFixed(1) + "%",
       confidence: aggregationResult.confidence,
       visual_cards: {
@@ -7512,6 +7829,16 @@ RESPONSE:`;
     // Ensure deterministic data overrides any LLM hallucinations
     return {
       ...llmReport,
+      canonical_verdict: canonicalVerdict,
+      decision: canonicalVerdict.decision,
+      confidence: canonicalVerdict.confidence,
+      novelty_score: canonicalVerdict.noveltyScore,
+      structured_narrative: {
+        ...(llmReport?.structured_narrative || {}),
+        decision: canonicalVerdict.decision,
+        confidence: canonicalVerdict.confidence,
+        verdict: canonicalVerdict.summary,
+      },
       // Include search query from stage 0 data
       search_query: reportInputs.stage0_data?.searchQuery || '',
       executive_summary: finalExec,
@@ -7709,16 +8036,16 @@ RESPONSE:`;
     return {
       ...existingRemarks,
       title: 'Claim-Positioning Observations',
-      overall_novelty_assessment: existingRemarks.overall_novelty_assessment || decision,
+      overall_novelty_assessment: decision,
       novelty_score_summary: `${(score * 100).toFixed(1)}% mapped-differentiation score with ${confidence.toLowerCase()} confidence`,
-      why_novelty_exists: existingRemarks.why_novelty_exists || visibleWhyNovel,
+      why_novelty_exists: visibleWhyNovel,
       closest_mapped_references: closestMappedReferences,
       distributed_component_risks: distributedComponentRisks,
       potential_differentiators: potentialDifferentiators,
       key_strengths: keyStrengths.length > 0 ? keyStrengths : safeExistingStrengths,
       key_risks: finalRisks,
       strategic_recommendations: existingRemarks.strategic_recommendations?.length > 0 ? existingRemarks.strategic_recommendations : recommendations,
-      filing_advice: existingRemarks.filing_advice || filingAdvice,
+      filing_advice: filingAdvice,
       inventor_action_items: inventorActions,
       analysis_date: new Date().toISOString().split('T')[0],
       disclaimer: 'This analysis is AI-generated and should be reviewed by a qualified patent attorney before making legal or business decisions. Patent law is complex and fact-specific; this report does not constitute legal advice.'
@@ -7959,6 +8286,168 @@ RESPONSE:`;
    * - Rank pool by coverage+overlap; then iteratively add the patent with highest marginal gain.
    * - Add one extra precision patent if only Partial is possible for remaining features.
    */
+  /** Build the report-presentation candidates without changing deep-analysis scope. */
+  private getStage1ReportCandidatePool(stage1Data: any): any[] {
+    const sources = [
+      stage1Data?.visiblePriorArtResults,
+      stage1Data?.gatedCandidates,
+      stage1Data?.retrievalCandidates,
+      stage1Data?.priorArtResults,
+      stage1Data?.pqaiResults,
+      stage1Data?.candidateResults,
+      stage1Data?.rawPriorArtResults,
+    ];
+    const byPn = new Map<string, any>();
+    for (const source of sources) {
+      if (!Array.isArray(source)) continue;
+      for (const candidate of source) {
+        const key = stage4PublicationKey(getPriorArtPublicationNumber(candidate));
+        if (key && !byPn.has(key)) byPn.set(key, candidate);
+      }
+    }
+    return Array.from(byPn.values());
+  }
+
+  private buildStage4ReportReferenceCandidates(
+    stage1Data: any,
+    featureMapData: FeatureMapBatchResult | null,
+    aggregationResult: AggregationResult
+  ): ReportReferenceCandidate[] {
+    const candidatePool = this.getStage1ReportCandidatePool(stage1Data);
+    const metadataByPn = new Map<string, any>();
+    candidatePool.forEach((candidate, index) => {
+      const pn = getPriorArtPublicationNumber(candidate);
+      const key = stage4PublicationKey(pn);
+      if (key && !metadataByPn.has(key)) metadataByPn.set(key, { candidate, index });
+    });
+
+    const remarks = Array.isArray(aggregationResult.per_patent_remarks)
+      ? aggregationResult.per_patent_remarks
+      : [];
+    const remarksByPn = new Map<string, any>();
+    remarks.forEach((remark, index) => {
+      const key = stage4PublicationKey(remark?.pn || (remark as any)?.patent_number);
+      if (key && !remarksByPn.has(key)) remarksByPn.set(key, { remark, index });
+    });
+    const coverageByPn = new Map<string, PerPatentCoverage>();
+    (aggregationResult.per_patent_coverage || []).forEach(coverage => {
+      const key = stage4PublicationKey(coverage.pn);
+      if (key && !coverageByPn.has(key)) coverageByPn.set(key, coverage);
+    });
+    const decisive = new Set(
+      ((aggregationResult as any)?.canonical_verdict?.decisiveReferences || [
+        aggregationResult.integration_check?.integration_pn,
+        ...(aggregationResult.closest_mapped_references || []),
+      ]).map(stage4PublicationKey).filter(Boolean)
+    );
+
+    const maps = Array.isArray(featureMapData?.feature_map) && featureMapData!.feature_map.length > 0
+      ? featureMapData!.feature_map
+      : (aggregationResult.per_patent_coverage || []).map(coverage => ({
+          pn: coverage.pn,
+          title: metadataByPn.get(stage4PublicationKey(coverage.pn))?.candidate?.title || '',
+          feature_analysis: [],
+        } as PatentFeatureMap));
+    const mappedKeys = new Set<string>();
+    const mappedCandidates: ReportReferenceCandidate[] = [];
+    maps.forEach((map, index) => {
+      const key = stage4PublicationKey(map.pn);
+      if (!key || mappedKeys.has(key)) return;
+      mappedKeys.add(key);
+      const coverage = coverageByPn.get(key);
+      const remark = remarksByPn.get(key)?.remark;
+      const metadata = metadataByPn.get(key)?.candidate || {};
+      const gate = this.getGateRecordForPublication(stage1Data?.aiRelevance?.byPn || {}, map.pn);
+      const cells = Array.isArray(map.feature_analysis) ? map.feature_analysis : [];
+      const present = cells.filter(cell => cell.status === 'Present').length;
+      const partial = cells.filter(cell => cell.status === 'Partial').length;
+      const fallbackCoverage = cells.length ? (present + partial * 0.5) / cells.length : 0;
+      const featureCoverage = Number(
+        coverage?.important_coverage_ratio ?? coverage?.coverage_ratio ?? fallbackCoverage
+      );
+      const highOverlap = String(remark?.novelty_threat || '').toLowerCase() === 'high_overlap';
+      const priority = highOverlap || featureCoverage >= 0.75
+        ? 'Critical'
+        : featureCoverage >= 0.5
+          ? 'High'
+          : present + partial > 0 ? 'Medium' : 'Low';
+      const gateScore = Number(gate?.rerankScore ?? gate?.score ?? metadata?.rerankScore ?? metadata?.relevanceScore ?? 0);
+      mappedCandidates.push({
+        publicationNumber: map.pn,
+        mapped: true,
+        sourceOrder: index,
+        priority,
+        priorityScore: featureCoverage * 100 + present * 2 + partial + gateScore,
+        featureCoverage,
+        gateScore,
+        gateDecision: gate?.rerankDecision || gate?.decision,
+        hasGateRecord: Boolean(gate),
+        evidenceQuality: gate?.evidence_quality || metadata?.evidence_quality,
+        canonicalDecisive: decisive.has(key),
+        noveltyThreat: remark?.novelty_threat,
+        overlapRiskLevel: highOverlap ? 'High' : undefined,
+      });
+    });
+
+    const unmappedCandidates = candidatePool
+      .map((candidate, index): ReportReferenceCandidate | null => {
+        const publicationNumber = getPriorArtPublicationNumber(candidate);
+        const key = stage4PublicationKey(publicationNumber);
+        if (!key || mappedKeys.has(key)) return null;
+        const gate = this.getGateRecordForPublication(stage1Data?.aiRelevance?.byPn || {}, publicationNumber);
+        return {
+          publicationNumber,
+          mapped: false,
+          sourceOrder: index,
+          gateScore: Number(gate?.rerankScore ?? gate?.score ?? candidate?.rerankScore ?? candidate?.relevanceScore ?? 0),
+          gateDecision: gate?.rerankDecision || gate?.decision,
+          hasGateRecord: Boolean(gate),
+          evidenceQuality: gate?.evidence_quality || candidate?.evidence_quality,
+        };
+      })
+      .filter((candidate): candidate is ReportReferenceCandidate => Boolean(candidate));
+
+    return [...mappedCandidates, ...unmappedCandidates];
+  }
+
+  private buildStage4SelectedPatentDetails(
+    selection: ReportReferenceSelectionV1,
+    aggregationResult: AggregationResult,
+    featureMapCells: any[],
+    stage1Data: any
+  ): any[] {
+    const candidatePool = this.getStage1ReportCandidatePool(stage1Data);
+    const metadataByPn = new Map(candidatePool.map(candidate => [
+      stage4PublicationKey(getPriorArtPublicationNumber(candidate)),
+      candidate,
+    ]));
+    const coverageByPn = new Map((aggregationResult.per_patent_coverage || []).map(coverage => [
+      stage4PublicationKey(coverage.pn),
+      coverage,
+    ]));
+
+    return selection.main.map(selected => {
+      const key = selected.canonicalPublicationNumber;
+      const coverage = coverageByPn.get(key);
+      const metadata = metadataByPn.get(key) || {};
+      const mappings = (featureMapCells || []).filter(cell => stage4PublicationKey(
+        cell.patent_publication_number || cell.publicationNumber
+      ) === key);
+      const overlaps = mappings.map(mapping => Number(mapping.overlap_percentage || 0)).filter(Number.isFinite);
+      return {
+        patentNumber: selected.publicationNumber,
+        coverageRatio: Number(coverage?.coverage_ratio || 0),
+        avgFeatureOverlap: overlaps.length ? overlaps.reduce((sum, value) => sum + value, 0) / overlaps.length : 0,
+        pqaiRelevance: Number(metadata?.rerankScore ?? metadata?.relevanceScore ?? metadata?.score ?? 0),
+        abstract: metadata?.abstract || metadata?.snippet || metadata?.description || '',
+        title: metadata?.title || metadata?.invention_title || 'Untitled Patent',
+        mappings,
+        link: metadata?.link || `https://patents.google.com/patent/${selected.publicationNumber}`,
+        selectionReason: selected.reason,
+      };
+    });
+  }
+
   private selectPatentsByGreedyCoverage(
     perPatentCoverage: PerPatentCoverage[],
     featureMapCells: any[],
@@ -8268,22 +8757,35 @@ OUTPUT JSON:
     };
   }
 
-  private cooperativeRelationshipEvidence(stage0Data: NormalizedIdea, abstract: string): { present: boolean; quote: string } {
-    const normalizedAbstract = String(abstract || '').toLowerCase();
-    if (!normalizedAbstract || normalizedAbstract === 'no abstract available.') return { present: false, quote: '' };
+  private cooperativeRelationshipEvidence(
+    stage0Data: NormalizedIdea,
+    patent: { abstract?: string; claimsText?: string }
+  ): { present: boolean; quote: string; source: 'claims' | 'abstract' | 'none' } {
     const interactions = stage0Data.noveltyFocusInteractions || [];
-    for (const interaction of interactions) {
-      const relationshipTerms = this.screeningTokens(interaction.description);
-      const relationshipHits = relationshipTerms.filter(term => normalizedAbstract.includes(term));
-      const linkedCovered = (interaction.linkedFeatures || []).every(feature => {
-        const terms = this.screeningTokens(feature);
-        return terms.some(term => normalizedAbstract.includes(term));
-      });
-      if (linkedCovered && relationshipHits.length >= Math.min(3, Math.max(1, Math.ceil(relationshipTerms.length * 0.35)))) {
-        return { present: true, quote: this.screeningEvidenceQuote(abstract, relationshipHits) };
+    const sources: Array<{ source: 'claims' | 'abstract'; text: string }> = [
+      { source: 'claims', text: String(patent?.claimsText || '') },
+      { source: 'abstract', text: String(patent?.abstract || '') },
+    ];
+    for (const source of sources) {
+      const normalizedSource = source.text.toLowerCase();
+      if (!normalizedSource || normalizedSource === 'no abstract available.') continue;
+      for (const interaction of interactions) {
+        const relationshipTerms = this.screeningTokens(interaction.description);
+        const relationshipHits = relationshipTerms.filter(term => normalizedSource.includes(term));
+        const linkedCovered = (interaction.linkedFeatures || []).every(feature => {
+          const terms = this.screeningTokens(feature);
+          return terms.some(term => normalizedSource.includes(term));
+        });
+        if (linkedCovered && relationshipHits.length >= Math.min(3, Math.max(1, Math.ceil(relationshipTerms.length * 0.35)))) {
+          return {
+            present: true,
+            quote: this.screeningEvidenceQuote(source.text, relationshipHits),
+            source: source.source,
+          };
+        }
       }
     }
-    return { present: false, quote: '' };
+    return { present: false, quote: '', source: 'none' };
   }
 
   private orderAdaptiveCandidates(
@@ -8389,11 +8891,13 @@ OUTPUT JSON:
       return !cell || cell.status === 'Unknown';
     }).length;
     const importantUnknownRatio = importantFeatures.length ? importantUnknownCount / importantFeatures.length : 0;
-    const criticalAbstractPresent = Array.from(criticalFeatures).every(feature => {
+    const criticalRecordEvidencePresent = Array.from(criticalFeatures).every(feature => {
       const cell = patentMap.feature_analysis.find(item => item.feature === feature);
-      return cell?.status === 'Present' && cell.evidence_source === 'abstract' && Boolean(cell.quote);
+      return cell?.status === 'Present' &&
+        (cell.evidence_source === 'abstract' || cell.evidence_source === 'claims') &&
+        Boolean(cell.quote);
     });
-    const relationship = this.cooperativeRelationshipEvidence(stage0Data, String(patent?.abstract || ''));
+    const relationship = this.cooperativeRelationshipEvidence(stage0Data, patent);
     const domain = this.classifyDomainTier(patent, stage0Data, clusters);
     const genericFeatureOnlyMatch = positiveCells.length > 0 && genericMappedFeatureCount === positiveCells.length;
     const genericityRiskReasons: string[] = [];
@@ -8416,12 +8920,12 @@ OUTPUT JSON:
       : 0;
     const gateDecision = normalizeRerankDecision(gate?.rerankDecision || gate?.decision);
     const relationshipRequired = (stage0Data.noveltyFocusInteractions || []).length > 0;
-    const highOverlap = gateDecision === 'accept' && domain.tier <= 2 && criticalAbstractPresent && importantFeatureCoverage >= 0.90 &&
+    const highOverlap = gateDecision === 'accept' && domain.tier <= 2 && criticalRecordEvidencePresent && importantFeatureCoverage >= 0.90 &&
       importantUnknownRatio === 0 && (noveltyCandidateMappedFeatureCount >= 1 || domainSpecificMappedFeatureCount >= 1) &&
       (!relationshipRequired || relationship.present) &&
       !genericFeatureOnlyMatch && genericityRiskLevel !== 'HIGH';
     const matchCategory: PatentScreeningMatchCategory = highOverlap
-      ? 'HIGH_ABSTRACT_OVERLAP'
+      ? 'HIGH_RECORD_OVERLAP'
       : positiveCells.some(cell => this.isImportantFeature(cell.feature, featureTypes))
         ? 'COMPONENT_LEVEL_OVERLAP'
         : domain.tier <= 3 ? 'ADJACENT_DOMAIN_ANALOGY' : domain.tier === 4 ? 'WEAK_ANALOGY' : 'NOT_RELEVANT';
@@ -8429,7 +8933,9 @@ OUTPUT JSON:
     return {
       ...patentMap,
       screeningConfidence,
-      evidenceDepth: patent?.abstract && patent?.title ? 'TITLE_AND_ABSTRACT' : patent?.abstract ? 'ABSTRACT_ONLY' : patent?.title ? 'TITLE_ONLY' : 'NONE',
+      evidenceDepth: patent?.claimsText
+        ? (patent?.abstract ? 'CLAIMS_AND_ABSTRACT' : 'CLAIMS_ONLY')
+        : patent?.abstract && patent?.title ? 'TITLE_AND_ABSTRACT' : patent?.abstract ? 'ABSTRACT_ONLY' : patent?.title ? 'TITLE_ONLY' : 'NONE',
       legalEvidenceStrength,
       domainTier: domain.tier,
       domainTierReason: domain.reason,
@@ -8441,8 +8947,15 @@ OUTPUT JSON:
       genericityRiskLevel,
       genericityRiskReasons,
       genericFeatureOnlyMatch,
-      cooperativeRelationshipPresentInSameAbstract: relationship.present,
+      cooperativeRelationshipPresentInSameAbstract: relationship.present && relationship.source === 'abstract',
+      cooperativeRelationshipPresentInSameRecord: relationship.present,
       cooperativeRelationshipEvidenceQuote: relationship.quote,
+      cooperativeRelationshipEvidenceSource: relationship.source,
+      claimsAvailability: patentMap.claimsAvailability || patent?.claimsAvailability,
+      claimsSource: patentMap.claimsSource || patent?.claimsSource,
+      claimsContentHash: patentMap.claimsContentHash || patent?.claimsContentHash,
+      claimsClaimNumbers: patentMap.claimsClaimNumbers || patent?.claimsClaimNumbers,
+      claimsExcerpted: patentMap.claimsExcerpted ?? patent?.claimsExcerpted,
       importantFeatureCoverage,
       importantUnknownRatio,
       queryClusterIds: domain.clusterIds,
@@ -8483,21 +8996,26 @@ OUTPUT JSON:
       const cell = map.feature_analysis.find(item => item.feature === feature);
       return cell?.evidenceDepth === 'TITLE_ONLY' || cell?.evidence_source === 'title';
     }))) reasons.push('At least one critical feature is supported only by title text.');
-    if (maps.some(map => map.matchCategory === 'HIGH_ABSTRACT_OVERLAP' && !map.cooperativeRelationshipEvidenceQuote && map.noveltyCandidateMappedFeatureCount === 0)) {
-      reasons.push('A high-overlap candidate lacks an exact abstract relationship or novelty-feature quote.');
+    if (maps.some(map => this.isHighRecordOverlapCategory(map.matchCategory) && !map.cooperativeRelationshipEvidenceQuote && map.noveltyCandidateMappedFeatureCount === 0)) {
+      reasons.push('A high-overlap candidate lacks an exact record relationship or novelty-feature quote.');
     }
     if (maps.length > 0 && maps.filter(map => (map.domainTier || 5) >= 3 || map.genericityRiskLevel === 'HIGH').length / maps.length > 0.6) {
       reasons.push('More than 60% of analyzed candidates are generic or Tier 3-5 analogies.');
     }
     const represented = new Set(maps.flatMap(map => map.queryClusterIds || []));
-    if (clusters.some(cluster => cluster.critical && !represented.has(cluster.id))) reasons.push('A critical query cluster lacks a sufficiently specific analyzed abstract.');
+    if (clusters.some(cluster => cluster.critical && !represented.has(cluster.id))) reasons.push('A critical query cluster lacks a sufficiently specific analyzed record.');
     return { low: reasons.length > 0, reasons };
+  }
+
+  private isHighRecordOverlapCategory(value: PatentScreeningMatchCategory | undefined): boolean {
+    return value === 'HIGH_RECORD_OVERLAP' || value === 'HIGH_ABSTRACT_OVERLAP';
   }
 
   private adaptiveCoveragePlateauBatches(
     maps: PatentFeatureMap[],
     stage0Data: NormalizedIdea,
-    batchSize: number
+    batchSize: number,
+    minMarginalCoverageGain = 0.05
   ): number {
     const featureTypes = this.buildFeatureTypeMap(stage0Data, stage0Data.inventionFeatures || []);
     const important = new Set((stage0Data.inventionFeatures || []).filter(feature => this.isImportantFeature(feature, featureTypes)));
@@ -8510,7 +9028,8 @@ OUTPUT JSON:
           if (important.has(cell.feature) && cell.status === 'Present') covered.add(cell.feature);
         }
       }
-      trailingPlateaus = covered.size === before ? trailingPlateaus + 1 : 0;
+      const marginalGain = important.size > 0 ? (covered.size - before) / important.size : 0;
+      trailingPlateaus = marginalGain < minMarginalCoverageGain ? trailingPlateaus + 1 : 0;
     }
     return trailingPlateaus;
   }
@@ -8525,6 +9044,8 @@ OUTPUT JSON:
     outputTokens: number;
     thoughtTokens: number;
     batchesCompleted: number;
+    degradedBatchCount?: number;
+    elapsedMs?: number;
   }): AdaptiveScreeningProgress {
     const { maps, stage0Data, stage1Data, clusters, config } = params;
     const adaptive = config.adaptiveAnalysis || this.defaultConfig.adaptiveAnalysis!;
@@ -8532,18 +9053,24 @@ OUTPUT JSON:
     const gateByPn = stage1Data?.aiRelevance?.byPn || {};
     const profile = this.adaptiveComplexityProfile(stage0Data, maps);
     const quality = this.titleAbstractEvidenceQuality(maps, stage0Data, clusters);
-    const decisive = maps.find(map => map.matchCategory === 'HIGH_ABSTRACT_OVERLAP' &&
+    const decisive = maps.find(map => this.isHighRecordOverlapCategory(map.matchCategory) &&
       Number(map.screeningConfidence || 0) >= Number(adaptive.screeningConfidenceThreshold || 0.75) &&
       Number(map.importantFeatureCoverage || 0) >= Number(adaptive.importantCoverageThreshold || 0.90));
     const qaInvalidatedAcceptedCandidate = maps.some(map => {
       const gate = this.getGateRecordForPublication(gateByPn, map.pn);
       return normalizeRerankDecision(gate?.rerankDecision || gate?.decision) === 'accept' &&
-        map.matchCategory !== 'HIGH_ABSTRACT_OVERLAP' &&
+        !this.isHighRecordOverlapCategory(map.matchCategory) &&
         map.feature_analysis.some(cell => cell.qaDowngraded);
     });
     const decisiveIndex = decisive ? maps.findIndex(map => map.pn === decisive.pn) : -1;
-    const confirmationBatchCompleted = decisiveIndex >= 0 && maps.length - decisiveIndex - 1 >= Math.min(profile.batchSize, Math.max(0, candidates.length - decisiveIndex - 1));
-    const confirmationStable = Boolean(decisive && confirmationBatchCompleted && maps.some(map => map.pn === decisive.pn && map.matchCategory === 'HIGH_ABSTRACT_OVERLAP'));
+    const configuredConfirmationBatches = Math.max(0, Math.trunc(Number(adaptive.confirmationBatches ?? 1)));
+    const confirmationPatentTarget = profile.batchSize * configuredConfirmationBatches;
+    const confirmationBatchCompleted = decisiveIndex >= 0 && (
+      configuredConfirmationBatches === 0 || maps.length - decisiveIndex - 1 >= confirmationPatentTarget
+    );
+    const confirmationStable = Boolean(decisive && confirmationBatchCompleted && maps.some(map =>
+      map.pn === decisive.pn && this.isHighRecordOverlapCategory(map.matchCategory)
+    ));
     const queryClusterCoverage = Object.fromEntries(clusters.map(cluster => {
       const gated = candidates.filter(candidate => {
         const domain = this.classifyDomainTier(candidate, stage0Data, clusters);
@@ -8569,18 +9096,37 @@ OUTPUT JSON:
       const decision = normalizeRerankDecision(gate?.rerankDecision || gate?.decision);
       return decision === 'accept' || (decision === 'component' && Number(gate?.rerankScore ?? gate?.score ?? 0) >= Number(adaptive.componentScoreThreshold || 0.55));
     }).filter(candidate => !maps.some(map => this.canonicalPatentNumber(map.pn) === this.canonicalPatentNumber(getPriorArtPublicationNumber(candidate))));
-    const plateau = this.adaptiveCoveragePlateauBatches(maps, stage0Data, profile.batchSize);
-    const saturation = maps.length >= profile.minimum && plateau >= Number(adaptive.saturationPlateauBatches || 2) &&
-      ungatedTier12.length === 0 && !clustersInsufficient && !uncoveredCriticalCluster && remainingReviewable.length === 0 && !quality.low;
+    const plateau = this.adaptiveCoveragePlateauBatches(
+      maps,
+      stage0Data,
+      profile.batchSize,
+      Number(adaptive.minMarginalCoverageGain ?? 0.05)
+    );
+    let runningBestRisk = 0;
+    let stableRiskBatches = 0;
+    for (const batch of this.createBatches(maps, profile.batchSize)) {
+      const before = runningBestRisk;
+      runningBestRisk = Math.max(runningBestRisk, ...batch.map(map => Number(map.importantFeatureCoverage || 0)));
+      stableRiskBatches = runningBestRisk - before <= Number(adaptive.maxStableRiskDelta ?? 0.05)
+        ? stableRiskBatches + 1
+        : 0;
+    }
+    const degradedBatchCount = Math.max(0, Number(params.degradedBatchCount || 0));
+    const evidenceQualityLow = quality.low || degradedBatchCount > 0;
+    const requiredStableBatches = Math.max(1, Number(adaptive.saturationPlateauBatches || 2));
+    const saturation = plateau >= requiredStableBatches && stableRiskBatches >= requiredStableBatches &&
+      ungatedTier12.length === 0 && !clustersInsufficient && !uncoveredCriticalCluster && remainingReviewable.length === 0 && !evidenceQualityLow;
     const gatedCount = Number(stage1Data?.aiRelevance?.reviewedCount || stage1Data?.reviewedCount || 0);
-    const hardCeiling = gatedCount >= Number(adaptive.gateCeiling || 180) ||
-      maps.length >= Math.min(profile.maximum, Number(adaptive.deepAnalysisCeiling || 60));
-    const exhausted = maps.length >= candidates.length || (remainingReviewable.length === 0 && !stage1Data?.hasMoreCandidates && candidates.length <= maps.length);
+    const elapsedMs = Math.max(0, Number(params.elapsedMs || 0));
+    const totalTokens = params.inputTokens + params.outputTokens + params.thoughtTokens;
+    const safetyBudgetReached = elapsedMs >= Number(adaptive.safetyMaxElapsedMs || 20 * 60 * 1000) ||
+      totalTokens >= Number(adaptive.safetyMaxTokens || 250000);
+    const exhausted = remainingReviewable.length === 0 && ungatedTier12.length === 0 && !stage1Data?.hasMoreCandidates;
 
     let projectedStopReason: AdaptiveStopReason | undefined;
-    if (qaInvalidatedAcceptedCandidate && !decisive) projectedStopReason = 'safe_report_due_to_qa_failure';
-    else if (decisive && confirmationStable) projectedStopReason = 'abstract_level_high_overlap_candidate_confirmed';
-    else if (hardCeiling) projectedStopReason = 'hard_ceiling_reached';
+    if ((qaInvalidatedAcceptedCandidate || degradedBatchCount > 0) && !decisive) projectedStopReason = 'safe_report_due_to_qa_failure';
+    else if (decisive && confirmationStable) projectedStopReason = 'high_record_overlap_candidate_confirmed';
+    else if (safetyBudgetReached) projectedStopReason = 'safety_budget_reached';
     else if (saturation) projectedStopReason = 'coverage_saturation';
     else if (exhausted) projectedStopReason = 'candidate_pool_exhausted';
     else if ((ungatedTier12.length > 0 || clustersInsufficient || uncoveredCriticalCluster) && maps.length >= profile.minimum) projectedStopReason = 'provider_or_cluster_coverage_incomplete';
@@ -8603,8 +9149,11 @@ OUTPUT JSON:
       decisivePatentNumber: decisive?.pn,
       confirmationBatchCompleted,
       confirmationStable,
-      evidenceQualityLow: quality.low,
-      evidenceQualityReasons: quality.reasons,
+      evidenceQualityLow,
+      evidenceQualityReasons: [
+        ...quality.reasons,
+        ...(degradedBatchCount > 0 ? [`${degradedBatchCount} analysis batch(es) used degraded fallback data.`] : []),
+      ],
       queryClusterCoverage,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
@@ -8612,6 +9161,13 @@ OUTPUT JSON:
       projectedTokensSaved: projectedStopReason
         ? Math.max(0, Math.round((candidates.length - maps.length) * estimatedTokensPerPatent))
         : 0,
+      degradedBatchCount,
+      completeness: degradedBatchCount > 0 || qaInvalidatedAcceptedCandidate
+        ? 'degraded'
+        : projectedStopReason === 'safety_budget_reached' || projectedStopReason === 'provider_or_cluster_coverage_incomplete'
+          ? 'incomplete'
+          : 'complete',
+      elapsedMs,
     };
   }
 
@@ -9247,6 +9803,10 @@ OUTPUT JSON:
       }
 
       let aggRes = aggregationResult as AggregationResult;
+      if (featureMapData?.degraded || featureMapData?.adaptiveScreening?.completeness === 'degraded') {
+        aggRes = { ...(aggRes as any), analysis_degraded: true } as AggregationResult;
+        aggregationResult = aggRes;
+      }
       if ((!Array.isArray((aggRes as any).per_patent_remarks) || (aggRes as any).per_patent_remarks.length === 0) && featureMapData) {
         const fallbackRemarks = this.buildDeterministicPerPatentRemarks(
           stage0Data,
@@ -9270,27 +9830,32 @@ OUTPUT JSON:
       const featureMapCells = await this.getFeatureMapCellsWithOverrides(searchRun.id);
 
       // Select top patents for detailed analysis, filtered to those with â‰¥1 matching feature
-      const selectedPatents = this.selectPatentsByGreedyCoverage(
-        aggRes.per_patent_coverage,
-        featureMapCells,
-        stage0Data.inventionFeatures || [],
-        Array.isArray(stage1Data?.pqaiResults) && stage1Data.pqaiResults.length > 0 ? stage1Data.pqaiResults : stage1CandidatePool
+      // This partitions already-mapped/reportable references; it does not initiate
+      // or limit feature-wise deep analysis.
+      const reportReferenceCandidates = this.buildStage4ReportReferenceCandidates(
+        stage1Data,
+        featureMapData,
+        aggRes
       );
+      const reportReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
+        mainReferenceTarget: config.stage4.mainReferenceTarget ?? config.stage4.maxRefsForReportMain ?? 10,
+        minMainReferences: config.stage4.minMainReferences ?? 3,
+        maxUnmappedSupplementaryReferences: config.stage4.maxUnmappedSupplementaryReferences ?? 20,
+      });
+      const selectedPatents = this.buildStage4SelectedPatentDetails(
+        reportReferenceSelection,
+        aggRes,
+        featureMapCells,
+        stage1Data
+      );
+      console.info('[NoveltyReportReferenceSelection]', JSON.stringify({
+        event: 'selection_created',
+        searchId: searchRun.id,
+        version: reportReferenceSelection.version,
+        counts: reportReferenceSelection.counts,
+      }));
 
       console.log(`ðŸ“Š Generating report with ${aggRes.decision} decision, score ${aggRes.novelty_score}`);
-
-      // Build the feature-patent matrix for the report
-      const featureMatrix = this.buildFeaturePatentMatrix(
-        stage0Data.inventionFeatures || [],
-        featureMapCells,
-        config.stage4.maxRefsForReportMain
-      );
-
-      // Get top references sorted by coverage ratio
-      const topReferences = this.getTopReferences(
-        aggRes.per_patent_coverage,
-        config.stage4.maxRefsForReportMain
-      );
 
       // Prepare report inputs
       const reportInputs = this.prepareReportInputs(
@@ -9300,6 +9865,7 @@ OUTPUT JSON:
         featureMapCells,
         config
       );
+      reportInputs.analysis_degraded = Boolean(featureMapData?.degraded || featureMapData?.adaptiveScreening?.completeness === 'degraded');
 
       // Prepare enhanced report inputs with selected patents
       const selectedPatentsSummary = selectedPatents.map(p => {
@@ -9457,15 +10023,21 @@ OUTPUT JSON:
         ? (aggregationResult as any).per_patent_remarks
         : [];
 
-      // Filter per_patent_remarks to only the top patents selected by greedy coverage
-      // (typically 5-6) + any remaining with novelty_threat 'high'. The full set of 60
-      // patents caused prompt payloads >300K tokens; the tail patents never appear in the
-      // final report and just waste context.
-      const selectedPNs = new Set(selectedPatents.map(p => p.patentNumber));
-      const stage4RemarksForPrompt = allRemarks.filter(r => {
-        const pn = r.pn || r.patent_number || '';
-        return selectedPNs.has(pn) || r.novelty_threat === 'high';
-      }).slice(0, Math.max(10, selectedPatents.length + 4));
+      const deterministicRemarks = featureMapData
+        ? this.buildDeterministicPerPatentRemarks(
+            stage0Data,
+            featureMapData,
+            Math.max(1, featureMapData.feature_map?.length || 0)
+          )
+        : [];
+      const remarksByPn = new Map<string, any>();
+      for (const remark of [...allRemarks, ...deterministicRemarks]) {
+        const key = stage4PublicationKey(remark?.pn || remark?.patent_number);
+        if (key && !remarksByPn.has(key)) remarksByPn.set(key, remark);
+      }
+      const stage4RemarksForPrompt = reportReferenceSelection.main
+        .map(reference => remarksByPn.get(reference.canonicalPublicationNumber))
+        .filter(Boolean);
 
       // Strip verbose/redundant fields from comparison_rows before serializing:
       // - user_invention_disclosure repeats the user's own text per feature per patent
@@ -9479,16 +10051,30 @@ OUTPUT JSON:
         return { ...rest, comparison_rows: rows };
       });
 
-      // Build a lightweight summary of ALL studied patents (including those not in the
-      // detailed remarks) so the report can reference the full corpus of work.
-      const studiedPatentsSummary = allRemarks
-        .filter(r => !selectedPNs.has(r.pn || r.patent_number || ''))
-        .map((r: any) => ({
-          pn: r.pn || r.patent_number,
-          title: r.title || '',
-          relevance: r.relevance || 'low',
-          novelty_threat: r.novelty_threat || 'none',
-        }));
+      const mappedSupplementarySummary = reportReferenceSelection.mappedSupplementary.map(reference => {
+        const remark = remarksByPn.get(reference.canonicalPublicationNumber) || {};
+        return {
+          pn: reference.publicationNumber,
+          title: remark.title || '',
+          relevance: remark.relevance || 'low',
+          novelty_threat: remark.novelty_threat || 'none',
+          selection_reason: reference.reason,
+        };
+      });
+      const stage1MetadataByPn = new Map(this.getStage1ReportCandidatePool(stage1Data).map(candidate => [
+        stage4PublicationKey(getPriorArtPublicationNumber(candidate)),
+        candidate,
+      ]));
+      const shortlistedUnmappedSummary = reportReferenceSelection.unmappedSupplementary.map(reference => {
+        const candidate = stage1MetadataByPn.get(reference.canonicalPublicationNumber) || {};
+        return {
+          pn: reference.publicationNumber,
+          title: candidate.title || candidate.invention_title || '',
+          gate_decision: reference.gateDecision,
+          relevance: Number(candidate.rerankScore ?? candidate.relevanceScore ?? candidate.score ?? 0),
+          selection_reason: reference.reason,
+        };
+      });
 
       const reportMetrics = {
         novelty_score: aggRes.novelty_score,
@@ -9498,15 +10084,20 @@ OUTPUT JSON:
         distributed_component_risks: (aggRes as any).distributed_component_risks || [],
         potential_differentiators: this.getPotentialDifferentiatorsFromAggregation(aggRes),
         coverage_summary: (aggRes as any).feature_coverage_summary || null,
-        total_patents_studied: allRemarks.length,
-        patents_in_detail: stage4RemarksForPrompt.length
+        total_patents_studied: reportReferenceSelection.counts.mappedTotal,
+        patents_in_detail: reportReferenceSelection.counts.mainDisplayed,
+        mapped_supplementary_count: reportReferenceSelection.counts.mappedSupplementaryDisplayed,
+        shortlisted_unmapped_displayed: reportReferenceSelection.counts.unmappedDisplayed,
+        shortlisted_unmapped_omitted: reportReferenceSelection.counts.unmappedOmitted,
       };
-      basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
-        + "\ninvention_features=" + JSON.stringify(stage0Data.inventionFeatures || [])
-        + "\nper_patent_remarks=" + JSON.stringify(trimmedRemarks)
-        + "\nsearch_metadata=" + JSON.stringify(enhancedReportInputs.search_metadata)
-        + "\nmetrics=" + JSON.stringify(reportMetrics)
-        + "\nadditional_patents_studied=" + JSON.stringify(studiedPatentsSummary);
+      basePrompt = buildStage4ReportPromptFromRemarksV3({
+        inventionFeatures: stage0Data.inventionFeatures || [],
+        perPatentRemarks: trimmedRemarks,
+        searchMetadata: enhancedReportInputs.search_metadata,
+        metrics: reportMetrics,
+        mappedSupplementaryReferences: mappedSupplementarySummary,
+        shortlistedUnmappedReferences: shortlistedUnmappedSummary,
+      });
       if (stage4RemarksForPrompt.length === 0) {
         basePrompt += "\nNOTE_TO_MODEL: No per-patent remarks were available. Produce a Requires Full-Text Review report and explain that novelty cannot be inferred from unmapped analysis.";
       }
@@ -9530,7 +10121,10 @@ OUTPUT JSON:
         console.warn('LLM report generation failed, using fallback structure');
         return {
           success: true,
-          data: this.generateFallbackReportData(searchRun, stage0Data, aggregationResult, config, selectedPatents),
+          data: {
+            ...this.generateFallbackReportData(searchRun, stage0Data, aggregationResult, config, selectedPatents),
+            report_reference_selection: reportReferenceSelection,
+          },
           reportUrl: undefined
         };
       }
@@ -9543,7 +10137,10 @@ OUTPUT JSON:
         console.warn('LLM report JSON parse failed, falling back to deterministic report:', parseError);
         return {
           success: true,
-          data: this.generateFallbackReportData(searchRun, stage0Data, aggRes, config, selectedPatents),
+          data: {
+            ...this.generateFallbackReportData(searchRun, stage0Data, aggRes, config, selectedPatents),
+            report_reference_selection: reportReferenceSelection,
+          },
           reportUrl: undefined
         };
       }
@@ -9602,7 +10199,8 @@ OUTPUT JSON:
 
       const finalReportData = {
         ...this.enhanceReportWithDeterministicData(reportData, aggRes, reportInputs),
-        idea_bank_suggestions: ideaBank
+        idea_bank_suggestions: ideaBank,
+        report_reference_selection: reportReferenceSelection,
       };
 
       // === TRIGGER UNIFIED IDEA BANK FUNNEL ASYNCHRONOUSLY ===
@@ -9920,36 +10518,161 @@ ${candidatesText}`;
     return normalized;
   }
 
-  // Attach claims text from the local corpus to the primary candidates so the
-  // consolidated prompt and evidence verification can quote claim language. Only the
-  // top-N are hydrated: claims are long, and the references that actually drive the
-  // novelty conclusion are the highest-ranked ones.
-  private async hydrateClaimsForTopCandidates(normalizedPatents: any[], topN: number) {
-    const maxChars = Math.max(1000, Number(process.env.NOVELTY_CLAIMS_MAX_CHARS || '3000') || 3000);
-    const targets = normalizedPatents
-      .slice(0, Math.max(0, topN))
-      .filter(patent => patent && patent.referenceType !== 'paper' && !patent.claimsText);
-    if (!targets.length) return;
-    try {
-      // Look up on the raw publication number (indexed) rather than the kind-stripped
-      // canonical form, then key the result map back by canonical PN.
-      const claims = await fetchLocalPatentClaims(targets.map(patent => String(
+  private normalizeNoveltyClaimsAvailability(value: unknown): NoveltyClaimsAvailability {
+    const normalized = String(value || '').trim().toUpperCase();
+    if (normalized === 'FULL' || normalized === 'FULL_EPO' || normalized === 'COMPLETE') return 'FULL';
+    if (normalized === 'FIRST_CLAIM_ONLY' || normalized === 'FIRST_CLAIM') return 'FIRST_CLAIM_ONLY';
+    if (normalized === 'NONE') return 'NONE';
+    if (normalized === 'LOOKUP_FAILED') return 'LOOKUP_FAILED';
+    return 'PARTIAL';
+  }
+
+  private emptyClaimsEvidenceDiagnostics(): NoveltyClaimsEvidenceDiagnostics {
+    return {
+      lookupStatus: 'complete',
+      patentsChecked: 0,
+      claimsFound: 0,
+      claimsMissing: 0,
+      fullClaims: 0,
+      firstClaimOnly: 0,
+      partialClaims: 0,
+      excerptsUsed: 0,
+      truncatedExcerpts: 0,
+      charactersIncluded: 0,
+      lookupFailures: 0,
+    };
+  }
+
+  private mergeClaimsEvidenceDiagnostics(items: Array<NoveltyClaimsEvidenceDiagnostics | undefined>): NoveltyClaimsEvidenceDiagnostics {
+    const merged = this.emptyClaimsEvidenceDiagnostics();
+    for (const item of items) {
+      if (!item) continue;
+      if (item.lookupStatus === 'partial_failure') merged.lookupStatus = 'partial_failure';
+      merged.patentsChecked += item.patentsChecked;
+      merged.claimsFound += item.claimsFound;
+      merged.claimsMissing += item.claimsMissing;
+      merged.fullClaims += item.fullClaims;
+      merged.firstClaimOnly += item.firstClaimOnly;
+      merged.partialClaims += item.partialClaims;
+      merged.excerptsUsed += item.excerptsUsed;
+      merged.truncatedExcerpts += item.truncatedExcerpts;
+      merged.charactersIncluded += item.charactersIncluded;
+      merged.lookupFailures += item.lookupFailures;
+    }
+    return merged;
+  }
+
+  private claimsEvidenceTerms(stage0Data: NormalizedIdea): string[] {
+    return [
+      ...(stage0Data.inventionFeatures || []),
+      ...(stage0Data.noveltyFocusInteractions || []).map(item => item.description),
+      ...(stage0Data.claimConcepts || []).map(item => item.claimableSummary),
+    ].map(value => String(value || '').trim()).filter(Boolean);
+  }
+
+  /**
+   * Best-effort, local-only enrichment for one batch that will actually be analyzed.
+   * Missing claims and lookup failures intentionally leave the title/abstract path
+   * unchanged and never throw into batch retry or degradation handling.
+   */
+  private async hydrateClaimsForAnalysisBatch(
+    batch: any[],
+    evidenceTerms: string[]
+  ): Promise<NoveltyClaimsEvidenceDiagnostics> {
+    const diagnostics = this.emptyClaimsEvidenceDiagnostics();
+    const eligible = batch.filter(patent => patent && patent.referenceType !== 'paper');
+    diagnostics.patentsChecked = eligible.length;
+    if (eligible.length === 0) return diagnostics;
+
+    const rawClaimsByPatent = new Map<any, string>();
+    const targets: any[] = [];
+    for (const patent of eligible) {
+      const suppliedClaims = String(patent.claimsText || '').trim();
+      if (suppliedClaims) {
+        rawClaimsByPatent.set(patent, suppliedClaims);
+        patent.claimsAvailability = this.normalizeNoveltyClaimsAvailability(
+          patent.claimsAvailability || patent.claimsCompleteness || patent.claims_completeness || 'PARTIAL'
+        );
+        patent.claimsSource = String(patent.claimsSource || patent.claims_source || 'upstream-candidate');
+        patent.claimsContentHash = String(patent.claimsContentHash || patent.claims_content_hash ||
+          crypto.createHash('sha256').update(suppliedClaims).digest('hex'));
+      } else {
+        targets.push(patent);
+      }
+    }
+
+    if (targets.length > 0) {
+      const lookup = await fetchLocalPatentClaimEvidence(targets.map(patent => String(
         patent.publicationNumber || patent.publication_number || patent.pn || patent.canonicalPn || ''
       )));
-      let hydrated = 0;
-      for (const patent of targets) {
-        const text = claims.get(String(patent.canonicalPn || ''));
-        if (text) {
-          patent.claimsText = text.replace(/\s+/g, ' ').trim().slice(0, maxChars);
-          hydrated += 1;
+      if (lookup.status === 'failed') {
+        diagnostics.lookupStatus = 'partial_failure';
+        diagnostics.lookupFailures = targets.length;
+        for (const patent of targets) patent.claimsAvailability = 'LOOKUP_FAILED';
+      } else {
+        for (const patent of targets) {
+          const key = String(patent.canonicalPn || this.canonicalPatentNumber(
+            patent.publicationNumber || patent.publication_number || patent.pn
+          ));
+          const record = lookup.records.get(key);
+          if (!record) {
+            patent.claimsAvailability = 'NONE';
+            diagnostics.claimsMissing += 1;
+            continue;
+          }
+          rawClaimsByPatent.set(patent, record.text);
+          patent.claimsAvailability = record.completeness;
+          patent.claimsSource = record.source;
+          patent.claimsContentHash = record.contentHash;
         }
       }
-      if (hydrated > 0) {
-        console.info(`[ConsolidatedAnalysis] Hydrated claims text for ${hydrated}/${targets.length} top candidates.`);
-      }
+    }
+
+    const allocation = allocateNoveltyClaimsCharacters(
+      rawClaimsByPatent.size,
+      NOVELTY_CLAIMS_MAX_CHARS_PER_REFERENCE,
+      NOVELTY_CLAIMS_MAX_CHARS_PER_BATCH,
+      NOVELTY_CLAIMS_MIN_CHARS_PER_REFERENCE
+    );
+    for (const [patent, rawClaims] of Array.from(rawClaimsByPatent.entries())) {
+      const excerpt = selectNoveltyClaimExcerpt(rawClaims, evidenceTerms, allocation);
+      if (!excerpt.text) continue;
+      patent.claimsText = excerpt.text;
+      patent.claimsClaimNumbers = excerpt.claimNumbers;
+      patent.claimsExcerpted = excerpt.excerpted;
+      diagnostics.claimsFound += 1;
+      diagnostics.excerptsUsed += 1;
+      diagnostics.charactersIncluded += excerpt.text.length;
+      if (excerpt.excerpted) diagnostics.truncatedExcerpts += 1;
+      if (patent.claimsAvailability === 'FULL') diagnostics.fullClaims += 1;
+      else if (patent.claimsAvailability === 'FIRST_CLAIM_ONLY') diagnostics.firstClaimOnly += 1;
+      else diagnostics.partialClaims += 1;
+    }
+
+    console.info('[NoveltyClaimsEvidence]', JSON.stringify({ event: 'batch_enriched', ...diagnostics }));
+    return diagnostics;
+  }
+
+  private async safelyHydrateClaimsForAnalysisBatch(
+    batch: any[],
+    evidenceTerms: string[]
+  ): Promise<NoveltyClaimsEvidenceDiagnostics> {
+    try {
+      return await this.hydrateClaimsForAnalysisBatch(batch, evidenceTerms);
     } catch (error) {
-      console.warn('[ConsolidatedAnalysis] Claims hydration failed; continuing with title/abstract evidence.',
+      const eligible = batch.filter(patent => patent && patent.referenceType !== 'paper');
+      for (const patent of eligible) {
+        if (!patent.claimsText) patent.claimsAvailability = 'LOOKUP_FAILED';
+      }
+      const diagnostics: NoveltyClaimsEvidenceDiagnostics = {
+        ...this.emptyClaimsEvidenceDiagnostics(),
+        lookupStatus: 'partial_failure',
+        patentsChecked: eligible.length,
+        lookupFailures: eligible.filter(patent => !patent.claimsText).length,
+      };
+      console.warn('[NoveltyClaimsEvidence] Optional claims enrichment failed; continuing with title/abstract evidence.',
         error instanceof Error ? error.message : error);
+      return diagnostics;
     }
   }
 
@@ -9967,8 +10690,17 @@ ${candidatesText}`;
     inventionFeatures: string[],
     config: NoveltySearchConfig,
     requestHeaders?: Record<string, string>,
-    batchNumber: number = 0
-  ): Promise<{ success: boolean; featureMaps?: PatentFeatureMap[]; error?: string }> {
+    batchNumber: number = 0,
+    claimEvidenceTerms: string[] = inventionFeatures
+  ): Promise<{
+    success: boolean;
+    featureMaps?: PatentFeatureMap[];
+    error?: string;
+    degraded?: boolean;
+    provenance?: 'cache' | 'llm' | 'repaired_llm' | 'deterministic_fallback';
+    claimsEvidence?: NoveltyClaimsEvidenceDiagnostics;
+  }> {
+    const claimsEvidence = await this.safelyHydrateClaimsForAnalysisBatch(batch, claimEvidenceTerms);
     try {
       // Check cache first
       const batchHash = this.createBatchHash(batch, inventionFeatures);
@@ -9977,7 +10709,7 @@ ${candidatesText}`;
 
       if (cached) {
         console.log(`ðŸ’¾ Using cached results for batch ${batchNumber}`);
-        return { success: true, featureMaps: cached };
+        return { success: true, featureMaps: cached, provenance: 'cache', claimsEvidence };
       }
 
       // Format patent batch for prompt. The claims line is emitted only when the corpus
@@ -9990,7 +10722,7 @@ Reference ID: ${patent.canonicalPn}
 Type: ${patent.referenceType === 'paper' ? 'Scholarly paper' : 'Patent'}
 Title: ${patent.title}
 Abstract: ${patent.abstract}
-${patent.claimsText ? `Claims (excerpt): ${String(patent.claimsText).replace(/\s+/g, ' ').trim()}\n` : ''}${patent.referenceType === 'paper' ? `Authors: ${(patent.authors || []).join(', ')}\nYear/Venue: ${patent.year || ''} ${patent.venue || ''}\nDOI/URL: ${patent.doi || patent.sourceUrl || patent.link || ''}\nSource: ${(patent.sourceProviders || [patent.sourceProvider]).filter(Boolean).join(', ')}` : ''}
+${patent.claimsText ? `Claims evidence (${patent.claimsAvailability || 'PARTIAL'}${patent.claimsClaimNumbers?.length ? `; selected claims ${patent.claimsClaimNumbers.join(', ')}` : ''}): ${String(patent.claimsText).replace(/\s+/g, ' ').trim()}\n` : ''}${patent.referenceType === 'paper' ? `Authors: ${(patent.authors || []).join(', ')}\nYear/Venue: ${patent.year || ''} ${patent.venue || ''}\nDOI/URL: ${patent.doi || patent.sourceUrl || patent.link || ''}\nSource: ${(patent.sourceProviders || [patent.sourceProvider]).filter(Boolean).join(', ')}` : ''}
 Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
 ---
       `).join('\n');
@@ -10006,19 +10738,28 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         {
           taskCode: TaskCode.LLM5_NOVELTY_ASSESS,
           stageCode: 'NOVELTY_FEATURE_ANALYSIS',
-          prompt
+          prompt,
+          inputTokens: Math.ceil(prompt.length / 2.5),
         }
       );
 
       if (!llmResult.success || !llmResult.response) {
         console.warn(`LLM call failed for batch ${batchNumber}`);
         const fallbackFeatureMaps = this.createDeterministicFeatureMap(batch, inventionFeatures);
-        await this.cacheFeatureMappingResults(searchId, ideaHash, batchHash, fallbackFeatureMaps);
-        return { success: true, featureMaps: fallbackFeatureMaps };
+        return {
+          success: true,
+          featureMaps: fallbackFeatureMaps,
+          degraded: true,
+          provenance: 'deterministic_fallback',
+          claimsEvidence,
+          error: llmResult.error?.message || 'Feature-mapping LLM call failed',
+        };
       }
 
       // Parse and validate response
       let parsedResult: FeatureMapBatchResult;
+      let repairedResponse = false;
+      let degraded = false;
       try {
         parsedResult = this.parseLLMResponse(llmResult.response.output);
       } catch (parseError) {
@@ -10027,9 +10768,11 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         const repaired = this.repairFeatureMappingJSON(llmResult.response.output);
         if (repaired) {
           parsedResult = repaired;
+          repairedResponse = true;
         } else {
           // Mark cells as Unknown
           parsedResult = this.createUnknownFeatureMap(batch, inventionFeatures);
+          degraded = true;
         }
       }
 
@@ -10037,7 +10780,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       const validatedFeatureMaps = this.validateAndRepairFeatureMaps(parsedResult.feature_map, batch, inventionFeatures);
 
       // Cache the results
-      await this.cacheFeatureMappingResults(searchId, ideaHash, batchHash, validatedFeatureMaps);
+      if (!degraded) {
+        await this.cacheFeatureMappingResults(searchId, ideaHash, batchHash, validatedFeatureMaps);
+      }
 
       // Record LLM call
       await prisma.noveltySearchLLMCall.create({
@@ -10052,11 +10797,25 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         },
       });
 
-      return { success: true, featureMaps: validatedFeatureMaps };
+      return {
+        success: true,
+        featureMaps: validatedFeatureMaps,
+        degraded,
+        provenance: degraded ? 'deterministic_fallback' : repairedResponse ? 'repaired_llm' : 'llm',
+        claimsEvidence,
+        ...(degraded ? { error: 'Feature-mapping response could not be parsed after repair' } : {}),
+      };
 
     } catch (error) {
       console.error(`Batch ${batchNumber} processing error:`, error);
-      return { success: true, featureMaps: this.createDeterministicFeatureMap(batch, inventionFeatures) };
+      return {
+        success: true,
+        featureMaps: this.createDeterministicFeatureMap(batch, inventionFeatures),
+        degraded: true,
+        provenance: 'deterministic_fallback',
+        claimsEvidence,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
@@ -10121,7 +10880,12 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
 
   private createBatchHash(batch: any[], inventionFeatures: string[], modelConfigKey = ''): string {
     const batchData = batch
-      .map(p => `${p.canonicalPn}:${p.title || ''}:${p.abstract || ''}`)
+      .map(p => {
+        const claimsExcerptHash = p.claimsText
+          ? crypto.createHash('sha1').update(String(p.claimsText)).digest('hex')
+          : '';
+        return `${p.canonicalPn}:${p.title || ''}:${p.abstract || ''}:${p.claimsAvailability || 'NONE'}:${p.claimsContentHash || ''}:${claimsExcerptHash}`;
+      })
       .join('|');
     const featuresData = inventionFeatures.join('|');
     return crypto
@@ -10229,7 +10993,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         feature,
         status: 'Unknown' as const,
         extent_score: 0.2,
-        evidence: 'LLM parsing failed'
+        evidence: 'LLM parsing failed',
+        reason: 'Feature-mapping execution failed.',
+        qaDowngraded: true,
       }))
     }));
 
@@ -10418,8 +11184,64 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       .trim();
   }
 
+  private hasUsableReviewedRecord(patent: any): boolean {
+    const placeholders = new Set([
+      '',
+      'n a',
+      'na',
+      'none',
+      'unknown',
+      'untitled',
+      'no title available',
+      'no abstract available',
+      'abstract unavailable',
+    ]);
+    return [patent?.title, patent?.abstract, patent?.claimsText].some(value => {
+      const normalized = this.normalizeEvidenceForVerification(value);
+      return normalized.length >= 4 && !placeholders.has(normalized);
+    });
+  }
+
+  private isFeatureMappingFailureCell(cell: FeatureMapCell): boolean {
+    if (cell.qaDowngraded === true) return true;
+    const detail = `${typeof cell.evidence === 'string' ? cell.evidence : ''} ${cell.reason || ''}`.toLowerCase();
+    return /analysis not provided|invalid or missing analysis|llm parsing failed|feature-mapping execution failed|evidence quote was not found/.test(detail);
+  }
+
   private validateFeatureCellEvidence(cell: FeatureMapCell, patent: any): FeatureMapCell {
-    if (cell.status !== 'Present' && cell.status !== 'Partial') return cell;
+    const claimsCompleteness = patent?.claimsAvailability
+      ? this.normalizeNoveltyClaimsAvailability(patent.claimsAvailability)
+      : undefined;
+    const claimsContentHash = String(patent?.claimsContentHash || '').trim() || undefined;
+    if (cell.status !== 'Present' && cell.status !== 'Partial') {
+      // Missing optional claims must not turn a usable title/abstract review into
+      // Unknown. Preserve Unknown only when the record is unusable or the mapping
+      // itself failed/was incomplete; otherwise non-disclosure means Absent.
+      if (
+        cell.status === 'Unknown' &&
+        this.hasUsableReviewedRecord(patent) &&
+        !this.isFeatureMappingFailureCell(cell)
+      ) {
+        return {
+          ...cell,
+          status: 'Absent',
+          extent_score: 0,
+          quote: undefined,
+          field: undefined,
+          evidence_source: 'none',
+          evidenceDepth: 'NONE',
+          legalEvidenceStrength: 0,
+          reason: 'The feature is not disclosed in the usable reviewed record.',
+          ...(claimsCompleteness ? { claims_completeness: claimsCompleteness } : {}),
+          ...(claimsContentHash ? { claims_content_hash: claimsContentHash } : {}),
+        };
+      }
+      return {
+        ...cell,
+        ...(claimsCompleteness ? { claims_completeness: claimsCompleteness } : {}),
+        ...(claimsContentHash ? { claims_content_hash: claimsContentHash } : {}),
+      };
+    }
 
     const evidenceObject = cell.evidence && typeof cell.evidence === 'object' ? cell.evidence : null;
     const quote = String(
@@ -10452,7 +11274,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         qaDowngraded: true,
         extent_score: 0.2,
         confidence: Math.min(typeof cell.confidence === 'number' ? cell.confidence : 0.4, 0.4),
-        reason: 'Supplied evidence quote was not found in the available title or abstract.',
+        ...(claimsCompleteness ? { claims_completeness: claimsCompleteness } : {}),
+        ...(claimsContentHash ? { claims_content_hash: claimsContentHash } : {}),
+        reason: 'Supplied evidence quote was not found in the available title, abstract, or claims evidence.',
       };
     }
 
@@ -10469,22 +11293,29 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         mappingConfidence: Math.min(originalConfidence, 0.60),
         qaDowngraded: true,
         extent_score: Math.min(this.normalizeScore(cell.extent_score) ?? 0.5, 0.5),
+        ...(claimsCompleteness ? { claims_completeness: claimsCompleteness } : {}),
+        ...(claimsContentHash ? { claims_content_hash: claimsContentHash } : {}),
         reason: 'Title-only evidence cannot establish a Present feature in title/abstract screening.',
       };
     }
 
     // Claims are the strongest record-level evidence, then abstract, then title.
-    const matchedField = quoteInClaims && !quoteInAbstract ? 'claims' : quoteInAbstract ? 'abstract' : 'title';
+    const matchedField = quoteInClaims ? 'claims' : quoteInAbstract ? 'abstract' : 'title';
     return {
       ...cell,
       quote,
       field: matchedField,
       evidence_source: matchedField,
       evidenceDepth: matchedField === 'claims'
-        ? 'CLAIMS_AND_SPECIFICATION'
+        ? (abstract ? 'CLAIMS_AND_ABSTRACT' : 'CLAIMS_ONLY')
         : quoteInAbstract ? (title ? 'TITLE_AND_ABSTRACT' : 'ABSTRACT_ONLY') : 'TITLE_ONLY',
       legalEvidenceStrength: matchedField === 'claims' ? 0.75 : quoteInAbstract ? 0.65 : 0.30,
       mappingConfidence: originalConfidence,
+      ...(matchedField === 'claims' ? {
+        claim_number: cell.claim_number || findNoveltyClaimNumber(claimsText, quote),
+      } : {}),
+      ...(claimsCompleteness ? { claims_completeness: claimsCompleteness } : {}),
+      ...(claimsContentHash ? { claims_content_hash: claimsContentHash } : {}),
     };
   }
 
@@ -10525,6 +11356,10 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
               quote: cell.quote,
               field: cell.field,
               evidence_source: cell.evidence_source,
+              claim_number: cell.claim_number,
+              claims_completeness: cell.claims_completeness,
+              claims_content_hash: cell.claims_content_hash,
+              qaDowngraded: cell.qaDowngraded,
               reason: cell.reason,
               crisp_remark: cell.crisp_remark,
               attorney_remark: cell.attorney_remark,
@@ -10593,6 +11428,11 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         partial: patentMap.partial,
         absent: patentMap.absent,
         feature_analysis: evidenceValidatedCells,
+        claimsAvailability: patent.claimsAvailability,
+        claimsSource: patent.claimsSource,
+        claimsContentHash: patent.claimsContentHash,
+        claimsClaimNumbers: patent.claimsClaimNumbers,
+        claimsExcerpted: patent.claimsExcerpted,
         remarks: (patentMap as any).remarks,
         model_decision: (patentMap as any).model_decision,
         decision: (patentMap as any).decision

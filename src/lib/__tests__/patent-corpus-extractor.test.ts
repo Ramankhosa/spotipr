@@ -94,9 +94,34 @@ describe('patent corpus field parsers', () => {
       raw: '202311051949 A',
       publicationNumber: 'IN202311051949A',
     })
+    // The office code is part of the identity: 0869/DEL/2005 and 0869/CHE/2005 are
+    // different applications. Reducing to digits gave both IN08692005A, so one
+    // publication number addressed two patents and lookups returned either.
     expect(parseApplicationNumber('(21) APPLICATION No: 0869/DEL/2005 A')).toMatchObject({
       raw: '0869/DEL/2005 A',
-      publicationNumber: 'IN08692005A',
+      publicationNumber: 'IN0869DEL2005A',
+    })
+  })
+
+  it('keeps same-serial applications from different regional offices distinct', () => {
+    const che = parseApplicationNumber('(21) Application No: 1456/CHE/2009 A')
+    const kol = parseApplicationNumber('(21) Application No: 1456/KOL/2009 A')
+    expect(che.publicationNumber).toBe('IN1456CHE2009A')
+    expect(kol.publicationNumber).toBe('IN1456KOL2009A')
+    expect(che.publicationNumber).not.toBe(kol.publicationNumber)
+  })
+
+  it('does not mistake an office-code letter for a kind code', () => {
+    expect(parseApplicationNumber('(21) Application No: IN/PCT/2000/738/CHE')).toMatchObject({
+      raw: 'IN/PCT/2000/738/CHE',
+      kind: null,
+      publicationNumber: 'INPCT2000738CHE',
+    })
+  })
+
+  it('leaves modern all-digit application numbers unchanged', () => {
+    expect(parseApplicationNumber('(21) Application No: 202131023678 A')).toMatchObject({
+      publicationNumber: 'IN202131023678A',
     })
   })
 

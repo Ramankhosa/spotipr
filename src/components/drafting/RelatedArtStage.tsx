@@ -187,6 +187,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [manualDraft, setManualDraft] = useState('')
   const [continuing, setContinuing] = useState(false)
   const [hasHydrated, setHasHydrated] = useState(false)
+  // Explicit opt-out of claim refinement, for users who are confident in their
+  // preliminary claims. Without this, skipping is only inferrable from tagging
+  // nothing for claims — which gives no way to skip while still tagging claim
+  // references for later stages.
+  const [skipClaimRefinement, setSkipClaimRefinement] = useState(false)
 
   // Idea bank (unchanged behavior)
   const [ideaBank, setIdeaBank] = useState<Array<{ title: string; core_principle: string; expected_advantage: string; tags: string[]; non_obvious_extension: string }>>([])
@@ -496,6 +501,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         })
       }
       if (Object.keys(restoredTags).length > 0) setTags(prev => ({ ...restoredTags, ...prev }))
+
+      // Restore an earlier explicit decision to skip refinement, so a reload
+      // doesn't silently put the stage back into the flow.
+      if (config.skippedClaimRefinement) setSkipClaimRefinement(true)
 
       // Manual text from either the new config or the legacy manualPriorArt record.
       const draftManual = String(draftConfig.manualText || session?.manualPriorArt?.manualPriorArtText || '').trim()
@@ -1025,7 +1034,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     setError(null)
     try {
       const { priorArtPatents, claimRefPatents, backgroundManualText, claimsManualText, priorArtMode, claimRefMode } = buildSelectionArrays()
-      const willRefine = claimRefPatents.length > 0 || claimsManualText.trim().length > 0
+      // An explicit skip wins. Otherwise refinement is inferred from whether the
+      // user tagged anything for claim comparison.
+      const willRefine = !skipClaimRefinement
+        && (claimRefPatents.length > 0 || claimsManualText.trim().length > 0)
 
       // Persist user-confirmed selections on the run (kept for downstream
       // fallbacks and stage-status derivation).
@@ -1646,7 +1658,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                             content column — px-5 (20) + badge col (84) + gap-4 (16) = 120. */}
                         {isExpanded && (
                           <div className="px-4 pb-4 sm:pr-5 sm:pl-[120px]">
-                            <div className="rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
+                            <div className="rounded-xl border border-paper-300 bg-white p-4 space-y-3">
                               {details.abstract && (
                                 <div>
                                   <div className="text-[11px] font-semibold uppercase tracking-wide text-ai-graphite-500 mb-1">Abstract</div>
@@ -1686,7 +1698,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                 </div>
                               )}
                               {analysis?.failureReason && (
-                                <div className="text-sm text-ai-graphite-600 bg-white rounded-lg border border-paper-300 p-3">{analysis.failureReason}</div>
+                                <div className="text-sm text-ai-graphite-600 bg-paper-100 rounded-lg border border-paper-300 p-3">{analysis.failureReason}</div>
                               )}
                               <div className="grid gap-2 md:grid-cols-2 text-xs text-ai-graphite-600 pt-1">
                                 <div><span className="font-semibold text-ai-graphite-800">Publication: </span>{details.publicationDate || 'Not available'}</div>
@@ -1763,14 +1775,18 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         )}
       </div>
 
-      {/* Sticky footer: one action. Skipping refinement is a consequence, not a button. */}
+      {/* Sticky footer: what happens next, an explicit opt-out, and one action. */}
       {showTriage && (
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm border-t border-paper-300">
           <div className="max-w-5xl mx-auto px-4 py-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3">
             <div className="text-sm text-ai-graphite-600">
               <span className="font-semibold text-ai-graphite-900">{backgroundCount}</span> for background
               {' · '}
-              {claimsCount > 0 ? (
+              {skipClaimRefinement ? (
+                <span className="text-amber-700">
+                  skipping claim refinement — your preliminary claims become the final claims
+                </span>
+              ) : claimsCount > 0 ? (
                 <>
                   <span className="font-semibold text-ai-graphite-900">{claimsCount}</span> for claim comparison — refinement runs next
                 </>
@@ -1778,13 +1794,32 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 <span className="text-amber-700">no claim references — claim refinement will be skipped</span>
               )}
             </div>
-            <button
-              onClick={handleContinue}
-              disabled={continuing || running || (!hasAIReview && manualRefs.length === 0)}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-            >
-              {continuing ? 'Saving...' : 'Continue'}
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+              <label
+                className="flex items-start gap-2 text-sm text-ai-graphite-700 cursor-pointer select-none"
+                title="Go straight to drafting using the claims you already have. Anything you tagged for claim comparison is still saved."
+              >
+                <input
+                  type="checkbox"
+                  checked={skipClaimRefinement}
+                  onChange={e => setSkipClaimRefinement(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
+                />
+                <span>
+                  Skip claim refinement
+                  <span className="block text-xs text-ai-graphite-500">
+                    I&apos;m happy with my current claims
+                  </span>
+                </span>
+              </label>
+              <button
+                onClick={handleContinue}
+                disabled={continuing || running || (!hasAIReview && manualRefs.length === 0)}
+                className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+              >
+                {continuing ? 'Saving...' : 'Continue'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1967,23 +1967,28 @@ export async function GET(
 
     if ((report.appendixMappedComparisons || []).length > 0) {
       startSection('A', 'Appendix A: Remaining Mapped References', 1);
+      drawParagraph(doc, 'These references were analyzed feature by feature and contributed to the assessment, but are summarized here because higher-priority mapped references are presented in detail.');
       drawCitationTable(doc, report.appendixMappedComparisons || []);
     }
 
     const otherCitationSection = paperComparisons.length > 0 ? '2.3' : '2.2';
     startSection(otherCitationSection, 'List of Other Shortlisted Citations (Appendix B: Shortlisted but Unmapped)', 2);
-    const excludedShortlistCount = Number((report as any).otherShortlistedExcludedCount || 0);
+    const omittedEligibleCount = Number(report.otherShortlistedOmittedCount || 0);
+    const rejectedCount = Number(report.otherShortlistedRejectedCount || 0);
+    const ungatedCount = Number(report.otherShortlistedUngatedCount || 0);
     if (report.otherShortlistedCitations.length > 0) {
-      drawParagraph(doc, 'The citations below cleared retrieval relevance screening but were not selected for detailed feature mapping because the report focuses on the most relevant mapped references.');
+      drawParagraph(doc, 'The citations below explicitly passed the AI relevance gate but were not selected for detailed feature mapping because the report focuses on the most relevant mapped references.');
       drawCitationTable(doc, report.otherShortlistedCitations);
-      if (excludedShortlistCount > 0) {
+      if (omittedEligibleCount > 0) {
         doc.y += SPACE.sm;
-        drawParagraph(doc, `${excludedShortlistCount} additional low-relevance retrieval candidate${excludedShortlistCount === 1 ? ' was' : 's were'} screened out by the AI relevance gate and ${excludedShortlistCount === 1 ? 'is' : 'are'} not listed.`);
+        drawParagraph(doc, `${omittedEligibleCount} additional gate-approved unmapped citation${omittedEligibleCount === 1 ? ' was' : 's were'} omitted from this appendix to keep the report readable.`);
       }
-    } else if (excludedShortlistCount > 0) {
-      drawParagraph(doc, `No additional relevant shortlisted citations remained after the detailed mapped references were selected. ${excludedShortlistCount} low-relevance retrieval candidate${excludedShortlistCount === 1 ? ' was' : 's were'} screened out by the AI relevance gate.`);
     } else {
-      drawParagraph(doc, 'No additional shortlisted citations remained after the detailed mapped references were selected.');
+      drawParagraph(doc, 'No explicitly gate-approved unmapped citations remained after the detailed mapped references were selected.');
+    }
+    if (rejectedCount > 0 || ungatedCount > 0) {
+      doc.y += SPACE.sm;
+      drawParagraph(doc, `${rejectedCount} explicitly rejected and ${ungatedCount} ungated retrieval candidate${rejectedCount + ungatedCount === 1 ? ' was' : 's were'} excluded from the supplementary-reference list.`);
     }
 
     startSection('3', 'Applicant / Assignee Landscape');

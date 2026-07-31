@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client'
+import crypto from 'crypto'
 import { prisma } from '@/lib/prisma'
 
 // Claims lookup for shortlisted prior-art candidates, served from the local corpus.
@@ -28,6 +29,36 @@ const CLAIMS_LOOKUP_STATEMENT_TIMEOUT_MS = Math.max(
   Number(process.env.NOVELTY_CLAIMS_LOOKUP_TIMEOUT_MS || '8000') || 8000
 )
 
+export type LocalPatentClaimsCompleteness = 'FULL' | 'FIRST_CLAIM_ONLY' | 'PARTIAL'
+
+export interface LocalPatentClaimEvidence {
+  publicationNumber: string
+  text: string
+  completeness: LocalPatentClaimsCompleteness
+  source: string
+  contentHash: string
+}
+
+export interface LocalPatentClaimLookupResult {
+  records: Map<string, LocalPatentClaimEvidence>
+  status: 'complete' | 'failed'
+  checked: number
+  error?: string
+}
+
+function normalizeClaimsCompleteness(value: unknown): LocalPatentClaimsCompleteness {
+  const normalized = String(value || '').trim().toUpperCase()
+  if (normalized === 'FULL' || normalized === 'FULL_EPO' || normalized === 'COMPLETE') return 'FULL'
+  if (normalized === 'FIRST_CLAIM_ONLY' || normalized === 'FIRST_CLAIM') return 'FIRST_CLAIM_ONLY'
+  return 'PARTIAL'
+}
+
+function completenessRank(value: LocalPatentClaimsCompleteness): number {
+  if (value === 'FULL') return 3
+  if (value === 'PARTIAL') return 2
+  return 1
+}
+
 /** Compact, kind-code-stripped form used as the join key across the novelty pipeline. */
 export function canonicalClaimsKey(publicationNumber: unknown): string {
   const compact = String(publicationNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -50,20 +81,24 @@ function compactPublicationKey(publicationNumber: unknown): string {
  * would sequential-scan the ~45M-row corpus. Failures are non-fatal: an empty map
  * is returned so the pipeline continues on title/abstract evidence alone.
  */
-export async function fetchLocalPatentClaims(publicationNumbers: string[]): Promise<Map<string, string>> {
-  const claims = new Map<string, string>()
-
+export async function fetchLocalPatentClaimEvidence(publicationNumbers: string[]): Promise<LocalPatentClaimLookupResult> {
+  const records = new Map<string, LocalPatentClaimEvidence>()
   const exactValues = new Set<string>()
   const compactValues = new Set<string>()
+  const checkedKeys = new Set<string>()
   for (const publicationNumber of publicationNumbers) {
     const raw = String(publicationNumber || '').trim()
-    if (!raw || !canonicalClaimsKey(raw)) continue
+    const canonicalKey = canonicalClaimsKey(raw)
+    if (!raw || !canonicalKey) continue
+    checkedKeys.add(canonicalKey)
     exactValues.add(raw)
     exactValues.add(raw.toUpperCase())
     const compact = compactPublicationKey(raw)
     if (compact) compactValues.add(compact)
   }
-  if (!exactValues.size && !compactValues.size) return claims
+  if (!exactValues.size && !compactValues.size) {
+    return { records, status: 'complete', checked: 0 }
+  }
 
   try {
     const conditions: Prisma.Sql[] = []
@@ -84,30 +119,60 @@ export async function fetchLocalPatentClaims(publicationNumbers: string[]): Prom
         publicationNumber: string
         claimsText: string | null
         claimsAvailability: string | null
+        claimsSource: string | null
       }>>(Prisma.sql`
-        SELECT p."publicationNumber", p."claimsText",
-               -- An explicit marker means we wrote it and recorded what it is;
-               -- NULL means legacy, which today can only be the Google US
-               -- first-claim. No join needed: the EP import fills this column
-               -- directly, so the IN-list index scan is unchanged.
-               COALESCE(p."claimsCompleteness", 'FIRST_CLAIM_ONLY') AS "claimsAvailability"
+        SELECT p."publicationNumber",
+               CASE
+                 WHEN eft."claimsComplete" AND eft."claimsText" IS NOT NULL THEN eft."claimsText"
+                 ELSE COALESCE(p."claimsText", eft."claimsText")
+               END AS "claimsText",
+               CASE
+                 WHEN eft."claimsComplete" AND eft."claimsText" IS NOT NULL THEN 'FULL'
+                 WHEN p."claimsText" IS NOT NULL THEN COALESCE(p."claimsCompleteness", 'FIRST_CLAIM_ONLY')
+                 ELSE 'PARTIAL'
+               END AS "claimsAvailability",
+               CASE
+                 WHEN eft."claimsComplete" AND eft."claimsText" IS NOT NULL THEN 'epo-ep-fulltext'
+                 ELSE COALESCE(p."claimsSource", 'legacy-local-corpus')
+               END AS "claimsSource"
         FROM "local_patents" p
+        LEFT JOIN "epo_ep_fulltext" eft
+          ON eft."publicationNumberKey" = p."publicationNumberKey"
         WHERE (${Prisma.join(conditions, ' OR ')})
-          AND p."claimsText" IS NOT NULL
-          AND p."claimsText" <> ''
+          AND COALESCE(p."claimsText", eft."claimsText") IS NOT NULL
+          AND COALESCE(p."claimsText", eft."claimsText") <> ''
       `),
     ])
 
     for (const row of rows) {
       const key = canonicalClaimsKey(row?.publicationNumber)
       const text = String(row?.claimsText || '').trim()
-      // A family can surface under several kind codes; keep the first non-empty hit.
-      if (key && text && !claims.has(key)) claims.set(key, text)
+      const completeness = normalizeClaimsCompleteness(row?.claimsAvailability)
+      const existing = records.get(key)
+      // A family can surface under several kind codes. Prefer the most complete
+      // deterministic record instead of depending on database row order.
+      if (key && text && (!existing || completenessRank(completeness) > completenessRank(existing.completeness))) {
+        records.set(key, {
+          publicationNumber: String(row.publicationNumber || '').trim(),
+          text,
+          completeness,
+          source: String(row.claimsSource || 'local-corpus'),
+          contentHash: crypto.createHash('sha256').update(text).digest('hex'),
+        })
+      }
     }
+    return { records, status: 'complete', checked: checkedKeys.size }
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
     console.warn('[LocalPatentClaims] Claims lookup failed; continuing without claims text.',
-      error instanceof Error ? error.message : error)
+      message)
+    return { records, status: 'failed', checked: checkedKeys.size, error: message }
   }
+}
 
+export async function fetchLocalPatentClaims(publicationNumbers: string[]): Promise<Map<string, string>> {
+  const result = await fetchLocalPatentClaimEvidence(publicationNumbers)
+  const claims = new Map<string, string>()
+  for (const [key, record] of Array.from(result.records.entries())) claims.set(key, record.text)
   return claims
 }

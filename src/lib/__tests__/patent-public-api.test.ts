@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   coverage: vi.fn(),
-  peekCoverage: vi.fn(),
+  readCoverage: vi.fn(),
   hasSearchableVectors: vi.fn(),
   findMany: vi.fn(),
   findFirst: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('@/lib/patent-corpus-service', () => ({
   getPatentCorpusCoverageStats: mocks.coverage,
-  peekPatentCorpusCoverageStats: mocks.peekCoverage,
+  readPatentCorpusCoverageStats: mocks.readCoverage,
   corpusHasSearchableVectors: mocks.hasSearchableVectors,
   hasSearchEmbeddingApiKey: () => true,
   PATENT_CORPUS_EMBEDDING_MODEL: 'text-embedding-3-small',
@@ -45,7 +45,7 @@ describe('public patent API service', () => {
     const coverage = { sourceCoverage: { 'indian-corpus': { totalPatents: 100, patentsWithCompletedEmbedding: 100, patentsWithoutCompletedEmbedding: 0, coveragePercent: 100 } } }
     mocks.coverage.mockResolvedValue(coverage)
     // The search path reads the census from cache only; it never computes one.
-    mocks.peekCoverage.mockReturnValue(coverage)
+    mocks.readCoverage.mockResolvedValue(coverage)
     mocks.hasSearchableVectors.mockResolvedValue(true)
     mocks.queryRaw.mockResolvedValue([{ available: true }])
   })
@@ -69,7 +69,7 @@ describe('public patent API service', () => {
   // multi-million-row corpus is minutes of table scans with no statement timeout —
   // production searches hung indefinitely while lookups stayed fast.
   it('searches without waiting on the corpus census when no census has completed', async () => {
-    mocks.peekCoverage.mockReturnValue(null)
+    mocks.readCoverage.mockResolvedValue(null)
     mocks.hasSearchableVectors.mockResolvedValue(true)
     mocks.search.mockResolvedValue({
       providerStats: [{ providerId: 'indian-corpus', enabled: true, requested: true, resultCount: 1 }],
@@ -85,7 +85,7 @@ describe('public patent API service', () => {
   })
 
   it('refuses search when the corpus has no usable vectors for the configured model', async () => {
-    mocks.peekCoverage.mockReturnValue(null)
+    mocks.readCoverage.mockResolvedValue(null)
     mocks.hasSearchableVectors.mockResolvedValue(false)
 
     await expect(searchPublicIndianPatents('thermal battery management', 10)).rejects.toMatchObject({

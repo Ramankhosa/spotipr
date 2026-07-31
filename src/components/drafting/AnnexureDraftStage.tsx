@@ -12,6 +12,7 @@ import PersonaManager, { type PersonaSelection } from './PersonaManager'
 // REMOVED: InlineSectionValidator - validation now handled by AI Review only
 import type { ValidationIssue as UnifiedValidationIssue } from '@/types/validation'
 import { isDrawingSectionKey } from '@/lib/figure-availability'
+import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
 import { useToast } from '@/components/ui/toast'
 
 // ============================================================================
@@ -2327,7 +2328,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     try {
       setAddingJurisdiction(true)
       const country = availableCountries.find(c => c.code === selectedAddCode)
-      const preferredLang = languageByCode[selectedAddCode] || country?.languages?.[0]
+      const preferredLang = languageByCode[selectedAddCode]
+        || (country ? defaultLanguageForJurisdiction(selectedAddCode, country.languages) : '')
       const nextLanguageMap = preferredLang ? { ...languageByCode, [selectedAddCode]: preferredLang } : { ...languageByCode }
       setLanguageByCode(nextLanguageMap)
       const nextList = [...availableJurisdictions, selectedAddCode]
@@ -2483,7 +2485,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       availableJurisdictions.forEach(code => {
         const saved = status?.[code]?.language
         const country = availableCountries.find(c => c.code === code)
-        const defaultLang = country?.languages?.[0] || ''
+        // Never country.languages[0] — that list is an unordered catalogue of
+        // accepted languages (PCT starts with Arabic), not a preference order.
+        const defaultLang = country ? defaultLanguageForJurisdiction(code, country.languages) : ''
         next[code] = saved || prev[code] || defaultLang
       })
       return next
@@ -2848,7 +2852,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     if (!country) return
     setLanguageByCode(prev => {
       if (prev[selectedAddCode]) return prev
-      const lang = country.languages?.[0]
+      if (!country.languages?.length) return prev
+      const lang = defaultLanguageForJurisdiction(selectedAddCode, country.languages)
       if (!lang) return prev
       return { ...prev, [selectedAddCode]: lang }
     })

@@ -62,6 +62,9 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.mainComparisons).toHaveLength(10);
     expect(model.appendixMappedComparisons).toHaveLength(8);
     expect(model.comparisons.filter(item => item.reviewPriority === 'Critical')).toHaveLength(4);
+    expect(model.comparisons.filter(item => item.reviewPriority === 'Critical').every(item =>
+      model.mainComparisons.some(main => main.publicationNumber === item.publicationNumber)
+    )).toBe(true);
     expect(model.comparisons.filter(item => item.reviewPriority === 'High')).toHaveLength(8);
     expect(model.comparisons.filter(item => item.reviewPriority === 'Medium')).toHaveLength(6);
     expect(model.comparisons.find(item => item.publicationNumber === 'CN121704000A')).toMatchObject({
@@ -480,7 +483,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       headline: 'High component-combination risk',
       coreFeatureCount: 2,
     });
-    expect(first.finalAssessment.decision).toBe('High component-combination risk');
+    expect(first.finalAssessment.decision).toBe('Not Novel');
     expect(first.finalAssessment.risks.join(' ')).not.toMatch(/Not Novel determination/i);
     expect(first.featureSummaries[3]).toMatchObject({
       importance: 'optional_embodiment',
@@ -730,6 +733,54 @@ describe('buildNoveltyAttorneyReportModel', () => {
     });
   });
 
+  it('uses claim-supported evidence internally while keeping the public source label generic', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'claim-evidence-report',
+      title: 'Temperature-aware charging controller',
+      jurisdiction: 'IN',
+      stage0Results: {
+        searchQuery: 'temperature charging current threshold',
+        inventionFeatures: ['reduces charging current above a temperature threshold'],
+      },
+      stage1Results: {
+        retrievalCandidates: [{
+          publicationNumber: 'USCLAIM1A1',
+          title: 'Temperature-aware charging controller',
+          abstract: 'A charging controller for a battery.',
+          relevanceScore: 0.9,
+        }],
+        aiRelevance: {
+          accepted: ['USCLAIM1A1'],
+          byPn: { USCLAIM1: { decision: 'accept', score: 0.9, evidence_quality: 'high' } },
+        },
+      },
+      stage35Results: {
+        feature_map: [{
+          pn: 'USCLAIM1A1',
+          title: 'Temperature-aware charging controller',
+          claimsAvailability: 'FULL',
+          feature_analysis: [{
+            feature: 'reduces charging current above a temperature threshold',
+            status: 'Present',
+            quote: 'reduces charging current above a temperature threshold',
+            evidence_source: 'claims',
+            claim_number: 1,
+            confidence: 0.9,
+          }],
+        }],
+      },
+      stage4Results: {},
+    });
+
+    expect(model.comparisons[0].rows[0]).toMatchObject({
+      status: 'Present',
+      evidenceQuote: 'reduces charging current above a temperature threshold',
+      evidenceSource: 'source record',
+      evidenceStrength: 'Strong',
+    });
+    expect(JSON.stringify(model.comparisons[0].rows[0])).not.toContain('claimsAvailability');
+  });
+
   it('keeps gate-rejected retrieval candidates out of the other-shortlisted citations list', () => {
     const model = buildNoveltyAttorneyReportModel({
       id: 'shortlistfilter1',
@@ -743,8 +794,10 @@ describe('buildNoveltyAttorneyReportModel', () => {
         retrievalCandidates: [
           { publicationNumber: 'IN100A', title: 'Mapped battery reference', abstract: 'Battery reference.', relevanceScore: 0.9 },
           { publicationNumber: 'IN200A', title: 'Gate-accepted battery monitor', abstract: 'Battery monitor.', relevanceScore: 0.72 },
+          { publicationNumber: 'IN250A', title: 'Component battery monitor', abstract: 'Battery component.', relevanceScore: 0.68 },
+          { publicationNumber: 'IN260A', title: 'Borderline battery monitor', abstract: 'Battery candidate.', relevanceScore: 0.61 },
           { publicationNumber: 'IN300A', title: 'Score-only borderline candidate', abstract: 'Cell diagnostics.', relevanceScore: 0.55 },
-          { publicationNumber: 'IN400A', title: 'Water quality inspection drone', abstract: 'A drone inspects water quality.', relevanceScore: 0.12 },
+          { publicationNumber: 'IN400A', title: 'Water quality inspection drone', abstract: 'A drone inspects water quality.', relevanceScore: 0.92 },
           { publicationNumber: 'IN500A', title: 'Aquatic environment monitor', abstract: 'Aquarium environment control.' },
         ],
         aiRelevance: {
@@ -752,6 +805,8 @@ describe('buildNoveltyAttorneyReportModel', () => {
           byPn: {
             IN100: { decision: 'accept', score: 0.9, evidence_quality: 'high' },
             IN200: { decision: 'accept', score: 0.72, evidence_quality: 'high' },
+            IN250: { decision: 'component', score: 0.68, evidence_quality: 'medium' },
+            IN260: { decision: 'borderline', score: 0.61, evidence_quality: 'medium' },
             IN400: { decision: 'reject', score: 0.12, evidence_quality: 'low' },
           },
         },
@@ -766,12 +821,95 @@ describe('buildNoveltyAttorneyReportModel', () => {
       stage4Results: {},
     });
 
-    // IN100A is mapped in detail; IN200A/IN300A cleared the gate (explicit accept /
-    // score-derived borderline); IN400A was gate-rejected and IN500A has neither a
-    // gate record nor a usable relevance score.
-    expect(model.otherShortlistedCitations.map(item => item.publicationNumber)).toEqual(['IN200A', 'IN300A']);
-    expect(model.otherShortlistedCitations[0].referenceRole).toBe('Shortlisted / not mapped');
+    // The three explicit gate decisions retain their categories. A raw score cannot
+    // promote IN300A, and IN400A remains excluded despite its deliberately high score.
+    expect(model.otherShortlistedCitations.map(item => item.publicationNumber)).toEqual(['IN200A', 'IN250A', 'IN260A']);
+    expect(model.otherShortlistedCitations[0].referenceRole).toBe('Gate accepted / not mapped');
+    expect(model.otherShortlistedCitations[0].matchCategory).toBe('direct');
+    expect(model.otherShortlistedCitations[1]).toMatchObject({
+      referenceRole: 'Component candidate / not mapped',
+      matchCategory: 'component',
+      reviewPriority: 'Medium',
+    });
+    expect(model.otherShortlistedCitations[2]).toMatchObject({
+      referenceRole: 'Borderline candidate / not mapped',
+      matchCategory: 'borderline',
+      reviewPriority: 'Low',
+    });
     expect(model.otherShortlistedCitations.some(item => item.referenceRole === 'Requires full-text review')).toBe(false);
-    expect(model.otherShortlistedExcludedCount).toBe(2);
+    expect(model.otherShortlistedEligibleCount).toBe(3);
+    expect(model.otherShortlistedRejectedCount).toBe(1);
+    expect(model.otherShortlistedUngatedCount).toBe(2);
+    expect(model.otherShortlistedExcludedCount).toBe(3);
+  });
+
+  it('uses a valid persisted reference partition and recomputes an invalid one', () => {
+    const publications = ['US100A', 'US200A', 'US300A', 'US400A'];
+    const featureMap = publications.map(publicationNumber => ({
+      pn: publicationNumber,
+      title: publicationNumber,
+      feature_analysis: [{ feature: 'adaptive control', status: 'Present', quote: 'adaptive control', field: 'abstract' }],
+    }));
+    const counts = {
+      mappedTotal: 4,
+      mainDisplayed: 3,
+      mappedSupplementaryDisplayed: 1,
+      unmappedEligibleTotal: 0,
+      unmappedDisplayed: 0,
+      unmappedOmitted: 0,
+      explicitlyRejectedExcluded: 0,
+      ungatedExcluded: 0,
+      invalidPublicationNumbersExcluded: 0,
+      protectedOverflow: 0,
+    };
+    const persisted = {
+      version: 1,
+      main: ['US400A', 'US200A', 'US300A'].map(publicationNumber => ({
+        publicationNumber,
+        canonicalPublicationNumber: publicationNumber.replace(/A$/, ''),
+        reason: 'ranked_fill',
+      })),
+      mappedSupplementary: [{
+        publicationNumber: 'US100A',
+        canonicalPublicationNumber: 'US100',
+        reason: 'mapped_supplementary',
+      }],
+      unmappedSupplementary: [],
+      counts,
+    };
+    const searchRun = {
+      id: 'persisted-selection',
+      title: 'Adaptive controller',
+      jurisdiction: 'IN',
+      config: { stage4: { mainReferenceTarget: 3, minMainReferences: 3 } },
+      stage0Results: { inventionFeatures: ['adaptive control'] },
+      stage1Results: {
+        retrievalCandidates: publications.map(publicationNumber => ({ publicationNumber, title: publicationNumber })),
+        aiRelevance: { byPn: {} },
+      },
+      stage35Results: { feature_map: featureMap },
+      stage4Results: { report_reference_selection: persisted },
+    };
+
+    const model = buildNoveltyAttorneyReportModel(searchRun);
+    expect(model.mainComparisons.map(item => item.publicationNumber)).toEqual(['US400A', 'US200A', 'US300A']);
+    expect(model.appendixMappedComparisons.map(item => item.publicationNumber)).toEqual(['US100A']);
+
+    const invalidModel = buildNoveltyAttorneyReportModel({
+      ...searchRun,
+      stage4Results: {
+        report_reference_selection: {
+          ...persisted,
+          mappedSupplementary: [],
+          counts: { ...counts, mappedTotal: 3, mappedSupplementaryDisplayed: 0 },
+        },
+      },
+    });
+    expect(invalidModel.mainComparisons).toHaveLength(3);
+    expect(invalidModel.appendixMappedComparisons).toHaveLength(1);
+    expect(new Set([
+      ...invalidModel.mainComparisons,
+      ...invalidModel.appendixMappedComparisons,
+    ].map(item => item.publicationNumber))).toEqual(new Set(publications));
   });
 });

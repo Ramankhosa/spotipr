@@ -91,6 +91,13 @@ const COVERAGE_STATS_STATEMENT_TIMEOUT_MS = Math.max(
   5000,
   Number(process.env.PATENT_CORPUS_COVERAGE_STATS_TIMEOUT_MS || '120000') || 120_000
 )
+// The scheduled/admin refresh is allowed to be slow: it runs off the request path,
+// and on the production corpus the census legitimately takes minutes. Too short a
+// ceiling here is why coverage stayed null — every attempt was killed mid-scan.
+const COVERAGE_STATS_REFRESH_TIMEOUT_MS = Math.max(
+  COVERAGE_STATS_STATEMENT_TIMEOUT_MS,
+  Number(process.env.PATENT_CORPUS_COVERAGE_REFRESH_TIMEOUT_MS || '900000') || 900_000
+)
 
 type UploadInput = {
   fileName: string
@@ -151,6 +158,24 @@ type PatentCorpusCoverageStats = {
     patentsWithoutCompletedEmbedding: number
     coveragePercent: number
   }>
+}
+
+// Returned when no census has been recorded yet, so callers get a well-shaped
+// object instead of an inline full-corpus scan. Readiness treats zero coverage as
+// "not proven by census" and falls back to the index probe.
+const EMPTY_COVERAGE_STATS: PatentCorpusCoverageStats = {
+  embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
+  totalPatents: 0,
+  titleOnlyPatents: 0,
+  enrichedPatents: 0,
+  patentsWithCompletedEmbedding: 0,
+  patentsWithoutCompletedEmbedding: 0,
+  patentsWithQueuedEmbedding: 0,
+  patentsWithFailedEmbedding: 0,
+  coveragePercent: 0,
+  embeddingCounts: {},
+  importFileCounts: {},
+  sourceCoverage: {},
 }
 
 let coverageStatsCache: { value: PatentCorpusCoverageStats; expiresAt: number } | null = null
@@ -1460,7 +1485,9 @@ async function coverageQuery<T = any>(
   return rows
 }
 
-async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageStats> {
+async function computePatentCorpusCoverageStats(
+  timeoutMs = COVERAGE_STATS_STATEMENT_TIMEOUT_MS
+): Promise<PatentCorpusCoverageStats> {
   const patentRows = await coverageQuery(Prisma.sql`
     SELECT
       COUNT(*)::int AS "totalPatents",
@@ -1496,7 +1523,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
         )
       )::int AS "patentsWithFailedEmbedding"
     FROM "local_patents" p
-  `)
+  `, timeoutMs)
   const embeddingRows = await (prisma as any).localPatentEmbedding.groupBy({
     by: ['status'],
     where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
@@ -1531,7 +1558,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
       COUNT(*) FILTER (WHERE "hasCompletedEmbedding")::int AS "patentsWithCompletedEmbedding"
     FROM patent_sources
     GROUP BY "source"
-  `).catch(() => [])
+  `, timeoutMs).catch(() => [])
 
   const patentStats = patentRows[0] || {}
   const embeddingCounts = embeddingRows.reduce((acc: Record<string, number>, row: any) => {
@@ -1578,48 +1605,81 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
   }
 }
 
+/**
+ * Admin/reporting view of the census. Reads the materialized snapshot unless an
+ * explicit recompute is requested; a recompute is slow by nature (minutes on the
+ * production corpus) and must only ever be triggered deliberately.
+ *
+ * Returns zeroed stats when no snapshot exists yet rather than computing one
+ * inline — the caller can request forceRefresh to populate it.
+ */
 export async function getPatentCorpusCoverageStats(options: { forceRefresh?: boolean } = {}) {
-  const now = Date.now()
-  if (!options.forceRefresh && coverageStatsCache && coverageStatsCache.expiresAt > now) {
-    return coverageStatsCache.value
+  if (options.forceRefresh) {
+    if (!coverageStatsInFlight) {
+      coverageStatsInFlight = refreshPatentCorpusCoverageSnapshot()
+        .then(result => result.stats)
+        .finally(() => {
+          coverageStatsInFlight = null
+        })
+    }
+    return coverageStatsInFlight
   }
-
-  if (!coverageStatsInFlight) {
-    coverageStatsInFlight = computePatentCorpusCoverageStats()
-      .then(stats => {
-        coverageStatsCache = { value: stats, expiresAt: Date.now() + COVERAGE_STATS_CACHE_MS }
-        return stats
-      })
-      .finally(() => {
-        coverageStatsInFlight = null
-      })
-  }
-  const refresh = coverageStatsInFlight
-
-  // Stale-while-revalidate: once a census has succeeded once, an expired entry is
-  // still far better than making every caller wait behind a full-corpus scan. The
-  // refresh above replaces it in the background. Only a cold cache blocks, and the
-  // statement timeout bounds even that.
-  if (!options.forceRefresh && coverageStatsCache) {
-    refresh.catch(error => console.error('[PatentCorpus] Coverage stats refresh failed:', error))
-    return coverageStatsCache.value
-  }
-
-  return refresh
+  const snapshot = await readPatentCorpusCoverageStats()
+  return snapshot || EMPTY_COVERAGE_STATS
 }
 
 /**
- * Cache-only read of the coverage census, for callers that must never block —
- * above all the search hot path. Returns null until a census has completed once,
- * and schedules a background refresh so a later request finds a value.
+ * Read the census without ever computing it: in-process cache first, then the
+ * materialized snapshot table. Returns null only when no census has been recorded
+ * for the configured model yet.
+ *
+ * Requests deliberately do NOT trigger a computation. The census is refreshed by
+ * the corpus worker (refreshPatentCorpusCoverageSnapshot) or an explicit admin
+ * refresh; a request that computes it is how the search endpoint came to hang.
  */
-export function peekPatentCorpusCoverageStats(): PatentCorpusCoverageStats | null {
+export async function readPatentCorpusCoverageStats(): Promise<PatentCorpusCoverageStats | null> {
   const cached = coverageStatsCache
-  if (!cached || cached.expiresAt <= Date.now()) {
-    void getPatentCorpusCoverageStats().catch(error =>
-      console.error('[PatentCorpus] Background coverage census failed:', error))
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  try {
+    const snapshot = await (prisma as any).patentCorpusCoverageSnapshot.findUnique({
+      where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
+      select: { payload: true, computedAt: true },
+    })
+    if (!snapshot?.payload) return cached ? cached.value : null
+    const value = snapshot.payload as PatentCorpusCoverageStats
+    coverageStatsCache = { value, expiresAt: Date.now() + COVERAGE_STATS_CACHE_MS }
+    return value
+  } catch (error) {
+    console.error('[PatentCorpus] Failed to read coverage snapshot:', error)
+    return cached ? cached.value : null
   }
-  return cached ? cached.value : null
+}
+
+/**
+ * Computes the census and records it. Intended for the corpus worker and the
+ * admin "recompute" action — never for a path a user is waiting on. Gets a
+ * generous statement timeout because it is allowed to be slow here.
+ */
+export async function refreshPatentCorpusCoverageSnapshot() {
+  const startedAt = Date.now()
+  const stats = await computePatentCorpusCoverageStats(COVERAGE_STATS_REFRESH_TIMEOUT_MS)
+  const durationMs = Date.now() - startedAt
+  coverageStatsCache = { value: stats, expiresAt: Date.now() + COVERAGE_STATS_CACHE_MS }
+  try {
+    await (prisma as any).patentCorpusCoverageSnapshot.upsert({
+      where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
+      create: {
+        model: PATENT_CORPUS_EMBEDDING_MODEL,
+        payload: stats as any,
+        computedAt: new Date(),
+        durationMs,
+      },
+      update: { payload: stats as any, computedAt: new Date(), durationMs },
+    })
+  } catch (error) {
+    console.error('[PatentCorpus] Failed to persist coverage snapshot:', error)
+  }
+  return { stats, durationMs }
 }
 
 const SEARCHABLE_VECTOR_PROBE_CACHE_MS = Math.max(

@@ -3,6 +3,7 @@ import {
   hasCorpusEmbeddingApiKey,
   processPendingPatentEmbeddings,
   processPendingPatentImportFiles,
+  refreshPatentCorpusCoverageSnapshot,
 } from '../src/lib/patent-corpus-service'
 import {
   processPendingIpIndiaJournalArchive,
@@ -47,6 +48,11 @@ async function main() {
     ? Math.max(0, Math.min(envNumber('PATENT_CORPUS_EMBEDDING_BATCH', 32), embeddingClaimMax))
     : 0
   let lastDailyLatestCheckAt = 0
+  const coverageRefreshIntervalMs = Math.max(
+    5 * 60 * 1000,
+    envNumber('PATENT_CORPUS_COVERAGE_REFRESH_INTERVAL_MS', 6 * 60 * 60 * 1000)
+  )
+  let lastCoverageRefreshAt = 0
 
   console.log('[PatentCorpusWorker] Started:', {
     workerId,
@@ -59,6 +65,26 @@ async function main() {
   })
   if (embeddingBatch > 0 && !hasCorpusEmbeddingApiKey()) {
     console.warn('[PatentCorpusWorker] Embedding processing is enabled but OPENAI_CORPUS_API_KEY and OPENAI_API_KEY are missing in this PM2 process.')
+  }
+
+  // The coverage census is several full-table scans, so nothing user-facing may
+  // compute it: the public search API is read-only against the snapshot this
+  // writes. Refreshed here on a slow interval, and once at startup so a fresh
+  // deploy reports real numbers without waiting for the first interval.
+  async function maybeRefreshCoverageSnapshot() {
+    if (Date.now() - lastCoverageRefreshAt < coverageRefreshIntervalMs) return
+    lastCoverageRefreshAt = Date.now()
+    try {
+      const { stats, durationMs } = await refreshPatentCorpusCoverageSnapshot()
+      console.log('[PatentCorpusWorker]', JSON.stringify({
+        event: 'coverage_snapshot_refreshed',
+        durationMs,
+        totalPatents: stats.totalPatents,
+        coveragePercent: stats.coveragePercent,
+      }))
+    } catch (error) {
+      console.warn('[PatentCorpusWorker] Coverage snapshot refresh failed:', error)
+    }
   }
 
   async function maybeQueueLatestJournals() {
@@ -78,6 +104,7 @@ async function main() {
   }
 
   do {
+    await maybeRefreshCoverageSnapshot()
     await maybeQueueLatestJournals()
     const journals = journalBatch > 0
       ? await processPendingIpIndiaJournalArchive(workerId, journalBatch)

@@ -37,15 +37,27 @@ describe('deriveCountryMappings (JP.json against the seeded superset catalog)', 
     expect(byKey.get('crossReference')?.structureId).toBe('cross_reference')
   })
 
-  it('warns for sections with no superset counterpart and skips them', () => {
+  it('blocks sections with no superset counterpart instead of dropping them silently', () => {
     const unresolved = issues.filter(i => i.code === 'UNRESOLVED_SECTION')
     const unresolvedIds = unresolved.map(i => i.sectionId)
-    expect(unresolvedIds).toContain('citation_list')
-    expect(unresolvedIds).toContain('reference_signs_list')
+    // citation_list genuinely has no superset counterpart → BLOCKING error
+    expect(unresolvedIds).toEqual(['citation_list'])
     expect(byKey.has('citation_list')).toBe(false)
     for (const issue of unresolved) {
-      expect(issue.severity).toBe('warning')
+      expect(issue.severity).toBe('error')
     }
+  })
+
+  it('resolves reference_signs_list to listOfNumerals via the synonym vocabulary', () => {
+    expect(byKey.get('listOfNumerals')?.structureId).toBe('reference_signs_list')
+  })
+
+  it('downgrades an unresolved section to a warning when explicitly skipped', () => {
+    const skipped = deriveCountryMappings(jp, index, { skipSections: ['citation_list'] })
+    expect(skipped.issues.filter(i => i.severity === 'error')).toHaveLength(0)
+    const ack = skipped.issues.find(i => i.code === 'SECTION_SKIPPED')
+    expect(ack?.sectionId).toBe('citation_list')
+    expect(ack?.severity).toBe('warning')
   })
 
   it('derives supersetCode with per-country zero-padded order and the superset label', () => {
@@ -68,16 +80,19 @@ describe('deriveCountryMappings (JP.json against the seeded superset catalog)', 
     expect(mappings.every(m => m.isEnabled)).toBe(true)
   })
 
-  it('derives mappings for every resolvable JP section (10 of 12)', () => {
-    // 12 structure sections minus citation_list and reference_signs_list
-    expect(mappings).toHaveLength(10)
+  it('derives mappings for every resolvable JP section (11 of 12)', () => {
+    // 12 structure sections minus citation_list (no superset counterpart)
+    expect(mappings).toHaveLength(11)
     expect(byKey.has('title')).toBe(true)
     expect(byKey.has('claims')).toBe(true)
     expect(byKey.has('abstract')).toBe(true)
   })
 
-  it('emits no error-severity issues for a well-formed profile', () => {
-    expect(issues.filter(i => i.severity === 'error')).toHaveLength(0)
+  it('emits exactly one blocking issue: the unmappable citation_list', () => {
+    const errors = issues.filter(i => i.severity === 'error')
+    expect(errors).toHaveLength(1)
+    expect(errors[0].code).toBe('UNRESOLVED_SECTION')
+    expect(errors[0].sectionId).toBe('citation_list')
   })
 })
 
@@ -100,7 +115,58 @@ describe('deriveCountryMappings edge cases', () => {
       index
     )
     expect(mappings).toHaveLength(1)
-    expect(issues.some(i => i.code === 'DUPLICATE_CANONICAL_KEY')).toBe(true)
+    const dup = issues.find(i => i.code === 'DUPLICATE_CANONICAL_KEY')
+    expect(dup?.severity).toBe('error')
+  })
+
+  it('allows an acknowledged skip to resolve a duplicate-key conflict', () => {
+    const { mappings, issues } = deriveCountryMappings(
+      minimalProfile([
+        { id: 'summary_of_invention', label: 'Summary', order: 1, canonicalKeys: ['summary_of_invention'], required: true },
+        { id: 'disclosure_of_invention', label: 'Disclosure', order: 2, canonicalKeys: ['disclosure_of_invention'], required: true }
+      ]),
+      index,
+      { skipSections: ['disclosure_of_invention'] }
+    )
+    expect(mappings).toHaveLength(1)
+    expect(issues.filter(i => i.severity === 'error')).toHaveLength(0)
+    expect(issues.some(i => i.code === 'SECTION_SKIPPED')).toBe(true)
+  })
+
+  it('resolves the common jurisdiction vocabulary without aliases in the DB', () => {
+    const cases: Array<[string, string]> = [
+      ['title_of_the_invention', 'title'],
+      ['what_is_claimed', 'claims'],
+      ['patent_claims', 'claims'],
+      ['abstract_of_disclosure', 'abstract'],
+      ['state_of_the_art', 'background'],
+      ['problem_to_be_solved', 'technicalProblem'],
+      ['means_for_solving_the_problem', 'technicalSolution'],
+      ['effects_of_invention', 'advantageousEffects'],
+      ['description_of_embodiments', 'detailedDescription'],
+      ['modes_for_carrying_out', 'detailedDescription'],
+      ['best_mode_of_carrying_out_the_invention', 'bestMode'],
+      ['utility', 'industrialApplicability'],
+      ['reference_signs_list', 'listOfNumerals'],
+      ['priority_claim', 'crossReference'],
+      ['object_of_the_invention', 'objectsOfInvention'],
+      ['technical_field_of_invention', 'fieldOfInvention'],
+      ['brief_description_of_the_drawings', 'briefDescriptionOfDrawings'],
+      // camelCase variants split on humps before matching
+      ['summaryOfTheInvention', 'summary'],
+      ['listOfReferenceNumerals', 'listOfNumerals'],
+      ['backgroundArt', 'background'],
+      // display labels resolve as identifiers too
+      ['Title of the Invention', 'title'],
+      ['Brief Description of the Drawings', 'briefDescriptionOfDrawings']
+    ]
+    for (const [name, expected] of cases) {
+      const { mappings } = deriveCountryMappings(
+        minimalProfile([{ id: name, label: name, order: 1, canonicalKeys: [name], required: true }]),
+        index
+      )
+      expect(mappings[0]?.sectionKey, `"${name}" should resolve to ${expected}`).toBe(expected)
+    }
   })
 
   it('errors when the structure has no resolvable sections', () => {
@@ -127,5 +193,17 @@ describe('deriveCountryMappings edge cases', () => {
     )
     const unresolved = issues.find(i => i.code === 'UNRESOLVED_SECTION')
     expect(unresolved?.suggestion).toBe('background')
+  })
+
+  it('offers no suggestion for genuinely novel sections rather than a wrong one', () => {
+    const { issues } = deriveCountryMappings(
+      minimalProfile([
+        { id: 'sharia_declaration', label: 'Declaration of Compliance', order: 1, canonicalKeys: ['declaration_of_compliance'], required: true }
+      ]),
+      index
+    )
+    const unresolved = issues.find(i => i.code === 'UNRESOLVED_SECTION')
+    expect(unresolved?.severity).toBe('error')
+    expect(unresolved?.suggestion).toBeUndefined()
   })
 })

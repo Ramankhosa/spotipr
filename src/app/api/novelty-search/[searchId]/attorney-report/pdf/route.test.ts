@@ -347,7 +347,7 @@ describe('GET attorney report PDF', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-disposition')).toContain('attachment;')
     expect(normalizedText).toContain('Mapping assessment: Directly Mapped')
-    expect(parsed.text).toContain('No additional shortlisted citations remained')
+    expect(parsed.text).toContain('No explicitly gate-approved unmapped citations remained')
     expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
   }, 20_000)
 

@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { AlertTriangle, ArrowLeft, ArrowRight, Check, FileText, Loader2, RefreshCw } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
+import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
 
 type Project = { id: string; name: string }
 
@@ -192,9 +193,11 @@ export default function NoveltyToDraftingPage() {
 
   useEffect(() => {
     if (!languageOptions.includes(commonLanguage)) {
-      setCommonLanguage(languageOptions[0] || 'en')
+      // Not languageOptions[0]: the shared list inherits the profile catalogue's
+      // arbitrary order, which for PCT begins with Arabic.
+      setCommonLanguage(defaultLanguageForJurisdiction(selectedCodes[0] || '', languageOptions))
     }
-  }, [commonLanguage, languageOptions])
+  }, [commonLanguage, languageOptions, selectedCodes])
 
   const toggleCountry = (code: string) => {
     setSelectedCodes(prev => prev.includes(code) ? prev.filter(item => item !== code) : [...prev, code])

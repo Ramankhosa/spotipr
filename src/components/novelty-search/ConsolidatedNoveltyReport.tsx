@@ -139,6 +139,7 @@ function firstText(...values: unknown[]) {
 function displayEvidenceSource(value: unknown, fallback = 'citation record') {
   const text = cleanText(value, fallback).toLowerCase();
   if (!text || text === 'none' || text === 'citation record') return 'none';
+  if (/\bclaims?\b/.test(text)) return 'source record';
   if (/\babstract\b/.test(text)) return 'source record';
   if (/\btitle\b/.test(text)) return 'source record';
   return 'inference';
@@ -1112,6 +1113,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
 
           {reportData.appendixMapped.length > 0 && (
             <Section id="appendix-a" title="Appendix A: Remaining Mapped References" breakBefore>
+              <div className="mb-5 rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm font-semibold text-ai-blue-950">
+                These references were analyzed feature by feature and contributed to the assessment, but are summarized here because higher-priority mapped references are shown in detail.
+              </div>
               <DenseTable>
                 <thead><tr><HeaderCell>Publication</HeaderCell><HeaderCell>Title</HeaderCell><HeaderCell>Priority</HeaderCell><HeaderCell>Role</HeaderCell></tr></thead>
                 <tbody>{reportData.appendixMapped.map(item => (
@@ -1123,12 +1127,14 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             </Section>
           )}
 
-          {reportData.otherShortlisted.length > 0 && (
+          {(reportData.otherShortlisted.length > 0 || reportData.otherShortlistedEligibleCount > 0 || reportData.otherShortlistedExcludedCount > 0) && (
             <Section id={reportData.paperCitations.length ? 'section-2-3' : 'section-2-2'} title="Appendix B: Shortlisted but Unmapped References" breakBefore>
               <div className="mb-5 rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm font-semibold text-ai-blue-950">
-                These citations were shortlisted for reference but not mapped in detail in this report version.
+                These citations explicitly passed the AI relevance gate but were not mapped feature by feature in this report version.
+                {reportData.otherShortlistedOmittedCount > 0 && ` ${reportData.otherShortlistedOmittedCount} additional eligible citation(s) were omitted from this appendix to keep the report readable.`}
+                {(reportData.otherShortlistedRejectedCount > 0 || reportData.otherShortlistedUngatedCount > 0) && ` ${reportData.otherShortlistedRejectedCount} explicitly rejected and ${reportData.otherShortlistedUngatedCount} ungated citation(s) are not presented as supplementary references.`}
               </div>
-              <DenseTable>
+              {reportData.otherShortlisted.length > 0 ? <DenseTable>
                 <thead>
                   <tr>
                     <HeaderCell className="w-16">S.No.</HeaderCell>
@@ -1148,7 +1154,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                     );
                   })}
                 </tbody>
-              </DenseTable>
+              </DenseTable> : <p className="text-sm text-slate-600">No explicitly gate-approved unmapped citations were selected for display.</p>}
             </Section>
           )}
 
