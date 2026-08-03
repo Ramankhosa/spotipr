@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { buildNoveltyAttorneyReportModel, type AttorneyReportCitation, type AttorneyReportFeatureRow } from '@/lib/novelty-attorney-report';
+import { buildNoveltyAttorneyReportModel, formatFirmAddressLines, type AttorneyReportCitation, type AttorneyReportFeatureRow } from '@/lib/novelty-attorney-report';
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
+import { loadFirmBranding } from '@/lib/firm-profile-service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -76,6 +77,103 @@ const PAGE = {
   top: 64,
   bottom: 64,
 };
+
+// --- Firm accent theming ----------------------------------------------------
+// A tenant may set a single brand accent color. We honor it by overriding the accent-family
+// keys of the module-level COLORS palette for the duration of a single request, then
+// restoring them in a `finally`.
+//
+// SAFETY: this is concurrency-safe ONLY because the entire PDF drawing pass
+// (drawCover(...) ... drawHeaderFooter(...)) is fully synchronous — there is no `await`
+// between applyAccentOverrides() and the first `await pdfBuffer(doc)`. Node cannot
+// interleave another request into that synchronous block, so each request draws with its
+// own accent before yielding. DO NOT introduce an `await` into the drawing pass.
+const ACCENT_KEYS = ['blue', 'blue2', 'cyan', 'tableHeader'] as const;
+
+function normalizeHexColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^#?([0-9a-fA-F]{6})$/);
+  return match ? `#${match[1].toUpperCase()}` : null;
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${clamp(r)}${clamp(g)}${clamp(b)}`.toUpperCase();
+}
+
+function mixToward(hex: string, target: number, amount: number): string {
+  const [r, g, b] = hexToRgb(hex);
+  return rgbToHex(r + (target - r) * amount, g + (target - g) * amount, b + (target - b) * amount);
+}
+const darkenColor = (hex: string, amount: number) => mixToward(hex, 0, amount);
+const lightenColor = (hex: string, amount: number) => mixToward(hex, 255, amount);
+
+function relativeLuminance(hex: string): number {
+  const [r, g, b] = hexToRgb(hex).map(v => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+// Keep an accent used as a fill behind white text legible: darken very light accents.
+function clampForFill(hex: string): string {
+  let out = hex;
+  let guard = 0;
+  while (relativeLuminance(out) > 0.5 && guard < 8) {
+    out = darkenColor(out, 0.15);
+    guard++;
+  }
+  return out;
+}
+
+function deriveAccentOverrides(accent?: string | null): Partial<Record<typeof ACCENT_KEYS[number], string>> | null {
+  const hex = normalizeHexColor(accent);
+  if (!hex) return null;
+  return {
+    blue: hex,
+    blue2: darkenColor(hex, 0.14),
+    cyan: lightenColor(hex, 0.22),
+    tableHeader: clampForFill(hex),
+  };
+}
+
+function applyAccentOverrides(accent?: string | null): () => void {
+  const overrides = deriveAccentOverrides(accent);
+  if (!overrides) return () => {};
+  const saved: Partial<Record<string, string>> = {};
+  for (const key of ACCENT_KEYS) {
+    const value = overrides[key];
+    if (value) {
+      saved[key] = (COLORS as Record<string, string>)[key];
+      (COLORS as Record<string, string>)[key] = value;
+    }
+  }
+  return () => {
+    for (const key of Object.keys(saved)) (COLORS as Record<string, string>)[key] = saved[key]!;
+  };
+}
+
+// PDFKit's doc.image supports PNG/JPEG only (not SVG). Decode a firm logo data-URI to a
+// Buffer, validating the magic bytes; return null on anything unsupported.
+function decodeFirmLogo(dataUri?: string | null): Buffer | null {
+  if (!dataUri) return null;
+  try {
+    const match = dataUri.match(/^data:image\/(png|jpe?g);base64,(.+)$/i);
+    if (!match) return null;
+    const buffer = Buffer.from(match[2], 'base64');
+    const isPng = buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+    const isJpg = buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    return isPng || isJpg ? buffer : null;
+  } catch {
+    return null;
+  }
+}
 
 function registerReportFonts(doc: PdfDoc) {
   try {
@@ -493,9 +591,23 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
   });
 
   doc.rect(PAGE.left, 76, 82, 5).fill(COLORS.cyan);
-  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text('PatentNest.ai', PAGE.left, 96, { width: 300 });
+  // Co-branding: a firm's logo (or name) leads the cover; otherwise the PatentNest wordmark.
+  const firm = report.firm;
+  const logoBuffer = decodeFirmLogo(firm?.logoDataUri);
+  let subtitleY = 128;
+  if (logoBuffer) {
+    try {
+      doc.image(logoBuffer, PAGE.left, 90, { fit: [210, 48] });
+      subtitleY = 150;
+    } catch {
+      doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text(firm?.firmName || 'PatentNest.ai', PAGE.left, 96, { width: 390 });
+      subtitleY = 128;
+    }
+  } else {
+    doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text(firm?.firmName || 'PatentNest.ai', PAGE.left, 96, { width: 390 });
+  }
   doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3)
-    .text(cleanText(report.reportTitle, 'Preliminary Novelty Assessment Report'), PAGE.left, 128, { width: 420 });
+    .text(cleanText(report.reportTitle, 'Preliminary Novelty Assessment Report'), PAGE.left, subtitleY, { width: 420 });
 
   // The invention itself is the cover headline; the report type is already stated in
   // the subtitle above (previously the same phrase appeared twice on the cover).
@@ -519,6 +631,26 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
     doc.fillColor(COLORS.white).font(FONTS.regular).fontSize(TYPE.small).text(truncate(value, 96), PAGE.left + 140, y, { width: 290 });
     y += SPACE.xl - SPACE.xs;
   });
+
+  // Firm contact line (address / phone / email / website) in the cover footer band.
+  if (firm) {
+    const contact = [
+      formatFirmAddressLines(firm).join(', '),
+      firm.phone,
+      firm.email,
+      firm.website,
+    ].filter(Boolean).join('   ·   ');
+    if (contact) {
+      doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.caption)
+        .text(contact, PAGE.left, height - 118, { width: contentWidth(doc), align: 'center' });
+    }
+  }
+
+  // Co-brand attribution: keep a subtle "Powered by PatentNest.ai" when a firm brand leads.
+  if (firm && report.showPoweredBy !== false) {
+    doc.fillColor('#93C5FD').font(FONTS.regular).fontSize(TYPE.micro)
+      .text('Powered by PatentNest.ai', PAGE.left, height - 96, { width: contentWidth(doc), align: 'center' });
+  }
 
   doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.caption)
     .text(report.confidentiality, PAGE.left, height - 74, { width: contentWidth(doc), align: 'center' });
@@ -1721,6 +1853,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { searchId: string } }
 ) {
+  let restoreAccent: (() => void) | null = null;
   try {
     const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -1735,8 +1868,14 @@ export async function GET(
     });
     if (!searchRun) return NextResponse.json({ error: 'Novelty search not found' }, { status: 404 });
 
+    // Tenant firm branding (co-brand cover / prepared-by / accent). Any tenant member may
+    // read it; loadFirmBranding is guarded and returns null if unavailable.
+    const firm = await loadFirmBranding(payload.tenant_id);
+
     const enrichedSearchRun = await hydrateNoveltyReportPatentMetadata(searchRun);
-    const report = buildNoveltyAttorneyReportModel(enrichedSearchRun);
+    const report = buildNoveltyAttorneyReportModel(enrichedSearchRun, firm);
+    // Apply the firm accent for this request's (synchronous) drawing pass; restored in finally.
+    restoreAccent = applyAccentOverrides(firm?.accentColor);
     const detailedComparisons = Array.isArray(report.mainComparisons) ? report.mainComparisons : report.comparisons;
     const patentComparisons = detailedComparisons.filter(item => item.referenceType !== 'paper');
     const paperComparisons = detailedComparisons.filter(item => item.referenceType === 'paper');
@@ -2121,5 +2260,8 @@ export async function GET(
   } catch (error) {
     console.error('[AttorneyReportPDF] Failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to generate attorney report PDF' }, { status: 500 });
+  } finally {
+    // Always restore the shared COLORS palette, even if drawing threw.
+    restoreAccent?.();
   }
 }

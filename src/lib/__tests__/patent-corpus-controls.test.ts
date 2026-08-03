@@ -49,6 +49,8 @@ vi.mock('@/lib/prisma', () => ({
       groupBy: vi.fn(),
     },
     ipIndiaJournalFile: {
+      findMany: vi.fn(),
+      update: vi.fn(),
       updateMany: vi.fn(),
     },
     $executeRaw: vi.fn(),
@@ -343,36 +345,39 @@ describe('patent corpus PDF-level controls', () => {
     beforeEach(() => {
       mockPrisma.patentImportFile.update.mockResolvedValue({ id: 'file-1' })
       mockPrisma.ipIndiaJournalFile.updateMany.mockResolvedValue({ count: 0 })
+      // The orphan-journal pass runs after the import-file pass; default it to no
+      // orphans so the existing cases exercise only the import-file path.
+      mockPrisma.ipIndiaJournalFile.findMany.mockResolvedValue([])
+      mockPrisma.ipIndiaJournalFile.update.mockResolvedValue({ id: 'journal-1' })
     })
 
     it('only considers finished imports with no embedding work in flight', async () => {
       await cleanupOldStoredPdfs()
 
       const where = mockPrisma.patentImportFile.findMany.mock.calls[0][0].where
-      expect(where.status).toEqual({ in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS'] })
+      // Terminal states only -- FAILED is included so its PDF is reclaimed too, but
+      // files still QUEUED/PROCESSING for extraction keep their PDF.
+      expect(where.status).toEqual({ in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED'] })
       expect(where.extractedPatents).toEqual({
         none: { embeddings: { some: { status: { in: ['QUEUED', 'PROCESSING'] } } } },
       })
     })
 
-    it('retires zero-patent PDFs on a shorter window than productive ones', async () => {
+    it('keeps the last month of downloads and sweeps older ones by ingest date', async () => {
       await cleanupOldStoredPdfs()
 
       const where = mockPrisma.patentImportFile.findMany.mock.calls[0][0].where
-      const [standard, empty] = where.OR
 
-      expect(standard).toEqual({ completedAt: { lt: expect.any(Date) } })
-      expect(empty).toEqual({
-        completedAt: { lt: expect.any(Date) },
-        patentPages: 0,
-        patentsCreated: 0,
-        patentsUpdated: 0,
-      })
+      // Age is measured from createdAt (download/ingest), on a single window --
+      // there is no separate empty-file window any more.
+      expect(where.OR).toBeUndefined()
+      expect(where.createdAt).toEqual({ lt: expect.any(Date) })
 
-      // Both windows are in the past, and the empty one retires sooner.
-      expect(standard.completedAt.lt.getTime()).toBeLessThan(Date.now())
-      expect(empty.completedAt.lt.getTime()).toBeLessThan(Date.now())
-      expect(empty.completedAt.lt.getTime()).toBeGreaterThan(standard.completedAt.lt.getTime())
+      // The cutoff is ~one month in the past.
+      const ageMs = Date.now() - where.createdAt.lt.getTime()
+      const day = 24 * 60 * 60 * 1000
+      expect(ageMs).toBeGreaterThan(29 * day)
+      expect(ageMs).toBeLessThan(31 * day)
     })
 
     it('deletes the PDF and clears both pointers to the shared file on disk', async () => {
@@ -434,6 +439,44 @@ describe('patent corpus PDF-level controls', () => {
       expect(mockPrisma.patentImportFile.update).not.toHaveBeenCalled()
       expect(mockPrisma.ipIndiaJournalFile.updateMany).not.toHaveBeenCalled()
       expect(result).toEqual({ checked: 1, deleted: 0 })
+    })
+
+    it('also reclaims orphaned journal PDFs that never became an import file', async () => {
+      mockPrisma.patentImportFile.findMany.mockResolvedValueOnce([])
+      mockPrisma.ipIndiaJournalFile.findMany.mockResolvedValueOnce([
+        { id: 'journal-1', storedPath: '/uploads/patent-corpus/ipindia-journals/orphan.pdf' },
+      ])
+
+      const result = await cleanupOldStoredPdfs()
+
+      // Only settled downloads with a PDF and no import file, on the same window.
+      const where = mockPrisma.ipIndiaJournalFile.findMany.mock.calls[0][0].where
+      expect(where.patentImportFileId).toBeNull()
+      expect(where.storedPath).toEqual({ not: null })
+      expect(where.status).toEqual({
+        in: ['DOWNLOADED', 'IMPORTED', 'EXTRACTED', 'EMBEDDED', 'SKIPPED', 'FAILED'],
+      })
+      expect(where.createdAt).toEqual({ lt: expect.any(Date) })
+
+      expect(mockFs.unlink).toHaveBeenCalledWith('/uploads/patent-corpus/ipindia-journals/orphan.pdf')
+      expect(mockPrisma.ipIndiaJournalFile.update).toHaveBeenCalledWith({
+        where: { id: 'journal-1' },
+        data: { storedPath: null },
+      })
+      expect(result).toEqual({ checked: 1, deleted: 1 })
+    })
+
+    it('spends the batch budget on import files first, leaving none for orphans', async () => {
+      mockPrisma.patentImportFile.findMany.mockResolvedValueOnce([
+        { id: 'file-1', storedPath: '/uploads/patent-corpus/a.pdf' },
+        { id: 'file-2', storedPath: '/uploads/patent-corpus/b.pdf' },
+      ])
+
+      const result = await cleanupOldStoredPdfs(2)
+
+      // Budget (2) fully consumed by import files, so the orphan pass is skipped.
+      expect(mockPrisma.ipIndiaJournalFile.findMany).not.toHaveBeenCalled()
+      expect(result).toEqual({ checked: 2, deleted: 2 })
     })
   })
 })

@@ -95,6 +95,7 @@ export default function ConsolidatedNoveltyReportPage() {
         <ConsolidatedNoveltyReport
           searchId={searchId}
           searchData={searchData.results || searchData}
+          firm={searchData.firm}
         />
       </div>
     </div>

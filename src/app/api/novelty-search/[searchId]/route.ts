@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
 import { NoveltySearchStage, NoveltySearchStatus, Prisma } from '@prisma/client';
 import { getNoveltyPublicStatus } from '@/lib/novelty-search-background-state';
+import { loadFirmBranding } from '@/lib/firm-profile-service';
 
 const noveltySearchService = new NoveltySearchService();
 
@@ -53,11 +54,15 @@ export async function GET(
     const publicStatus = getNoveltyPublicStatus(enrichedSearchRun as any);
     const isCancelled = publicStatus === 'CANCELLED';
 
+    // Tenant firm branding for co-branding the on-screen report (null when unset).
+    const firm = await loadFirmBranding(user.tenantId);
+
     return NextResponse.json({
       success: true,
       search: {
         id: enrichedSearchRun.id,
         title: enrichedSearchRun.title,
+        firm,
         // Needed by the drafting handoff screen to show the original disclosure alongside the
         // AI-refined version, and to default the destination project.
         inventionDescription: enrichedSearchRun.inventionDescription,

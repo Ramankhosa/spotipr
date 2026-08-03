@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { verifyJWT } from '@/lib/auth';
+import { loadFirmBranding } from '@/lib/firm-profile-service';
 import crypto from 'crypto';
 
 function parseOrigin(value: string | null | undefined): string | null {
@@ -106,6 +108,10 @@ export async function POST(
       );
     }
 
+    // Bake the firm branding into the snapshot so the co-brand survives on the public
+    // (unauthenticated) share page. It's the firm's own letterhead, safe to embed.
+    const firm = await loadFirmBranding(payload.tenant_id);
+
     const rawToken = crypto.randomBytes(32).toString('base64url');
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -113,6 +119,7 @@ export async function POST(
       searchId: searchRun.id,
       title: searchRun.title,
       jurisdiction: searchRun.jurisdiction,
+      firm,
       stage0Results: searchRun.stage0Results,
       stage1Results: searchRun.stage1Results,
       stage35Results: searchRun.stage35Results,
@@ -127,7 +134,7 @@ export async function POST(
         searchId: searchRun.id,
         userId: searchRun.userId,
         title: searchRun.title || 'Novelty Assessment Report',
-        snapshot,
+        snapshot: snapshot as Prisma.InputJsonValue,
         tokenHash,
         expiresAt
       }

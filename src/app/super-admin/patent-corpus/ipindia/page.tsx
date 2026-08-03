@@ -255,7 +255,9 @@ export default function IpIndiaPatentArchivePage() {
           until: until || undefined,
           part: part !== 'ALL' ? Number(part) : undefined,
           retryFailed: action === 'queue' || action === 'historical' || action === 'check-latest',
-          limit: settings?.latestCheckLimit || 1,
+          // The retention sweep is a full on-demand cleanup, not a "latest N" check --
+          // it must not be capped by latestCheckLimit (which defaults to 1).
+          limit: action === 'cleanup-pdfs' ? 1000 : (settings?.latestCheckLimit || 1),
         }),
       })
       const body = (await response.json().catch(() => ({}))) as ArchiveResponse & { result?: { queued?: number; sync?: { synced?: number } }; sync?: { synced?: number }; cleanup?: { checked?: number; deleted?: number } }

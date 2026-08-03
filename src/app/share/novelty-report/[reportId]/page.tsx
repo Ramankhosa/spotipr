@@ -109,6 +109,7 @@ export default function PublicNoveltyReportPage() {
         searchId={reportData.searchId}
         searchData={reportData}
         readOnly
+        firm={reportData.firm}
       />
     </div>
   );

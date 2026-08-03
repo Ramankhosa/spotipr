@@ -183,6 +183,40 @@ export interface AttorneyReportCombination {
   label: 'Inventive-step review';
 }
 
+// Tenant firm branding embedded into the report (cover, headers, footer). Pure type so it
+// can be imported by both the server PDF route and the client HTML report component; the
+// Prisma-record -> FirmBranding mapping lives in firm-profile-service.ts (server-only).
+export interface FirmBranding {
+  firmName: string;
+  logoDataUri?: string | null;
+  tagline?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  countryCode?: string | null;
+  postalCode?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  website?: string | null;
+  accentColor?: string | null;
+  showPoweredBy?: boolean;
+}
+
+/**
+ * Compose the firm's mailing address into human-readable lines for a report block.
+ * Client-safe (no server imports) so both the PDF route and the HTML report can use it.
+ */
+export function formatFirmAddressLines(firm: FirmBranding): string[] {
+  const lines: string[] = [];
+  if (firm.addressLine1) lines.push(firm.addressLine1);
+  if (firm.addressLine2) lines.push(firm.addressLine2);
+  const cityLine = [firm.city, firm.state, firm.postalCode].filter(Boolean).join(', ');
+  if (cityLine) lines.push(cityLine);
+  if (firm.countryCode) lines.push(firm.countryCode);
+  return lines;
+}
+
 export interface AttorneyReportModel {
   reportNumber: string;
   reportTitle: string;
@@ -192,6 +226,11 @@ export interface AttorneyReportModel {
   generatedDate: string;
   confidentiality: string;
   preparedBy: string;
+  // Optional firm white-label branding. Absent -> default PatentNest branding. Kept optional
+  // so existing AttorneyReportModel fixtures/tests keep compiling.
+  firm?: FirmBranding;
+  accentColor?: string;
+  showPoweredBy?: boolean;
   searchQuery: string;
   inventionFeatures: string[];
   evidenceBasis: string;
@@ -1721,6 +1760,9 @@ function sourceModeLabel(value: unknown): string {
   if (mode === 'INDIAN_ONLY') return 'India patents';
   if (mode === 'AUSTRALIA_ONLY') return 'Australia patents';
   if (mode === 'EPO_ONLY') return 'Europe patents';
+  // The local production corpus is a multi-jurisdiction index of ~55M patent records;
+  // surface that instead of the raw internal mode identifier.
+  if (mode === 'LOCAL_CORPUS') return 'PatentNest Global Patent Corpus — 55M+ international patent records';
   return mode;
 }
 
@@ -1996,7 +2038,7 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
   });
 }
 
-export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportModel {
+export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBranding | null): AttorneyReportModel {
   const stage0 = (searchRun.stage0Results || {}) as NormalizedIdea;
   const stage1 = searchRun.stage1Results || {};
   const stage35 = searchRun.stage35Results || {};
@@ -2327,7 +2369,10 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     sourceMode,
     generatedDate,
     confidentiality: 'Confidential review draft',
-    preparedBy: 'PatentNest.ai Patent Intelligence',
+    preparedBy: firm?.firmName ? firm.firmName : 'PatentNest.ai Patent Intelligence',
+    firm: firm ?? undefined,
+    accentColor: firm?.accentColor ?? undefined,
+    showPoweredBy: firm?.showPoweredBy ?? true,
     searchQuery: cleanText(stage0.searchQuery, '-'),
     inventionFeatures: stage0.inventionFeatures || [],
     evidenceBasis: 'Disclaimer: This preliminary assessment is based on limited preliminary data. Review the full patent text, claims, specification, drawings, family/legal status, and prosecution history before any final conclusion.',

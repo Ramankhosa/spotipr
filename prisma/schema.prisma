@@ -132,6 +132,9 @@ model Tenant {
   subscriptions Subscription[]
   payments      Payment[]
 
+  // Firm branding / white-label profile (1:1)
+  firmProfile FirmProfile?
+
   @@map("tenants")
 }
 
@@ -483,6 +486,33 @@ model ApplicantProfile {
   project                    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@map("applicant_profiles")
+}
+
+// Tenant-level firm identity + white-label branding, embedded into novelty reports
+// (and, later, filing documents). Tenant-scoped 1:1. All fields optional except the
+// firm name so a partially-filled profile still renders; absence = default PatentNest branding.
+model FirmProfile {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  firmName      String
+  logoDataUri   String? // base64 data-URI; PNG/JPEG only; <= ~500KB (enforced in Zod)
+  tagline       String?
+  addressLine1  String?
+  addressLine2  String?
+  city          String?
+  state         String?
+  countryCode   String? // ISO-2
+  postalCode    String?
+  phone         String? // E.164
+  email         String?
+  website       String?
+  accentColor   String? // hex #RRGGBB - drives the novelty report accent color
+  showPoweredBy Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("firm_profiles")
 }
 
 model ProjectCollaborator {

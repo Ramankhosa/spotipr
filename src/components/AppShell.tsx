@@ -25,6 +25,7 @@ import {
   Scale,
   Users,
   Building2,
+  BadgeCheck,
   BarChart3,
   ShieldCheck,
   ChevronsLeft,
@@ -78,6 +79,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   'super-admin': 'Admin',
   users: 'Users',
   teams: 'Teams',
+  'firm-profile': 'Firm Profile',
   analytics: 'Analytics',
   'email-drafting': 'Email Drafting',
   requests: 'Requests',
@@ -99,7 +101,7 @@ const LINKABLE_PATTERNS = [
   /^\/office-actions$/,
   /^\/patents\/draft\/batch$/,
   /^\/patents\/draft\/batch\/history$/,
-  /^\/tenant-admin\/(users|teams|analytics)$/
+  /^\/tenant-admin\/(users|teams|analytics|firm-profile)$/
 ]
 
 function segmentLabel(segment: string): string {
@@ -187,6 +189,7 @@ const MAIN_NAV: NavItem[] = [
 ]
 
 const TENANT_ADMIN_NAV: NavItem[] = [
+  { label: 'Firm Profile', href: '/tenant-admin/firm-profile', icon: BadgeCheck },
   { label: 'Users', href: '/tenant-admin/users', icon: Users },
   { label: 'Teams', href: '/tenant-admin/teams', icon: Building2 },
   { label: 'Usage Analytics', href: '/tenant-admin/analytics', icon: BarChart3 }

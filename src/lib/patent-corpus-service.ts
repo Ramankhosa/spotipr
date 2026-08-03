@@ -1791,22 +1791,56 @@ export async function deletePatentImportFileStoredPdf(batchId: string, fileId: s
 }
 
 const STORED_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_PDF_RETENTION_DAYS || '30') || 30)
-// Journal parts that yield no patents at all (Part III design/corrigenda issues)
-// are dead weight, so they go sooner. Not immediately, though: clearing a file's
-// records by hand zeroes these same counters and promises the PDF stays around
-// for a rerun, so this window has to be wide enough to honour that.
-const EMPTY_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_EMPTY_PDF_RETENTION_DAYS || '7') || 7)
 
 /**
- * Deletes journal PDFs whose extraction finished more than
- * STORED_PDF_RETENTION_DAYS ago. Only the file on disk goes away: extracted
- * LocalPatent rows and their embeddings are never touched, and embeddings can
- * still be requeued afterwards because they are rebuilt from embeddingText /
- * ragText in the database rather than from the PDF. Rerunning extraction does
- * need the PDF, so a cleaned file has to be uploaded again for that.
+ * Removes one PDF from disk. Returns whether the caller should clear the row's
+ * stored-path pointer (`cleared`: true on a real delete or when the file was
+ * already gone, false when the OS refused -- e.g. the file is locked -- so the
+ * row is left for a later pass) and whether a file was actually removed
+ * (`deleted`, for the tally).
+ */
+async function unlinkStoredPdf(storedPath: string): Promise<{ cleared: boolean; deleted: boolean }> {
+  try {
+    await fs.unlink(storedPath)
+    return { cleared: true, deleted: true }
+  } catch (error) {
+    // ENOENT means it is already gone; still clear the pointer so the row stops
+    // being rescanned. Any other error (locked/permission) leaves the row as-is.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { cleared: true, deleted: false }
+    }
+    console.warn(`[PatentCorpus] Failed to delete stored PDF ${storedPath}:`, error)
+    return { cleared: false, deleted: false }
+  }
+}
+
+/**
+ * Reclaims disk by deleting stored PDFs that were ingested more than
+ * STORED_PDF_RETENTION_DAYS ago (one month by default) -- so only the last
+ * month of downloads is kept and everything older is swept. Age is measured
+ * from createdAt (when the PDF was downloaded / uploaded), not from when
+ * extraction finished, so "kept if downloaded in the last month" holds exactly.
  *
- * Files that extracted no patents at all are dropped on the shorter
- * EMPTY_PDF_RETENTION_DAYS window, since nothing in the corpus came out of them.
+ * A PDF is only removed once its processing is done:
+ *   - the import file is in a terminal state (COMPLETED, COMPLETED_WITH_WARNINGS
+ *     or FAILED). A file still QUEUED/PROCESSING for extraction keeps its PDF,
+ *     since extraction needs it.
+ *   - no embedding for its extracted patents is still QUEUED/PROCESSING -- the
+ *     "embedding is complete" guard, so we never pull a PDF mid-embed. FAILED and
+ *     empty files have no embeddings, so they pass this guard immediately.
+ *
+ * A second pass reclaims journal PDFs pulled straight from the IP India site that
+ * never became an import file (a download that stalled before extraction): those
+ * are referenced only by ipIndiaJournalFile, so the import-file pass never sees
+ * them. Same one-month window; with no import file there are no patents or
+ * embeddings to guard, and pre-download states (DISCOVERED/QUEUED) have no PDF
+ * yet while DOWNLOADING is still in flight -- all excluded.
+ *
+ * Only the file on disk goes away: extracted LocalPatent rows and their
+ * embeddings are never touched, and embeddings can still be requeued afterwards
+ * because they are rebuilt from embeddingText / ragText in the database rather
+ * than from the PDF. Rerunning *extraction* does need the PDF, so a cleaned file
+ * (including a FAILED one) has to be uploaded again for that.
  *
  * storedPath is cleared once the file is gone. That keeps this scan moving
  * forward -- a row it already handled stops matching -- and makes
@@ -1814,44 +1848,32 @@ const EMPTY_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_EM
  */
 export async function cleanupOldStoredPdfs(limit = 50) {
   const cutoff = new Date(Date.now() - STORED_PDF_RETENTION_DAYS * 24 * 60 * 60 * 1000)
-  const emptyCutoff = new Date(Date.now() - EMPTY_PDF_RETENTION_DAYS * 24 * 60 * 60 * 1000)
 
   const files = await (prisma as any).patentImportFile.findMany({
     where: {
-      status: { in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS'] },
+      // Only reclaim once extraction is finished; a PDF still awaiting extraction
+      // (QUEUED/PROCESSING) must be kept because extraction still needs it.
+      status: { in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED'] },
       storedPath: { not: '' },
-      // Never pull the PDF out from under embedding work that is still running.
+      // "Embedding is complete": never pull the PDF while any embedding for its
+      // patents is still running.
       extractedPatents: {
         none: { embeddings: { some: { status: { in: ['QUEUED', 'PROCESSING'] } } } },
       },
-      OR: [
-        { completedAt: { lt: cutoff } },
-        {
-          completedAt: { lt: emptyCutoff },
-          patentPages: 0,
-          patentsCreated: 0,
-          patentsUpdated: 0,
-        },
-      ],
+      // Kept if downloaded within the last month; older downloads are swept.
+      createdAt: { lt: cutoff },
     },
-    orderBy: { completedAt: 'asc' },
+    orderBy: { createdAt: 'asc' },
     select: { id: true, storedPath: true },
     take: limit,
   })
 
   let deleted = 0
+  let checked = files.length
   for (const file of files) {
-    try {
-      await fs.unlink(file.storedPath)
-      deleted++
-    } catch (error) {
-      // ENOENT means it is already gone; fall through so the row still gets
-      // cleared and stops being rescanned on every idle tick.
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(`[PatentCorpus] Failed to delete stored PDF ${file.storedPath}:`, error)
-        continue
-      }
-    }
+    const { cleared, deleted: removed } = await unlinkStoredPdf(file.storedPath)
+    if (!cleared) continue
+    if (removed) deleted++
 
     await (prisma as any).patentImportFile.update({
       where: { id: file.id },
@@ -1865,11 +1887,41 @@ export async function cleanupOldStoredPdfs(limit = 50) {
     })
   }
 
+  // Second pass: orphaned journal downloads (no import file). Spend whatever is
+  // left of the batch budget so one sweep can never exceed `limit` deletions.
+  const orphanBudget = Math.max(0, limit - files.length)
+  if (orphanBudget > 0) {
+    const orphans = await (prisma as any).ipIndiaJournalFile.findMany({
+      where: {
+        patentImportFileId: null,
+        storedPath: { not: null },
+        status: { in: ['DOWNLOADED', 'IMPORTED', 'EXTRACTED', 'EMBEDDED', 'SKIPPED', 'FAILED'] },
+        createdAt: { lt: cutoff },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, storedPath: true },
+      take: orphanBudget,
+    })
+
+    checked += orphans.length
+    for (const orphan of orphans) {
+      if (!orphan.storedPath) continue
+      const { cleared, deleted: removed } = await unlinkStoredPdf(orphan.storedPath)
+      if (!cleared) continue
+      if (removed) deleted++
+
+      await (prisma as any).ipIndiaJournalFile.update({
+        where: { id: orphan.id },
+        data: { storedPath: null },
+      })
+    }
+  }
+
   if (deleted > 0) {
     console.info(`[PatentCorpus] Cleaned up ${deleted} stored PDF(s) older than ${STORED_PDF_RETENTION_DAYS} days`)
   }
 
-  return { checked: files.length, deleted }
+  return { checked, deleted }
 }
 
 export async function deletePatentImportFileExtractions(batchId: string, fileId: string) {
