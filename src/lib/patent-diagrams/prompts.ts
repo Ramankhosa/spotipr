@@ -1,4 +1,4 @@
-import type { FigureSetPlanItem, PatentDiagramComponent, PatentDiagram } from './types'
+import type { FigureCoverageLedger, FigureSetPlanItem, PatentDiagramComponent, PatentDiagram } from './types'
 import { PATENT_DIAGRAM_STYLE } from './style'
 import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
 
@@ -67,8 +67,6 @@ const NON_FIGURE_CONTEXT_KEYS = new Set([
   'claimsApprovedAt',
   'claimsApprovedBy',
   'claimsGeneratedAt',
-  'sourceFactLedger',
-  'supportDataSources',
   'detailedDescriptionSourceSelection',
   'detailedDescriptionInjectionControls',
   'normalizationReviewWarnings',
@@ -80,21 +78,41 @@ const NON_FIGURE_CONTEXT_KEYS = new Set([
 const MAXIMUM_CONTEXT_CHARACTERS = 12_000
 const MAXIMUM_CLAIMS_CHARACTERS = 6_000
 
-function truncateForPrompt(value: string, limit: number): string {
-  return value.length <= limit ? value : `${value.slice(0, limit)}\n…[truncated for prompt budget]`
-}
-
 function compactInventionContext(context: unknown): string {
   if (!context || typeof context !== 'object') return JSON.stringify(context ?? {})
-  const filtered = Object.fromEntries(
-    Object.entries(context as Record<string, unknown>)
-      .filter(([key, value]) => !NON_FIGURE_CONTEXT_KEYS.has(key) && value != null && value !== ''),
-  )
-  return truncateForPrompt(JSON.stringify(filtered), MAXIMUM_CONTEXT_CHARACTERS)
+  const priority = [
+    'processSteps', 'relationships', 'interactions', 'materials', 'constituents',
+    'conditions', 'ranges', 'quantities', 'embodiments', 'alternatives',
+    'sourceFactLedger', 'supportDataSources', 'technicalProblem', 'technicalSolution',
+    'novelFeatures', 'advantages', 'detailedDescription',
+  ]
+  const entries = Object.entries(context as Record<string, unknown>)
+    .filter(([key, value]) => !NON_FIGURE_CONTEXT_KEYS.has(key) && value != null && value !== '')
+    .sort(([left], [right]) => {
+      const leftPriority = priority.indexOf(left)
+      const rightPriority = priority.indexOf(right)
+      return (leftPriority < 0 ? priority.length : leftPriority) - (rightPriority < 0 ? priority.length : rightPriority)
+    })
+  const selected: Record<string, unknown> = {}
+  for (const [key, value] of entries) {
+    const candidate = JSON.stringify({ ...selected, [key]: value })
+    if (candidate.length <= MAXIMUM_CONTEXT_CHARACTERS) selected[key] = value
+  }
+  return JSON.stringify(selected)
 }
 
 function compactClaimsContext(claims: unknown): string {
-  return truncateForPrompt(JSON.stringify(claims ?? []), MAXIMUM_CLAIMS_CHARACTERS)
+  const rows = Array.isArray(claims)
+    ? claims
+    : claims && typeof claims === 'object' && Array.isArray((claims as any).claims)
+      ? (claims as any).claims
+      : [claims]
+  const selected: unknown[] = []
+  for (const row of rows.filter(Boolean)) {
+    const candidate = JSON.stringify([...selected, row])
+    if (candidate.length <= MAXIMUM_CLAIMS_CHARACTERS) selected.push(row)
+  }
+  return JSON.stringify(selected)
 }
 
 export function buildFigureSetPlanningPrompt(input: {
@@ -104,15 +122,21 @@ export function buildFigureSetPlanningPrompt(input: {
   claimsContext: unknown
   components: PatentDiagramComponent[]
   evidenceCatalog?: Array<{ id: string; value: string }>
+  coverageLedger?: FigureCoverageLedger
+  existingFigures?: Array<{ figureNo: number; title: string; kind?: string | null; componentIds: string[]; coverageRequirementIds: string[] }>
   figureCount?: number | null
+  exactFigureCount?: boolean
   instructions?: string
 }): string {
   const catalog = input.evidenceCatalog || []
   const processSteps = catalog.filter(item => item.id.startsWith('SF-processSteps-'))
   const claimCritical = claimCriticalComponentIds(input.components)
-  const countRule = input.figureCount
-    ? `Plan exactly ${input.figureCount} base figure(s), before any density-driven detail figures.`
-    : 'Choose the smallest figure set that covers the claims — never more than 6 figures. The server discards any figure past the sixth. One of the six may be an enlarged detail view of a region of another figure when that region is too dense to read at filing scale.'
+  const requiredCoverageIds = (input.coverageLedger?.requirements || []).filter(item => item.required).map(item => item.id)
+  const countRule = input.figureCount && input.exactFigureCount
+    ? `Plan exactly ${input.figureCount} figure(s), one per non-empty manual instruction.`
+    : input.figureCount
+      ? `Prefer ${input.figureCount} base figure(s), but exceed that count when required for complete claim coverage or filing-scale density.`
+    : 'Choose the smallest figure set that covers the claims. Target no more than 6 figures, but exceed six when coverage or filing-scale density requires it. Never omit content merely to hit six.'
   return `You are the PatentNest patent figure-set planner.
 
 Return JSON only. Do not return PlantUML, styling, reference numerals, prose outside JSON, or markdown fences.
@@ -127,14 +151,15 @@ ${claimCritical.length
   ? `These components are named by the claims and every one of them must appear in the componentIds of at least one figure: ${claimCritical.join(', ')}. List the ones a figure covers in that figure's claimCriticalComponentIds.`
   : `Claim-to-component matching is unavailable for this invention; use the claims context below to judge what must be covered.`}
 Preserve claim-critical coverage. Prefer functional patent terminology over APIs, SDKs, vendors, or implementation details.
+${requiredCoverageIds.length ? `Every required coverage ID must appear in coverageRequirementIds of at least one new or existing figure: ${requiredCoverageIds.join(', ')}.` : ''}
 Depict only subject matter disclosed in the invention context, claims, or component registry. Never plan figures, phases, or steps for generic product-lifecycle activity (installation, deployment, login, registration, onboarding, testing, monitoring, maintenance, error handling) unless the disclosure claims it as part of the invention.
 Plan subsystem and phase order explicitly. Split coverage across figures instead of overloading one figure.
-Stay within per-figure complexity budgets. Each planned figure is rendered as exactly one sheet — a figure that exceeds its budget is not split for you, it ships as one crowded, hard-to-read drawing. Budgets: COMPONENT at most ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents} components and ${PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands} subsystem bands, PROCESS at most ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes} steps, SEQUENCE at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions} interactions, CONSTITUENT at most ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents} constituents.
+Stay within per-figure complexity budgets. A figure that still exceeds a jurisdiction or page-fit budget is automatically split into filing-scale sheets without dropping its coverage obligations. Budgets: COMPONENT at most ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents} components and ${PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands} subsystem bands, PROCESS at most ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes} steps, SEQUENCE at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions} interactions, CONSTITUENT at most ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents} constituents.
 ${countRule}
 
 Required JSON shape:
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "figures": [{
     "key": "stable-key",
     "kind": "COMPONENT|SEQUENCE|PROCESS|CONSTITUENT",
@@ -146,7 +171,8 @@ Required JSON shape:
     "claimCriticalComponentIds": ["component-id"],
     "orderedGroups": [{"id":"group-id","label":"short subsystem label","componentIds":["component-id"]}],
     "phaseHints": ["short phase label"],
-    "evidenceIds": ["disclosed-step-id — PROCESS figures only; empty for other kinds"]
+    "evidenceIds": ["supported evidence or claim-evidence ID"],
+    "coverageRequirementIds": ["required coverage ID"]
   }]
 }
 
@@ -158,6 +184,11 @@ ${compactInventionContext(input.inventionContext)}
 
 CLAIMS CONTEXT:
 ${compactClaimsContext(input.claimsContext)}
+
+CLAIM/DISCLOSURE COVERAGE LEDGER (authoritative; cover every required ID):
+${JSON.stringify(input.coverageLedger || { basis: 'DISCLOSURE', requirements: [] }, null, 2)}
+
+${input.existingFigures?.length ? `EXISTING FIGURES (do not duplicate their coverage):\n${JSON.stringify(input.existingFigures, null, 2)}` : 'EXISTING FIGURES: none supplied.'}
 
 ${processSteps.length
   ? `DISCLOSED METHOD STEPS (the only operations a PROCESS figure may depict):\n${processSteps.map(item => `- ${item.id}: ${item.value}`).join('\n')}`
@@ -173,6 +204,7 @@ export function buildDiagramDetailPrompt(input: {
   claimsContext: unknown
   components: PatentDiagramComponent[]
   evidenceCatalog?: Array<{ id: string; value: string }>
+  coverageLedger?: FigureCoverageLedger
   existingDiagram?: PatentDiagram | null
   instructions?: string
 }): string {
@@ -181,24 +213,24 @@ export function buildDiagramDetailPrompt(input: {
   "kind":"COMPONENT", "systemBoundaryLabel":"short system name",
   "groups":[{"id":"group-id","label":"subsystem label","rows":[{"componentIds":["one-to-${PATENT_DIAGRAM_STYLE.maximumComponentsPerRow} IDs in semantic order"]}]}],
   "components":[{"componentId":"id","displayLabel":"maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","optional":false,"external":false}],
-  "relationships":[{"fromId":"id","toId":"id","category":"PRIMARY|DATA_INPUT|TECHNICAL_OUTPUT|EVIDENCE|GENERATED_CONTENT|CONTROL|CONFIGURATION|VALIDATION|RESPONSE|REVIEW_FEEDBACK|STORAGE|OPTIONAL|ASSOCIATION"}]
+  "relationships":[{"fromId":"id","toId":"id","category":"PRIMARY|DATA_INPUT|TECHNICAL_OUTPUT|EVIDENCE|GENERATED_CONTENT|CONTROL|CONFIGURATION|VALIDATION|RESPONSE|REVIEW_FEEDBACK|STORAGE|OPTIONAL|ASSOCIATION","evidenceIds":["id"],"coverageRequirementIds":["id"]}]
 }`
     : input.plan.kind === 'SEQUENCE'
       ? `{
   "kind":"SEQUENCE",
   "participants":[{"componentId":"id","displayLabel":"maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words"}],
-  "interactions":[{"order":1,"fromId":"id","toId":"id","label":"maximum ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words","category":"PRIMARY|RESPONSE|CONTROL|OPTIONAL","phase":"short phase","alternative":{"condition":"short condition","branch":"IF|ELSE"}}]
+  "interactions":[{"order":1,"fromId":"id","toId":"id","label":"maximum ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words","category":"PRIMARY|RESPONSE|CONTROL|OPTIONAL","phase":"short phase","alternative":{"condition":"short condition","branch":"IF|ELSE"},"evidenceIds":["id"],"coverageRequirementIds":["id"]}]
 }`
       : input.plan.kind === 'PROCESS'
         ? `{
   "kind":"PROCESS",
-  "nodes":[{"key":"stable-step-key","kind":"STEP|DECISION","componentId":"registry ID performing this step — REQUIRED for STEP","relatedComponentIds":["other participating registry IDs"],"evidenceIds":["catalog IDs this step paraphrases — REQUIRED when the catalog is non-empty"],"label":"verb-led maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","phase":"short phase"}],
-  "transitions":[{"fromId":"step-key","toId":"step-key","label":"decision outcome only (e.g. yes/no); empty string for step-to-step","category":"PRIMARY|CONTROL|OPTIONAL"}]
+  "nodes":[{"key":"stable-step-key","kind":"STEP|DECISION","componentId":"registry ID performing this step — REQUIRED for STEP","relatedComponentIds":["other participating registry IDs"],"evidenceIds":["catalog IDs this step paraphrases"],"coverageRequirementIds":["planned coverage IDs"],"label":"verb-led maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","phase":"short phase"}],
+  "transitions":[{"fromId":"step-key","toId":"step-key","label":"decision outcome only (e.g. yes/no); empty string for step-to-step","category":"PRIMARY|CONTROL|OPTIONAL","evidenceIds":["id"],"coverageRequirementIds":["id"]}]
 }`
         : `{
   "kind":"CONSTITUENT", "boundaryLabel":"short composition name",
-  "constituents":[{"componentId":"id","displayLabel":"maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","technicalRole":"short supported role","quantityOrRange":"only when disclosed"}],
-  "relationships":[{"fromId":"id","toId":"id","category":"ASSOCIATION|PRIMARY|OPTIONAL"}]
+  "constituents":[{"componentId":"id","displayLabel":"maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","technicalRole":"short supported role","quantityOrRange":"only when disclosed","evidenceIds":["id"],"coverageRequirementIds":["id"]}],
+  "relationships":[{"fromId":"id","toId":"id","category":"ASSOCIATION|PRIMARY|OPTIONAL","evidenceIds":["id"],"coverageRequirementIds":["id"]}]
 }`
 
   return `You are the PatentNest semantic figure detailer.
@@ -219,7 +251,7 @@ Only SEQUENCE interaction labels and PROCESS decision-branch outcomes are drawn;
 The code will assign canonical names/reference signs, wrapping, rows, arrows, and all visual styling.
 
 Every response must include the common fields:
-{"schemaVersion":1,"key":"${input.plan.key}","title":"${input.plan.title}","purpose":"${input.plan.purpose}","detailLevel":"${input.plan.detailLevel}","direction":"${input.plan.direction}","claimCriticalComponentIds":${JSON.stringify(input.plan.claimCriticalComponentIds)},"evidenceIds":["supported-evidence-id"]}
+{"schemaVersion":2,"key":"${input.plan.key}","title":"${input.plan.title}","purpose":"${input.plan.purpose}","detailLevel":"${input.plan.detailLevel}","direction":"${input.plan.direction}","claimCriticalComponentIds":${JSON.stringify(input.plan.claimCriticalComponentIds)},"evidenceIds":${JSON.stringify(input.plan.evidenceIds)},"coverageRequirementIds":${JSON.stringify(input.plan.coverageRequirementIds)}}
 
 Use one or more IDs from the supported evidence catalog when it is non-empty. Do not invent evidence IDs.
 
@@ -241,6 +273,9 @@ ${compactClaimsContext(input.claimsContext)}
 
 SUPPORTED EVIDENCE CATALOG:
 ${evidenceCatalogBlock(input.evidenceCatalog || [])}
+
+PLANNED COVERAGE REQUIREMENTS (every planned ID must be represented by a semantic node, edge, interaction, transition, or constituent):
+${JSON.stringify((input.coverageLedger?.requirements || []).filter(item => input.plan.coverageRequirementIds.includes(item.id)), null, 2)}
 
 COMPONENT PLANNER REGISTRY (listed in disclosed order; preserve it):
 ${componentLines(input.components)}`

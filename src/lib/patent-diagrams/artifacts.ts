@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import crypto from 'crypto'
 import { renderPlantUml } from '@/lib/plantuml-renderer'
 import { PATENT_DIAGRAM_STYLE } from './style'
 import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
@@ -83,12 +84,19 @@ export async function renderAndWriteDiagramArtifacts(input: {
   const baseDir = path.join(process.cwd(), 'uploads', 'patents', input.patentId, 'figures')
   await fs.mkdir(baseDir, { recursive: true })
   const suffix = input.language && input.language !== 'en' ? `_${input.language}` : ''
-  const stamp = Date.now()
+  // Unique names keep the new render isolated until its database transaction
+  // commits; an older exported artifact is never overwritten in place.
+  const stamp = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`
   const svgFilename = `figure_${input.figureNo}${suffix}_${stamp}.svg`
   const pngFilename = `figure_${input.figureNo}${suffix}_${stamp}.png`
   const svgPath = path.join(baseDir, svgFilename)
   const pngPath = path.join(baseDir, pngFilename)
-  await Promise.all([fs.writeFile(svgPath, svg.buffer), fs.writeFile(pngPath, png.buffer)])
+  try {
+    await Promise.all([fs.writeFile(svgPath, svg.buffer), fs.writeFile(pngPath, png.buffer)])
+  } catch (error) {
+    await Promise.allSettled([fs.unlink(svgPath), fs.unlink(pngPath)])
+    throw error
+  }
   const artifacts: DiagramRenderArtifacts = {
     svg: { filename: svgFilename, path: svgPath, checksum: svg.checksum, contentType: svg.contentType, width: svg.width, height: svg.height },
     png: { filename: pngFilename, path: pngPath, checksum: png.checksum, contentType: png.contentType },

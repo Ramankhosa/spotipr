@@ -380,10 +380,14 @@ describe('complexity and filing validation', () => {
     }))
     const diagram = patentDiagramSchema.parse({
       schemaVersion: 1, kind: 'COMPONENT', key: 'complex', title: 'Complex System', purpose: 'Show system',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c1', 'c24'], systemBoundaryLabel: 'Complex System',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c1', 'c24'],
+      evidenceIds: ['CLM-node', 'CLM-relation'], coverageRequirementIds: ['COV-node', 'COV-relation'], systemBoundaryLabel: 'Complex System',
       groups,
-      components: components.map(component => ({ componentId: component.id })),
-      relationships: Array.from({ length: 23 }, (_, index) => ({ fromId: `c${index + 1}`, toId: `c${index + 2}`, label: 'technical flow', category: 'PRIMARY' })),
+      components: components.map(component => ({ componentId: component.id, coverageRequirementIds: component.id === 'c24' ? ['COV-node'] : [] })),
+      relationships: Array.from({ length: 23 }, (_, index) => ({
+        fromId: `c${index + 1}`, toId: `c${index + 2}`, label: 'technical flow', category: 'PRIMARY',
+        evidenceIds: index === 3 ? ['CLM-relation'] : [], coverageRequirementIds: index === 3 ? ['COV-relation'] : [],
+      })),
     })
     expect(analyzeDiagramComplexity(diagram).requiresSplit).toBe(true)
     const split = decomposePatentDiagram(diagram)
@@ -395,6 +399,21 @@ describe('complexity and filing validation', () => {
     const preservedRelationships = split.slice(1).flatMap(item => item.kind === 'COMPONENT' ? item.relationships : [])
     expect(preservedRelationships).toHaveLength(23)
     expect(new Set(preservedRelationships.map(link => `${link.fromId}:${link.toId}`)).size).toBe(23)
+    expect(new Set(split.flatMap(item => item.coverageRequirementIds))).toEqual(new Set(['COV-node', 'COV-relation']))
+    for (const item of split) {
+      if (item.kind !== 'COMPONENT') continue
+      const atomic = new Set([
+        ...item.components.flatMap(node => node.coverageRequirementIds),
+        ...item.relationships.flatMap(link => link.coverageRequirementIds),
+      ])
+      expect(new Set(item.coverageRequirementIds)).toEqual(atomic)
+    }
+    const originalPairs = new Set((diagram.kind === 'COMPONENT' ? diagram.relationships : []).map(link => `${link.fromId}:${link.toId}`))
+    const overview = split[0]
+    expect(overview.kind).toBe('COMPONENT')
+    if (overview.kind === 'COMPONENT') {
+      expect(overview.relationships.every(link => originalPairs.has(`${link.fromId}:${link.toId}`))).toBe(true)
+    }
   })
 
   test('preserves sequence interactions, process transitions, and constituent relationships across splits', () => {

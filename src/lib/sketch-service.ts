@@ -1841,13 +1841,36 @@ export async function createSketchSuggestions(
   patentId: string,
   sessionId: string,
   suggestions: SketchSuggestion[]
-): Promise<{ created: number; sketchIds: string[] }> {
+): Promise<{ created: number; sketchIds: string[]; sketches: any[] }> {
   const sketchIds: string[] = []
+  const sketches: any[] = []
+  let created = 0
+
+  // "Suggest views" is a reusable library, not a transient generation queue.
+  // Avoid adding the same suggestion again when a user repeats the request,
+  // while leaving prior suggestions available for later generations.
+  const existing = await prisma.sketchRecord.findMany({
+    where: { patentId, sessionId, status: 'SUGGESTED', isDeleted: false },
+  })
+  const signature = (title: string, description: string) =>
+    `${title.trim().toLocaleLowerCase()}\u0000${description.trim().toLocaleLowerCase()}`
+  const bySignature = new Map(existing.map(sketch => [
+    signature(sketch.title, sketch.description || ''),
+    sketch,
+  ]))
   
   for (const suggestion of suggestions) {
     // Validate suggestion has required fields
     if (!suggestion.title || !suggestion.description) {
       console.warn('[SketchService] Skipping invalid suggestion:', suggestion)
+      continue
+    }
+
+    const suggestionSignature = signature(suggestion.title, suggestion.description)
+    const existingSketch = bySignature.get(suggestionSignature)
+    if (existingSketch) {
+      sketchIds.push(existingSketch.id)
+      sketches.push(existingSketch)
       continue
     }
     
@@ -1864,10 +1887,13 @@ export async function createSketchSuggestions(
     })
     
     sketchIds.push(sketch.id)
+    sketches.push(sketch)
+    bySignature.set(suggestionSignature, sketch)
+    created++
   }
   
-  console.log(`[SketchService] Created ${sketchIds.length} sketch suggestions`)
-  return { created: sketchIds.length, sketchIds }
+  console.log(`[SketchService] Saved ${sketches.length} sketch suggestions (${created} new)`)
+  return { created, sketchIds, sketches }
 }
 
 /**
@@ -1897,11 +1923,29 @@ export async function generateFromSuggestion(
     return { success: false, error: 'Access denied' }
   }
 
-  // Mark as pending
-  await prisma.sketchRecord.update({
-    where: { id: sketchId },
-    data: { status: 'PENDING' }
+  // Keep the SUGGESTED record as a reusable template. Every click creates a
+  // separate derived record so the same view can be generated again later,
+  // and failed attempts never destroy or hide the original suggestion.
+  const generatedSketch = await prisma.sketchRecord.create({
+    data: {
+      patentId: sketch.patentId,
+      sessionId: sketch.sessionId,
+      mode: 'GUIDED',
+      status: 'PENDING',
+      title: sketch.title,
+      description: sketch.description,
+      userPrompt: sketch.description,
+      contextFlags: {
+        useIdeaSummary: true,
+        useClaims: true,
+        useDiagrams: true,
+        useComponents: true,
+      },
+      sourceSketchId: sketch.id,
+      attemptCount: 0,
+    }
   })
+  const generatedSketchId = generatedSketch.id
 
   try {
     // Build context bundle from session
@@ -1916,7 +1960,7 @@ export async function generateFromSuggestion(
     
     if (modelCandidates.length === 0) {
       await prisma.sketchRecord.update({
-        where: { id: sketchId },
+        where: { id: generatedSketchId },
         data: {
           status: 'FAILED',
           errorMessage: 'No sketch generation model configured'
@@ -1924,7 +1968,7 @@ export async function generateFromSuggestion(
       })
       return {
         success: false,
-        sketchId,
+        sketchId: generatedSketchId,
         error: 'No sketch generation model configured. Please configure a model for "Sketch Generation" stage in Super Admin → LLM Config.'
       }
     }
@@ -1938,7 +1982,7 @@ export async function generateFromSuggestion(
 
     // Store prompt for debugging
     await prisma.sketchRecord.update({
-      where: { id: sketchId },
+      where: { id: generatedSketchId },
       data: { aiPromptUsed: userPrompt }
     })
 
@@ -1953,7 +1997,7 @@ export async function generateFromSuggestion(
 
     if (result.success && result.imageBase64) {
       // Save generated image
-      const filename = `sketch_${sketchId}_${Date.now()}.png`
+      const filename = `sketch_${generatedSketchId}_${Date.now()}.png`
       const filePath = path.join(SKETCH_UPLOAD_DIR, filename)
       await fs.mkdir(SKETCH_UPLOAD_DIR, { recursive: true })
       const imageBuffer = Buffer.from(result.imageBase64, 'base64')
@@ -1975,7 +2019,7 @@ export async function generateFromSuggestion(
       const checksum = crypto.createHash('sha256').update(imageBuffer).digest('hex')
 
       await prisma.sketchRecord.update({
-        where: { id: sketchId },
+        where: { id: generatedSketchId },
         data: {
           status: 'SUCCESS',
           imagePath: `/uploads/sketches/${filename}`,
@@ -1991,7 +2035,7 @@ export async function generateFromSuggestion(
 
       return {
         success: true,
-        sketchId,
+        sketchId: generatedSketchId,
         imagePath: `/uploads/sketches/${filename}`,
         imageUrl: `/uploads/sketches/${filename}`,
         attemptCount: 1
@@ -1999,7 +2043,7 @@ export async function generateFromSuggestion(
     } else {
       // Mark as failed
       await prisma.sketchRecord.update({
-        where: { id: sketchId },
+        where: { id: generatedSketchId },
         data: {
           status: 'FAILED',
           errorMessage: result.error || 'Unknown error',
@@ -2009,7 +2053,7 @@ export async function generateFromSuggestion(
 
       return {
         success: false,
-        sketchId,
+        sketchId: generatedSketchId,
         error: result.error || 'Image generation failed',
         attemptCount: 1
       }
@@ -2017,7 +2061,7 @@ export async function generateFromSuggestion(
   } catch (error) {
     // Mark as failed on exception
     await prisma.sketchRecord.update({
-      where: { id: sketchId },
+      where: { id: generatedSketchId },
       data: {
         status: 'FAILED',
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
@@ -2027,7 +2071,7 @@ export async function generateFromSuggestion(
 
     return {
       success: false,
-      sketchId,
+      sketchId: generatedSketchId,
       error: error instanceof Error ? error.message : 'Unknown error'
     }
   }

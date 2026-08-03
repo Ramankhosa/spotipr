@@ -100,6 +100,10 @@ import {
   type SketchContextFlags,
   type SketchViewConfig
 } from '@/lib/sketch-service';
+import {
+  buildSketchSuggestionCorrectionPrompt,
+  parseSketchSuggestionOutput
+} from '@/lib/sketch-suggestion-output'
 
 // Interface for sketch records as stored in session
 interface SessionSketchRecord {
@@ -142,15 +146,17 @@ import {
 } from '@/lib/figure-availability'
 import {
   addManagedFigures,
-  evaluateFigureSetClaimCoverage,
+  evaluateManagedPlanCoverage,
   extractReferenceMapComponents,
   generateManagedFigureSet,
   PatentDiagramPipelineError,
   planManagedFigureSet,
+  rebuildManagedFigureSource,
   regenerateManagedFigure,
   semanticChecksum,
 } from '@/lib/patent-diagrams/pipeline'
 import { DIAGRAM_KINDS, figureSetPlanSchema } from '@/lib/patent-diagrams/types'
+import { repairFigureSetCoverage } from '@/lib/patent-diagrams/coverage'
 import { saveRawPlantUmlOverride } from '@/lib/patent-diagrams/raw-source'
 import { translateAllPatentDiagrams, translatePatentDiagram } from '@/lib/patent-diagrams/translation'
 import { diagramFactsForDownstream, summarizeDiagramPlan } from '@/lib/patent-diagrams/facts'
@@ -1124,7 +1130,7 @@ export async function POST(
         return await handleRegenerateDiagramManaged(authResult.user, patentId, data, requestHeaders);
 
       case 'fix_plantuml_render':
-        return await handleFixPlantUMLRenderManaged(authResult.user, patentId, data);
+        return await handleFixPlantUMLRenderManaged(authResult.user, patentId, data, requestHeaders);
 
       case 'add_figure_llm':
         return await handleAddFigureManaged(authResult.user, patentId, data, requestHeaders);
@@ -2658,11 +2664,7 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
     ? { ready: true, errors: [], selectedSources: new Map<number, any>() }
     : validateDiagramExportReadiness(session, preferredFigureLanguage)
   if (!diagramReadiness.ready) {
-    return NextResponse.json({
-      error: 'One or more diagrams are not filing-ready',
-      code: 'DIAGRAM_FILING_READINESS_FAILED',
-      details: diagramReadiness.errors,
-    }, { status: 409 })
+    return diagramExportReadinessError(diagramReadiness.errors)
   }
 
   // Helper to find best diagram source for a figureNo based on language preference
@@ -3435,11 +3437,7 @@ async function handleExportPDF(user: any, patentId: string, data: any, request?:
     ? { ready: true, errors: [], selectedSources: new Map<number, any>() }
     : validateDiagramExportReadiness(session, preferredFigureLanguage)
   if (!diagramReadiness.ready) {
-    return NextResponse.json({
-      error: 'One or more diagrams are not filing-ready',
-      code: 'DIAGRAM_FILING_READINESS_FAILED',
-      details: diagramReadiness.errors,
-    }, { status: 409 })
+    return diagramExportReadinessError(diagramReadiness.errors)
   }
 
   // Load export config early to honor country-specific settings (e.g., addParagraphNumbers)
@@ -8007,10 +8005,56 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
 
 function patentDiagramPipelineError(error: unknown): NextResponse {
   if (error instanceof PatentDiagramPipelineError) {
-    return NextResponse.json({ error: error.message, details: error.details, code: error.name }, { status: error.status })
+    const titleByStage: Record<string, string> = {
+      COVERAGE: 'The claims could not be fully assigned to figures',
+      PLAN: 'The figure plan could not be completed',
+      DETAIL: 'A planned figure could not be grounded',
+      VALIDATION: 'The generated figure needs correction',
+      RENDER: 'The diagram could not be rendered',
+      PERSIST: 'The completed drawing set could not be saved',
+      GENERAL: 'The diagram operation did not complete',
+    }
+    return NextResponse.json({
+      error: error.message,
+      details: error.details,
+      code: error.code,
+      failure: {
+        code: error.code,
+        stage: error.stage,
+        title: titleByStage[error.stage] || titleByStage.GENERAL,
+        whatHappened: error.message,
+        retryable: error.retryable,
+        actions: error.actions,
+        automaticCorrection: error.automaticCorrection || { attempted: false, attempts: 0, result: 'NOT_ATTEMPTED' },
+      },
+    }, { status: error.status })
   }
   console.error('[PatentDiagramPipeline]', error)
-  return NextResponse.json({ error: error instanceof Error ? error.message : 'Patent diagram operation failed' }, { status: 500 })
+  return NextResponse.json({
+    error: 'The diagram operation stopped unexpectedly. No existing figures were removed.',
+    code: 'UNEXPECTED_DIAGRAM_FAILURE',
+    failure: {
+      code: 'UNEXPECTED_DIAGRAM_FAILURE', stage: 'GENERAL', title: 'The diagram operation did not complete',
+      whatHappened: 'An unexpected server error stopped the operation before it could finish.', retryable: true,
+      actions: ['Try again.', 'If it repeats, report the technical details from the server log to an administrator.'],
+      automaticCorrection: { attempted: false, attempts: 0, result: 'NOT_ATTEMPTED' },
+    },
+  }, { status: 500 })
+}
+
+function diagramExportReadinessError(errors: unknown): NextResponse {
+  return NextResponse.json({
+    error: 'One or more diagrams are not filing-ready',
+    details: errors,
+    code: 'DIAGRAM_FILING_READINESS_FAILED',
+    failure: {
+      code: 'DIAGRAM_FILING_READINESS_FAILED', stage: 'VALIDATION', title: 'Diagram export is blocked',
+      whatHappened: 'At least one figure is review-only, stale, missing an artifact, or otherwise not filing-ready.',
+      retryable: false,
+      actions: ['Open the listed figure and use Modify or Repair.', 'Open the Component Plan if a reference-map change made the figure stale.', 'Export again after every figure reports filing-ready.'],
+      automaticCorrection: { attempted: false, attempts: 0, result: 'NOT_ATTEMPTED' },
+    },
+  }, { status: 409 })
 }
 
 function managedDiagramInstructions(data: any): string | undefined {
@@ -8025,14 +8069,47 @@ function managedDiagramInstructions(data: any): string | undefined {
 }
 
 function managedPipelineInput(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const parsedCount = data.figureCount == null || data.figureCount === '' ? undefined : Number(data.figureCount)
+  if (parsedCount != null && (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 20)) {
+    throw new PatentDiagramPipelineError('Figure count must be a whole number from 1 to 20.', 400, undefined, {
+      code: 'INVALID_FIGURE_COUNT', stage: 'PLAN', retryable: false,
+      actions: ['Choose a figure count between 1 and 20, or leave it on Auto.'],
+    })
+  }
   return {
     userId: user.id,
     patentId,
     sessionId: String(data.sessionId || ''),
     requestHeaders,
-    figureCount: Number.isInteger(Number(data.figureCount)) ? Number(data.figureCount) : undefined,
+    figureCount: parsedCount,
     instructions: managedDiagramInstructions(data),
+    includeExistingFigures: data.includeExistingFigures === true,
+    mode: data.mode === 'manual' ? 'manual' as const : 'ai' as const,
   }
+}
+
+function physicalViewInstruction(value: unknown): boolean {
+  return /\b(cross[- ]?section(?:al)?|cutaway|exploded|perspective|isometric|exterior view|physical appearance|three[- ]dimensional|3d view)\b/i.test(String(value || ''))
+}
+
+function physicalViewHandoff(instruction: string): NextResponse {
+  return NextResponse.json({
+    error: 'This request describes a physical view that should be created as a Sketch, not as a PlantUML diagram.',
+    details: instruction,
+    code: 'PHYSICAL_VIEW_REQUIRES_SKETCH',
+    sketchSuggestion: {
+      title: 'Physical patent illustration',
+      description: instruction,
+      viewType: /cross[- ]?section|cutaway/i.test(instruction) ? 'INTERNAL' : /exploded/i.test(instruction) ? 'EXPLODED' : 'PERSPECTIVE',
+    },
+    failure: {
+      code: 'PHYSICAL_VIEW_REQUIRES_SKETCH', stage: 'PLAN', title: 'Create this view as a Sketch',
+      whatHappened: 'PlantUML is intended for logical architecture, flows, interactions, and constituent relationships. The requested physical view needs patent line art.',
+      retryable: false,
+      actions: ['Open Sketches and generate the prefilled physical illustration.', 'Rewrite the request as logical parts and connections if a diagram is intended.'],
+      automaticCorrection: { attempted: false, attempts: 0, result: 'NOT_ATTEMPTED' },
+    },
+  }, { status: 422 })
 }
 
 function compatiblePlan(plan: Awaited<ReturnType<typeof planManagedFigureSet>>) {
@@ -8042,21 +8119,17 @@ function compatiblePlan(plan: Awaited<ReturnType<typeof planManagedFigureSet>>) 
 async function handlePlanFiguresManaged(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   if (!data.sessionId) return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
   try {
-    const plan = await planManagedFigureSet(managedPipelineInput(user, patentId, data, requestHeaders))
-    // Coverage rides along with the plan so the attorney reviewing it can see a
-    // claimed component nothing depicts, and add a figure before approving.
-    // Reported only — never a reason to refuse the plan.
-    const session = await prisma.draftingSession.findFirst({
-      where: { id: String(data.sessionId), patent: { id: patentId, project: { userId: user.id } } },
-      include: { referenceMap: true },
-    })
-    const coverage = session
-      ? evaluateFigureSetClaimCoverage(plan, extractReferenceMapComponents(session.referenceMap))
-      : { missing: [], evaluated: false }
+    const input = managedPipelineInput(user, patentId, data, requestHeaders)
+    if (input.instructions && physicalViewInstruction(input.instructions)) return physicalViewHandoff(input.instructions)
+    const plan = await planManagedFigureSet(input)
+    // Coverage and automatic repairs ride along with the plan so the attorney
+    // can review every claim-driven addition before the first render.
+    const coverage = evaluateManagedPlanCoverage(plan)
     return NextResponse.json({
       success: true,
       plan: compatiblePlan(plan),
       coverage,
+      repairSummary: plan.repairSummary,
       message: `Planned ${plan.figures.length} managed diagrams`,
     })
   } catch (error) {
@@ -8100,9 +8173,12 @@ async function handleSaveFigurePlanManaged(user: any, patentId: string, data: an
     for (const edit of data.figures) {
       const key = String(edit?.key || '')
       const original = byKey.get(key)
-      // Unknown or duplicated keys are dropped rather than 400'd: a plan the user
-      // is mid-edit on shouldn't fail to save because one row went stale.
-      if (!original || seen.has(key)) continue
+      if (!original) {
+        return NextResponse.json({ error: `Figure plan entry ${key || '(missing key)'} is stale or unknown. Plan the figures again.`, code: 'STALE_PLAN_ENTRY' }, { status: 409 })
+      }
+      if (seen.has(key)) {
+        return NextResponse.json({ error: `Figure plan entry ${key} was submitted more than once.`, code: 'DUPLICATE_PLAN_KEY' }, { status: 400 })
+      }
       seen.add(key)
       const title = typeof edit.title === 'string' ? edit.title.trim() : ''
       const purpose = typeof edit.purpose === 'string' ? edit.purpose.trim() : ''
@@ -8114,18 +8190,22 @@ async function handleSaveFigurePlanManaged(user: any, patentId: string, data: an
         kind,
         title: title || original.title,
         purpose: purpose || original.purpose,
+        ...(kind !== original.kind ? { coverageRequirementIds: [], evidenceIds: [] } : {}),
       })
     }
     if (figures.length === 0) {
       return NextResponse.json({ error: 'The edited plan has no recognisable figures' }, { status: 400 })
     }
 
-    const plan = figureSetPlanSchema.parse({ ...storedPlan.data, figures })
+    const editedPlan = figureSetPlanSchema.parse({ ...storedPlan.data, figures })
+    const plan = editedPlan.coverageLedger
+      ? repairFigureSetCoverage({ plan: editedPlan, ledger: editedPlan.coverageLedger }).plan
+      : editedPlan
     await prisma.draftingSession.update({
       where: { id: sessionId },
       data: { aiAnalysisData: { ...previousAnalysis, figurePlan: plan } as any },
     })
-    return NextResponse.json({ success: true, plan: compatiblePlan(plan) })
+    return NextResponse.json({ success: true, plan: compatiblePlan(plan), coverage: evaluateManagedPlanCoverage(plan), repairSummary: plan.repairSummary })
   } catch (error) {
     return patentDiagramPipelineError(error)
   }
@@ -8135,7 +8215,13 @@ async function handleGenerateDiagramsManaged(user: any, patentId: string, data: 
   if (!data.sessionId) return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
   try {
     const input = managedPipelineInput(user, patentId, data, requestHeaders)
-    const suppliedInstructions = Array.isArray(data.figureInstructions) ? data.figureInstructions : null
+    const normalizedInstructions = Array.isArray(data.figureInstructions)
+      ? data.figureInstructions.map((value: unknown) => String(value || '').trim()).filter(Boolean)
+      : null
+    const suppliedInstructions = normalizedInstructions?.length ? normalizedInstructions : null
+    const physicalInstruction = suppliedInstructions?.find(physicalViewInstruction)
+      || (input.instructions && physicalViewInstruction(input.instructions) ? input.instructions : null)
+    if (physicalInstruction) return physicalViewHandoff(physicalInstruction)
     const plan = data.usePlan && !suppliedInstructions
       ? undefined
       : await planManagedFigureSet({ ...input, figureCount: suppliedInstructions?.length || input.figureCount })
@@ -8152,6 +8238,7 @@ async function handlePlanAndGenerateDiagramsManaged(user: any, patentId: string,
   if (!data.sessionId) return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
   try {
     const input = managedPipelineInput(user, patentId, data, requestHeaders)
+    if (input.instructions && physicalViewInstruction(input.instructions)) return physicalViewHandoff(input.instructions)
     const plan = await planManagedFigureSet(input)
     const result = data.replaceExisting === false
       ? await addManagedFigures({ ...input, plan })
@@ -8217,17 +8304,84 @@ async function handleRegenerateDiagramManaged(user: any, patentId: string, data:
   }
 }
 
-async function handleFixPlantUMLRenderManaged(user: any, patentId: string, data: any) {
-  const response = await handleSavePlantUMLManaged(user, patentId, data)
-  if (!response.ok) return response
-  const body = await response.json()
-  return NextResponse.json({ success: true, fixedCode: body.plantumlCode, diagramSource: body.diagramSource, validationReport: body.validationReport })
+async function handleFixPlantUMLRenderManaged(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  if (!data.sessionId || !Number(data.figureNo)) return NextResponse.json({ error: 'Session ID and figure number are required' }, { status: 400 })
+  try {
+    const source = await prisma.diagramSource.findFirst({
+      where: { sessionId: String(data.sessionId), figureNo: Number(data.figureNo), language: 'en', session: { patentId, userId: user.id } },
+    })
+    if (!source) return NextResponse.json({ error: 'Diagram source not found', code: 'DIAGRAM_SOURCE_NOT_FOUND' }, { status: 404 })
+    if (source.sourceMode === 'MANAGED') {
+      try {
+        const rebuilt = await rebuildManagedFigureSource({
+          ...managedPipelineInput(user, patentId, data, requestHeaders),
+          figureNo: Number(data.figureNo),
+        })
+        return NextResponse.json({ success: true, ...rebuilt })
+      } catch (error) {
+        if (!(error instanceof PatentDiagramPipelineError) || error.code !== 'STALE_MANAGED_SEMANTICS') throw error
+        const regenerated = await regenerateManagedFigure({
+          ...managedPipelineInput(user, patentId, { ...data, instructions: `Repair the managed semantic figure after this render failure: ${String(data.renderError || 'render failed').slice(0, 500)}` }, requestHeaders),
+          figureNo: Number(data.figureNo),
+        })
+        if (regenerated.status === 'SPLIT_REQUIRED') {
+          throw new PatentDiagramPipelineError('Repair requires splitting this figure into filing-scale detail figures.', 409, regenerated.splitProposal, {
+            code: 'SPLIT_APPROVAL_REQUIRED', stage: 'VALIDATION', retryable: false,
+            actions: ['Open Modify, review the split proposal, and approve it.'],
+          })
+        }
+        const repairedSource = await prisma.diagramSource.findUnique({
+          where: { sessionId_figureNo_language: { sessionId: String(data.sessionId), figureNo: Number(data.figureNo), language: 'en' } },
+        })
+        return NextResponse.json({ success: true, fixedCode: repairedSource?.plantumlCode, diagramSource: repairedSource, repairMode: 'SEMANTIC_REDETAIL' })
+      }
+    }
+
+    const rawCode = String(data.plantumlCode || source.plantumlCode || '').slice(0, 16_000)
+    const repairPrompt = `Repair this patent PlantUML source after a render failure.
+Return PlantUML code only, without markdown. Preserve every supported component and reference sign.
+Allowed declarations are rectangle, participant, and diamond. Do not use includes, themes, macros, notes, icons, colours, or unsupported entities.
+Keep connector labels to four words or fewer.
+
+RENDER ERROR:
+${String(data.renderError || source.renderError || 'Unknown render error').slice(0, 2_000)}
+
+SOURCE:
+${rawCode}`
+    const repair = await llmGateway.executeLLMOperation({ headers: requestHeaders || {} }, {
+      taskCode: 'LLM3_DIAGRAM', stageCode: 'DRAFT_DIAGRAM_GENERATION', prompt: repairPrompt,
+      inputTokens: Math.ceil(repairPrompt.length / 4),
+      metadata: { patentId, sessionId: data.sessionId, figureNo: Number(data.figureNo), purpose: 'repair_raw_plantuml' },
+    })
+    if (!repair.success || !repair.response?.output) {
+      throw new PatentDiagramPipelineError(repair.error?.message || 'Raw PlantUML repair did not return source code.', 422, undefined, {
+        code: 'RAW_REPAIR_FAILED', stage: 'RENDER', retryable: true,
+        actions: ['Open the advanced PlantUML editor and correct the source manually.', 'Use Modify to replace it with a managed semantic figure.'],
+        automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
+      })
+    }
+    const fixedCode = repair.response.output.trim().replace(/^```(?:plantuml|puml)?\s*/i, '').replace(/\s*```$/, '')
+    if (!fixedCode || fixedCode === rawCode) {
+      throw new PatentDiagramPipelineError('Automatic raw-source repair did not produce a meaningful change.', 422, undefined, {
+        code: 'RAW_REPAIR_NO_CHANGE', stage: 'RENDER', retryable: false,
+        actions: ['Open the advanced PlantUML editor and correct the source manually.'],
+        automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
+      })
+    }
+    const saved = await saveRawPlantUmlOverride({
+      userId: user.id, patentId, sessionId: String(data.sessionId), figureNo: Number(data.figureNo), plantumlCode: fixedCode,
+    })
+    return NextResponse.json({ success: true, fixedCode: saved.plantumlCode, diagramSource: saved.diagramSource, validationReport: saved.validationReport, repairMode: 'RAW_LLM_REPAIR' })
+  } catch (error) {
+    return patentDiagramPipelineError(error)
+  }
 }
 
 async function handleAddFigureManaged(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   if (!data.sessionId) return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
   try {
     const input = { ...managedPipelineInput(user, patentId, data, requestHeaders), figureCount: 1 }
+    if (input.instructions && physicalViewInstruction(input.instructions)) return physicalViewHandoff(input.instructions)
     const result = await addManagedFigures(input)
     return NextResponse.json({ success: true, ...result, plan: compatiblePlan(result.plan), diagramSource: result.saved[0]?.source })
   } catch (error) {
@@ -8241,6 +8395,7 @@ async function handleAddFiguresManaged(user: any, patentId: string, data: any, r
   }
   try {
     const input = { ...managedPipelineInput(user, patentId, data, requestHeaders), figureCount: data.instructionsList.length }
+    if (input.instructions && physicalViewInstruction(input.instructions)) return physicalViewHandoff(input.instructions)
     const result = await addManagedFigures(input)
     return NextResponse.json({ success: true, ...result, plan: compatiblePlan(result.plan), diagramSources: result.saved.map(item => item.source) })
   } catch (error) {
@@ -8399,43 +8554,61 @@ async function generateSketchSuggestionsInBackground(
       return
     }
 
-    // Parse sketch suggestions from response
-    const suggestionText = sketchResult.response.output.trim()
-    let sketchSuggestions: any[] = []
+    // Use the same parser and bounded correction behavior as the interactive
+    // "Suggest views" action, so a background reply is not silently discarded.
+    let suggestionText = sketchResult.response.output.trim()
+    let parsedOutput = parseSketchSuggestionOutput(suggestionText)
 
-    try {
-      // Try to parse as JSON array
-      const start = suggestionText.indexOf('[')
-      const end = suggestionText.lastIndexOf(']')
-      if (start !== -1 && end !== -1) {
-        const jsonStr = suggestionText.substring(start, end + 1)
-        const parsed = JSON.parse(jsonStr)
-        if (Array.isArray(parsed)) {
-          sketchSuggestions = parsed.filter(s => s.title && s.description)
+    if (
+      (parsedOutput.suggestions.length === 0 && !parsedOutput.parsedCleanly)
+      || parsedOutput.droppedForMissingFields > 0
+    ) {
+      console.warn(`[SketchSuggestions] Background response was malformed; attempting one correction for session: ${sessionId}`)
+      try {
+        const correctionPrompt = buildSketchSuggestionCorrectionPrompt(sketchSuggestPrompt, suggestionText)
+        const correctionResult = await llmGateway.executeLLMOperation(request, {
+          taskCode: 'LLM3_DIAGRAM',
+          stageCode: 'DRAFT_FIGURE_PLANNER',
+          prompt: correctionPrompt,
+          idempotencyKey: crypto.randomUUID(),
+          inputTokens: Math.ceil(correctionPrompt.length / 4),
+          metadata: {
+            patentId,
+            sessionId,
+            purpose: 'correct_sketch_suggestions_background',
+            correctionAttempt: 1
+          }
+        })
+
+        if (correctionResult.success && correctionResult.response?.output) {
+          const correctedText = correctionResult.response.output.trim()
+          const correctedOutput = parseSketchSuggestionOutput(correctedText)
+          const correctionIsBetter = parsedOutput.suggestions.length === 0
+            ? correctedOutput.parsedCleanly || correctedOutput.suggestions.length > 0
+            : correctedOutput.droppedForMissingFields === 0
+              && correctedOutput.suggestions.length >= parsedOutput.suggestions.length
+
+          if (correctionIsBetter) {
+            suggestionText = correctedText
+            parsedOutput = correctedOutput
+          }
         }
-      }
-    } catch {
-      // Fallback: try to extract from structured text using exec loop
-      const regex = /(?:TITLE|Title):\s*(.+?)(?:\n|$)[\s\S]*?(?:DESCRIPTION|Description):\s*([\s\S]+?)(?=(?:TITLE|Title):|$)/gi
-      let match: RegExpExecArray | null
-      while ((match = regex.exec(suggestionText)) !== null) {
-        if (match[1] && match[2]) {
-          sketchSuggestions.push({
-            title: match[1].trim(),
-            description: match[2].trim().split('\n')[0] // Take first paragraph
-          })
-        }
+      } catch (correctionError) {
+        console.warn(
+          `[SketchSuggestions] Background correction failed for session ${sessionId}:`,
+          correctionError instanceof Error ? correctionError.message : correctionError
+        )
       }
     }
 
+    const sketchSuggestions = parsedOutput.suggestions
+
     // Create SUGGESTED sketch records if we got suggestions
     if (sketchSuggestions.length > 0) {
-      const { createSketchSuggestions, clearSketchSuggestions } = await import('@/lib/sketch-service')
+      const { createSketchSuggestions } = await import('@/lib/sketch-service')
 
-      // Clear old suggestions before creating new ones
-      await clearSketchSuggestions(sessionId)
-
-      // Create new suggestion records
+      // Append/dedupe instead of clearing. Saved view ideas are a reusable
+      // library and must survive later background or manual suggestion runs.
       await createSketchSuggestions(patentId, sessionId, sketchSuggestions)
 
       console.log(`[SketchSuggestions] Background generation complete: Created ${sketchSuggestions.length} suggestions for session: ${sessionId}`)
@@ -8601,7 +8774,14 @@ Analyze the invention type and facts. Then:
 
 1. IF the invention has PHYSICAL/VISUAL aspects that can be meaningfully sketched
    using ONLY the provided components and relationships:
-   → Suggest 1-3 patent-style SKETCHES with detailed specifications
+   → Suggest 1-5 patent-style SKETCHES with detailed specifications
+
+   First audit the supported view categories: exterior/perspective, opposite or
+   orthographic view, internal/cross-section, assembly/exploded view, claim-critical
+   detail, and installation/deployment. Include a category only when the invention
+   facts support it and it is not already covered by an existing diagram or sketch.
+   Prefer a smaller complete set over filler views; every suggestion must add a
+   materially different disclosure purpose.
 
 2. IF the invention is PURELY ABSTRACT (algorithm, method, business process,
    pure software logic with no UI):
@@ -8620,7 +8800,9 @@ INVENTION TYPE GUIDANCE:
 ═══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT - COMPREHENSIVE SKETCH SUGGESTIONS
 ═══════════════════════════════════════════════════════════════════════════════
-Return a JSON array with 0-3 sketch suggestions.
+Return a JSON array with 0-5 sketch suggestions. The set should cover every distinct,
+fact-supported physical view that materially helps disclose the invention, up to five.
+Do not add redundant views merely to reach the maximum.
 
 CRITICAL: The "description" field must be COMPREHENSIVE and include ALL drawing
 instructions. This description is passed directly to the image generator.
@@ -9780,50 +9962,85 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
     )
 
     if (!result.success || !result.response?.output) {
+      const providerMessage = typeof result.error === 'string'
+        ? result.error
+        : result.error?.message
       return NextResponse.json({
-        error: 'Failed to generate sketch suggestions'
+        error: providerMessage || 'The suggestion model did not return any output.'
       }, { status: 500 })
     }
 
-    // Parse AI response
-    const suggestionText = result.response.output.trim()
-    let suggestions: any[] = []
+    // Parse the first reply. If it is malformed or loses every item because a
+    // required field is missing, make exactly one correction pass. The bound is
+    // deliberate: it provides recovery without creating an LLM retry loop.
+    let suggestionText = result.response.output.trim()
+    let parsedOutput = parseSketchSuggestionOutput(suggestionText)
+    let autoCorrectionAttempted = false
+
+    if (
+      (parsedOutput.suggestions.length === 0 && !parsedOutput.parsedCleanly)
+      || parsedOutput.droppedForMissingFields > 0
+    ) {
+      autoCorrectionAttempted = true
+      console.warn(
+        `[Sketch Suggestions] Invalid response for session ${sessionId}; attempting one structured-output correction`
+      )
+
+      try {
+        const correctionResult = await llmGateway.executeLLMOperation(
+          { headers: requestHeaders || {} },
+          {
+            taskCode: 'LLM3_DIAGRAM',
+            stageCode: 'DRAFT_FIGURE_PLANNER',
+            prompt: buildSketchSuggestionCorrectionPrompt(prompt, suggestionText),
+            idempotencyKey: crypto.randomUUID(),
+            parameters: { tenantId: session.tenantId || undefined },
+            metadata: {
+              patentId,
+              sessionId,
+              purpose: 'correct_sketch_suggestions',
+              correctionAttempt: 1
+            }
+          }
+        )
+
+        if (correctionResult.success && correctionResult.response?.output) {
+          const correctedText = correctionResult.response.output.trim()
+          const correctedOutput = parseSketchSuggestionOutput(correctedText)
+          const correctionIsBetter = parsedOutput.suggestions.length === 0
+            ? correctedOutput.parsedCleanly || correctedOutput.suggestions.length > 0
+            : correctedOutput.droppedForMissingFields === 0
+              && correctedOutput.suggestions.length >= parsedOutput.suggestions.length
+
+          if (correctionIsBetter) {
+            suggestionText = correctedText
+            parsedOutput = correctedOutput
+          }
+        }
+      } catch (correctionError) {
+        console.warn(
+          `[Sketch Suggestions] Correction attempt failed for session ${sessionId}:`,
+          correctionError instanceof Error ? correctionError.message : correctionError
+        )
+      }
+    }
+
+    const { suggestions, parsedCleanly, droppedForMissingFields } = parsedOutput
     // Zero suggestions is a legitimate outcome — the prompt instructs the model to
     // return [] for abstract inventions (algorithms, business methods, backend
     // software). We must tell those apart from a response we simply failed to read,
     // otherwise the UI can only show "nothing happened" for two very different cases.
-    let parsedCleanly = false
-    let droppedForMissingFields = 0
-
-    try {
-      // Try to parse as JSON array
-      const start = suggestionText.indexOf('[')
-      const end = suggestionText.lastIndexOf(']')
-      if (start !== -1 && end !== -1) {
-        const jsonStr = suggestionText.substring(start, end + 1)
-        const parsed = JSON.parse(jsonStr)
-        if (Array.isArray(parsed)) {
-          parsedCleanly = true
-          suggestions = parsed.filter(s => s.title && s.description)
-          droppedForMissingFields = parsed.length - suggestions.length
-        }
-      }
-    } catch {
-      // Fallback: try to extract from structured text
-      const regex = /(?:TITLE|Title):\s*(.+?)(?:\n|$)[\s\S]*?(?:DESCRIPTION|Description):\s*([\s\S]+?)(?=(?:TITLE|Title):|$)/gi
-      let match: RegExpExecArray | null
-      while ((match = regex.exec(suggestionText)) !== null) {
-        if (match[1] && match[2]) {
-          suggestions.push({
-            title: match[1].trim(),
-            description: match[2].trim().split('\n')[0] // Take first paragraph
-          })
-        }
-      }
-    }
 
     if (suggestions.length > 0) {
-      return NextResponse.json({ suggestions })
+      // Persist the ideas as reusable SUGGESTED records. Generating an image
+      // creates a derived sketch and leaves these templates intact.
+      const { createSketchSuggestions } = await import('@/lib/sketch-service')
+      const saved = await createSketchSuggestions(patentId, sessionId, suggestions)
+      return NextResponse.json({
+        suggestions: saved.sketches,
+        created: saved.created,
+        autoCorrectionAttempted
+      })
     }
 
     // Nothing to show — say why, so the client can render a real explanation.
@@ -9848,6 +10065,7 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
     return NextResponse.json({
       suggestions: [],
       emptyReason,
+      autoCorrectionAttempted,
       inventionType: inventionTypeStr,
       hasExistingSketches: existingSketches.length > 0,
       existingSketchCount: existingSketches.length

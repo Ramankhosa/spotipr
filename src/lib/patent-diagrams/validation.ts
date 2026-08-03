@@ -100,7 +100,14 @@ export function analyzeDiagramComplexity(diagram: PatentDiagram): DiagramComplex
   }
 }
 
-function relationshipPairs(diagram: PatentDiagram): Array<{ fromId: string; toId: string; label?: string; category?: RelationshipCategory }> {
+function relationshipPairs(diagram: PatentDiagram): Array<{
+  fromId: string
+  toId: string
+  label?: string
+  category?: RelationshipCategory
+  evidenceIds: string[]
+  coverageRequirementIds: string[]
+}> {
   if (diagram.kind === 'COMPONENT' || diagram.kind === 'CONSTITUENT') return diagram.relationships
   if (diagram.kind === 'SEQUENCE') return diagram.interactions
   return diagram.transitions
@@ -116,6 +123,22 @@ export function validatePatentDiagram(
   const visibleIds = diagramComponentIds(diagram)
   const visibleSet = new Set(visibleIds)
   const duplicateIds = visibleIds.filter((id, index) => visibleIds.indexOf(id) !== index)
+  const validateSemanticEvidence = (label: string, evidenceIds: string[], coverageRequirementIds: string[], alwaysCite = false) => {
+    const citationRequired = coverageRequirementIds.length > 0 || (alwaysCite && !!supportedEvidenceIds?.size)
+    if (citationRequired && !evidenceIds.length) {
+      issues.push({
+        code: 'UNCITED_SEMANTIC_ELEMENT', severity: 'warning',
+        message: coverageRequirementIds.length
+          ? `${label} covers a claim requirement but cites no supporting evidence`
+          : `${label} cites no supporting disclosure evidence`,
+      })
+    }
+    if (supportedEvidenceIds?.size) {
+      evidenceIds.filter(id => !supportedEvidenceIds.has(id)).forEach(id => issues.push({
+        code: 'UNKNOWN_SEMANTIC_EVIDENCE', severity: 'warning', message: `${label} cites unrecognized evidence ID: ${id}`,
+      }))
+    }
+  }
 
   for (const id of Array.from(new Set(duplicateIds))) {
     issues.push({ code: 'DUPLICATE_COMPONENT', severity: 'error', message: `Component ${id} appears more than once`, componentId: id })
@@ -159,6 +182,7 @@ export function validatePatentDiagram(
     if (words(link.label) > PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords) {
       issues.push({ code: 'LONG_CONNECTOR_LABEL', severity: 'error', message: `Connector label "${link.label}" exceeds ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words` })
     }
+    validateSemanticEvidence(`Relationship ${link.fromId} to ${link.toId}`, link.evidenceIds || [], link.coverageRequirementIds || [], true)
   }
 
   if (diagram.kind === 'COMPONENT') {
@@ -187,6 +211,7 @@ export function validatePatentDiagram(
       code: 'DUPLICATE_PROCESS_IDENTIFIER', severity: 'error', message: `Process identifier ${identifier} appears more than once`,
     }))
     diagram.nodes.forEach(node => {
+      validateSemanticEvidence(`Step "${node.label}"`, node.evidenceIds || [], node.coverageRequirementIds || [])
       if (node.identifier && !new RegExp(node.kind === 'DECISION' ? '^D\\d+$' : '^S\\d+$', 'i').test(node.identifier)) {
         issues.push({ code: 'INVALID_PROCESS_IDENTIFIER', severity: 'error', message: `${node.kind} ${node.key} has invalid identifier ${node.identifier}` })
       }
@@ -227,6 +252,17 @@ export function validatePatentDiagram(
       if (!keys.has(link.fromId)) issues.push({ code: 'UNKNOWN_PROCESS_ENDPOINT', severity: 'error', message: `Transition source ${link.fromId} is unknown` })
       if (!keys.has(link.toId)) issues.push({ code: 'UNKNOWN_PROCESS_ENDPOINT', severity: 'error', message: `Transition target ${link.toId} is unknown` })
     })
+  }
+
+  if (diagram.kind === 'COMPONENT') {
+    diagram.components.forEach(node => {
+      if ((node.coverageRequirementIds || []).length && !diagram.evidenceIds.length) {
+        issues.push({ code: 'UNCITED_SEMANTIC_ELEMENT', severity: 'warning', message: `Component ${node.componentId} covers a claim requirement but the figure cites no supporting evidence` })
+      }
+    })
+  }
+  if (diagram.kind === 'CONSTITUENT') {
+    diagram.constituents.forEach(item => validateSemanticEvidence(`Constituent ${item.componentId}`, item.evidenceIds || [], item.coverageRequirementIds || [], true))
   }
 
   const labels: string[] = diagram.kind === 'COMPONENT'

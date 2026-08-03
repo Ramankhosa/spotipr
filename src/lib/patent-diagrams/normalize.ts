@@ -79,7 +79,7 @@ export function normalizePatentDiagram(
     // mechanical, so it is inserted rather than failing the figure.
     for (const id of diagram.claimCriticalComponentIds) {
       if (visible.has(id) || !known.has(id)) continue
-      diagram.components.push({ componentId: id, optional: false, external: false })
+      diagram.components.push({ componentId: id, optional: false, external: false, coverageRequirementIds: [] })
       visible.add(id)
       corrections.push(`Added missing claim-critical component ${id}`)
     }

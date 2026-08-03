@@ -74,6 +74,10 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/toast'
 import Hint from '@/components/ui/hint'
+import {
+  explainFigurePlannerError,
+  type FigurePlannerErrorArea
+} from '@/lib/figure-planner-error-guidance'
 import dynamic from 'next/dynamic'
 
 // Dynamic import for the in-browser canvas image editor (Konva-based; ssr:false is required)
@@ -176,6 +180,17 @@ type PlanFigure = {
   detailLevel?: string
   componentIds?: string[]
   claimCriticalComponentIds?: string[]
+  coverageRequirementIds?: string[]
+}
+
+type DiagramFailurePayload = {
+  code?: string
+  stage?: string
+  title?: string
+  whatHappened?: string
+  retryable?: boolean
+  actions?: string[]
+  automaticCorrection?: { attempted?: boolean; attempts?: number; result?: string }
 }
 
 // Phases shown while the planner runs. Planning is the fast half of the
@@ -202,6 +217,112 @@ const FIGURE_GENERATION_MESSAGES = [
   "Still working — large inventions can take 2–3 minutes..."
 ]
 
+type ActionableErrorPanelProps = {
+  message: string
+  area: FigurePlannerErrorArea
+  details?: string[]
+  onRetry?: () => void
+  retryLabel?: string
+  retrying?: boolean
+  onDismiss?: () => void
+  failure?: DiagramFailurePayload
+}
+
+function ActionableErrorPanel({
+  message,
+  area,
+  details = [],
+  onRetry,
+  retryLabel = 'Try again',
+  retrying = false,
+  onDismiss,
+  failure,
+}: ActionableErrorPanelProps) {
+  const fallbackGuidance = explainFigurePlannerError(message, area)
+  const guidance = failure ? {
+    title: failure.title || fallbackGuidance.title,
+    whatHappened: failure.whatHappened || fallbackGuidance.whatHappened,
+    actions: failure.actions?.length ? failure.actions : fallbackGuidance.actions,
+    autoRecovery: failure.automaticCorrection?.attempted
+      ? `The server attempted ${failure.automaticCorrection.attempts || 1} automatic correction${(failure.automaticCorrection.attempts || 1) === 1 ? '' : 's'} before stopping.`
+      : fallbackGuidance.autoRecovery,
+  } : fallbackGuidance
+  const uniqueDetails = Array.from(new Set(details.filter(detail => detail && detail !== message)))
+
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      className="rounded-xl border border-red-200 bg-red-50/80 p-4 text-red-950 shadow-sm sm:p-5"
+    >
+      <div className="flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100">
+          <AlertCircle className="h-5 w-5 text-red-700" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold">{guidance.title}</p>
+          <p className="mt-1 text-sm leading-relaxed text-red-900">{guidance.whatHappened}</p>
+
+          {guidance.autoRecovery && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+              <RefreshCw className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span><span className="font-medium">Automatic recovery:</span> {guidance.autoRecovery}</span>
+            </div>
+          )}
+
+          <div className="mt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-red-800">What you can do</p>
+            <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm leading-relaxed text-red-900">
+              {guidance.actions.map(action => <li key={action}>{action}</li>)}
+            </ul>
+          </div>
+
+          <details className="mt-3 rounded-lg border border-red-200 bg-white/60 px-3 py-2 text-xs text-red-900">
+            <summary className="cursor-pointer font-medium">Technical details</summary>
+            <p className="mt-2 whitespace-pre-wrap break-words font-mono">{message}</p>
+            {(failure?.code || failure?.stage) && (
+              <p className="mt-1 font-mono">{[failure.stage, failure.code].filter(Boolean).join(' / ')}</p>
+            )}
+            {uniqueDetails.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-5 font-sans">
+                {uniqueDetails.map(detail => <li key={detail}>{detail}</li>)}
+              </ul>
+            )}
+          </details>
+
+          {(onRetry || onDismiss) && (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {onRetry && (
+                <Button size="sm" onClick={onRetry} disabled={retrying}>
+                  {retrying
+                    ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                  {retrying ? 'Trying again...' : retryLabel}
+                </Button>
+              )}
+              {onDismiss && (
+                <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function inferSketchViewType(title: string, description?: string): string {
+  const text = `${title || ''} ${description || ''}`.toLowerCase()
+  if (/exploded|disassembled/.test(text)) return 'Exploded view'
+  if (/cross[- ]?section|sectional|cutaway|internal/.test(text)) return 'Internal view'
+  if (/detail|close[- ]?up|enlarged/.test(text)) return 'Detail view'
+  if (/install|deploy|mounted|in use/.test(text)) return 'Deployment view'
+  if (/interface|screen|display|user interface|\bui\b/.test(text)) return 'Interface view'
+  if (/isometric|perspective|three-quarter|3\/4/.test(text)) return 'Perspective view'
+  if (/front|rear|back|side|top|bottom|plan view|elevation/.test(text)) return 'Orthographic view'
+  return 'Physical view'
+}
+
 export default function FigurePlannerStage({ session, patent, onComplete, onRefresh }: FigurePlannerStageProps) {
   const { toast } = useToast()
   const [isGenerating, setIsGenerating] = useState(false)
@@ -210,7 +331,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // Recoverable failures carry their own retry so the user can re-run the exact
   // action that failed instead of reading a raw error string.
   const [generationFailure, setGenerationFailure] = useState<
-    { message: string; details: string[]; retry: () => void } | null
+    { message: string; details: string[]; retry: () => void; failure?: DiagramFailurePayload } | null
   >(null)
   const [generationWarning, setGenerationWarning] = useState<string | null>(null)
   // In AI mode, null/empty means "AI decides the count"
@@ -277,6 +398,45 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
   const formatDiagramGenerationWarnings = (response: any): string | null => {
     const messages: string[] = []
+    const additions = Array.isArray(response?.repairSummary?.addedComponents) ? response.repairSummary.addedComponents : []
+    const addedFigures = Array.isArray(response?.repairSummary?.addedFigureKeys) ? response.repairSummary.addedFigureKeys : []
+    const figureChanges = Array.isArray(response?.repairSummary?.figureChanges) ? response.repairSummary.figureChanges : []
+    if (additions.length || addedFigures.length || figureChanges.length) {
+      const componentText = additions.length
+        ? `Added ${additions.map((item: any) => `${item.name}${item.referenceLabel ? ` (${item.referenceLabel})` : ''}`).join(', ')} to the Component Plan.`
+        : ''
+      const addedChanges = figureChanges.filter((change: any) => change.action === 'ADDED')
+      const addedFigureText = addedFigures.length
+        ? addedChanges.map((change: any) => {
+          const figureNumbers = Array.isArray(change.generatedFigureNumbers) && change.generatedFigureNumbers.length
+            ? change.generatedFigureNumbers.map((value: any) => `FIG. ${value}`).join(', ')
+            : 'an additional figure'
+          const claims = Array.isArray(change.claimNumbers) && change.claimNumbers.length
+            ? ` for claim${change.claimNumbers.length === 1 ? '' : 's'} ${change.claimNumbers.join(', ')}`
+            : ''
+          return `Created ${figureNumbers}${claims}.`
+        }).join(' ') || `Created ${addedFigures.length} additional figure${addedFigures.length === 1 ? '' : 's'} for complete coverage.`
+        : ''
+      const modifiedFigureText = figureChanges.filter((change: any) => change.action === 'MODIFIED').map((change: any) => {
+        const figureNumbers = Array.isArray(change.generatedFigureNumbers) && change.generatedFigureNumbers.length
+          ? change.generatedFigureNumbers.map((value: any) => `FIG. ${value}`).join(', ')
+          : change.figureKey
+        const claims = Array.isArray(change.claimNumbers) && change.claimNumbers.length
+          ? ` for claim${change.claimNumbers.length === 1 ? '' : 's'} ${change.claimNumbers.join(', ')}`
+          : ''
+        return `Updated ${figureNumbers}${claims}.`
+      }).join(' ')
+      messages.push([componentText, addedFigureText, modifiedFigureText].filter(Boolean).join(' '))
+    }
+    if (response?.coverage && Number.isFinite(Number(response.coverage.required))) {
+      const basis = response.coverage.basis === 'DISCLOSURE' ? 'disclosure requirements' : 'claim requirements'
+      messages.push(`Verified ${Number(response.coverage.covered || 0)}/${Number(response.coverage.required || 0)} ${basis}.`)
+      if (response.coverage.note) messages.push(String(response.coverage.note))
+    }
+    if (response?.countAdjusted?.adjusted && response.countAdjusted.reason) messages.push(response.countAdjusted.reason)
+    if (response?.filingReadiness?.status === 'REVIEW_REQUIRED') {
+      messages.push('The figures were rendered, but at least one remains review-only and is blocked from export until its filing issue is corrected.')
+    }
     if (Array.isArray(response?.warnings)) {
       messages.push(...response.warnings.filter((warning: any) => typeof warning === 'string' && warning.trim()))
     }
@@ -296,13 +456,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       if (corrections.length) {
         messages.push(`Automatic corrections applied: ${corrections.slice(0, 4).join('; ')}${corrections.length > 4 ? `; and ${corrections.length - 4} more` : ''}.`)
       }
-      // Figures are never split automatically, so a figure that came back
-      // denser than the filing guideline would otherwise ship with no visible
-      // sign. Name them so the user can Modify and approve a split.
+      // Name any persisted review-only density/page-fit result so the user can
+      // correct the exact figure before export.
       const dense = response.figures.filter((figure: any) =>
         Array.isArray(figure?.validation?.issues)
         && figure.validation.issues.some((issue: any) =>
-          issue?.severity === 'warning' && ['SPLIT_REQUIRED', 'PAGE_FIT_MINIMUM_TEXT'].includes(issue?.code)))
+          issue?.severity === 'error' && ['SPLIT_REQUIRED', 'PAGE_FIT_MINIMUM_TEXT'].includes(issue?.code)))
       if (dense.length) {
         const labels = dense.map((figure: any) => figure?.figureNo ? `FIG. ${figure.figureNo}` : 'A figure')
         messages.push(`${labels.join(', ')} ${dense.length === 1 ? 'is' : 'are'} denser than the filing guideline. Use Modify on ${dense.length === 1 ? 'it' : 'them'} and approve the proposed split if you want ${dense.length === 1 ? 'it' : 'them'} divided.`)
@@ -422,11 +581,19 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [planningSeconds, setPlanningSeconds] = useState(0)
   const [planError, setPlanError] = useState<string | null>(null)
   const [planDirty, setPlanDirty] = useState(false)
-  // Claim-named components that no planned figure depicts. Shown for judgement,
-  // not as a blocker — the attorney may well have a reason to leave one out.
+  // Any claim/disclosure requirements automatic repair could not assign.
+  // Generation blocks rather than silently omitting these in AI mode.
   const [planCoverageGaps, setPlanCoverageGaps] = useState<
-    Array<{ id: string; name: string; referenceLabel: string; matchedClaims: number[] }>
+    Array<{ id: string; label: string; type: string; claimNumber: number | null; sourceText?: string }>
   >([])
+  const [planCoverageSummary, setPlanCoverageSummary] = useState<{
+    status: string
+    basis: string | null
+    required: number
+    covered: number
+    note?: string | null
+  } | null>(null)
+  const [planRepairSummary, setPlanRepairSummary] = useState<any | null>(null)
   const planningMessageIndex = Math.min(
     Math.floor(planningSeconds / 5),
     FIGURE_PLANNING_MESSAGES.length - 1
@@ -476,6 +643,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [selectedReferenceFigures, setSelectedReferenceFigures] = useState<string[]>([])
   // Reference sketch selection for visual style consistency (passes actual images to AI)
   const [selectedReferenceSketchIds, setSelectedReferenceSketchIds] = useState<string[]>([])
+  const persistentSketchSuggestions = sketches.filter(sketch => sketch.status === 'SUGGESTED')
+  const displayedSketchSuggestions = [
+    ...persistentSketchSuggestions,
+    ...sketchSuggestions.filter(suggestion => !persistentSketchSuggestions.some(persisted =>
+      persisted.title === suggestion.title && persisted.description === suggestion.description)),
+  ]
 
   // === IMAGE EDITOR STATE ===
   const [imageEditorOpen, setImageEditorOpen] = useState(false)
@@ -1525,10 +1698,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       }
 
       const returned: any[] = Array.isArray(data?.suggestions) ? data.suggestions : []
-      setSketchSuggestions(returned)
 
       if (returned.length > 0) {
+        // Suggestions are persisted by the API and loaded with the rest of the
+        // sketch records, so they survive refreshes and can be reused.
+        setSketchSuggestions([])
+        await loadSketches()
         setShowReferenceSelector(false)
+        if (data?.autoCorrectionAttempted) {
+          setSuggestionsNotice('The first AI reply was malformed, so the Figure Planner corrected it automatically and saved the recovered suggestions.')
+        }
         return
       }
 
@@ -1748,9 +1927,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         throw new Error(data.error || 'Failed to generate sketch')
       }
       
-      // Remove the generated suggestion from the list
-      setSketchSuggestions(prev => prev.filter((_, i) => i !== index))
-      
       // Refresh sketches list
       await loadSketches()
     } catch (err) {
@@ -1798,6 +1974,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       const res = await onComplete({
         action: 'plan_figures_llm',
         sessionId: session?.id,
+        includeExistingFigures: !replaceExistingDiagrams,
         ...(diagramCount ? { figureCount: diagramCount } : {})
       })
 
@@ -1814,9 +1991,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         kind: String(figure.kind || 'COMPONENT'),
         detailLevel: figure.detailLevel,
         componentIds: figure.componentIds,
-        claimCriticalComponentIds: figure.claimCriticalComponentIds
+        claimCriticalComponentIds: figure.claimCriticalComponentIds,
+        coverageRequirementIds: figure.coverageRequirementIds,
       })))
       setPlanCoverageGaps(Array.isArray(res.coverage?.missing) ? res.coverage.missing : [])
+      setPlanCoverageSummary(res.coverage ? {
+        status: String(res.coverage.status || 'NOT_EVALUATED'),
+        basis: res.coverage.basis || null,
+        required: Number(res.coverage.required || 0),
+        covered: Number(res.coverage.covered || 0),
+        note: res.coverage.note || null,
+      } : null)
+      setPlanRepairSummary(res.repairSummary || res.plan?.repairSummary || null)
       setPlanDirty(false)
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Planning failed'
@@ -1824,7 +2010,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setGenerationFailure({
         message,
         details: describeDiagramFailure((e as any)?.diagramFailure),
-        retry: () => { void handlePlanFigures() }
+        retry: () => { void handlePlanFigures() },
+        failure: (e as any)?.diagramFailure?.failure,
       })
     } finally {
       setIsPlanning(false)
@@ -1859,8 +2046,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   }
 
   // Step 2: persist whatever the attorney approved, then draw exactly that.
-  // `figureCount` is sent deliberately — it marks the count as a user decision,
-  // which stops the auto-mode ceiling from silently trimming an approved plan.
+  // `figureCount` records the attorney's preferred reviewed count. Coverage
+  // repair may still add a necessary figure and reports that change afterward.
   const handleApprovePlan = async () => {
     if (!planFigures || planFigures.length === 0) return
     const approvedCount = planFigures.length
@@ -1903,6 +2090,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setPlanFigures(null)
       setPlanDirty(false)
       setPlanCoverageGaps([])
+      setPlanCoverageSummary(null)
+      setPlanRepairSummary(null)
       setFigures([])
       await onRefresh()
     } catch (e) {
@@ -1910,7 +2099,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setGenerationFailure({
         message,
         details: describeDiagramFailure((e as any)?.diagramFailure),
-        retry: () => { void handleApprovePlan() }
+        retry: () => { void handleApprovePlan() },
+        failure: (e as any)?.diagramFailure?.failure,
       })
     } finally {
       setIsGenerating(false)
@@ -1944,6 +2134,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         })
         if (!manualResp) throw new Error('LLM did not return valid figure list')
         if (manualResp.error) {
+          if (manualResp.code === 'PHYSICAL_VIEW_REQUIRES_SKETCH' && manualResp.sketchSuggestion) {
+            setSketchSuggestions(prev => [manualResp.sketchSuggestion, ...prev])
+            setSuggestionsNotice('This physical view was moved to Sketches because it needs patent line art rather than a logical PlantUML diagram.')
+            setActiveTab('sketches')
+            return
+          }
           throw Object.assign(new Error(manualResp.error), { diagramFailure: manualResp })
         }
         setGenerationWarning(formatDiagramGenerationWarnings(manualResp))
@@ -2007,6 +2203,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         message: errorMessage,
         details: describeDiagramFailure((e as any)?.diagramFailure),
         retry: () => { void handleGenerateFromLLM() },
+        failure: (e as any)?.diagramFailure?.failure,
       })
     } finally {
       setIsGenerating(false)
@@ -2720,46 +2917,27 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
       {/* Errors are shown here so they're visible from any tab */}
       {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <ActionableErrorPanel
+          message={error}
+          area={/plantuml|render|processing failed/i.test(error) ? 'render' : 'general'}
+          onDismiss={() => setError(null)}
+        />
       )}
 
       {generationFailure && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-amber-900">
-                Figure generation didn&apos;t complete
-              </p>
-              <p className="text-sm text-amber-800 mt-1">{generationFailure.message}</p>
-              {generationFailure.details.length > 0 && (
-                <ul className="mt-2 space-y-1 text-xs text-amber-800 list-disc list-inside">
-                  {generationFailure.details.map((detail, index) => (
-                    <li key={index}>{detail}</li>
-                  ))}
-                </ul>
-              )}
-              <p className="text-xs text-amber-700 mt-2">
-                Your existing figures were not changed. You can run generation again.
-              </p>
-              <div className="flex items-center gap-2 mt-3">
-                <Button
-                  size="sm"
-                  onClick={() => { const retry = generationFailure.retry; setGenerationFailure(null); retry() }}
-                  disabled={isGenerating}
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isGenerating ? 'animate-spin' : ''}`} />
-                  {isGenerating ? 'Retrying…' : 'Try again'}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setGenerationFailure(null)}>
-                  Dismiss
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ActionableErrorPanel
+          message={generationFailure.message}
+          area="diagram"
+          details={generationFailure.details}
+          failure={generationFailure.failure}
+          onRetry={() => {
+            const retry = generationFailure.retry
+            setGenerationFailure(null)
+            retry()
+          }}
+          retrying={isGenerating || isPlanning}
+          onDismiss={() => setGenerationFailure(null)}
+        />
       )}
 
       {generationWarning && (
@@ -2871,28 +3049,50 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
               {planError && (
                 <div className="px-5 pt-4">
-                  <Alert variant="destructive">
-                    <AlertDescription>{planError}</AlertDescription>
-                  </Alert>
+                  <ActionableErrorPanel
+                    message={planError}
+                    area="diagram"
+                    onRetry={handlePlanFigures}
+                    retrying={isPlanning}
+                    onDismiss={() => setPlanError(null)}
+                  />
                 </div>
               )}
 
               {/* An actionable gap the attorney can fix before drawing, not a
                   quality warning about the AI's own output. */}
+              {planCoverageSummary && planCoverageGaps.length === 0 && (
+                <div className="px-5 pt-4">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                    <p className="flex items-center gap-2 text-sm font-medium text-emerald-900">
+                      <Check className="h-4 w-4" />
+                      {planCoverageSummary.covered}/{planCoverageSummary.required} {planCoverageSummary.basis === 'DISCLOSURE' ? 'disclosure' : 'claim'} requirements covered
+                    </p>
+                    <p className="mt-1 text-xs text-emerald-700">
+                      {planCoverageSummary.note || 'Coverage is checked again after your edits. Missing concepts are restored automatically before drawing.'}
+                    </p>
+                    {Array.isArray(planRepairSummary?.addedComponents) && planRepairSummary.addedComponents.length > 0 && (
+                      <div className="mt-3 border-t border-emerald-200 pt-3 text-xs text-emerald-800">
+                        <span className="font-semibold">Component Plan additions:</span>{' '}
+                        {planRepairSummary.addedComponents.map((item: any) => `${item.name} (${item.referenceLabel})`).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {planCoverageGaps.length > 0 && (
                 <div className="px-5 pt-4">
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
                     <p className="text-sm font-medium text-amber-900">
-                      {planCoverageGaps.length === 1 ? 'One part named by your claims is not' : `${planCoverageGaps.length} parts named by your claims are not`} in any planned figure
+                      Automatic repair could not assign {planCoverageGaps.length === 1 ? 'one requirement' : `${planCoverageGaps.length} requirements`} to a planned figure
                     </p>
                     <ul className="mt-2 space-y-1 text-sm text-amber-800">
                       {planCoverageGaps.slice(0, 6).map(gap => (
                         <li key={gap.id}>
-                          <span className="font-medium">{gap.name}</span>
-                          {gap.referenceLabel ? ` (${gap.referenceLabel})` : ''}
-                          {gap.matchedClaims.length > 0
-                            ? ` — claim${gap.matchedClaims.length === 1 ? '' : 's'} ${gap.matchedClaims.join(', ')}`
-                            : ''}
+                          <span className="font-medium">{gap.label}</span>
+                          {gap.claimNumber ? ` — claim ${gap.claimNumber}` : ''}
+                          {gap.type ? ` · ${gap.type.toLowerCase().replace(/_/g, ' ')}` : ''}
                         </li>
                       ))}
                       {planCoverageGaps.length > 6 && (
@@ -2900,7 +3100,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       )}
                     </ul>
                     <p className="mt-2 text-xs text-amber-700">
-                      Add it to a figure&rsquo;s description below, or plan again. You can also approve as-is if the drawings don&rsquo;t need it.
+                      Plan again or review the Component Plan. Generation will not silently omit these requirements.
                     </p>
                   </div>
                 </div>
@@ -3092,8 +3292,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </Button>
 
               <p className="text-xs text-ai-graphite-500 max-w-prose">
-                A good description names the parts and the view — &ldquo;Cross-section of the soil probe showing electrodes 302 and seal 304.&rdquo;
-                Plain sentences work; no technical format needed.
+                Describe logical architecture, operations, interactions, or constituents — for example,
+                &ldquo;Controller receiving sensor measurements and sending an actuator command.&rdquo; Physical, cross-sectional,
+                exploded, and perspective views are created in Sketches.
               </p>
 
               <div className="flex items-center space-x-2">
@@ -4048,10 +4249,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         <div className="space-y-6">
           {/* Sketch Error Alert */}
           {sketchError && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{sketchError}</AlertDescription>
-            </Alert>
+            <ActionableErrorPanel
+              message={sketchError}
+              area="sketch"
+              onDismiss={() => setSketchError(null)}
+            />
           )}
 
           {/* Sketch Generation Controls */}
@@ -4104,9 +4306,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         ? `${selectedReferenceFigures.length} context refs` 
                         : 'Add Context'}
                     </Button>
-                    {sketchSuggestions.length > 0 && (
+                    {displayedSketchSuggestions.length > 0 && (
                       <Badge variant="secondary" className="ml-2">
-                        {sketchSuggestions.length} suggestions
+                        {displayedSketchSuggestions.length} saved suggestions
                       </Badge>
                     )}
                   </div>
@@ -4209,10 +4411,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
               {/* Suggestions Error */}
               {suggestionsError && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{suggestionsError}</AlertDescription>
-                </Alert>
+                <ActionableErrorPanel
+                  message={suggestionsError}
+                  area="suggestion"
+                  onRetry={handleGenerateSketchSuggestions}
+                  retryLabel="Suggest views again"
+                  retrying={suggestionsLoading}
+                  onDismiss={() => setSuggestionsError(null)}
+                />
               )}
 
               {/* Nothing suggested, but nothing went wrong — explain why. */}
@@ -4224,88 +4430,138 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               )}
 
               {/* Sketch Suggestions - with Generate Image buttons */}
-              {sketchSuggestions.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Lightbulb className="w-4 h-4 text-amber-600" />
-                      <Label className="text-sm font-medium text-ai-graphite-700">Sketch Suggestions</Label>
-                      <Badge variant="secondary" className="text-xs">{sketchSuggestions.length}</Badge>
+              {displayedSketchSuggestions.length > 0 && (
+                <section className="overflow-hidden rounded-2xl border border-ai-blue-100 bg-gradient-to-br from-white via-white to-ai-blue-50/50 shadow-sm">
+                  <div className="flex flex-col gap-3 border-b border-ai-blue-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ai-blue-100 text-ai-blue-700">
+                        <Lightbulb className="h-5 w-5" aria-hidden="true" />
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="font-semibold text-ai-graphite-900">Saved view ideas</h4>
+                          <Badge className="border-ai-blue-200 bg-white text-ai-blue-700 hover:bg-white">
+                            {displayedSketchSuggestions.length} available
+                          </Badge>
+                        </div>
+                        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ai-graphite-500">
+                          Generate a sketch now, or customize an idea first. Every idea stays saved and can be reused.
+                        </p>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => setSketchSuggestions([])}
-                      className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700"
-                    >
-                      Clear all
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-emerald-700">
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      Reusable after generation
+                    </div>
                   </div>
-                  <p className="text-xs text-ai-graphite-500">
-                    Click &quot;Generate Image&quot; to create an actual sketch from each suggestion.
-                  </p>
-                  <div className="grid gap-3">
-                    {sketchSuggestions.map((suggestion, index) => (
-                      <Card key={index} className="border-amber-200 bg-amber-50/50 overflow-hidden">
-                        <CardContent className="p-4">
-                          <div className="flex items-start gap-3">
-                            <div className="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                              <span className="text-xs font-semibold text-amber-700">{index + 1}</span>
-                            </div>
-                            <div className="flex-1">
-                              <h4 className="font-medium text-ai-graphite-900 mb-1">{suggestion.title}</h4>
-                              <p className="text-sm text-ai-graphite-600 leading-relaxed mb-3">{suggestion.description}</p>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  className="bg-amber-600 hover:bg-amber-700 text-white gap-1"
-                                  onClick={() => handleGenerateFromManualSuggestion(suggestion, index)}
-                                  disabled={generatingManualSuggestionIdx !== null || sketchGenerating}
-                                >
-                                  {generatingManualSuggestionIdx === index ? (
-                                    <>
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                      Generating...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Wand2 className="w-3 h-3" />
-                                      Generate Image
-                                    </>
-                                  )}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-ai-graphite-500 hover:text-ai-graphite-700"
-                                  onClick={() => {
-                                    // Pre-fill the form with suggestion data for customization
-                                    setSketchTitle(suggestion.title)
-                                    setSketchPrompt(suggestion.description)
-                                    setSketchMode('guided')
-                                    // Remove from suggestions
-                                    setSketchSuggestions(prev => prev.filter((_, i) => i !== index))
-                                  }}
-                                  disabled={generatingManualSuggestionIdx !== null}
-                                >
-                                  <Edit2 className="w-3 h-3 mr-1" />
-                                  Customize
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-ai-graphite-400 hover:text-red-500"
-                                  onClick={() => setSketchSuggestions(prev => prev.filter((_, i) => i !== index))}
-                                  disabled={generatingManualSuggestionIdx !== null}
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </Button>
-                              </div>
-                            </div>
+
+                  <div className="grid gap-4 p-4 md:grid-cols-2 sm:p-5">
+                    {displayedSketchSuggestions.map((suggestion, index) => {
+                      const isPersistent = typeof suggestion.id === 'string'
+                      const isGeneratingThis = isPersistent
+                        ? generatingSuggestionId === suggestion.id
+                        : generatingManualSuggestionIdx === index
+                      const viewType = inferSketchViewType(suggestion.title, suggestion.description)
+                      return (
+                      <article
+                        key={suggestion.id || `${suggestion.title}-${index}`}
+                        className="group flex min-h-[280px] flex-col overflow-hidden rounded-xl border border-paper-300 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-ai-blue-200 hover:shadow-md"
+                      >
+                        <div className="relative flex h-24 items-center justify-center overflow-hidden border-b border-paper-200 bg-gradient-to-br from-slate-50 to-ai-blue-50">
+                          <div className="absolute inset-0 opacity-40" style={{
+                            backgroundImage: 'linear-gradient(to right, #cbd5e1 1px, transparent 1px), linear-gradient(to bottom, #cbd5e1 1px, transparent 1px)',
+                            backgroundSize: '20px 20px'
+                          }} />
+                          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white bg-white/90 text-ai-blue-600 shadow-sm transition-transform duration-200 group-hover:scale-105">
+                            {viewType === 'Exploded view' || viewType === 'Internal view'
+                              ? <Layers className="h-6 w-6" aria-hidden="true" />
+                              : viewType === 'Detail view'
+                                ? <Eye className="h-6 w-6" aria-hidden="true" />
+                                : <Pencil className="h-6 w-6" aria-hidden="true" />}
                           </div>
-                        </CardContent>
-                      </Card>
-                    ))}
+                          <div className="absolute left-3 top-3 flex items-center gap-2">
+                            <Badge className="border-white bg-white/90 text-ai-graphite-700 shadow-sm hover:bg-white">
+                              {viewType}
+                            </Badge>
+                          </div>
+                          <span className="absolute right-3 top-3 flex h-6 min-w-6 items-center justify-center rounded-full border border-white bg-white/90 px-1.5 text-[11px] font-semibold text-ai-graphite-500 shadow-sm">
+                            {index + 1}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-1 flex-col p-4">
+                          <div className="flex-1">
+                            <h5 className="font-semibold leading-snug text-ai-graphite-900">{suggestion.title}</h5>
+                            <p
+                              className="mt-2 line-clamp-4 text-sm leading-relaxed text-ai-graphite-600"
+                              title={suggestion.description}
+                            >
+                              {suggestion.description}
+                            </p>
+                          </div>
+
+                          <div className="mt-4 flex items-center gap-2 border-t border-paper-200 pt-3">
+                            <Button
+                              size="sm"
+                              className="min-w-0 flex-1 gap-1.5 bg-ai-blue-600 text-white hover:bg-ai-blue-700"
+                              onClick={() => isPersistent
+                                ? handleGenerateFromSuggestion(suggestion.id)
+                                : handleGenerateFromManualSuggestion(suggestion, index)}
+                              disabled={generatingSuggestionId !== null || generatingManualSuggestionIdx !== null || sketchGenerating}
+                            >
+                              {isGeneratingThis ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  Generating...
+                                </>
+                              ) : (
+                                <>
+                                  <Wand2 className="h-3.5 w-3.5" />
+                                  Generate sketch
+                                </>
+                              )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-9 w-9 shrink-0 p-0 text-ai-graphite-600 hover:border-ai-blue-200 hover:bg-ai-blue-50 hover:text-ai-blue-700"
+                              title="Customize this view before generating"
+                              aria-label={`Customize ${suggestion.title}`}
+                              onClick={() => {
+                                setSketchTitle(suggestion.title)
+                                setSketchPrompt(suggestion.description)
+                                setSketchMode('guided')
+                                if (!isPersistent) setSketchSuggestions(prev => prev.filter((_, i) => i !== index))
+                                requestAnimationFrame(() => {
+                                  document.getElementById('sketch-illustration-form')?.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'start'
+                                  })
+                                })
+                              }}
+                              disabled={generatingSuggestionId !== null || generatingManualSuggestionIdx !== null}
+                            >
+                              <Edit2 className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-9 w-9 shrink-0 p-0 text-ai-graphite-400 hover:bg-red-50 hover:text-red-600"
+                              title="Remove saved idea"
+                              aria-label={`Remove ${suggestion.title}`}
+                              onClick={() => isPersistent
+                                ? handleDeleteSketch(suggestion.id)
+                                : setSketchSuggestions(prev => prev.filter((_, i) => i !== index))}
+                              disabled={generatingSuggestionId !== null || generatingManualSuggestionIdx !== null}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      </article>
+                    )})}
                   </div>
-                </div>
+                </section>
               )}
 
               {/*
@@ -4313,7 +4569,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 the fields it controls; it previously sat between "Get ideas" and the
                 suggestions that button produces, splitting one task in half.
               */}
-              <div className="pt-4 border-t border-paper-200 space-y-3">
+              <div id="sketch-illustration-form" className="scroll-mt-4 space-y-3 border-t border-paper-200 pt-4">
                 <div>
                   <h4 className="text-sm font-semibold text-ai-graphite-900">Make the illustration</h4>
                   <p className="text-xs text-ai-graphite-500 mt-0.5">
@@ -4544,90 +4800,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </Button>
             </CardContent>
           </Card>
-
-          {/* Sketch Suggestions Section - shown first if there are suggestions from diagram generation */}
-          {(() => {
-            const suggestions = sketches.filter(s => s.status === 'SUGGESTED')
-            if (suggestions.length === 0) return null
-            
-            return (
-              <div className="mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-ai-graphite-900 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-amber-500" />
-                    AI-Suggested Sketches
-                    <Badge variant="secondary" className="ml-2">{suggestions.length}</Badge>
-                  </h3>
-                </div>
-                <p className="text-sm text-ai-graphite-600 mb-4">
-                  These sketch ideas were generated alongside your diagrams. Click &quot;Generate Image&quot; to create the actual sketch.
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {suggestions.map((suggestion) => (
-                    <motion.div
-                      key={suggestion.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="group"
-                    >
-                      <Card className="overflow-hidden transition-shadow hover:shadow-lg border-amber-200 bg-amber-50/50">
-                        <div className="relative aspect-[4/3] bg-gradient-to-br from-amber-100 to-amber-50 flex items-center justify-center p-4">
-                          {generatingSuggestionId === suggestion.id ? (
-                            <div className="flex flex-col items-center">
-                              <Loader2 className="w-10 h-10 animate-spin text-amber-600 mb-2" />
-                              <p className="text-sm text-amber-700">Generating sketch...</p>
-                            </div>
-                          ) : (
-                            <div className="text-center">
-                              <Wand2 className="w-12 h-12 mx-auto text-amber-400 mb-3" />
-                              <p className="text-xs text-amber-600 uppercase tracking-wide font-medium">Suggested Sketch</p>
-                            </div>
-                          )}
-                        </div>
-                        <CardContent className="p-4">
-                          <h4 className="font-semibold text-ai-graphite-900 text-sm mb-2">{suggestion.title}</h4>
-                          {suggestion.description && (
-                            <p className="text-xs text-ai-graphite-600 mb-3 line-clamp-3">
-                              {suggestion.description}
-                            </p>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
-                              onClick={() => handleGenerateFromSuggestion(suggestion.id)}
-                              disabled={generatingSuggestionId !== null}
-                            >
-                              {generatingSuggestionId === suggestion.id ? (
-                                <>
-                                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                                  Generating...
-                                </>
-                              ) : (
-                                <>
-                                  <Wand2 className="w-3 h-3 mr-1" />
-                                  Generate Image
-                                </>
-                              )}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 w-8 p-0"
-                              onClick={() => handleDeleteSketch(suggestion.id)}
-                              disabled={generatingSuggestionId !== null}
-                            >
-                              <Trash2 className="w-4 h-4 text-ai-graphite-400" />
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
-                  ))}
-                </div>
-              </div>
-            )
-          })()}
 
           {/* Generated Sketches Grid */}
           <div>
@@ -5019,10 +5191,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         <div className="space-y-6">
           {/* Arrange Error Alert */}
           {arrangeError && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{arrangeError}</AlertDescription>
-            </Alert>
+            <ActionableErrorPanel
+              message={arrangeError}
+              area="arrange"
+              onRetry={loadCombinedFigures}
+              retryLabel="Reload figures"
+              retrying={arrangeLoading}
+              onDismiss={() => setArrangeError(null)}
+            />
           )}
 
           {/* Header with instruction */}

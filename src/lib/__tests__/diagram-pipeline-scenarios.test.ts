@@ -2,7 +2,7 @@
  * Scenario harness: drives the REAL diagram pipeline with a dummy invention.
  * Only two boundaries are stubbed - Postgres and the PlantUML render server -
  * so planning, prompting, normalization, validation, decomposition, the
- * auto-mode cap and the replace/append persistence paths all run for real.
+ * soft figure target and the replace/append persistence paths all run for real.
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { llmGateway } from '@/lib/metering/gateway'
@@ -56,8 +56,83 @@ const IDEA = {
 type LlmCall = { stageCode: string; prompt: string; metadata: any }
 const llmCalls: LlmCall[] = []
 let planResponder: (call: LlmCall) => string
+let coverageResponder: (call: LlmCall) => string
 let detailResponder: (call: LlmCall, attempt: number) => string
 const detailAttempts = new Map<string, number>()
+
+function coverageFixtureForPlannedKind(call: LlmCall): string {
+  let kind = 'COMPONENT'
+  try {
+    const preview = JSON.parse(planResponder(call))
+    kind = String(preview?.figures?.[0]?.kind || kind)
+  } catch {}
+  const process = kind === 'PROCESS'
+  return JSON.stringify({
+    requirements: IDEA.claimsStructuredFinal.map(claim => ({
+      claimNumber: claim.number,
+      type: process ? 'PROCESS_STEP' : 'COMPONENT',
+      label: process ? `claim ${claim.number} operation` : `claim ${claim.number} structure`,
+      sourceText: claim.text,
+      componentIds: ['c3'],
+    })),
+  })
+}
+
+function applyApprovedPlanContract(raw: string, call: LlmCall): string {
+  try {
+    const diagram = JSON.parse(raw)
+    const match = call.prompt.match(/FIGURE PLAN:\r?\n([\s\S]*?)\r?\n\r?\nUSER MODIFICATION INSTRUCTIONS:/)
+    if (!match) return raw
+    const plan = JSON.parse(match[1])
+    Object.assign(diagram, {
+      schemaVersion: 2,
+      key: plan.key,
+      kind: plan.kind,
+      title: plan.title,
+      purpose: plan.purpose,
+      detailLevel: plan.detailLevel,
+      direction: plan.direction,
+      claimCriticalComponentIds: plan.claimCriticalComponentIds,
+      evidenceIds: plan.evidenceIds,
+      coverageRequirementIds: plan.coverageRequirementIds,
+    })
+    if (diagram.kind === 'COMPONENT') {
+      const visible = new Set((diagram.components || []).map((item: any) => item.componentId))
+      const missing = (plan.componentIds || []).filter((id: string) => !visible.has(id))
+      if (missing.length) {
+        diagram.components = [...(diagram.components || []), ...missing.map((componentId: string) => ({ componentId }))]
+        diagram.groups = [...(diagram.groups || []), {
+          id: 'automatic-coverage', label: 'Automatic Coverage',
+          rows: Array.from({ length: Math.ceil(missing.length / 4) }, (_, index) => ({ componentIds: missing.slice(index * 4, index * 4 + 4) })),
+        }]
+      }
+    }
+    const atom = diagram.kind === 'COMPONENT' ? diagram.components?.[0]
+      : diagram.kind === 'SEQUENCE' ? diagram.interactions?.[0]
+        : diagram.kind === 'PROCESS' ? diagram.nodes?.[0]
+          : diagram.constituents?.[0]
+    if (atom && plan.coverageRequirementIds?.length) {
+      atom.coverageRequirementIds = Array.from(new Set([...(atom.coverageRequirementIds || []), ...plan.coverageRequirementIds]))
+      atom.evidenceIds = Array.from(new Set([...(atom.evidenceIds || []), ...plan.evidenceIds]))
+    }
+    if (diagram.kind === 'PROCESS' && !call.prompt.includes('"sourceFactLedger"')) {
+      for (const node of diagram.nodes || []) {
+        node.evidenceIds = Array.from(new Set([...(node.evidenceIds || []), ...plan.evidenceIds]))
+      }
+    }
+    const fallbackEvidence = plan.evidenceIds?.[0] || (call.prompt.includes('SF-processSteps-1') ? 'SF-processSteps-1' : null)
+    const citedAtoms = diagram.kind === 'COMPONENT' ? diagram.relationships
+      : diagram.kind === 'SEQUENCE' ? diagram.interactions
+        : diagram.kind === 'PROCESS' ? diagram.transitions
+          : [...(diagram.constituents || []), ...(diagram.relationships || [])]
+    if (fallbackEvidence) {
+      for (const cited of citedAtoms || []) cited.evidenceIds = Array.from(new Set([...(cited.evidenceIds || []), fallbackEvidence]))
+    }
+    return JSON.stringify(diagram)
+  } catch {
+    return raw
+  }
+}
 
 // executeStructured reaches the gateway through a DYNAMIC import, and two
 // figures detail concurrently. Concurrent dynamic imports race past vitest's
@@ -67,12 +142,15 @@ vi.spyOn(llmGateway, 'executeLLMOperation').mockImplementation(async (_ctx: any,
   const call = { stageCode: String(request.stageCode), prompt: String(request.prompt), metadata: request.metadata }
   llmCalls.push(call)
   if (call.stageCode === 'DRAFT_FIGURE_PLANNER') {
+    if (call.metadata?.purpose === 'extract_figure_coverage') {
+      return { success: true, response: { output: coverageResponder(call) } } as any
+    }
     return { success: true, response: { output: planResponder(call) } } as any
   }
   const key = String(request.metadata?.figureKey || '')
   const attempt = (detailAttempts.get(key) || 0) + 1
   detailAttempts.set(key, attempt)
-  return { success: true, response: { output: detailResponder(call, attempt) } } as any
+  return { success: true, response: { output: applyApprovedPlanContract(detailResponder(call, attempt), call) } } as any
 })
 
 // -------------------------------------------------------------- render stub
@@ -103,6 +181,8 @@ const db = {
   diagramSources: [] as any[],
   sessionUpdates: [] as any[],
   deleteManyCalls: [] as string[],
+  referenceMapUpdates: [] as any[],
+  auditLogs: [] as any[],
 }
 
 const txClient = {
@@ -118,6 +198,8 @@ const txClient = {
     update: vi.fn(async (args: any) => ({ id: args.where.id, ...args.data })),
   },
   draftingSession: { update: vi.fn(async (args: any) => { db.sessionUpdates.push(args.data); return {} }) },
+  referenceMap: { update: vi.fn(async (args: any) => { db.referenceMapUpdates.push(args.data); return {} }) },
+  auditLog: { create: vi.fn(async (args: any) => { db.auditLogs.push(args.data); return args.data }) },
 }
 
 let existingFigurePlans: any[] = []
@@ -248,14 +330,17 @@ beforeEach(async () => {
   db.diagramSources = []
   db.sessionUpdates = []
   db.deleteManyCalls = []
+  db.referenceMapUpdates = []
+  db.auditLogs = []
   existingFigurePlans = []
   ideaOverride = null
   planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
+  coverageResponder = coverageFixtureForPlannedKind
   detailResponder = call => componentDetail(String(call.metadata?.figureKey || 'figure-1'))
 })
 
-describe('auto-mode figure cap', () => {
-  test('caps an over-eager 8-figure auto plan at 6 and details only those 6', async () => {
+describe('soft auto-mode figure target', () => {
+  test('keeps an 8-figure plan when coverage or density requires more than 6', async () => {
     planResponder = () => JSON.stringify({
       schemaVersion: 1,
       figures: Array.from({ length: 8 }, (_, index) => planFigure(index + 1)),
@@ -263,12 +348,11 @@ describe('auto-mode figure cap', () => {
 
     const result = await generateManagedFigureSet({ ...INPUT })
 
-    expect(result.plan.figures).toHaveLength(6)
-    expect(result.figures).toHaveLength(6)
-    expect(result.figures.map(f => f.figureNo)).toEqual([1, 2, 3, 4, 5, 6])
-    // The cap must apply BEFORE detailing, or the extra figures still cost LLM calls.
-    expect(llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(6)
-    expect(db.figurePlans).toHaveLength(6)
+    expect(result.plan.figures).toHaveLength(8)
+    expect(result.figures).toHaveLength(8)
+    expect(result.figures.map(f => f.figureNo)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(8)
+    expect(db.figurePlans).toHaveLength(8)
   })
 
   test('an explicit user count is respected and not capped', async () => {
@@ -280,14 +364,48 @@ describe('auto-mode figure cap', () => {
     expect(plan.figures).toHaveLength(7)
   })
 
-  test('the auto-mode prompt states the 6-figure ceiling', async () => {
+  test('returns the explicit safety-limit error instead of silently dropping figure 21', async () => {
+    planResponder = () => JSON.stringify({
+      schemaVersion: 2,
+      figures: Array.from({ length: 21 }, (_, index) => planFigure(index + 1)),
+    })
+    await expect(planManagedFigureSet({ ...INPUT })).rejects.toMatchObject({ code: 'FIGURE_SET_TOO_LARGE' })
+  })
+
+  test('atomically appends a missing claim element and audits its stable reference label', async () => {
+    coverageResponder = () => JSON.stringify({
+      requirements: [
+        {
+          claimNumber: 1, type: 'DATA_STRUCTURE', label: 'controller state variable',
+          sourceText: IDEA.claimsStructuredFinal[0].text, componentIds: [],
+          componentCandidate: { name: 'Controller State Variable', type: 'STORAGE', parentId: 'c3' },
+        },
+        {
+          claimNumber: 2, type: 'COMPONENT', label: 'flow verification',
+          sourceText: IDEA.claimsStructuredFinal[1].text, componentIds: ['c3'],
+        },
+      ],
+    })
+
+    const result = await generateManagedFigureSet({ ...INPUT })
+
+    const addition = result.repairSummary?.addedComponents[0]
+    expect(addition).toMatchObject({ name: 'Controller State Variable', referenceLabel: '400', parentId: 'c3' })
+    expect(result.coverage.status).toBe('COMPLETE')
+    expect(db.referenceMapUpdates).toHaveLength(1)
+    const persisted = db.referenceMapUpdates[0].components.components
+    expect(persisted.slice(0, COMPONENTS.length).map((item: any) => [item.id, item.referenceLabel]))
+      .toEqual(COMPONENTS.map(item => [item.id, item.referenceLabel]))
+    expect(persisted.at(-1)).toMatchObject({ id: addition?.id, referenceLabel: '400', autoGeneratedBy: 'CLAIM_COVERAGE' })
+    expect(db.auditLogs[0]).toMatchObject({ action: 'FIGURE_COVERAGE_COMPONENTS_AUTO_ADDED' })
+  })
+
+  test('the auto-mode prompt states that six is a soft target', async () => {
     await planManagedFigureSet({ ...INPUT })
-    const prompt = llmCalls.find(c => c.stageCode === 'DRAFT_FIGURE_PLANNER')!.prompt
-    expect(prompt).toContain('never more than 6 figures')
-    expect(prompt).not.toContain('2 to 6 figures')
-    // The model must know a figure is never split for it, or it keeps
-    // overloading figures on the assumption the server will tidy up.
-    expect(prompt).toContain('rendered as exactly one sheet')
+    const prompt = llmCalls.find(c => c.metadata?.purpose === 'plan_figures_structured')!.prompt
+    expect(prompt).toContain('Target no more than 6 figures')
+    expect(prompt).toContain('Never omit content merely to hit six')
+    expect(prompt).toContain('automatically split')
   })
 })
 
@@ -318,7 +436,7 @@ describe('ungrounded flowchart steps', () => {
     planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [{ ...planFigure(1), kind: 'PROCESS', key: 'method' }] })
     detailResponder = () => hallucinatedProcess('method')
 
-    await expect(generateManagedFigureSet({ ...INPUT })).rejects.toThrow(/invalid structured data/i)
+    await expect(generateManagedFigureSet({ ...INPUT })).rejects.toThrow(/required structured format/i)
     expect(db.figurePlans).toHaveLength(0)
   })
 
@@ -399,10 +517,18 @@ describe('step citation grounding', () => {
         schemaVersion: 1, kind: 'PROCESS', key: 'method', title: 'M', purpose: 'P',
         detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], evidenceIds: [],
         nodes: [
-          { key: 'a', kind: 'STEP', componentId: 'c1', label: 'Measure soil moisture', evidenceIds: ['SF-invented-99'] },
+          { key: 'a', kind: 'STEP', componentId: 'c1', label: 'Measure soil moisture', evidenceIds: ['SF-processSteps-1'] },
+          { key: 'receive', kind: 'STEP', componentId: 'c2', label: 'Receive forecast precipitation', evidenceIds: ['SF-processSteps-2'] },
+          { key: 'below', kind: 'DECISION', componentId: 'c3', label: 'Moisture below threshold', evidenceIds: ['SF-processSteps-3'] },
+          { key: 'invented', kind: 'STEP', componentId: 'c5', label: 'Calibrate flow meter monthly', evidenceIds: ['SF-invented-99'] },
           { key: 'b', kind: 'STEP', componentId: 'c4', label: 'Open supply valve', evidenceIds: ['SF-processSteps-5'] },
         ],
-        transitions: [{ fromId: 'a', toId: 'b', label: '', category: 'PRIMARY' }],
+        transitions: [
+          { fromId: 'a', toId: 'receive', label: '', category: 'PRIMARY' },
+          { fromId: 'receive', toId: 'below', label: '', category: 'PRIMARY' },
+          { fromId: 'below', toId: 'invented', label: 'yes', category: 'PRIMARY' },
+          { fromId: 'invented', toId: 'b', label: '', category: 'PRIMARY' },
+        ],
       })
       : groundedProcess('method')
 
@@ -425,11 +551,24 @@ describe('step citation grounding', () => {
     expect(prompt).toContain('ref=100')
   })
 
-  test('a session with no disclosure ledger still generates flowcharts', async () => {
+  test('a session with no disclosure ledger uses the exact claim span as evidence', async () => {
     ideaOverride = { ...IDEA, sourceFactLedger: undefined }
     planResponder = processPlan
-    // No node-level evidenceIds anywhere, and nothing to cite against.
-    detailResponder = () => uncitedProcess('method').replace('Calibrate flow meter monthly', 'Receive forecast precipitation')
+    detailResponder = () => JSON.stringify({
+      schemaVersion: 2, kind: 'PROCESS', key: 'method', title: 'M', purpose: 'P',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c3'], evidenceIds: [],
+      nodes: [
+        { key: 'sense', kind: 'STEP', componentId: 'c1', label: 'Provide moisture sensor', evidenceIds: [] },
+        { key: 'weather', kind: 'STEP', componentId: 'c2', label: 'Provide weather interface', evidenceIds: [] },
+        { key: 'derive', kind: 'STEP', componentId: 'c3', label: 'Derive watering window', evidenceIds: [] },
+        { key: 'actuate', kind: 'STEP', componentId: 'c4', label: 'Control valve actuator', evidenceIds: [] },
+      ],
+      transitions: [
+        { fromId: 'sense', toId: 'derive', label: '', category: 'PRIMARY' },
+        { fromId: 'weather', toId: 'derive', label: '', category: 'PRIMARY' },
+        { fromId: 'derive', toId: 'actuate', label: '', category: 'PRIMARY' },
+      ],
+    })
 
     const result = await generateManagedFigureSet({ ...INPUT })
 
@@ -454,7 +593,7 @@ describe('interrupted-run retry behaviour', () => {
     expect(db.figurePlans).toHaveLength(4)
   })
 
-  test('append path is clamped to the session-wide ceiling instead of stacking a second set', async () => {
+  test('append path can add a complete set beyond the six-figure target', async () => {
     existingFigurePlans = [1, 2, 3, 4, 5].map(figureNo => ({ figureNo, id: `plan-${figureNo}` }))
     planResponder = () => JSON.stringify({
       schemaVersion: 1, figures: Array.from({ length: 5 }, (_, index) => planFigure(index + 1)),
@@ -465,16 +604,16 @@ describe('interrupted-run retry behaviour', () => {
     expect(db.deleteManyCalls).toEqual([])
     // 5 already exist, so only 1 slot remains — appending used to add all 5
     // and reach 10, which is how the reported session got there.
-    expect(result.plan.figures).toHaveLength(1)
-    expect(result.figures.map(f => f.figureNo)).toEqual([6])
+    expect(result.plan.figures).toHaveLength(5)
+    expect(result.figures.map(f => f.figureNo)).toEqual([6, 7, 8, 9, 10])
   })
 
-  test('append refuses once the session is already at the ceiling', async () => {
+  test('append remains available when the session already has six figures', async () => {
     existingFigurePlans = [1, 2, 3, 4, 5, 6].map(figureNo => ({ figureNo, id: `plan-${figureNo}` }))
     planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
 
-    await expect(addManagedFigures({ ...INPUT })).rejects.toThrow(/maximum for automatic generation/i)
-    expect(db.figurePlans).toHaveLength(0)
+    const result = await addManagedFigures({ ...INPUT })
+    expect(result.figures.map(f => f.figureNo)).toEqual([7])
   })
 
   test('an explicit figure count still appends past the auto ceiling', async () => {
@@ -487,7 +626,7 @@ describe('interrupted-run retry behaviour', () => {
   })
 })
 
-describe('figure-count inflation after the plan is capped', () => {
+describe('density-aware expansion after planning', () => {
   /** A COMPONENT figure dense enough that the complexity policy demands a split. */
   const denseComponent = (key: string) => {
     // 22 components across 3 bands: above the 20-component split threshold, so
@@ -534,7 +673,7 @@ describe('figure-count inflation after the plan is capped', () => {
     expect(result.figures).toHaveLength(5)
   })
 
-  test('ships one dense sheet with a review warning instead of fanning out', async () => {
+  test('automatically splits a dense fallback without dropping coverage', async () => {
     planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
     detailResponder = call => denseComponent(String(call.metadata?.figureKey || 'figure-1'))
 
@@ -545,17 +684,20 @@ describe('figure-count inflation after the plan is capped', () => {
     // Strict pass burns both attempts, then the tolerant pass accepts the
     // dense figure so no disclosed content is lost.
     expect(detailCalls.map(c => c.metadata.densityBudget)).toEqual(['enforced', 'enforced', 'relaxed'])
-    // One planned figure is one sheet, always. This used to decompose into an
-    // overview plus detail and interface sheets.
-    expect(result.figures).toHaveLength(1)
-    expect(result.figures[0].title).not.toMatch(/Overview|Detail|Interface/)
-    // The user has to be able to see that it shipped dense, or the ceiling is
-    // just silent degradation.
-    const codes = result.figures[0].validation.issues.map(i => `${i.severity}:${i.code}`)
-    expect(codes).toContain('warning:SPLIT_REQUIRED')
-    expect(result.figures[0].validation.filingReady).toBe(true)
-    expect(result.figures[0].validation.issues.find(i => i.code === 'SPLIT_REQUIRED')?.message)
-      .toMatch(/approve the proposed split/i)
+    expect(result.figures.length).toBeGreaterThan(1)
+    expect(result.figures.some(figure => /Overview|Detail|Interface/.test(figure.title))).toBe(true)
+    expect(result.figures.every(figure => !figure.validation.issues.some(issue => issue.code === 'SPLIT_REQUIRED'))).toBe(true)
+    expect(result.figures.every(figure => figure.validation.filingReady)).toBe(true)
+  })
+
+  test('keeps manual instructions one-to-one and asks for simplification instead of splitting', async () => {
+    planResponder = () => JSON.stringify({ schemaVersion: 2, figures: [planFigure(1)] })
+    detailResponder = call => denseComponent(String(call.metadata?.figureKey || 'figure-1'))
+
+    await expect(generateManagedFigureSet({ ...INPUT, mode: 'manual', figureCount: 1 }))
+      .rejects.toMatchObject({ code: 'MANUAL_FIGURE_NEEDS_SIMPLIFICATION' })
+    expect(llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(2)
+    expect(db.figurePlans).toHaveLength(0)
   })
 
   test('aesthetic layout warnings no longer trigger an extra decomposition pass', async () => {

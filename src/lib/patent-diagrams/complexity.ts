@@ -1,13 +1,40 @@
 import { analyzeDiagramComplexity } from './validation'
 import type { PatentDiagram } from './types'
 
-function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
-  const seen = new Set<string>()
-  return items.filter(item => {
-    const value = key(item)
-    if (seen.has(value)) return false
-    seen.add(value)
-    return true
+function atomicCoverageRequirementIds(diagram: PatentDiagram): string[] {
+  const values = diagram.kind === 'COMPONENT'
+    ? [...diagram.components.flatMap(item => item.coverageRequirementIds), ...diagram.relationships.flatMap(item => item.coverageRequirementIds)]
+    : diagram.kind === 'SEQUENCE'
+      ? diagram.interactions.flatMap(item => item.coverageRequirementIds)
+      : diagram.kind === 'PROCESS'
+        ? [...diagram.nodes.flatMap(item => item.coverageRequirementIds), ...diagram.transitions.flatMap(item => item.coverageRequirementIds)]
+        : [...diagram.constituents.flatMap(item => item.coverageRequirementIds), ...diagram.relationships.flatMap(item => item.coverageRequirementIds)]
+  return Array.from(new Set(values))
+}
+
+function atomicEvidenceIds(diagram: PatentDiagram): string[] {
+  const values = diagram.kind === 'COMPONENT'
+    ? diagram.relationships.flatMap(item => item.evidenceIds)
+    : diagram.kind === 'SEQUENCE'
+      ? diagram.interactions.flatMap(item => item.evidenceIds)
+      : diagram.kind === 'PROCESS'
+        ? [...diagram.nodes.flatMap(item => item.evidenceIds), ...diagram.transitions.flatMap(item => item.evidenceIds)]
+        : [...diagram.constituents.flatMap(item => item.evidenceIds), ...diagram.relationships.flatMap(item => item.evidenceIds)]
+  return Array.from(new Set(values))
+}
+
+function finalizeSplitFigures(original: PatentDiagram, figures: PatentDiagram[]): PatentDiagram[] {
+  return figures.map(figure => {
+    const coverageRequirementIds = atomicCoverageRequirementIds(figure)
+    const evidenceIds = atomicEvidenceIds(figure)
+    return {
+      ...figure,
+      coverageRequirementIds,
+      evidenceIds: Array.from(new Set([
+        ...evidenceIds,
+        ...(figure.kind === 'COMPONENT' && coverageRequirementIds.length ? original.evidenceIds : []),
+      ])),
+    } as PatentDiagram
   })
 }
 
@@ -113,18 +140,12 @@ export function decomposePatentDiagram(diagram: PatentDiagram, force = false): P
       const representative = group.rows.flatMap(row => row.componentIds)[0]
       if (representative) representativeByGroup.set(group.id, representative)
     })
-    const groupByComponent = new Map<string, string>()
-    diagram.groups.forEach(group => group.rows.forEach(row => row.componentIds.forEach(id => groupByComponent.set(id, group.id))))
     const overviewIds = Array.from(representativeByGroup.values())
     const overviewIdSet = new Set(overviewIds)
-    const overviewRelationships = uniqueBy(diagram.relationships.flatMap(link => {
-      const fromGroup = groupByComponent.get(link.fromId)
-      const toGroup = groupByComponent.get(link.toId)
-      const fromId = fromGroup ? representativeByGroup.get(fromGroup) : undefined
-      const toId = toGroup ? representativeByGroup.get(toGroup) : undefined
-      if (!fromId || !toId || fromId === toId) return []
-      return [{ ...link, fromId, toId }]
-    }), link => `${link.fromId}\u0000${link.toId}\u0000${link.category}`)
+    // Do not rewrite a supported relationship onto representative components:
+    // that would preserve its evidence ID while changing the technical fact.
+    // Exact cross-group relationships remain available in interface details.
+    const overviewRelationships = diagram.relationships.filter(link => overviewIdSet.has(link.fromId) && overviewIdSet.has(link.toId))
     const overview = {
       ...diagram,
       key: `${diagram.key}-overview`,
@@ -144,7 +165,7 @@ export function decomposePatentDiagram(diagram: PatentDiagram, force = false): P
       claimCriticalComponentIds: [],
     }
     const decomposed = [...detailFigures, ...interfaceFigures]
-    return diagram.detailLevel !== 'OVERVIEW' && decomposed.length > 1 ? [overview, ...decomposed] : decomposed
+    return finalizeSplitFigures(diagram, diagram.detailLevel !== 'OVERVIEW' && decomposed.length > 1 ? [overview, ...decomposed] : decomposed)
   }
 
   if (diagram.kind === 'SEQUENCE') {
@@ -168,7 +189,7 @@ export function decomposePatentDiagram(diagram: PatentDiagram, force = false): P
       if (condition) alternativeConditions.add(condition)
     }
     if (chunk.length) chunks.push(chunk)
-    return chunks.map((interactions, index) => {
+    return finalizeSplitFigures(diagram, chunks.map((interactions, index) => {
       const ids = new Set(interactions.flatMap(item => [item.fromId, item.toId]))
       return {
         ...diagram,
@@ -178,7 +199,7 @@ export function decomposePatentDiagram(diagram: PatentDiagram, force = false): P
         interactions: interactions.map((item, order) => ({ ...item, order: order + 1 })),
         claimCriticalComponentIds: diagram.claimCriticalComponentIds.filter(id => ids.has(id)),
       }
-    })
+    }))
   }
 
   if (diagram.kind === 'PROCESS') {
@@ -228,7 +249,7 @@ export function decomposePatentDiagram(diagram: PatentDiagram, force = false): P
         claimCriticalComponentIds: diagram.claimCriticalComponentIds.filter(id => componentIds.has(id)),
       }
     })
-    return [...phaseFigures, ...bridgeFigures]
+    return finalizeSplitFigures(diagram, [...phaseFigures, ...bridgeFigures])
   }
 
   const chunks: typeof diagram.constituents[] = []
@@ -274,5 +295,5 @@ export function decomposePatentDiagram(diagram: PatentDiagram, force = false): P
       claimCriticalComponentIds: diagram.claimCriticalComponentIds.filter(id => ids.has(id)),
     }
   })
-  return [...groupFigures, ...bridgeFigures]
+  return finalizeSplitFigures(diagram, [...groupFigures, ...bridgeFigures])
 }
