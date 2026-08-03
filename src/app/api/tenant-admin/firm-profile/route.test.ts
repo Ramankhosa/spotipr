@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firmProfileSchema, isValidLogoDataUri } from './route';
+import { firmProfileSchema, isValidLogoDataUri } from '@/lib/firm-profile-schema';
 
 describe('firmProfileSchema', () => {
   it('accepts a minimal profile and defaults showPoweredBy to true', () => {
