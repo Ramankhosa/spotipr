@@ -384,6 +384,16 @@ export async function startWhitespaceRun(input: {
       const message = error instanceof Error ? error.message : 'Stage failed.'
       console.error('[Whitespace] Run failed:', { runId: run.id, stage: input.stage, message })
       try {
+        if (input.stage === 'VALIDATE') {
+          const params = (input.params ?? {}) as Record<string, unknown>
+          const hypothesisId = typeof params.hypothesisId === 'string' ? params.hypothesisId : ''
+          if (hypothesisId) {
+            await prisma.whitespaceHypothesis.updateMany({
+              where: { id: hypothesisId, studyId: input.studyId, status: 'VALIDATING' },
+              data: { status: 'INCONCLUSIVE' },
+            })
+          }
+        }
         await prisma.whitespaceRun.update({
           where: { id: run.id },
           data: { status: 'FAILED', lastError: message.slice(0, 2000), completedAt: new Date() },

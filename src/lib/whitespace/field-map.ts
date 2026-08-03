@@ -255,7 +255,11 @@ export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<
 function acceptedCpc(scope: WhitespaceScope): string[] {
   return scope.classifications
     .filter(c => c.accepted && c.code.trim())
-    .map(c => c.code.replace(/\s+/g, '').toUpperCase())
+    .map(c => normalizeClassificationCode(c.code))
+}
+
+function normalizeClassificationCode(code: string): string {
+  return code.replace(/\s+/g, '').toUpperCase()
 }
 
 /**
@@ -277,10 +281,17 @@ export function buildScopeFilter(scope: WhitespaceScope): Prisma.Sql {
   if (cpc.length) {
     // Prefix match: A61B5 must also capture A61B5/1455. Postgres cannot use the
     // GIN array index for a prefix test, so we OR an exact-overlap test (index
-    // eligible) with a prefix test over the same array.
+    // eligible for rows stored in canonical no-space form) with a normalised
+    // prefix test. The corpus contains both "A01G25/16" and "A01G 25/16" forms;
+    // comparing prefixes without normalising stored values silently missed the
+    // spaced rows.
     const exact = Prisma.sql`lp."classifications" && ${cpc}::text[]`
     const prefixes = cpc.map(
-      code => Prisma.sql`EXISTS (SELECT 1 FROM unnest(lp."classifications") c WHERE c LIKE ${code + '%'})`
+      code => Prisma.sql`EXISTS (
+        SELECT 1
+        FROM unnest(lp."classifications") c
+        WHERE regexp_replace(upper(c), '[[:space:]]+', '', 'g') LIKE ${code + '%'}
+      )`
     )
     clauses.push(Prisma.sql`(${Prisma.join([exact, ...prefixes], ' OR ')})`)
   }
@@ -519,7 +530,7 @@ export async function runFieldMap(
       tx,
       'classifications',
       Prisma.sql`
-        SELECT split_part(c, '/', 1) AS label,
+        SELECT split_part(regexp_replace(upper(c), '[[:space:]]+', '', 'g'), '/', 1) AS label,
                COUNT(DISTINCT ws.family_key)::bigint AS families
         FROM ws_census ws, unnest(ws.classifications) c
         GROUP BY 1

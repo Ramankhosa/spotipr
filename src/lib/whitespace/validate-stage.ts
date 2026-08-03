@@ -89,6 +89,7 @@ export async function runValidateStage(input: {
 
   const attacks: AttackRecord[] = []
   const allHits = new Map<string, AttackHit>()
+  const hitFamiliesByAttack = new Map<string, Set<string>>()
 
   // --- 1. compile the attack plan -------------------------------------------
   const cpcInScope = input.scope.classifications.filter(c => c.accepted).map(c => c.code)
@@ -129,7 +130,7 @@ export async function runValidateStage(input: {
   // --- 2. run the four attack strategies ------------------------------------
   for (const query of plan.synonymShifted) {
     const hits = await lexicalAttack(query)
-    recordAttack(attacks, allHits, 'SYNONYM_SHIFTED', query, hits)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'SYNONYM_SHIFTED', query, hits)
   }
 
   if (semanticLaneConfigured()) {
@@ -144,7 +145,7 @@ export async function runValidateStage(input: {
           claimsText: null,
           strategy: 'SEMANTIC_PARAPHRASE',
         }))
-        recordAttack(attacks, allHits, 'SEMANTIC_PARAPHRASE', paraphrase, hits)
+        recordAttack(attacks, allHits, hitFamiliesByAttack, 'SEMANTIC_PARAPHRASE', paraphrase, hits)
       } else {
         attacks.push({ strategy: 'SEMANTIC_PARAPHRASE', query: paraphrase, hits: 0, outcome: 'NOT_RUN', reason: result.reason })
       }
@@ -161,12 +162,12 @@ export async function runValidateStage(input: {
 
   for (const code of plan.cpcAdjacent) {
     const hits = await cpcAttack(code, elements)
-    recordAttack(attacks, allHits, 'CPC_ADJACENT', code, hits)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'CPC_ADJACENT', code, hits)
   }
 
   for (const assignee of plan.assigneeCandidates) {
     const hits = await assigneeAttack(assignee, elements)
-    recordAttack(attacks, allHits, 'ASSIGNEE_PIVOT', assignee, hits)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'ASSIGNEE_PIVOT', assignee, hits)
   }
 
   // Literature disproof: no NPL provider is wired into this stage yet. Recorded
@@ -206,7 +207,7 @@ export async function runValidateStage(input: {
 
   let mapped: MappedCandidate[] = await mapCandidates(Array.from(allHits.values()).slice(0, MAPPING_CANDIDATES))
 
-  applyMappingOutcomes(attacks, allHits, mapped)
+  applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
 
   // --- 4. red team names and executes the strongest remaining attack --------
   let redTeam: {
@@ -248,7 +249,7 @@ export async function runValidateStage(input: {
     const query = String(redTeam.strongestRemainingAttack.query)
     const previouslySeen = new Set(Array.from(allHits.keys()))
     const hits = await lexicalAttack(query)
-    recordAttack(attacks, allHits, 'RED_TEAM', query, hits)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'RED_TEAM', query, hits)
 
     // The red team's hits get the same element mapping as everyone else's.
     // Without this, the strongest remaining attack could retrieve 25 documents
@@ -261,7 +262,7 @@ export async function runValidateStage(input: {
       )
       if (redTeamMapped.length) {
         mapped = [...mapped, ...redTeamMapped]
-        applyMappingOutcomes(attacks, allHits, mapped)
+        applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
       }
     }
   }
@@ -464,6 +465,7 @@ async function assigneeAttack(assignee: string, elements: string[]): Promise<Att
 function recordAttack(
   attacks: AttackRecord[],
   allHits: Map<string, AttackHit>,
+  hitFamiliesByAttack: Map<string, Set<string>>,
   strategy: AttackRecord['strategy'],
   query: string,
   hits: AttackHit[] | null
@@ -476,9 +478,13 @@ function recordAttack(
   }
   // Outcome is provisional CLEAN until mapping says otherwise.
   attacks.push({ strategy, query, hits: hits.length, outcome: 'CLEAN' })
+  const attackKey = keyForAttack(strategy, query)
+  const families = hitFamiliesByAttack.get(attackKey) ?? new Set<string>()
   for (const hit of hits) {
+    families.add(hit.familyKey)
     if (!allHits.has(hit.familyKey)) allHits.set(hit.familyKey, { ...hit, strategy })
   }
+  hitFamiliesByAttack.set(attackKey, families)
 }
 
 async function enrichWithClaims(candidates: AttackHit[]) {
@@ -501,19 +507,30 @@ async function enrichWithClaims(candidates: AttackHit[]) {
 }
 
 /** Re-labels each attack's outcome from the mapping verdicts of its hits. */
-function applyMappingOutcomes(attacks: AttackRecord[], allHits: Map<string, AttackHit>, mapped: MappedCandidate[]) {
+function applyMappingOutcomes(
+  attacks: AttackRecord[],
+  hitFamiliesByAttack: Map<string, Set<string>>,
+  allHits: Map<string, AttackHit>,
+  mapped: MappedCandidate[]
+) {
   const verdictByPublication = new Map(mapped.map(candidate => [candidate.publicationNumber, candidate.fullCombination]))
   for (const attack of attacks) {
     if (attack.outcome === 'NOT_RUN') continue
     let worst: 'CLEAN' | 'WEAKENING' | 'REFUTING' = 'CLEAN'
-    for (const hit of Array.from(allHits.values())) {
-      if (hit.strategy !== attack.strategy) continue
+    const hitFamilies = hitFamiliesByAttack.get(keyForAttack(attack.strategy, attack.query)) ?? new Set<string>()
+    for (const familyKey of Array.from(hitFamilies)) {
+      const hit = allHits.get(familyKey)
+      if (!hit) continue
       const verdict = verdictByPublication.get(hit.publicationNumber)
       if (verdict === 'PRESENT') worst = 'REFUTING'
       else if (verdict === 'PARTIAL' && worst === 'CLEAN') worst = 'WEAKENING'
     }
     attack.outcome = worst
   }
+}
+
+function keyForAttack(strategy: AttackRecord['strategy'], query: string): string {
+  return `${strategy}\u0000${query}`
 }
 
 function allHitTitle(allHits: Map<string, AttackHit>, publicationNumber: string): string {
