@@ -36,8 +36,24 @@ export async function runWhitespaceLLM(call: WhitespaceLLMCall): Promise<Whitesp
     }
   }
 
-  // Stage-coded resolution is fail-closed; task-only routing keeps the module
-  // working before scripts/add-whitespace-stages.js has been run.
+  // Retry WITHOUT the stage code ONLY when the stage is genuinely unconfigured.
+  //
+  // This fallback exists so the module works on a fresh install, before
+  // scripts/add-whitespace-stages.js has run. It must not catch anything else:
+  // task-only routing resolves through PlanLLMAccess to MODEL_CLASS_DEFAULTS,
+  // a hardcoded table in model-resolver.ts. So retrying after a REAL failure
+  // (a 404 from a retired model, a rate limit, a timeout) silently abandons the
+  // model the operator configured and runs a hardcoded one instead — and the
+  // logs then blame that second model, hiding the original fault entirely.
+  // A configured stage that fails must fail loudly.
+  const unconfigured = stageAttempt.error?.code === 'CONFIGURATION_ERROR'
+  if (!unconfigured) {
+    throw new Error(
+      stageAttempt.error?.message ||
+        `Stage ${call.stageCode} failed. The model configured for this stage did not complete the request.`
+    )
+  }
+
   const taskAttempt = await llmGateway.executeLLMOperation(
     { headers: call.requestHeaders },
     { taskCode: call.taskCode, prompt: call.prompt }

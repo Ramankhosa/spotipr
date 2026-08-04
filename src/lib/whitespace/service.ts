@@ -130,6 +130,15 @@ export async function compileScope(input: {
   if (stageAttempt.success && stageAttempt.response?.output) {
     output = stageAttempt.response.output
     modelCode = stageAttempt.response.metadata?.model || stageAttempt.response.modelClass
+  } else if (stageAttempt.error?.code !== 'CONFIGURATION_ERROR') {
+    // The stage IS configured and its model failed. Do not retry task-only:
+    // that path resolves through MODEL_CLASS_DEFAULTS, a hardcoded table, so it
+    // would abandon the configured model for a hardcoded one and then report
+    // the second model's error — hiding the real fault. Fail loudly instead.
+    throw new Error(
+      stageAttempt.error?.message ||
+        'The model configured for the scope compiler did not complete the request.'
+    )
   } else {
     usedFallbackTask = true
     const taskAttempt = await llmGateway.executeLLMOperation(
@@ -276,7 +285,6 @@ async function narrateField(input: {
   requestHeaders: Record<string, string>
 }): Promise<string | null> {
   try {
-    const { llmGateway } = await import('@/lib/metering/gateway')
     const { result, scope } = input
     const peak = result.filingsByYear.reduce<{ year: number; families: number } | null>(
       (best, y) => (!best || y.families > best.families ? y : best),
@@ -299,11 +307,18 @@ async function narrateField(input: {
         : 0,
     })
 
-    const attempt = await llmGateway.executeLLMOperation(
-      { headers: input.requestHeaders },
-      { taskCode: TaskCode.WS_SCOPE, prompt }
-    )
-    return attempt.success && attempt.response?.output ? attempt.response.output.trim() : null
+    // Routed through the stage helper, not the gateway directly. A task-only
+    // call here bypassed stage configuration entirely and resolved through
+    // MODEL_CLASS_DEFAULTS, so this one narration ran on a hardcoded model no
+    // matter what the operator had assigned to Whitespace in Super Admin.
+    const { runWhitespaceLLM } = await import('./llm')
+    const response = await runWhitespaceLLM({
+      taskCode: TaskCode.WS_SCOPE,
+      stageCode: WS_SCOPE_STAGE_CODE,
+      prompt,
+      requestHeaders: input.requestHeaders,
+    })
+    return response.output.trim() || null
   } catch (error) {
     // Narration is a convenience over numbers the user already has. If it fails,
     // the census still stands on its own.
