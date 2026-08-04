@@ -1160,6 +1160,7 @@ async function main() {
     { code: 'DRAFT_CLAIM_GENERATION', displayName: 'Initial Claims Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 2, description: 'Generate initial patent claims from idea' },
     { code: 'DRAFT_PRIOR_ART_ANALYSIS', displayName: 'Prior Art Analysis', featureCode: 'PATENT_DRAFTING', sortOrder: 3, description: 'Analyze prior art relevance' },
     { code: 'DRAFT_CLAIM_REFINEMENT', displayName: 'Claim Refinement', featureCode: 'PATENT_DRAFTING', sortOrder: 4, description: 'Refine claims based on prior art' },
+    { code: 'DRAFT_FIGURE_COVERAGE', displayName: 'Figure Claim Coverage', featureCode: 'PATENT_DRAFTING', sortOrder: 5, description: 'Extract drawing-relevant claim limitations for figure coverage (mechanical quote-and-map; suits a fast model)' },
     { code: 'DRAFT_FIGURE_PLANNER', displayName: 'Figure Planning', featureCode: 'PATENT_DRAFTING', sortOrder: 5, description: 'AI-powered figure planning and diagram suggestions' },
     { code: 'DRAFT_SKETCH_GENERATION', displayName: 'Sketch Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 6, description: 'Generate 2K patent sketches using Gemini 3 Pro Image Preview (Nano Banana Pro)' },
     { code: 'DRAFT_DIAGRAM_GENERATION', displayName: 'Diagram Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 7, description: 'Generate PlantUML/technical diagrams' },
@@ -1277,6 +1278,7 @@ async function main() {
     'DRAFT_CLAIM_GENERATION':             { maxTokensIn: 30000,  maxTokensOut: 16000 },
     'DRAFT_PRIOR_ART_ANALYSIS':           { maxTokensIn: 50000,  maxTokensOut: 16000 },
     'DRAFT_CLAIM_REFINEMENT':             { maxTokensIn: 30000,  maxTokensOut: 16000 },
+    'DRAFT_FIGURE_COVERAGE':              { maxTokensIn: 30000,  maxTokensOut: 16000 },
     'DRAFT_FIGURE_PLANNER':               { maxTokensIn: 30000,  maxTokensOut: 16000 },
     'DRAFT_SKETCH_GENERATION':            { maxTokensIn: 20000,  maxTokensOut: 8192 },
     'DRAFT_DIAGRAM_GENERATION':           { maxTokensIn: 30000,  maxTokensOut: 16000 },
@@ -1348,6 +1350,7 @@ async function main() {
       'DRAFT_CLAIM_GENERATION':             'gpt-5.6-terra-thinking',  // reasoning model for claims
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.5-flash',       // Major: use 3.5 Flash
       'DRAFT_CLAIM_REFINEMENT':             'gemini-3.1-flash-lite',
+      'DRAFT_FIGURE_COVERAGE':              'gemini-3.1-flash-lite',   // mechanical extraction - fast model
       'DRAFT_FIGURE_PLANNER':               'gemini-3.1-flash-lite',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
       'DRAFT_DIAGRAM_GENERATION':           'gemini-3.1-flash-lite',
@@ -1414,6 +1417,11 @@ async function main() {
       'DRAFT_CLAIM_GENERATION':             'gpt-5.6-sol-thinking',    // reasoning model for claims
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.1-pro-preview',
       'DRAFT_CLAIM_REFINEMENT':             'gpt-5.6-terra',
+      // Measured 2026-08-04: a smaller model is NOT faster here. gpt-5-mini took
+      // 13.7-14.9s for this extraction vs 8.0-9.8s for gpt-5.5 on identical input.
+      // Default coverage to the plan's planner-class model and A/B per plan in
+      // Super Admin before assuming a cheaper tier is quicker.
+      'DRAFT_FIGURE_COVERAGE':              'gemini-3.1-pro-preview',
       'DRAFT_FIGURE_PLANNER':               'gemini-3.1-pro-preview',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
       'DRAFT_DIAGRAM_GENERATION':           'gpt-5.6-terra',
@@ -1480,6 +1488,9 @@ async function main() {
       'DRAFT_CLAIM_GENERATION':             'claude-opus-4-8-thinking',  // reasoning model for claims
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.1-pro-preview',
       'DRAFT_CLAIM_REFINEMENT':             'gpt-5.6-sol',
+      // See the PRO_PLAN note: coverage stays on the planner-class model because
+      // the smaller tier measured slower, not faster, for this extraction.
+      'DRAFT_FIGURE_COVERAGE':              'gpt-5.6-terra',
       'DRAFT_FIGURE_PLANNER':               'gpt-5.6-terra',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
       'DRAFT_DIAGRAM_GENERATION':           'gpt-5.6-terra',
@@ -1544,6 +1555,7 @@ async function main() {
       DRAFT_CLAIM_GENERATION: { maxTokensIn: 30000, maxTokensOut: 16000 },
       DRAFT_PRIOR_ART_ANALYSIS: { maxTokensIn: 50000, maxTokensOut: 16000 },
       DRAFT_CLAIM_REFINEMENT: { maxTokensIn: 30000, maxTokensOut: 16000 },
+      DRAFT_FIGURE_COVERAGE: { maxTokensIn: 30000, maxTokensOut: 16000 },
       DRAFT_FIGURE_PLANNER: { maxTokensIn: 30000, maxTokensOut: 16000 },
       DRAFT_SKETCH_GENERATION: { maxTokensIn: 20000, maxTokensOut: 8192 },
       DRAFT_DIAGRAM_GENERATION: { maxTokensIn: 30000, maxTokensOut: 16000 },

@@ -151,7 +151,8 @@ ${claimCritical.length
   ? `These components are named by the claims and every one of them must appear in the componentIds of at least one figure: ${claimCritical.join(', ')}. List the ones a figure covers in that figure's claimCriticalComponentIds.`
   : `Claim-to-component matching is unavailable for this invention; use the claims context below to judge what must be covered.`}
 Preserve claim-critical coverage. Prefer functional patent terminology over APIs, SDKs, vendors, or implementation details.
-${requiredCoverageIds.length ? `Every required coverage ID must appear in coverageRequirementIds of at least one new or existing figure: ${requiredCoverageIds.join(', ')}.` : ''}
+${requiredCoverageIds.length ? `Every required coverage ID must appear in coverageRequirementIds of at least one new or existing figure: ${requiredCoverageIds.join(', ')}.
+Those are the ONLY coverage IDs that exist. Copy them character for character and never construct, guess, or extend an ID (no invented COV-… values, and none for a claim the ledger does not list) — an ID outside that list fails the whole plan.` : ''}
 Depict only subject matter disclosed in the invention context, claims, or component registry. Never plan figures, phases, or steps for generic product-lifecycle activity (installation, deployment, login, registration, onboarding, testing, monitoring, maintenance, error handling) unless the disclosure claims it as part of the invention.
 Plan subsystem and phase order explicitly. Split coverage across figures instead of overloading one figure.
 Stay within per-figure complexity budgets. A figure that still exceeds a jurisdiction or page-fit budget is automatically split into filing-scale sheets without dropping its coverage obligations. Budgets: COMPONENT at most ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents} components and ${PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands} subsystem bands, PROCESS at most ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes} steps, SEQUENCE at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions} interactions, CONSTITUENT at most ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents} constituents.
@@ -186,9 +187,9 @@ CLAIMS CONTEXT:
 ${compactClaimsContext(input.claimsContext)}
 
 CLAIM/DISCLOSURE COVERAGE LEDGER (authoritative; cover every required ID):
-${JSON.stringify(input.coverageLedger || { basis: 'DISCLOSURE', requirements: [] }, null, 2)}
+${JSON.stringify(input.coverageLedger || { basis: 'DISCLOSURE', requirements: [] })}
 
-${input.existingFigures?.length ? `EXISTING FIGURES (do not duplicate their coverage):\n${JSON.stringify(input.existingFigures, null, 2)}` : 'EXISTING FIGURES: none supplied.'}
+${input.existingFigures?.length ? `EXISTING FIGURES (do not duplicate their coverage):\n${JSON.stringify(input.existingFigures)}` : 'EXISTING FIGURES: none supplied.'}
 
 ${processSteps.length
   ? `DISCLOSED METHOD STEPS (the only operations a PROCESS figure may depict):\n${processSteps.map(item => `- ${item.id}: ${item.value}`).join('\n')}`
@@ -208,6 +209,28 @@ export function buildDiagramDetailPrompt(input: {
   existingDiagram?: PatentDiagram | null
   instructions?: string
 }): string {
+  // The first detail pass enforces this budget and re-asks the model on a
+  // violation — a full extra LLM round trip. Stating the numbers here keeps
+  // most figures within budget on the first attempt.
+  const complexityBudget = input.plan.kind === 'COMPONENT'
+    ? `at most ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents} components and ${PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands} subsystem bands`
+    : input.plan.kind === 'SEQUENCE'
+      // The distinct-alternative ceiling is the sequence budget that gets busted
+      // in practice, and it is invisible from the interaction count alone.
+      ? `at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions} interactions, at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningParticipants} participants, and at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.maximumAlternatives} distinct alternative condition(s) across all interactions (every interaction carrying an "alternative" must reuse that one condition string; depict a second branching condition in a separate figure)`
+      : input.plan.kind === 'PROCESS'
+        ? `at most ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes} steps`
+        : `at most ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents} constituents`
+  // The schema minimums are hard parse failures, and a reply that misses them
+  // costs a full round trip, so they are stated rather than left to be inferred
+  // from the shape example.
+  const minimumContent = input.plan.kind === 'COMPONENT'
+    ? 'at least 1 group, at least 1 row per group with at least 1 component ID in EVERY row (never emit an empty row), and at least 1 component'
+    : input.plan.kind === 'SEQUENCE'
+      ? 'at least 2 participants and at least 1 interaction'
+      : input.plan.kind === 'PROCESS'
+        ? 'at least 2 nodes and at least 1 transition'
+        : 'at least 1 constituent'
   const kindShape = input.plan.kind === 'COMPONENT'
     ? `{
   "kind":"COMPONENT", "systemBoundaryLabel":"short system name",
@@ -233,6 +256,11 @@ export function buildDiagramDetailPrompt(input: {
   "relationships":[{"fromId":"id","toId":"id","category":"ASSOCIATION|PRIMARY|OPTIONAL","evidenceIds":["id"],"coverageRequirementIds":["id"]}]
 }`
 
+  // Ordering matters for provider prompt caching: every block up to the
+  // "figure-specific" marker is identical across all detail calls of one
+  // generation run (rules, then session context), so those calls share one
+  // cached prefix. Everything that varies per figure sits at the tail. Do not
+  // interleave plan-specific values above the marker.
   return `You are the PatentNest semantic figure detailer.
 
 Return JSON only. Never return PlantUML, reference numerals, styles, colours, layout-only links, markdown, or commentary.
@@ -248,23 +276,13 @@ Preserve the supplied component, group, participant, step, and phase order.
 Names must be functional and no more than ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words.
 COMPONENT and CONSTITUENT connectors are UNLABELLED — omit the label field entirely. The category carries the meaning and the server draws the arrow style from it. Do not describe a connector as "includes", "comprises", "connects to" or similar; the box hierarchy already shows containment and the written description explains the rest.
 Only SEQUENCE interaction labels and PROCESS decision-branch outcomes are drawn; keep those to no more than ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words.
-The code will assign canonical names/reference signs, wrapping, rows, arrows, and all visual styling.
-
-Every response must include the common fields:
-{"schemaVersion":2,"key":"${input.plan.key}","title":"${input.plan.title}","purpose":"${input.plan.purpose}","detailLevel":"${input.plan.detailLevel}","direction":"${input.plan.direction}","claimCriticalComponentIds":${JSON.stringify(input.plan.claimCriticalComponentIds)},"evidenceIds":${JSON.stringify(input.plan.evidenceIds)},"coverageRequirementIds":${JSON.stringify(input.plan.coverageRequirementIds)}}
-
 Use one or more IDs from the supported evidence catalog when it is non-empty. Do not invent evidence IDs.
-
-Merge those common fields with this ${input.plan.kind} shape:
-${kindShape}
-
-FIGURE PLAN:
-${JSON.stringify(input.plan, null, 2)}
+The code will assign canonical names/reference signs, wrapping, rows, arrows, and all visual styling.
+The figure-specific plan, required response shape, and coverage requirements follow the shared session context below.
 
 USER MODIFICATION INSTRUCTIONS:
 ${input.instructions || 'None'}
 
-${input.existingDiagram ? `EXISTING MANAGED SEMANTIC MODEL (retain stable keys/identifiers unless instructed):\n${JSON.stringify(input.existingDiagram)}\n` : ''}
 INVENTION CONTEXT:
 ${compactInventionContext(input.inventionContext)}
 
@@ -274,11 +292,29 @@ ${compactClaimsContext(input.claimsContext)}
 SUPPORTED EVIDENCE CATALOG:
 ${evidenceCatalogBlock(input.evidenceCatalog || [])}
 
-PLANNED COVERAGE REQUIREMENTS (every planned ID must be represented by a semantic node, edge, interaction, transition, or constituent):
-${JSON.stringify((input.coverageLedger?.requirements || []).filter(item => input.plan.coverageRequirementIds.includes(item.id)), null, 2)}
-
 COMPONENT PLANNER REGISTRY (listed in disclosed order; preserve it):
-${componentLines(input.components)}`
+${componentLines(input.components)}
+
+Stay within the filing complexity budget for this ${input.plan.kind} figure: ${complexityBudget}. A figure over budget is rejected and re-requested, so keep to the planned scope rather than adding depth.
+${input.plan.kind === 'PROCESS'
+  ? 'One component may perform several steps — repeat its ID across those steps rather than inventing a near-duplicate component.'
+  : 'Each Component Plan ID may appear at most ONCE in this figure; never list the same component twice to reach a minimum count.'}
+Minimum content for a ${input.plan.kind} figure — a reply below this is rejected outright: ${minimumContent}. If the disclosure genuinely cannot support that much, still return the elements you CAN ground rather than an empty or single-element figure, and leave the ungrounded ones out of the plan's scope.
+
+Every response must include the common fields:
+{"schemaVersion":2,"key":"${input.plan.key}","title":"${input.plan.title}","purpose":"${input.plan.purpose}","detailLevel":"${input.plan.detailLevel}","direction":"${input.plan.direction}","claimCriticalComponentIds":${JSON.stringify(input.plan.claimCriticalComponentIds)},"evidenceIds":${JSON.stringify(input.plan.evidenceIds)},"coverageRequirementIds":${JSON.stringify(input.plan.coverageRequirementIds)}}
+${input.plan.coverageRequirementIds.length && !input.plan.evidenceIds.length
+  ? `This figure carries claim coverage, so its figure-level "evidenceIds" MUST NOT stay empty: add the catalog IDs from the SUPPORTED EVIDENCE CATALOG that disclose the subject matter you depict. A figure that covers a claim requirement while citing no evidence is rejected. Keep every planned ID above and add to that list.`
+  : `Keep the planned evidenceIds above; you may add further catalog IDs that the figure depicts.`}
+
+Merge those common fields with this ${input.plan.kind} shape:
+${kindShape}
+
+FIGURE PLAN:
+${JSON.stringify(input.plan)}
+
+${input.existingDiagram ? `EXISTING MANAGED SEMANTIC MODEL (retain stable keys/identifiers unless instructed):\n${JSON.stringify(input.existingDiagram)}\n\n` : ''}PLANNED COVERAGE REQUIREMENTS (every planned ID must be represented by a semantic node, edge, interaction, transition, or constituent):
+${JSON.stringify((input.coverageLedger?.requirements || []).filter(item => input.plan.coverageRequirementIds.includes(item.id)))}`
 }
 
 export function extractJsonObject(text: string): unknown {

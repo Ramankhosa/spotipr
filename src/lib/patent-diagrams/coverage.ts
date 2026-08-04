@@ -147,7 +147,7 @@ Grounding rules:
 3. If a COMPONENT or DATA_STRUCTURE is not in the registry, provide componentCandidate with the shortest functional name copied or faithfully shortened from sourceText.
 4. If any other requirement has no componentIds, provide componentCandidate for the component that performs, owns, or contains it.
 5. Do not add implementation details or lifecycle activity absent from the claims.
-6. Cover every semicolon-delimited limitation and every dependent-claim addition. Do not merge unrelated limitations.
+6. Cover every span in the REQUIRED LIMITATION SPANS checklist below. Do not merge unrelated limitations.
 
 Required JSON:
 {"requirements":[{"claimNumber":1,"type":"COMPONENT|RELATIONSHIP|PROCESS_STEP|STATE_CONDITION|ALTERNATIVE|QUANTITY_RANGE|CONSTITUENT_ROLE|DATA_STRUCTURE","label":"short concept","sourceText":"exact claim excerpt","componentIds":["known-id"],"componentCandidate":{"name":"missing element","type":"OTHER","parentId":"known-parent-id"}}]}
@@ -156,7 +156,15 @@ COMPONENT PLAN:
 ${input.components.map(component => `- ${component.id}: ${component.name}${component.parentId ? ` | parent=${component.parentId}` : ''}`).join('\n')}
 
 CLAIMS (complete and untruncated):
-${input.claims.map(claim => `CLAIM ${claim.number} (${claim.type}${claim.dependsOn ? `, depends on ${claim.dependsOn}` : ''}):\n${claim.text}`).join('\n\n')}`
+${input.claims.map(claim => `CLAIM ${claim.number} (${claim.type}${claim.dependsOn ? `, depends on ${claim.dependsOn}` : ''}):\n${claim.text}`).join('\n\n')}
+
+REQUIRED LIMITATION SPANS — this is the exact checklist your reply is graded against.
+The server splits each claim into the spans below. Every span must be matched by at
+least one requirement for that claim whose sourceText either CONTAINS the span or is
+CONTAINED BY it. An excerpt that straddles two spans without containing either one
+matches NEITHER — so keep each sourceText inside a single span, and emit a separate
+requirement per span rather than one long excerpt spanning several.
+${input.claims.map(claim => `CLAIM ${claim.number}:\n${claimDrawingLimitations(claim).map(span => `  - ${span}`).join('\n')}`).join('\n')}`
 }
 
 export function materializeCoverageLedger(input: {

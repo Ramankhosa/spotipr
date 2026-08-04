@@ -8,7 +8,7 @@ import { decomposePatentDiagram } from '@/lib/patent-diagrams/complexity'
 import { patentDiagramSchema, type PatentDiagramComponent } from '@/lib/patent-diagrams/types'
 import { cleanPlantUmlForRendering, inspectRenderedSvg, validateRenderedPatentSvg } from '@/lib/plantuml-renderer'
 import { extractRawPlantUmlFacts } from '@/lib/patent-diagrams/raw-source'
-import { evaluateFigureSetClaimCoverage, semanticChecksum } from '@/lib/patent-diagrams/pipeline'
+import { claimChunks, evaluateFigureSetClaimCoverage, semanticChecksum } from '@/lib/patent-diagrams/pipeline'
 import { buildFigureSetPlanningPrompt } from '@/lib/patent-diagrams/prompts'
 import { validateDiagramExportReadiness } from '@/lib/patent-diagrams/export'
 
@@ -177,6 +177,85 @@ describe('deterministic patent diagram builders', () => {
     expect(builtConstituent.plantumlCode).toMatch(new RegExp(`^${c1Alias} -- ${c2Alias}$`, 'm'))
     expect(builtConstituent.plantumlCode).not.toContain('combined with')
     expect(builtConstituent.edges.map((edge: any) => edge.label)).toEqual(['combined with'])
+  })
+})
+
+describe('claim chunking for concurrent coverage extraction', () => {
+  const claimsOf = (count: number, length: number) =>
+    Array.from({ length: count }, (_, index) => ({ number: index + 1, type: 'dependent' as const, text: 'w'.repeat(length) }))
+  const tokensOf = (claim: { text: string }) => Math.ceil((claim.text.length + 120) / 4)
+  const chunkTokens = (chunk: Array<{ text: string }>) => chunk.reduce((sum, claim) => sum + tokensOf(claim), 0)
+
+  test('splits evenly rather than packing one chunk full and leaving a remainder', () => {
+    // Greedy packing put 20 claims in the first chunk and 1 in the second, so
+    // the concurrent extraction was still gated on one long call.
+    const chunks = claimChunks(claimsOf(21, 460))
+    expect(chunks.length).toBeGreaterThan(1)
+    const sizes = chunks.map(chunk => chunk.length)
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1)
+  })
+
+  test('never exceeds the token ceiling and keeps every claim exactly once', () => {
+    const claims = claimsOf(40, 700)
+    const chunks = claimChunks(claims)
+    chunks.forEach(chunk => expect(chunkTokens(chunk)).toBeLessThanOrEqual(3_000))
+    expect(chunks.flat().map(claim => claim.number)).toEqual(claims.map(claim => claim.number))
+  })
+
+  test('a short claim set stays a single chunk', () => {
+    expect(claimChunks(claimsOf(3, 350))).toHaveLength(1)
+  })
+
+  test('an oversized single claim still gets its own chunk', () => {
+    const chunks = claimChunks(claimsOf(2, 20_000))
+    expect(chunks).toHaveLength(2)
+    expect(chunks.every(chunk => chunk.length === 1)).toBe(true)
+  })
+})
+
+describe('component uniqueness is per figure kind', () => {
+  // A live 4-figure run failed outright on DUPLICATE_COMPONENT because the check
+  // flattened every process step's component: one controller performing three
+  // steps read as three duplicates, which is what an ordinary flowchart is.
+  test('one component may perform several process steps', () => {
+    const process = patentDiagramSchema.parse({
+      schemaVersion: 2, kind: 'PROCESS', key: 'method', title: 'Control Method', purpose: 'Show the method',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      nodes: [
+        { key: 'compare', kind: 'STEP', componentId: 'c1', label: 'Compare measured level' },
+        { key: 'suppress', kind: 'STEP', componentId: 'c1', label: 'Suppress watering window' },
+        { key: 'derive', kind: 'STEP', componentId: 'c1', relatedComponentIds: ['c2'], label: 'Derive watering window' },
+      ],
+      transitions: [
+        { fromId: 'compare', toId: 'suppress', category: 'PRIMARY' },
+        { fromId: 'suppress', toId: 'derive', category: 'PRIMARY' },
+      ],
+    })
+    const issues = validatePatentDiagram(process, components).issues
+    expect(issues.filter(issue => issue.code === 'DUPLICATE_COMPONENT')).toEqual([])
+  })
+
+  test('repeating a component in a component figure is still a defect', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 2, kind: 'COMPONENT', key: 'arch', title: 'Architecture', purpose: 'Show the system',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], systemBoundaryLabel: 'System',
+      groups: [{ id: 'g1', label: 'Subsystem', rows: [{ componentIds: ['c1', 'c2'] }] }],
+      components: [{ componentId: 'c1' }, { componentId: 'c2' }, { componentId: 'c1' }],
+      relationships: [],
+    })
+    const issues = validatePatentDiagram(diagram, components).issues
+    expect(issues.some(issue => issue.code === 'DUPLICATE_COMPONENT' && issue.severity === 'error')).toBe(true)
+  })
+
+  test('repeating a participant in a sequence figure is still a defect', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 2, kind: 'SEQUENCE', key: 'flow', title: 'Interactions', purpose: 'Show interactions',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      participants: [{ componentId: 'c1' }, { componentId: 'c1' }],
+      interactions: [{ order: 1, fromId: 'c1', toId: 'c1', label: 'reports level', category: 'PRIMARY' }],
+    })
+    const issues = validatePatentDiagram(diagram, components).issues
+    expect(issues.some(issue => issue.code === 'DUPLICATE_COMPONENT' && issue.severity === 'error')).toBe(true)
   })
 })
 

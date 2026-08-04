@@ -183,6 +183,23 @@ export class OpenAIProvider implements LLMProvider {
         }
       }
       
+      // Caller-supplied decoding and caching controls, passed through verbatim:
+      // - response_format (json_object / json_schema) constrains decoding so
+      //   structurally invalid replies cannot be produced.
+      // - prompt_cache_key routes same-prefix requests to the same cache shard.
+      // - prediction enables predicted outputs for near-copy regenerations; the
+      //   API does not combine it with response_format, so the schema wins when
+      //   a caller supplies both.
+      if (request.parameters?.response_format) {
+        requestBody.response_format = request.parameters.response_format
+      }
+      if (request.parameters?.prompt_cache_key) {
+        requestBody.prompt_cache_key = request.parameters.prompt_cache_key
+      }
+      if (request.parameters?.prediction && !requestBody.response_format) {
+        requestBody.prediction = request.parameters.prediction
+      }
+
       // Incremental delivery when the caller asked for it. Same request otherwise —
       // only the transport differs, so the resolved response shape is unchanged.
       if (request.stream) {
@@ -361,6 +378,26 @@ export class OpenAIProvider implements LLMProvider {
       input,
       max_output_tokens: maxTokens,
       reasoning: { effort: reasoningEffort }
+    }
+
+    // The Responses API expresses chat-completions' response_format as
+    // text.format (with json_schema fields flattened); translate so callers can
+    // pass one shape regardless of which API path serves the model.
+    const responseFormat = request.parameters?.response_format
+    if (responseFormat?.type === 'json_schema' && responseFormat.json_schema) {
+      requestBody.text = {
+        format: {
+          type: 'json_schema',
+          name: responseFormat.json_schema.name,
+          strict: responseFormat.json_schema.strict ?? true,
+          schema: responseFormat.json_schema.schema,
+        },
+      }
+    } else if (responseFormat?.type === 'json_object') {
+      requestBody.text = { format: { type: 'json_object' } }
+    }
+    if (request.parameters?.prompt_cache_key) {
+      requestBody.prompt_cache_key = request.parameters.prompt_cache_key
     }
 
     console.log(`[OpenAIProvider] Using Responses API for ${modelToUse} with reasoning.effort=${reasoningEffort}`)

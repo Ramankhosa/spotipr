@@ -363,6 +363,29 @@ export class LLMGateway {
   }
 
   /**
+   * How many operations of this task a caller may have in flight for its tenant.
+   *
+   * Callers that fan out (parallel figure detailing, chunked extraction) must size
+   * their own concurrency from this rather than guessing: exceeding it makes
+   * createReservation throw CONCURRENCY_LIMIT, which fails the whole operation.
+   * Returns null when the tenant cannot be resolved, so the caller keeps its own
+   * conservative default.
+   */
+  async getTaskConcurrencyLimit(
+    request: { headers: Record<string, string> } | { tenantContext: TenantContext },
+    taskCode: TaskCode
+  ): Promise<number | null> {
+    try {
+      const tenantContext = await extractTenantContextFromRequest(request)
+      if (!tenantContext?.tenantId) return null
+      return await this.system.reservation.getConcurrencyLimit(tenantContext.tenantId, taskCode)
+    } catch (error) {
+      console.warn('[Gateway] Could not resolve concurrency limit:', error instanceof Error ? error.message : error)
+      return null
+    }
+  }
+
+  /**
    * Execute LLM operation with explicit stage code
    * Convenience method for stage-aware calls
    */

@@ -14,6 +14,7 @@ import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
 import { PATENT_DIAGRAM_STYLE } from './style'
 import { validatePatentDiagram } from './validation'
 import { buildDiagramDetailPrompt, buildFigureSetPlanningPrompt, extractJsonObject } from './prompts'
+import { COVERAGE_EXTRACTION_RESPONSE_SCHEMA, FIGURE_SET_PLAN_RESPONSE_SCHEMA, diagramDetailResponseSchema } from './response-schemas'
 import {
   buildCoverageExtractionPrompt,
   buildDisclosureCoverageLedger,
@@ -222,51 +223,131 @@ async function loadPipelineContext(userId: string, patentId: string, sessionId: 
   }
 }
 
-export async function executeStructured<S extends z.ZodTypeAny>(input: {
+// OpenAI strict structured outputs cannot express "omit this key", so optional
+// fields arrive as explicit nulls. The Zod contracts use .optional(), which
+// rejects null, and no LLM-facing diagram field assigns meaning to null —
+// dropping null-valued keys before validation makes both worlds agree.
+function withoutNullValues<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutNullValues) as unknown as T
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entryValue]) => entryValue !== null)
+        .map(([key, entryValue]) => [key, withoutNullValues(entryValue)]),
+    ) as unknown as T
+  }
+  return value
+}
+
+type StructuredStageCode = 'DRAFT_FIGURE_COVERAGE' | 'DRAFT_FIGURE_PLANNER' | 'DRAFT_DIAGRAM_GENERATION'
+
+interface StructuredStageInput<S extends z.ZodTypeAny> {
   userHeaders: Record<string, string>
-  stageCode: 'DRAFT_FIGURE_PLANNER' | 'DRAFT_DIAGRAM_GENERATION'
+  stageCode: StructuredStageCode
   prompt: string
-  schema: S
+  /** A function receives the attempt index, letting a retry validate against a
+   *  relaxed contract instead of costing a whole second operation. */
+  schema: S | ((attempt: number) => S)
   metadata: Record<string, unknown>
-}): Promise<z.output<S>> {
+  /** Strict OpenAI json_schema for the reply; providers without support ignore it. */
+  responseSchema?: { name: string; schema: Record<string, unknown> }
+  /** Session-stable key so same-prefix prompts land on the same provider cache shard. */
+  promptCacheKey?: string
+  /** Expected near-copy output (predicted outputs); mutually exclusive with responseSchema. */
+  prediction?: string
+  /** Total tries before giving up. Two suits single-contract calls; the detail
+   *  stage takes three because its first try also carries the density budget. */
+  maxAttempts?: number
+}
+
+function errorStageFor(stageCode: StructuredStageCode): PatentDiagramPipelineError['stage'] {
+  return stageCode === 'DRAFT_DIAGRAM_GENERATION' ? 'DETAIL' : stageCode === 'DRAFT_FIGURE_COVERAGE' ? 'COVERAGE' : 'PLAN'
+}
+
+export async function executeStructured<S extends z.ZodTypeAny>(input: StructuredStageInput<S>): Promise<z.output<S>> {
   const { llmGateway } = await import('@/lib/metering/gateway')
   let prompt = input.prompt
   let previousOutput = ''
   let previousErrors = ''
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const maxAttempts = Math.max(1, input.maxAttempts ?? 2)
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt) {
       const boundedErrors = previousErrors.slice(0, 4_000)
       const boundedOutput = previousOutput.slice(0, 12_000)
       prompt = `${input.prompt}\n\nYour previous JSON was invalid. Correct it without changing supported semantics.\nVALIDATION ERRORS:\n${boundedErrors}\nPREVIOUS OUTPUT (bounded):\n${boundedOutput}`
     }
+    const schema = typeof input.schema === 'function' ? input.schema(attempt) : input.schema
+    const startedAt = Date.now()
     const result = await llmGateway.executeLLMOperation({ headers: input.userHeaders || {} }, {
       taskCode: 'LLM3_DIAGRAM',
       stageCode: input.stageCode,
       prompt,
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
+      // Diagram stages are structured extraction against a validated schema,
+      // not open-ended judgment: correctness is enforced by the Zod contract
+      // and coverage repair, so high thinking budgets only buy latency. Gemini 3
+      // otherwise defaults thinking_level to high. Providers ignore keys they
+      // do not understand, and temperature is dropped where a model rejects it.
+      parameters: {
+        thinking_level: 'low',
+        reasoning_effort: 'low',
+        temperature: 0.2,
+        ...(input.responseSchema ? {
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: input.responseSchema.name, strict: true, schema: input.responseSchema.schema },
+          },
+        } : {}),
+        ...(input.promptCacheKey ? { prompt_cache_key: input.promptCacheKey } : {}),
+        ...(input.prediction ? { prediction: { type: 'content', content: input.prediction } } : {}),
+      },
       metadata: { ...input.metadata, structuredDiagram: true, attempt: attempt + 1 },
     })
+    console.log(`[DiagramPipeline] ${input.stageCode} purpose=${String(input.metadata.purpose || 'unknown')} attempt=${attempt + 1} model=${result.response?.modelClass || 'unresolved'} ms=${Date.now() - startedAt}`)
     if (!result.success || !result.response?.output) {
       throw new PatentDiagramPipelineError(result.error?.message || 'Diagram LLM request failed', 502, result.error, {
-        code: 'DIAGRAM_PROVIDER_FAILED', stage: input.stageCode === 'DRAFT_FIGURE_PLANNER' ? 'PLAN' : 'DETAIL', retryable: true,
+        code: 'DIAGRAM_PROVIDER_FAILED', stage: errorStageFor(input.stageCode), retryable: true,
         actions: ['Try again.', 'If it repeats, ask an administrator to verify the configured diagram model and token limits.'],
       })
     }
     previousOutput = result.response.output
     try {
-      const parsed = input.schema.safeParse(extractJsonObject(previousOutput))
+      const parsed = schema.safeParse(withoutNullValues(extractJsonObject(previousOutput)))
       if (parsed.success) return parsed.data
       previousErrors = parsed.error.issues.map(issue => `${issue.path.join('.') || 'root'}: ${issue.message}`).join('\n')
     } catch (error) {
       previousErrors = error instanceof Error ? error.message : 'Invalid JSON'
     }
+    // A rejected reply costs a full extra round trip, so the reason is logged:
+    // a defect that shows up on most first attempts is a prompt bug, not model
+    // noise, and is the cheapest latency to remove.
+    console.warn(`[DiagramPipeline] ${input.stageCode} purpose=${String(input.metadata.purpose || 'unknown')} attempt=${attempt + 1} REJECTED: ${previousErrors.slice(0, 600).replace(/\n/g, ' | ')}`)
   }
-  throw new PatentDiagramPipelineError('The diagram model answered twice, but neither reply matched the required structured format.', 422, previousErrors, {
-    code: 'INVALID_STRUCTURED_DIAGRAM', stage: input.stageCode === 'DRAFT_FIGURE_PLANNER' ? 'PLAN' : 'DETAIL', retryable: true,
+  throw new PatentDiagramPipelineError(`The diagram model answered ${maxAttempts} times, but no reply matched the required structured format.`, 422, previousErrors, {
+    code: 'INVALID_STRUCTURED_DIAGRAM', stage: errorStageFor(input.stageCode), retryable: true,
     actions: ['Try again to request a fresh structured reply.', 'If it repeats, simplify the figure instructions or verify the Component Plan.', 'Ask an administrator to check the model output-token limit.'],
     automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
   })
+}
+
+// Coverage extraction has its own stage code so Super Admin can route this
+// mechanical quote-and-map step to a faster model than the planning judgment
+// call. Stage-coded resolution fails closed, so a deployment whose database
+// has not seeded DRAFT_FIGURE_COVERAGE yet falls back to the planner stage's
+// model instead of losing figure planning entirely.
+async function executeCoverageExtraction<S extends z.ZodTypeAny>(
+  input: Omit<StructuredStageInput<S>, 'stageCode'>,
+): Promise<z.output<S>> {
+  try {
+    return await executeStructured({ ...input, stageCode: 'DRAFT_FIGURE_COVERAGE' })
+  } catch (error) {
+    const stageUnconfigured = error instanceof PatentDiagramPipelineError
+      && (error.details as { code?: string } | undefined)?.code === 'CONFIGURATION_ERROR'
+    if (!stageUnconfigured) throw error
+    console.warn('[DiagramPipeline] DRAFT_FIGURE_COVERAGE stage is not configured for this plan; using the DRAFT_FIGURE_PLANNER model')
+    return executeStructured({ ...input, stageCode: 'DRAFT_FIGURE_PLANNER' })
+  }
 }
 
 function assertPlanComponentIds(plan: FigureSetPlan, components: PatentDiagramComponent[]) {
@@ -359,24 +440,40 @@ function persistedAutomaticComponent(addition: FigureSetPlan['pendingComponentAd
   }
 }
 
-function claimChunks(claims: ReturnType<typeof normalizeCoverageClaims>, maximumTokens = 3_000) {
-  const chunks: typeof claims[] = []
-  let current: typeof claims = []
-  let tokens = 0
-  for (const claim of claims) {
-    // Conservative tokenizer-independent estimate. Claims remain atomic: a
-    // large claim gets its own chunk and is never cut mid-limitation or JSON row.
-    const claimTokens = Math.ceil((claim.text.length + 120) / 4)
-    if (current.length && tokens + claimTokens > maximumTokens) {
-      chunks.push(current)
-      current = []
-      tokens = 0
-    }
-    current.push(claim)
-    tokens += claimTokens
+// Conservative tokenizer-independent estimate. Claims stay atomic: a large claim
+// gets its own chunk and is never cut mid-limitation or JSON row.
+function claimTokenEstimate(claim: { text: string }): number {
+  return Math.ceil((claim.text.length + 120) / 4)
+}
+
+/** Contiguous split into `count` runs whose lengths differ by at most one. */
+function splitEvenly<T>(items: T[], count: number): T[][] {
+  const chunks: T[][] = []
+  let start = 0
+  for (let index = 0; index < count && start < items.length; index++) {
+    const size = Math.ceil((items.length - start) / (count - index))
+    chunks.push(items.slice(start, start + size))
+    start += size
   }
-  if (current.length) chunks.push(current)
   return chunks
+}
+
+export function claimChunks(claims: ReturnType<typeof normalizeCoverageClaims>, maximumTokens = 3_000) {
+  // Chunks are extracted concurrently, so wall-clock is the SLOWEST chunk, not
+  // the total. Greedy packing to the token ceiling leaves a remainder — a
+  // 21-claim set split 20/1 and measured 35.7s against 8.5s, so the parallelism
+  // bought almost nothing. Splitting into equal shares instead makes the chunks
+  // finish together; the ceiling is then re-checked, and the count grows until
+  // every chunk fits (or each claim stands alone, since claims are atomic).
+  if (!claims.length) return []
+  const total = claims.reduce((sum, claim) => sum + claimTokenEstimate(claim), 0)
+  let chunkCount = Math.max(1, Math.ceil(total / maximumTokens))
+  for (;;) {
+    const chunks = splitEvenly(claims, chunkCount)
+    const withinCeiling = chunks.every(chunk => chunk.reduce((sum, claim) => sum + claimTokenEstimate(claim), 0) <= maximumTokens)
+    if (withinCeiling || chunkCount >= claims.length) return chunks
+    chunkCount++
+  }
 }
 
 async function buildCoverageLedger(
@@ -394,10 +491,13 @@ async function buildCoverageLedger(
   if (!claims.length) {
     ledger = buildDisclosureCoverageLedger({ contextChecksum, evidenceCatalog: context.evidenceCatalog, components: context.components })
   } else {
-    const requirements: any[] = []
-    for (const chunk of claimChunks(claims)) {
+    const knownIds = new Set(context.components.map(component => component.id))
+    // Chunks are independent extractions over disjoint claims, so they run
+    // concurrently up to the tenant's metered limit; results are collected in
+    // chunk order so requirement IDs stay deterministic for the same claim set.
+    const chunkConcurrency = await resolveDiagramConcurrency(input.requestHeaders)
+    const chunkRequirements = await mapWithConcurrency(claimChunks(claims), chunkConcurrency, async chunk => {
       const claimByNumber = new Map(chunk.map(claim => [claim.number, claim]))
-      const knownIds = new Set(context.components.map(component => component.id))
       const schema = coverageExtractionSchema.superRefine((value, validationContext) => {
         value.requirements.forEach((requirement, index) => {
           const claim = claimByNumber.get(requirement.claimNumber)
@@ -422,15 +522,17 @@ async function buildCoverageLedger(
           message: `Missing drawing-relevant limitation from claim ${missing.claimNumber}: ${missing.limitation}`,
         }))
       })
-      const extracted = await executeStructured({
+      const extracted = await executeCoverageExtraction({
         userHeaders: input.requestHeaders,
-        stageCode: 'DRAFT_FIGURE_PLANNER',
         prompt: buildCoverageExtractionPrompt({ claims: chunk, components: context.components }),
         schema,
+        responseSchema: { name: 'figure_coverage_extraction', schema: COVERAGE_EXTRACTION_RESPONSE_SCHEMA },
+        promptCacheKey: `patent-diagrams:${input.sessionId}`,
         metadata: { patentId: input.patentId, sessionId: input.sessionId, purpose: 'extract_figure_coverage', claimNumbers: chunk.map(claim => claim.number) },
       })
-      requirements.push(...extracted.requirements)
-    }
+      return extracted.requirements
+    })
+    const requirements: any[] = chunkRequirements.flat()
     try {
       ledger = materializeCoverageLedger({ contextChecksum, claims, extraction: { requirements }, components: context.components })
     } catch (error) {
@@ -543,7 +645,23 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
   })
   const knownIds = new Set(context.components.map(component => component.id))
   const knownCoverageIds = new Set(coverage.ledger.requirements.map(requirement => requirement.id))
-  const constrainedPlanSchema = figureSetPlanSchema.superRefine((value, ctx) => {
+  // A planner occasionally emits a plausible-looking coverage ID that is not in
+  // the ledger. Rejecting the plan for that cost a full re-plan, yet the ID
+  // carries no information: dropping it loses nothing, and any requirement the
+  // planner genuinely skipped is added back by repairFigureSetCoverage, with
+  // evaluateManagedPlanCoverage still failing the run if coverage is short.
+  // Unknown component and evidence IDs stay fatal — those are real defects.
+  const dropUnknownCoverageIds = (value: unknown) => {
+    const record = value as { figures?: unknown }
+    if (!record || typeof record !== 'object' || !Array.isArray(record.figures)) return value
+    return {
+      ...record,
+      figures: record.figures.map((figure: any) => (figure && Array.isArray(figure.coverageRequirementIds)
+        ? { ...figure, coverageRequirementIds: figure.coverageRequirementIds.filter((id: unknown) => typeof id === 'string' && knownCoverageIds.has(id)) }
+        : figure)),
+    }
+  }
+  const constrainedPlanSchema = z.preprocess(dropUnknownCoverageIds, figureSetPlanSchema).superRefine((value, ctx) => {
     const keys = value.figures.map(figure => figure.key)
     keys.filter((key, index) => keys.indexOf(key) !== index).forEach(key => ctx.addIssue({
       code: z.ZodIssueCode.custom, message: `Duplicate figure key: ${key}`,
@@ -568,15 +686,14 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
         code: z.ZodIssueCode.custom,
         message: `Unknown disclosed-step ID: ${id}`,
       }))
-    value.figures.flatMap(figure => figure.coverageRequirementIds)
-      .filter(id => !knownCoverageIds.has(id))
-      .forEach(id => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Unknown coverage requirement ID: ${id}` }))
   })
   const llmPlan = await executeStructured({
     userHeaders: input.requestHeaders,
     stageCode: 'DRAFT_FIGURE_PLANNER',
     prompt,
     schema: constrainedPlanSchema,
+    responseSchema: { name: 'figure_set_plan', schema: FIGURE_SET_PLAN_RESPONSE_SCHEMA },
+    promptCacheKey: `patent-diagrams:${input.sessionId}`,
     metadata: { patentId: input.patentId, sessionId: input.sessionId, purpose: 'plan_figures_structured' },
   })
   const seedPlan = figureSetPlanSchema.parse({
@@ -691,37 +808,53 @@ async function detailManagedFigure(input: {
       .filter(issue => blocksGeneration(issue) || (enforceDensityBudget && issue.code === 'SPLIT_REQUIRED'))
       .forEach(issue => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${issue.code}: ${issue.message}` }))
   })
-  const executeDetail = (enforceDensityBudget: boolean) => executeStructured({
-    userHeaders: input.pipeline.requestHeaders,
-    stageCode: 'DRAFT_DIAGRAM_GENERATION',
-    prompt,
-    schema: constrainedDiagramSchema(enforceDensityBudget),
-    metadata: {
-      patentId: input.pipeline.patentId, sessionId: input.pipeline.sessionId,
-      figureKey: input.plan.key, purpose: 'detail_figure_structured',
-      densityBudget: enforceDensityBudget ? 'enforced' : 'relaxed',
-    },
-  })
+  // A regeneration's output is mostly a copy of the existing semantic model, so
+  // it is passed as an OpenAI predicted output and unchanged spans decode at
+  // near-copy speed. Predictions do not combine with a strict response schema,
+  // so that call relies on the Zod contract plus retry instead. Gated by env
+  // until the account's model support for predictions is confirmed.
+  const prediction = input.existingDiagram && process.env.OPENAI_ENABLE_PREDICTED_OUTPUTS === 'true'
+    ? JSON.stringify(input.existingDiagram)
+    : undefined
   // An over-dense figure is not a defect the builder can repair - the
   // decomposer splits it into an overview plus detail sheets, which is how a
-  // 5-figure plan turned into 15 rendered sheets. So the first pass makes the
-  // published complexity budget binding and re-prompts the model to draw a
-  // figure that fits. Only when it cannot (process branch depth, say, which
-  // chunking genuinely cannot reduce) does the tolerant pass run and hand the
-  // figure to the decomposer. Content is never dropped to hit a figure count.
+  // 5-figure plan turned into 15 rendered sheets. Attempt 1 therefore makes the
+  // published complexity budget binding; the single retry relaxes it (except in
+  // manual mode, where the figure must fit one sheet) and hands anything still
+  // over budget to the decomposer. That caps a figure at two LLM calls where
+  // the old enforced-then-relaxed structure could spend four. Content is never
+  // dropped to hit a figure count.
   let diagram: PatentDiagram
   try {
-    diagram = await executeDetail(true)
+    diagram = await executeStructured({
+      userHeaders: input.pipeline.requestHeaders,
+      stageCode: 'DRAFT_DIAGRAM_GENERATION',
+      prompt,
+      schema: attempt => constrainedDiagramSchema(input.pipeline.mode === 'manual' || attempt === 0),
+      responseSchema: prediction ? undefined : { name: `patent_diagram_${input.plan.kind.toLowerCase()}`, schema: diagramDetailResponseSchema(input.plan.kind) },
+      promptCacheKey: `patent-diagrams:${input.pipeline.sessionId}`,
+      prediction,
+      // Three in auto mode, not two: attempt 1 also carries the density budget,
+      // so a figure that is merely too dense would otherwise get a single try at
+      // the relaxed contract — and a content slip there failed the whole drawing
+      // set. Manual mode keeps two, because its budget never relaxes: a third
+      // try cannot succeed where the second could not, and the caller is meant
+      // to be told to simplify the instruction instead.
+      maxAttempts: input.pipeline.mode === 'manual' ? 2 : 3,
+      metadata: {
+        patentId: input.pipeline.patentId, sessionId: input.pipeline.sessionId,
+        figureKey: input.plan.key, purpose: 'detail_figure_structured',
+      },
+    })
   } catch (error) {
-    if (!(error instanceof PatentDiagramPipelineError) || error.status !== 422) throw error
-    if (input.pipeline.mode === 'manual') {
+    if (error instanceof PatentDiagramPipelineError && error.status === 422 && input.pipeline.mode === 'manual') {
       throw new PatentDiagramPipelineError(`The manual instruction for "${input.plan.title}" could not be rendered as one filing-scale figure.`, 422, error.details, {
         code: 'MANUAL_FIGURE_NEEDS_SIMPLIFICATION', stage: 'DETAIL', retryable: true,
         actions: ['Simplify this instruction so it fits on one figure.', 'Create a second manual instruction if the subject should be divided across two figures.'],
         automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
       })
     }
-    diagram = await executeDetail(false)
+    throw error
   }
   diagram = { ...diagram, schemaVersion: 2 } as PatentDiagram
   const built = buildPatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds)
@@ -730,6 +863,20 @@ async function detailManagedFigure(input: {
     throw new PatentDiagramPipelineError(`Deterministic builder failed for ${input.plan.title}`, 500, deterministicDefects)
   }
   return built.diagram
+}
+
+// Metering caps concurrent LLM3_DIAGRAM reservations per tenant (a per-plan
+// policy rule, default 2). Fanning out wider than that does not run faster — it
+// throws CONCURRENCY_LIMIT and fails the whole figure set. So the pipeline asks
+// for the tenant's real limit instead of hardcoding one: raising the policy rule
+// speeds generation up with no code change, and an unresolvable tenant falls
+// back to the conservative default rather than guessing high.
+const DIAGRAM_CONCURRENCY_FALLBACK = 2
+
+async function resolveDiagramConcurrency(requestHeaders: Record<string, string>): Promise<number> {
+  const { llmGateway } = await import('@/lib/metering/gateway')
+  const limit = await llmGateway.getTaskConcurrencyLimit({ headers: requestHeaders || {} }, 'LLM3_DIAGRAM')
+  return Math.max(1, limit ?? DIAGRAM_CONCURRENCY_FALLBACK)
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -831,13 +978,22 @@ function applyRenderedLayoutValidation(built: BuiltPatentDiagram, svg: Awaited<R
   built.validation.filingReady = !built.validation.issues.some(issue => issue.severity === 'error')
 }
 
+// Rendering is an HTTP round trip to the PlantUML server, not a metered LLM
+// call, so it is bounded by that server rather than by any plan policy. The
+// default suits the shared/public renderer; point PLANTUML_BASE_URL at a private
+// one and this can go higher.
+function renderConcurrency(): number {
+  const configured = Number(process.env.DIAGRAM_RENDER_CONCURRENCY)
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 4
+}
+
 async function renderManagedFigures(
   patentId: string,
   builtFigures: BuiltPatentDiagram[],
   figureNumbers?: number[],
   pagePolicy?: Awaited<ReturnType<typeof resolveDiagramPagePolicy>>,
 ): Promise<RenderedManagedFigure[]> {
-  const outcomes = await mapWithConcurrency(builtFigures, 2, async (built, index) => {
+  const outcomes = await mapWithConcurrency(builtFigures, renderConcurrency(), async (built, index) => {
     try {
       const figureNo = figureNumbers?.[index] ?? index + 1
       const rendered = await renderAndWriteDiagramArtifacts({ patentId, figureNo, plantumlCode: built.plantumlCode, pagePolicy })
@@ -1174,7 +1330,8 @@ export async function generateManagedFigureSet(
       actions: ['Plan the figures again so missing claim concepts can be added automatically.'],
     })
   }
-  const detailed = await mapWithConcurrency(plan.figures, 2, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input, coverageLedger: plan.coverageLedger }))
+  const detailConcurrency = await resolveDiagramConcurrency(input.requestHeaders)
+  const detailed = await mapWithConcurrency(plan.figures, detailConcurrency, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input, coverageLedger: plan.coverageLedger }))
   const rendered = await buildAndRenderAdaptive({
     patentId: input.patentId,
     diagrams: detailed,
@@ -1212,7 +1369,8 @@ export async function addManagedFigures(
   assertPlanComponentIds(plan, context.components)
   const occupied = new Set(context.session.figurePlans.map(figure => figure.figureNo))
   if (plan.figures.length > MAXIMUM_MANAGED_FIGURES_PER_RUN) throw new PatentDiagramPipelineError(`A single append operation can create at most ${MAXIMUM_MANAGED_FIGURES_PER_RUN} managed figures`, 422)
-  const detailed = await mapWithConcurrency(plan.figures, 2, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input, coverageLedger: plan.coverageLedger }))
+  const detailConcurrency = await resolveDiagramConcurrency(input.requestHeaders)
+  const detailed = await mapWithConcurrency(plan.figures, detailConcurrency, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input, coverageLedger: plan.coverageLedger }))
 
   const allocateFigureNumbers = (count: number) => {
     const used = new Set(occupied)

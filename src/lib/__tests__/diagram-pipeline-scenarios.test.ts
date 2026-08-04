@@ -81,7 +81,9 @@ function coverageFixtureForPlannedKind(call: LlmCall): string {
 function applyApprovedPlanContract(raw: string, call: LlmCall): string {
   try {
     const diagram = JSON.parse(raw)
-    const match = call.prompt.match(/FIGURE PLAN:\r?\n([\s\S]*?)\r?\n\r?\nUSER MODIFICATION INSTRUCTIONS:/)
+    // The detail prompt keeps per-figure content at the tail (cache-friendly
+    // prefix ordering), with the plan minified on a single line.
+    const match = call.prompt.match(/FIGURE PLAN:\r?\n([^\r\n]+)/)
     if (!match) return raw
     const plan = JSON.parse(match[1])
     Object.assign(diagram, {
@@ -141,10 +143,13 @@ function applyApprovedPlanContract(raw: string, call: LlmCall): string {
 vi.spyOn(llmGateway, 'executeLLMOperation').mockImplementation(async (_ctx: any, request: any) => {
   const call = { stageCode: String(request.stageCode), prompt: String(request.prompt), metadata: request.metadata }
   llmCalls.push(call)
+  // Coverage extraction runs under its own stage code (DRAFT_FIGURE_COVERAGE)
+  // so admins can route it to a faster model, falling back to the planner
+  // stage when unconfigured — route it by purpose, not stage.
+  if (call.metadata?.purpose === 'extract_figure_coverage') {
+    return { success: true, response: { output: coverageResponder(call) } } as any
+  }
   if (call.stageCode === 'DRAFT_FIGURE_PLANNER') {
-    if (call.metadata?.purpose === 'extract_figure_coverage') {
-      return { success: true, response: { output: coverageResponder(call) } } as any
-    }
     return { success: true, response: { output: planResponder(call) } } as any
   }
   const key = String(request.metadata?.figureKey || '')
@@ -681,9 +686,11 @@ describe('density-aware expansion after planning', () => {
     const detailCalls = llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')
     console.log(`\n[fallback] detailCalls=${detailCalls.length} rendered=${result.figures.length}`)
 
-    // Strict pass burns both attempts, then the tolerant pass accepts the
-    // dense figure so no disclosed content is lost.
-    expect(detailCalls.map(c => c.metadata.densityBudget)).toEqual(['enforced', 'enforced', 'relaxed'])
+    // Attempt 1 enforces the budget; the single retry relaxes it and accepts
+    // the dense figure, so no disclosed content is lost and the figure costs
+    // at most two LLM calls before the decomposer splits it.
+    expect(detailCalls).toHaveLength(2)
+    expect(detailCalls[1].prompt).toContain('SPLIT_REQUIRED')
     expect(result.figures.length).toBeGreaterThan(1)
     expect(result.figures.some(figure => /Overview|Detail|Interface/.test(figure.title))).toBe(true)
     expect(result.figures.every(figure => !figure.validation.issues.some(issue => issue.code === 'SPLIT_REQUIRED'))).toBe(true)
@@ -769,5 +776,87 @@ describe('generated artefacts', () => {
     // Reference numerals come from the Component Planner, not the model.
     expect(result.figures[0].plantuml).toContain('(100)')
     expect(result.figures[0].plantuml).toContain('(120)')
+  })
+})
+
+describe('metered fan-out and reply repair', () => {
+  // A live run failed with CONCURRENCY_LIMIT because the pipeline fanned out
+  // wider than the tenant's metered allowance. Detail fan-out must be sized from
+  // the plan's limit, never from a constant.
+  /**
+   * Runs a 6-figure generation with the metered limit forced to `limit` and
+   * reports how many detail calls were ever in flight at once. The detail calls
+   * are made to overlap by suspending inside the gateway stub — measuring the
+   * stub's synchronous body would report 1 no matter what the pipeline did.
+   */
+  async function peakDetailConcurrency(limit: number): Promise<{ peak: number; figures: number }> {
+    const limitSpy = vi.spyOn(llmGateway, 'getTaskConcurrencyLimit').mockResolvedValue(limit)
+    const gateway = llmGateway.executeLLMOperation as any
+    const baseImplementation = gateway.getMockImplementation()
+    let inFlight = 0
+    let peak = 0
+    gateway.mockImplementation(async (context: any, request: any) => {
+      if (request.stageCode !== 'DRAFT_DIAGRAM_GENERATION') return baseImplementation(context, request)
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      try {
+        await new Promise(resolve => setTimeout(resolve, 5))
+        return await baseImplementation(context, request)
+      } finally {
+        inFlight--
+      }
+    })
+    planResponder = () => JSON.stringify({ schemaVersion: 2, figures: Array.from({ length: 6 }, (_, index) => planFigure(index + 1)) })
+    try {
+      const result = await generateManagedFigureSet({ ...INPUT })
+      return { peak, figures: result.figures.length }
+    } finally {
+      gateway.mockImplementation(baseImplementation)
+      limitSpy.mockRestore()
+    }
+  }
+
+  // A live run failed with CONCURRENCY_LIMIT because the pipeline fanned out
+  // wider than the tenant's metered allowance. Detail fan-out must be sized from
+  // the plan's limit, never from a constant.
+  test('detail fan-out never exceeds the tenant concurrency limit', async () => {
+    const { peak, figures } = await peakDetailConcurrency(2)
+    expect(figures).toBe(6)
+    expect(peak).toBe(2)
+  })
+
+  test('a raised limit widens fan-out without a code change', async () => {
+    const { peak, figures } = await peakDetailConcurrency(6)
+    expect(figures).toBe(6)
+    expect(peak).toBe(6)
+  })
+
+  // The planner occasionally emits a plausible-looking coverage ID that is not in
+  // the ledger. Re-planning for that cost a whole round trip and gained nothing.
+  test('an invented coverage ID is dropped instead of forcing a re-plan', async () => {
+    planResponder = () => JSON.stringify({
+      schemaVersion: 2,
+      figures: [{ ...planFigure(1), coverageRequirementIds: ['COV-3-totallyinvented'] }],
+    })
+
+    const plan = await planManagedFigureSet({ ...INPUT })
+
+    expect(llmCalls.filter(call => call.metadata?.purpose === 'plan_figures_structured')).toHaveLength(1)
+    expect(plan.figures[0].coverageRequirementIds).not.toContain('COV-3-totallyinvented')
+  })
+
+  // Strict provider schemas cannot express "omit this key", so optional fields
+  // arrive as explicit nulls that the Zod contracts would otherwise reject.
+  test('explicit nulls from a strict provider schema parse as absent fields', async () => {
+    detailResponder = call => {
+      const diagram = JSON.parse(componentDetail(String(call.metadata?.figureKey || 'figure-1')))
+      diagram.components = diagram.components.map((item: any) => ({ ...item, displayLabel: null }))
+      return JSON.stringify(diagram)
+    }
+
+    const result = await generateManagedFigureSet({ ...INPUT })
+
+    expect(llmCalls.filter(call => call.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(1)
+    expect(result.figures[0].validation.filingReady).toBe(true)
   })
 })

@@ -301,28 +301,40 @@ async function seedProductionPlans() {
     // normalization issues three concurrent LLM2_DRAFT calls (core/search/support).
     // A lower limit forces those calls to retry serially and Stage 0 slows to ~3x.
     const STAGE0_NORMALIZATION_FANOUT = 3
+    // LLM3_DIAGRAM gates the managed figure pipeline, which fans out one call per
+    // planned figure (and one per claim chunk during coverage extraction) sized
+    // directly from this number. At 2 a six-figure set details in three waves;
+    // raising it collapses those into one and is the single biggest lever on
+    // figure-generation latency. Provider 429s are absorbed by the provider's
+    // own backoff, so the practical ceiling is the account's rate limit, not
+    // this value. Every tier is listed explicitly — an omitted row silently
+    // falls back to 2, which is how the diagram stages ended up serialized.
     const concurrencyRules = [
       // FREE_PLAN - Lowest tier, but still needs the full Stage 0 fan-out
       { planCode: 'FREE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT },
       { planCode: 'FREE_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 1 },
+      { planCode: 'FREE_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 3 },
       { planCode: 'FREE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 1 },
 
       // TRIAL - same Stage 0 requirement as FREE
       { planCode: 'TRIAL', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT },
+      { planCode: 'TRIAL', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 3 },
 
       // BASIC_PLAN - Stage 0 fan-out plus a little headroom
       { planCode: 'BASIC_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT + 1 },
+      { planCode: 'BASIC_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 4 },
 
       // PRO_PLAN - Moderate concurrency for professional users
       { planCode: 'PRO_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT + 3 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 2 },
-      { planCode: 'PRO_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 2 },
+      // 6 covers the pipeline's own six-figure planning target in one wave.
+      { planCode: 'PRO_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 6 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 3 },
 
       // ENTERPRISE_PLAN - High concurrency for enterprise users
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT + 5 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 3 },
-      { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 3 },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 8 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 4 },
     ]
 
@@ -333,11 +345,15 @@ async function seedProductionPlans() {
         continue
       }
 
+      // scopeId is the plan ID: PolicyRule.scopeId is the foreign key to Plan.id,
+      // and every rule already in the database is keyed that way. Writing
+      // plan.code here created rules the FK rejects, so the concurrency limits
+      // below never reached the database.
       await prisma.policyRule.upsert({
         where: {
           scope_scopeId_taskCode_key: {
             scope: 'plan',
-            scopeId: plan.code,
+            scopeId: plan.id,
             taskCode: rule.taskCode,
             key: 'concurrency_limit'
           }
@@ -345,7 +361,7 @@ async function seedProductionPlans() {
         update: { value: rule.concurrencyLimit },
         create: {
           scope: 'plan',
-          scopeId: plan.code,
+          scopeId: plan.id,
           taskCode: rule.taskCode,
           key: 'concurrency_limit',
           value: rule.concurrencyLimit

@@ -122,7 +122,16 @@ export function validatePatentDiagram(
   const componentById = new Map(components.map(component => [component.id, component]))
   const visibleIds = diagramComponentIds(diagram)
   const visibleSet = new Set(visibleIds)
-  const duplicateIds = visibleIds.filter((id, index) => visibleIds.indexOf(id) !== index)
+  // In COMPONENT, SEQUENCE and CONSTITUENT figures a component is one drawn box
+  // or lifeline, so naming it twice is a real defect. A PROCESS figure draws
+  // STEPS, and one component legitimately performs several of them (a controller
+  // that compares, then suppresses, then derives) — plus relatedComponentIds
+  // repeats participants by design. Counting those as duplicates made an
+  // ordinary flowchart fail with a fatal DUPLICATE_COMPONENT; step identity is
+  // enforced separately through unique node keys.
+  const duplicateIds = diagram.kind === 'PROCESS'
+    ? []
+    : visibleIds.filter((id, index) => visibleIds.indexOf(id) !== index)
   const validateSemanticEvidence = (label: string, evidenceIds: string[], coverageRequirementIds: string[], alwaysCite = false) => {
     const citationRequired = coverageRequirementIds.length > 0 || (alwaysCite && !!supportedEvidenceIds?.size)
     if (citationRequired && !evidenceIds.length) {
