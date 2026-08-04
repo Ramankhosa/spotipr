@@ -260,36 +260,32 @@ async function getPlanDefault(planId: string, taskCode: TaskCode): Promise<Model
 
   if (!access) return null
 
-  // Map ModelClass to a default model code
-  const modelCode = MODEL_CLASS_DEFAULTS[access.defaultClass.code] || 'gemini-2.0-flash'
+  // Map ModelClass to a default model code. LLMModel carries no tier column, so
+  // this mapping cannot be data-driven; the constants go stale as the registry
+  // moves on, and a stale entry names a model nobody assigned.
+  const modelCode = MODEL_CLASS_DEFAULTS[access.defaultClass.code]
 
   // Get the model from registry
-  const model = await prisma.lLMModel.findFirst({
-    where: { code: modelCode, isActive: true }
-  })
+  const model = modelCode
+    ? await prisma.lLMModel.findFirst({ where: { code: modelCode, isActive: true } })
+    : null
 
   if (!model) {
-    // Fallback to any active model
-    const anyModel = await prisma.lLMModel.findFirst({
-      where: { isActive: true }
-    })
-    if (!anyModel) return null
-    
-    return {
-      modelCode: anyModel.code,
-      modelId: anyModel.id,
-      provider: anyModel.provider,
-      displayName: anyModel.displayName,
-      supportsVision: anyModel.supportsVision,
-      supportsStreaming: anyModel.supportsStreaming,
-      contextWindow: anyModel.contextWindow,
-      fallbacks: [],
-      source: 'plan-default',
-      costPer1M: {
-        input: anyModel.inputCostPer1M,
-        output: anyModel.outputCostPer1M
-      }
-    }
+    // Degrade to the CONFIGURED system default, never to an arbitrary row.
+    //
+    // This previously did findFirst({ isActive: true }) with no ordering, so
+    // Postgres returned whichever active model it felt like — which is how a
+    // model that is not assigned anywhere and is not marked default ends up
+    // being called, with nothing in the admin UI able to influence it. An
+    // unresolvable tier is a configuration gap, and the honest answer to a
+    // configuration gap is the model the operator actually chose.
+    console.warn(
+      `[ModelResolver] ModelClass "${access.defaultClass.code}" maps to ${
+        modelCode ? `"${modelCode}", which is not an active model` : 'nothing'
+      } — using the system default instead. Update MODEL_CLASS_DEFAULTS in model-resolver.ts.`
+    )
+    const fallback = await getSystemDefault()
+    return { ...fallback, source: 'plan-default' }
   }
 
   return {
@@ -333,11 +329,23 @@ async function getSystemDefault(): Promise<ModelResolutionResult> {
     }
   }
 
-  // Ultimate fallback - return first active model or hardcoded default
+  // Ultimate fallback - return first active model or hardcoded default.
+  //
+  // Nobody chose this model: it is simply the oldest row in the registry, which
+  // in practice is whatever was seeded first and is often long retired. Reaching
+  // here means no model carries isDefault + isActive, and every unconfigured
+  // call in the platform is running on that accident. Say so loudly — silence
+  // here is what makes "why is it calling a model I never assigned?" so hard to
+  // answer from the logs.
   const anyModel = await prisma.lLMModel.findFirst({
     where: { isActive: true },
     orderBy: { createdAt: 'asc' }
   })
+  console.warn(
+    `[ModelResolver] NO MODEL IS FLAGGED isDefault+isActive. Falling back to the oldest active model ` +
+      `("${anyModel?.code ?? 'gemini-2.0-flash'}"), which nobody selected. Set a system default in ` +
+      `Super Admin > LLM Config > Overview.`
+  )
 
   return {
     modelCode: anyModel?.code || 'gemini-2.0-flash',
