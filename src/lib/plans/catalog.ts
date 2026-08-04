@@ -327,6 +327,11 @@ export const PLAN_PRICING_CATALOG: Record<PlanCatalogCode, PlanPricingDefinition
  * Every TaskCode a plan can be granted. The seed expands `modelClasses` across this list
  * so a plan never has a task without an access rule (which would fall through to the
  * gateway's default and silently ignore the tier).
+ *
+ * MUST list every member of the TaskCode enum. Unlike TASK_TO_FEATURE and
+ * TASK_LABELS below — which are Record<TaskCode, …> and so fail to compile when
+ * a code is missing — this is a plain array with no exhaustiveness check, and an
+ * omission is silent: the Task row is never seeded and no plan grants the task.
  */
 export const ALL_TASK_CODES: TaskCode[] = [
   'LLM1_PRIOR_ART',
@@ -343,6 +348,7 @@ export const ALL_TASK_CODES: TaskCode[] = [
   'WS_HYPOTHESIZE',
   'WS_VALIDATE',
   'WS_REDTEAM',
+  'WS_DIMENSIONS',
   'LLM8_OA_RESPONSE',
   'IDEA_BANK_ACCESS',
   'IDEA_BANK_RESERVE',

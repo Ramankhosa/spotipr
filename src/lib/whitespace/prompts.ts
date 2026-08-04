@@ -39,7 +39,13 @@ export function buildScopeCompilePrompt(input: {
   const currentYear = new Date().getFullYear()
   const inventionFraming =
     input.framing === 'INVENTION'
-      ? `\nTHE BRIEF DESCRIBES A SPECIFIC INVENTION, NOT A FIELD. Define the scope as the technology field IMMEDIATELY SURROUNDING this invention — the space of existing approaches to the same problem, including approaches the invention rejects — not just documents matching the invention itself. A scope that only finds the invention's own wording will make everything look empty; the field around it is what the study measures.\n`
+      ? `
+THE BRIEF DESCRIBES A SPECIFIC INVENTION, NOT A FIELD. Define the scope as the technology field IMMEDIATELY SURROUNDING this invention — the space of existing approaches to the same problem, including approaches the invention rejects — not just documents matching the invention itself. A scope that only finds the invention's own wording will make everything look empty; the field around it is what the study measures.
+
+MARK AT MOST ONE CONCEPT AS REQUIRED, AND OFTEN NONE. This is the single most common way an invention scope fails.
+Required concepts INTERSECT: a document must contain EVERY required concept to be counted. An invention brief names several elements that work together, and it is tempting to mark them all required — but the documents in the surrounding field solve the same problem in other ways, and almost none of them contain every element of YOUR design. Four required concepts routinely reduce a 30-million-document corpus to nothing.
+So: mark required only the single concept that names the problem domain the invention lives in, if any concept does. Leave every component, mechanism and constraint concept optional. Optional concepts still steer the later analysis; they simply do not shrink the field.
+`
       : ''
   return `You are a patent search strategist preparing the scope for a technology landscape study.
 

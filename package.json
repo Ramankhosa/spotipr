@@ -20,6 +20,7 @@
     "oa:test:e2e": "tsx scripts/test-office-action-e2e.ts",
     "oa:sync-profile": "tsx scripts/sync-oa-profile.ts",
     "oa:seed-feature": "node scripts/add-office-action-feature.js",
+    "ws:seed-stages": "node scripts/add-whitespace-stages.js",
     "seed:llm-models:prod": "node Seed/seed-llm-models-modified.js",
     "create-admin": "node scripts/create-super-admin.js",
     "superadminbirth": "node scripts/create-super-admin.js ramankhosa@gmail.com",

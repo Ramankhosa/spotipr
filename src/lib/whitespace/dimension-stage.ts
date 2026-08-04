@@ -318,12 +318,30 @@ function totalValues(registry: WorkingDimension[]): number {
   return registry.reduce((sum, dimension) => sum + dimension.values.length, 0)
 }
 
-function tooNarrowMessage(familyCount: number): string {
+function tooNarrowMessage(familyCount: number, scope: WhitespaceScope): string {
+  const required = scope.concepts.filter(concept => concept.required && concept.label.trim())
+
+  // Intersecting required concepts is by far the most common cause, and the
+  // generic "widen the scope" advice sends people to the wrong dial. When two
+  // or more are marked, name them and say what to do.
+  if (required.length >= 2) {
+    return (
+      `This field has ${familyCount.toLocaleString()} families — too few to grid by viewpoint. ` +
+      `${required.length} concepts are marked as must-appear (${required
+        .map(concept => `"${concept.label}"`)
+        .join(', ')}), and required concepts INTERSECT: a document has to contain every one of them to be counted. ` +
+      `Documents in the field around your invention solve the same problem in other ways and rarely contain all of its elements at once, ` +
+      `which is what empties the field. Make all but one optional — optional concepts still steer the analysis, they just stop shrinking it — then run this again.`
+    )
+  }
+
   return (
     `This field has ${familyCount.toLocaleString()} families — too few to grid by viewpoint. ` +
     `Below ~${MIN_FIELD_FAMILIES} families the average cell holds fewer than two families whatever the technology looks like, ` +
-    `so empty cells would be arithmetic rather than absence. Widen the scope — drop a required concept, extend the filing years, ` +
-    `or add jurisdictions — or read the field directly with the landscape pipeline: at this size it fits inside one deep dive.`
+    `so empty cells would be arithmetic rather than absence. Widen the scope — ${
+      required.length === 1 ? 'make the required concept optional, ' : ''
+    }broaden the concept wording, extend the filing years, or add jurisdictions — ` +
+    `or read the field directly with the landscape pipeline: at this size it fits inside one deep dive.`
   )
 }
 
@@ -377,7 +395,7 @@ export async function runDimensionMapStage(input: {
     )
   }
   if (familyCount < MIN_FIELD_FAMILIES) {
-    throw new Error(tooNarrowMessage(familyCount))
+    throw new Error(tooNarrowMessage(familyCount, scope))
   }
 
   // --- Deterministic sample --------------------------------------------------

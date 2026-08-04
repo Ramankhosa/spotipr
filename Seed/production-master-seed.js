@@ -99,7 +99,8 @@ Seed Order:
   2. Production Countries  (Direct: All 30 jurisdictions)
   3. Country Config        (Countries/MasterSeed.js)
   4. LLM Models            (Seed/seed-llm-models.js)
-  5. Admin Users           (scripts/setup-full-hierarchy.js)
+  5. Whitespace Stages     (scripts/add-whitespace-stages.js)
+  6. Admin Users           (scripts/setup-full-hierarchy.js)
 
 All scripts are idempotent - safe to run multiple times.
 `);
@@ -135,6 +136,14 @@ const SEED_SCRIPTS = [
     script: 'Seed/seed-llm-models.js',
     skip: options.skipLlm || options.usersOnly,
     description: 'Seeds LLM model registry, workflow stages, PRODUCTION token limits',
+  },
+  {
+    // MUST run after seed-llm-models.js: it mirrors each whitespace stage's
+    // model config from the NOVELTY_* stages by tier, so those must exist first.
+    name: 'Whitespace Studio Stages',
+    script: 'scripts/add-whitespace-stages.js',
+    skip: options.skipLlm || options.usersOnly,
+    description: 'Seeds the WHITESPACE_ANALYSIS feature, its tasks, and per-stage model config',
   },
   {
     name: 'Admin Users & Tenants',

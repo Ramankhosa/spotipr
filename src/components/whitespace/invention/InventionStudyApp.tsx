@@ -69,7 +69,12 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
   const [selectedGaps, setSelectedGaps] = useState<Set<string>>(new Set())
   const [attacking, setAttacking] = useState(false)
   const [attackLabel, setAttackLabel] = useState<string | null>(null)
+  const [savingScope, setSavingScope] = useState(false)
   const autoCompiled = useRef(false)
+  // Guards the scope PATCH synchronously. The disabled prop only takes effect
+  // after a re-render, so two fast clicks would otherwise both read the same
+  // stale scope and the second would overwrite the first.
+  const scopeSaveInFlight = useRef(false)
 
   const load = useCallback(async () => {
     setLoadError(null)
@@ -174,6 +179,46 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
     [load, studyId]
   )
 
+  /**
+   * Toggles a concept between must-appear and optional, and saves.
+   *
+   * Required concepts INTERSECT, so each one multiplies the restriction — the
+   * usual reason an invention field comes back empty is that every component of
+   * the invention was marked required. The user has to be able to undo that
+   * here, where the message telling them to is.
+   */
+  const toggleRequired = useCallback(
+    async (conceptId: string) => {
+      if (!study || scopeSaveInFlight.current) return
+      scopeSaveInFlight.current = true
+      setSavingScope(true)
+      try {
+        const nextScope: Scope = {
+          ...study.scope,
+          concepts: study.scope.concepts.map(concept =>
+            concept.id === conceptId ? { ...concept, required: !concept.required, origin: 'user' } : concept
+          ),
+        }
+        await wsApi(`/api/whitespace/studies/${studyId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ scope: nextScope }),
+        })
+        await load()
+      } catch (error) {
+        toast({
+          variant: 'error',
+          title: 'Could not update the field',
+          description: error instanceof Error ? error.message : 'Try again.',
+        })
+      } finally {
+        scopeSaveInFlight.current = false
+        setSavingScope(false)
+      }
+    },
+    [load, study, studyId, toast]
+  )
+
+  const requiredCount = study?.scope?.concepts?.filter(concept => concept.required).length ?? 0
   const dirty = edit.removedDimensions.size > 0 || edit.removedValues.size > 0
 
   const recount = useCallback(() => {
@@ -370,18 +415,39 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                 )}
                 <div className="flex flex-wrap gap-1.5">
                   {study.scope.concepts.map(concept => (
-                    <span
+                    <button
                       key={concept.id}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-foreground"
+                      type="button"
+                      onClick={() => void toggleRequired(concept.id)}
+                      disabled={savingScope || running}
+                      title={
+                        concept.required
+                          ? 'Must appear in every document counted. Click to make it optional.'
+                          : 'Optional — broadens the field. Click to require it.'
+                      }
+                      className={[
+                        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
+                        concept.required
+                          ? 'border-primary/40 bg-primary/[0.06] text-foreground'
+                          : 'border-border bg-muted/60 text-muted-foreground hover:bg-accent',
+                        savingScope || running ? 'opacity-60' : '',
+                      ].join(' ')}
                     >
                       {concept.label}
                       {concept.required && (
                         <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">must</span>
                       )}
-                    </span>
+                    </button>
                   ))}
                 </div>
-                <p className="mt-3 text-[11px] text-muted-foreground">
+                <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+                  {requiredCount === 0
+                    ? 'No concept is required, so the field is everything matching any of them. Click a concept to require it.'
+                    : requiredCount === 1
+                      ? 'One concept must appear in every document counted. Click a concept to change that.'
+                      : `${requiredCount} concepts must ALL appear in the same document — they intersect, so each one shrinks the field sharply. Click any "must" to make it optional.`}
+                </p>
+                <p className="mt-2 text-[11px] text-muted-foreground">
                   Filing years {study.scope.filters.yearFrom}–{study.scope.filters.yearTo}
                   {study.scope.filters.jurisdictions.length
                     ? ` · ${study.scope.filters.jurisdictions.join(', ')}`
