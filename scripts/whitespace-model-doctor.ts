@@ -41,8 +41,37 @@ async function main() {
   const plans = planIdArg
     ? await prisma.plan.findMany({ where: { id: planIdArg } })
     : await prisma.plan.findMany({ where: { status: 'ACTIVE' }, orderBy: { code: 'asc' } })
+
   if (!plans.length) {
-    console.log(`No plan matches ${planIdArg ?? '(any active plan)'}.`)
+    console.log(`\nNo Plan row has id "${planIdArg}".\n`)
+
+    // A planId the gateway resolved but that has no Plan row means EVERY
+    // stage-coded call for that tenant fails resolution and silently falls to
+    // the system default — platform-wide, not just whitespace. Show what does
+    // exist, and who points where, so the mismatch is obvious.
+    const all = await prisma.plan.findMany({ orderBy: { code: 'asc' } })
+    console.log('Plans that DO exist:')
+    for (const plan of all) console.log(`  ${plan.id}  ${plan.code.padEnd(18)} status=${plan.status}`)
+
+    const tenantPlans = await prisma.tenantPlan.findMany({
+      include: { tenant: { select: { id: true, name: true, status: true } }, plan: { select: { code: true } } },
+      take: 40,
+    })
+    if (tenantPlans.length) {
+      console.log('\nTenant -> plan bindings (this is where the gateway reads planId):')
+      for (const binding of tenantPlans) {
+        console.log(
+          `  tenant ${binding.tenant.id} (${binding.tenant.name ?? 'unnamed'}, ${binding.tenant.status})` +
+            ` -> ${binding.planId} ${binding.plan?.code ?? 'MISSING PLAN ROW'}`
+        )
+      }
+    }
+    console.log(
+      '\nIf no binding above shows the id you passed, the id in your log was most likely\n' +
+        'mis-transcribed — re-copy it from the log text rather than a screenshot. If a\n' +
+        'binding DOES show it with "MISSING PLAN ROW", that tenant points at a deleted\n' +
+        'plan and every stage-coded call it makes falls through to the system default.'
+    )
     return
   }
 
