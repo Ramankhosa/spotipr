@@ -83,7 +83,8 @@ const FEATURE_LABELS: Record<string, string> = {
   DIAGRAM_GENERATION: 'Diagram Generation',
   IDEA_BANK: 'Idea Bank',
   IDEATION: 'Ideation Engine',
-  OFFICE_ACTION_RESPONSE: 'FER / Office Action Response'
+  OFFICE_ACTION_RESPONSE: 'FER / Office Action Response',
+  WHITESPACE_ANALYSIS: 'Whitespace Studio'
   // Note: Content Generation was removed - all superset section stages
   // (DRAFT_ANNEXURE_*) are now under PATENT_DRAFTING feature
 }
