@@ -8,14 +8,15 @@ import type { WhitespaceRunStage } from '@/lib/whitespace/types'
 
 export const runtime = 'nodejs'
 
-const STAGES: WhitespaceRunStage[] = ['FIELD_MAP', 'CLUSTER', 'SIGNALS', 'DEEP_DIVE', 'VALIDATE']
+const STAGES: WhitespaceRunStage[] = ['FIELD_MAP', 'CLUSTER', 'SIGNALS', 'DEEP_DIVE', 'VALIDATE', 'DIMENSION_MAP']
 
 /**
  * Observatory stages read the corpus with SQL and vector math and cost almost
  * nothing to serve, so they are unmetered — looking should feel free. Only the
- * Lab stages, which spend real model budget, consume quota.
+ * Lab stages, which spend real model budget, consume quota. DIMENSION_MAP runs
+ * up to three discovery model calls, so it meters.
  */
-const METERED_STAGES = new Set<WhitespaceRunStage>(['DEEP_DIVE', 'VALIDATE'])
+const METERED_STAGES = new Set<WhitespaceRunStage>(['DEEP_DIVE', 'VALIDATE', 'DIMENSION_MAP'])
 
 function headersToRecord(request: NextRequest) {
   const headers: Record<string, string> = {}

@@ -79,6 +79,27 @@ const STAGES = [
     tier: 'premium',
     sortOrder: 5,
   },
+  // Invention whitespace (DIMENSION_MAP). One task, two stage codes: the seed
+  // pass reads 150 abstracts and shapes the whole grid (premium); the grow
+  // passes read a residual slice and only extend it (mid).
+  {
+    task: 'WS_DIMENSIONS',
+    taskName: 'Whitespace: Viewpoint Discovery',
+    code: 'WHITESPACE_DIMENSION_SEED',
+    displayName: 'Whitespace: Viewpoint Seed',
+    description: 'Proposes the viewpoint axes (F-term style) that organise the field around an invention, from a document sample. PREMIUM — the seed shapes the whole grid.',
+    tier: 'premium',
+    sortOrder: 6,
+  },
+  {
+    task: 'WS_DIMENSIONS',
+    taskName: 'Whitespace: Viewpoint Discovery',
+    code: 'WHITESPACE_DIMENSION_GROW',
+    displayName: 'Whitespace: Viewpoint Growth',
+    description: 'Extends the viewpoint registry from documents no current axis places. Proposals are measured before acceptance; counts never come from the model.',
+    tier: 'mid',
+    sortOrder: 7,
+  },
 ]
 
 /** Mirror model config from an existing stage so plans are not left blank. */
@@ -172,8 +193,8 @@ async function main() {
   console.log('')
   console.log('Review in Super Admin > LLM Config. Intended routing:')
   console.log('  cheap   -> WHITESPACE_SCOPE_COMPILE, WHITESPACE_CLUSTER_LABEL')
-  console.log('  mid     -> WHITESPACE_CLAIM_ELEMENTS, WHITESPACE_VALIDATE')
-  console.log('  premium -> WHITESPACE_HYPOTHESIZE, WHITESPACE_REDTEAM')
+  console.log('  mid     -> WHITESPACE_CLAIM_ELEMENTS, WHITESPACE_VALIDATE, WHITESPACE_DIMENSION_GROW')
+  console.log('  premium -> WHITESPACE_HYPOTHESIZE, WHITESPACE_REDTEAM, WHITESPACE_DIMENSION_SEED')
 }
 
 main()

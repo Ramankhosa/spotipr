@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeRarePairs, supportFloor } from '../rarity'
+import { computeRarePairs, rarePairFromCounts, supportFloor } from '../rarity'
 
 /** N families where elements a and b each appear in `share` of them, never together. */
 function neverTogether(n: number, share: number): string[][] {
@@ -65,5 +65,51 @@ describe('computeRarePairs', () => {
 
   it('handles empty input', () => {
     expect(computeRarePairs([])).toEqual([])
+  })
+
+  it('does not merge distinct multi-word pairs whose labels join to the same string', () => {
+    // Sorted pair ("x", "y z") and sorted pair ("x y", "z") both space-join to
+    // "x y z". With a space-delimited key their observed counts merged; the
+    // NUL-delimited key must keep them apart. Here ("x", "y z") co-occur often
+    // while ("x y", "z") never co-occur — only the latter should look rare.
+    const sets: string[][] = []
+    for (let i = 0; i < 100; i++) {
+      const elements: string[] = []
+      if (i < 40) elements.push('x', 'y z') // together in 40
+      if (i >= 40 && i < 70) elements.push('x y') // in 30, never with "z"
+      if (i >= 70) elements.push('z') // in 30, never with "x y"
+      sets.push(elements)
+    }
+    const pairs = computeRarePairs(sets, 20)
+    const together = pairs.find(entry => entry.a === 'x' && entry.b === 'y z')
+    const apart = pairs.find(entry => entry.a === 'x y' && entry.b === 'z')
+    // "x" + "y z" co-occur far above chance — no rarity signal at all.
+    expect(together).toBeUndefined()
+    // "x y" + "z" are both established and never co-occur — full rarity.
+    expect(apart).toBeDefined()
+    expect(apart!.observed).toBe(0)
+    expect(apart!.rarity).toBeGreaterThan(0.7)
+  })
+})
+
+describe('rarePairFromCounts', () => {
+  it('agrees with computeRarePairs on the never-together fixture', () => {
+    const pairs = computeRarePairs(neverTogether(100, 0.4), 20)
+    const fromSets = pairs.find(entry => entry.a === 'element a' && entry.b === 'element b')!
+    const fromCounts = rarePairFromCounts({
+      a: 'element a',
+      b: 'element b',
+      supportA: 40,
+      supportB: 40,
+      observed: 0,
+      total: 100,
+    })!
+    expect(fromCounts.expected).toBeCloseTo(fromSets.expected, 10)
+    expect(fromCounts.z).toBeCloseTo(fromSets.z, 10)
+    expect(fromCounts.rarity).toBe(fromSets.rarity)
+  })
+
+  it('returns null when a margin is zero', () => {
+    expect(rarePairFromCounts({ a: 'a', b: 'b', supportA: 0, supportB: 40, observed: 0, total: 100 })).toBeNull()
   })
 })

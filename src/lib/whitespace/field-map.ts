@@ -91,15 +91,15 @@ const SEARCH_TSVECTOR = Prisma.sql`to_tsvector('english'::regconfig,
         coalesce(lp."abstract", '')  || ' ' ||
         coalesce(lp."abstractOriginal", ''))`
 
-type Tx = Prisma.TransactionClient
+export type Tx = Prisma.TransactionClient
 
 /** Transaction-local, so it applies to the following statements and nothing else. */
-async function setStatementTimeout(tx: Tx, ms: number): Promise<void> {
+export async function setStatementTimeout(tx: Tx, ms: number): Promise<void> {
   await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(ms)}, true)`
 }
 
 /** True for Postgres 57014 — query_canceled, i.e. the statement timeout fired. */
-function isStatementTimeout(error: unknown): boolean {
+export function isStatementTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   const code = (error as { meta?: { code?: string } })?.meta?.code
   return code === '57014' || /57014|statement timeout|canceling statement/i.test(message)
@@ -113,7 +113,7 @@ function isStatementTimeout(error: unknown): boolean {
  * back to a savepoint. Without this, one slow facet would take the entire map
  * down — the failure mode this module explicitly promises not to have.
  */
-async function facet<T>(tx: Tx, label: string, query: Prisma.Sql, gaps: string[]): Promise<T[] | null> {
+export async function facet<T>(tx: Tx, label: string, query: Prisma.Sql, gaps: string[]): Promise<T[] | null> {
   const savepoint = `ws_facet_${label.replace(/[^a-z0-9_]/gi, '_')}`
   await tx.$executeRawUnsafe(`SAVEPOINT ${savepoint}`)
   try {
@@ -155,7 +155,8 @@ export interface ConceptQueryPlan {
   exclusions: string | null
 }
 
-const quotePhrase = (value: string) => `"${value.replace(/["\\]/g, ' ').trim()}"`
+/** Phrase quoting for websearch_to_tsquery. Shared so every text lane quotes identically. */
+export const quotePhrase = (value: string) => `"${value.replace(/["\\]/g, ' ').trim()}"`
 
 function conceptTerms(concept: { label: string; synonyms: string[] }): string[] {
   const seen = new Set<string>()
@@ -405,7 +406,7 @@ function stageCensus(where: Prisma.Sql, rowCap: number): Prisma.Sql {
 }
 
 /** Shared advice for a scope that must be narrowed before it can be counted. */
-function narrowingAdvice(scope: WhitespaceScope): string {
+export function narrowingAdvice(scope: WhitespaceScope): string {
   const plan = buildConceptQuery(scope)
   if (!plan && acceptedCpc(scope).length > 0) {
     return 'This scope matches on classification alone, which cannot use the text index and so reads the whole corpus. Add a concept — even one — and the search becomes index-backed.'

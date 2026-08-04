@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -64,6 +64,7 @@ import IdeaFramePanel from './IdeaFramePanel'
 import IdeationHelpModal from './IdeationHelpModal'
 import IdeationProcessingView from './IdeationProcessingView'
 import ContradictionInsightPanel from './ContradictionInsightPanel'
+import { layoutMindMap, layoutSignature } from './mindmap-layout'
 
 interface IdeationWorkspaceProps {
   onExportToBank: () => void
@@ -491,216 +492,42 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
     }
   }, [reactFlowInstance, nodes.length])
 
-  // Auto-layout recalculation to prevent overlapping
-  // Groups nodes by parent and recalculates Y positions to avoid overlap
-  const recalculateLayout = useCallback(() => {
-    if (nodes.length === 0) return
-
-    const LEVEL_WIDTH = 400  // Horizontal spacing between levels
-    const NODE_HEIGHT = 180  // Generous vertical spacing for clear hierarchy
-    const CHILD_SPACING = 180 // Spacing between child nodes matching NODE_HEIGHT
-    
-    // Build tree structure
-    const nodeMap = new Map<string, typeof nodes[0]>()
-    const childrenMap = new Map<string, string[]>()
-    
-    nodes.forEach(node => {
-      nodeMap.set(node.id, node)
-      const parentId = (node.data as any)?.parentId || (node.data as any)?.parentNodeId
-      if (parentId) {
-        const children = childrenMap.get(parentId) || []
-        children.push(node.id)
-        childrenMap.set(parentId, children)
-      }
-    })
-
-    // Calculate subtree height recursively
-    const getSubtreeHeight = (nodeId: string, visited = new Set<string>()): number => {
-      if (visited.has(nodeId)) return NODE_HEIGHT
-      visited.add(nodeId)
-      
-      const children = childrenMap.get(nodeId) || []
-      const isCollapsed = collapsedNodes.has(nodeId)
-      
-      if (children.length === 0 || isCollapsed) {
-        return NODE_HEIGHT
-      }
-      
-      // Sum up heights of all visible children
-      let totalHeight = 0
-      children.forEach(childId => {
-        const parentId = (nodeMap.get(childId)?.data as any)?.parentId
-        // Skip if child's parent is collapsed
-        if (!collapsedNodes.has(parentId)) {
-          totalHeight += getSubtreeHeight(childId, visited)
-        }
-      })
-      
-      return Math.max(NODE_HEIGHT, totalHeight)
-    }
-
-    // Group nodes by depth level
-    const nodesByDepth = new Map<number, typeof nodes>()
-    nodes.forEach(node => {
-      const depth = (node.data as any)?.depth || 0
-      const existing = nodesByDepth.get(depth) || []
-      existing.push(node)
-      nodesByDepth.set(depth, existing)
-    })
-
-    // Recalculate Y positions for each depth level
-    const newNodes = [...nodes]
-    const depths = Array.from(nodesByDepth.keys()).sort((a, b) => a - b)
-    
-    depths.forEach(depth => {
-      if (depth === 0) return // Skip seed node
-      
-      const nodesAtDepth = nodesByDepth.get(depth) || []
-      
-      // Group by parent
-      const byParent = new Map<string, typeof nodes>()
-      nodesAtDepth.forEach(node => {
-        const parentId = (node.data as any)?.parentId || (node.data as any)?.parentNodeId || 'root'
-        const siblings = byParent.get(parentId) || []
-        siblings.push(node)
-        byParent.set(parentId, siblings)
-      })
-
-      // For each parent group, recalculate positions
-      byParent.forEach((siblings, parentId) => {
-        if (siblings.length === 0) return
-        
-        const parent = nodeMap.get(parentId)
-        const parentY = parent?.position?.y || 100
-        
-        // Calculate total height needed for this subtree
-        let totalHeight = 0
-        const heights: number[] = []
-        siblings.forEach(node => {
-          const h = getSubtreeHeight(node.id)
-          heights.push(h)
-          totalHeight += h
-        })
-        
-        // Distribute siblings vertically centered around parent
-        let currentY = parentY - (totalHeight / 2) + (NODE_HEIGHT / 2)
-        
-        siblings.forEach((node, idx) => {
-          const nodeIndex = newNodes.findIndex(n => n.id === node.id)
-          if (nodeIndex !== -1) {
-            newNodes[nodeIndex] = {
-              ...newNodes[nodeIndex],
-              position: {
-                x: newNodes[nodeIndex].position.x,
-                y: currentY,
-              },
-            }
-          }
-          currentY += heights[idx]
-        })
-      })
-    })
-
-    // Only update if positions actually changed
-    const hasChanges = newNodes.some((node, idx) => 
-      node.position.y !== nodes[idx].position.y
-    )
-    
-    if (hasChanges) {
-      setNodes(newNodes)
-    }
-  }, [nodes, collapsedNodes, setNodes, fitViewToNodes])
-
-  // Auto-layout function to properly space out nodes when needed
+  // Auto-layout: re-flow the tree from the *measured* size of every card.
+  // Dimension cards vary hugely in height (a "what if" move with IMPACT /
+  // LEADS TO / TENSION is several times taller than a family card), so spacing
+  // is derived from real rendered heights instead of a fixed row height.
   const autoLayoutNodes = useCallback(() => {
-    if (nodes.length <= 1) return
+    setNodes(prev => layoutMindMap(prev, collapsedNodes))
+  }, [collapsedNodes, setNodes])
 
-    const LEVEL_WIDTH = 400  // Horizontal spacing between levels
-    const NODE_HEIGHT = 180  // Vertical spacing between nodes
-    const START_X = 100
-    const START_Y = 100
+  // Everything the layout depends on: which nodes exist, how tall each one
+  // currently renders, and what is collapsed. Deliberately excludes positions —
+  // otherwise the layout would keep re-triggering itself.
+  const currentLayoutSignature = useMemo(
+    () => layoutSignature(nodes, collapsedNodes),
+    [nodes, collapsedNodes]
+  )
+  const appliedLayoutSignature = useRef<string | null>(null)
 
-    // Build parent-child relationships
-    const childrenMap = new Map<string, string[]>()
-    const nodeMap = new Map<string, typeof nodes[0]>()
-    
-    nodes.forEach(node => {
-      nodeMap.set(node.id, node)
-      const parentId = (node.data as any)?.parentId || (node.data as any)?.parentNodeId
-      if (parentId) {
-        const children = childrenMap.get(parentId) || []
-        children.push(node.id)
-        childrenMap.set(parentId, children)
-      }
-    })
-
-    // Calculate subtree height for a node
-    const getSubtreeHeight = (nodeId: string, visited = new Set<string>()): number => {
-      if (visited.has(nodeId)) return NODE_HEIGHT
-      visited.add(nodeId)
-      
-      const children = childrenMap.get(nodeId) || []
-      if (children.length === 0 || collapsedNodes.has(nodeId)) {
-        return NODE_HEIGHT
-      }
-      
-      let totalHeight = 0
-      children.forEach(childId => {
-        totalHeight += getSubtreeHeight(childId, visited)
-      })
-      
-      return Math.max(NODE_HEIGHT, totalHeight)
+  // Re-flow whenever the structure or any card's measured height changes:
+  // expanding a dimension, collapsing a branch, or a card growing when its
+  // "add your direction" input opens all keep the siblings apart.
+  useEffect(() => {
+    if (nodes.length === 0) {
+      appliedLayoutSignature.current = null
+      return
     }
+    if (appliedLayoutSignature.current === currentLayoutSignature) return
 
-    // Position nodes recursively
-    const positionedNodes = new Map<string, { x: number, y: number }>()
-    
-    const positionNode = (nodeId: string, x: number, yStart: number, yEnd: number): void => {
-      const yCenter = (yStart + yEnd) / 2
-      positionedNodes.set(nodeId, { x, y: yCenter })
-      
-      const children = childrenMap.get(nodeId) || []
-      if (children.length === 0 || collapsedNodes.has(nodeId)) return
-      
-      // Position children
-      const childX = x + LEVEL_WIDTH
-      let currentY = yStart
-      
-      children.forEach(childId => {
-        const childHeight = getSubtreeHeight(childId)
-        positionNode(childId, childX, currentY, currentY + childHeight)
-        currentY += childHeight
-      })
-    }
+    // Small delay so a burst of measurements (a whole expansion arriving at
+    // once) collapses into a single layout pass.
+    const timer = setTimeout(() => {
+      appliedLayoutSignature.current = currentLayoutSignature
+      setNodes(prev => layoutMindMap(prev, collapsedNodes))
+    }, 60)
 
-    // Find root nodes (nodes without parents or seed nodes)
-    const rootNodes = nodes.filter(n => {
-      const parentId = (n.data as any)?.parentId || (n.data as any)?.parentNodeId
-      return !parentId || n.type === 'seed'
-    })
-
-    // Position from each root
-    let currentRootY = START_Y
-    rootNodes.forEach(rootNode => {
-      const subtreeHeight = getSubtreeHeight(rootNode.id)
-      positionNode(rootNode.id, START_X, currentRootY, currentRootY + subtreeHeight)
-      currentRootY += subtreeHeight + NODE_HEIGHT // Gap between trees
-    })
-
-    // Apply new positions
-    const newNodes = nodes.map(node => {
-      const newPos = positionedNodes.get(node.id)
-      if (newPos) {
-        return {
-          ...node,
-          position: { x: newPos.x, y: newPos.y },
-        }
-      }
-      return node
-    })
-
-    setNodes(newNodes)
-  }, [nodes, collapsedNodes, setNodes])
+    return () => clearTimeout(timer)
+  }, [currentLayoutSignature, collapsedNodes, nodes.length, setNodes])
 
   // NOTE: Auto-layout can be triggered manually via button or on specific events
 

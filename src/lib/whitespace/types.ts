@@ -7,9 +7,19 @@
  * analytics and they are invisible unless written down.
  */
 
-export type WhitespaceRunStage = 'FIELD_MAP' | 'CLUSTER' | 'SIGNALS' | 'DEEP_DIVE' | 'VALIDATE'
+export type WhitespaceRunStage = 'FIELD_MAP' | 'CLUSTER' | 'SIGNALS' | 'DEEP_DIVE' | 'VALIDATE' | 'DIMENSION_MAP'
 
 export type WhitespaceRunStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
+
+/** FIELD = landscape census pipeline; INVENTION = dimension-map pipeline. */
+export type WhitespaceStudyKind = 'FIELD' | 'INVENTION'
+
+/** Live narration for a run in flight, written at heartbeat points. */
+export interface WhitespaceRunProgress {
+  phase: string
+  detail: string
+  round?: number
+}
 
 export type TrailKind = 'SCOPE' | 'RUN' | 'EDIT' | 'HYPOTHESIS' | 'CHALLENGE' | 'NOTE' | 'SYSTEM'
 
@@ -241,6 +251,183 @@ export interface DeepDiveResult {
   supportFloor: number
   problemSolution: Array<{ problem: string; solutions: string[]; families: number }>
   coverageNotes: string[]
+  generatedAt: string
+}
+
+// ---------------------------------------------------------------------------
+// Dimension map (invention whitespace) output
+// ---------------------------------------------------------------------------
+
+export type DimensionProvenance = 'seed' | 'grow' | 'user'
+
+/**
+ * One position along a viewpoint. Values are vocabulary, not a partition — a
+ * family may occupy several values of one dimension (F-terms allow this too),
+ * so value counts must never be drawn as shares of a whole.
+ */
+export interface DimensionValue {
+  id: string
+  label: string
+  /** The phrasings this value matches. This vocabulary IS the measurement. */
+  synonyms: string[]
+  /** The websearch string the value compiled to, so every count is reproducible. */
+  query: string
+  /** Exact families in scope matching this value — SQL over the full field. */
+  families: number
+  /** families / familyCount. */
+  share: number
+  /** Sample-side count from the discovery loop, labelled as such wherever shown. */
+  sampleFamilies: number
+  round: number
+  provenance: DimensionProvenance
+}
+
+/** A viewpoint that organises the field — the JPO F-term sense of the word. */
+export interface Dimension {
+  id: string
+  label: string
+  /** What question this axis asks of a document. */
+  description: string
+  values: DimensionValue[]
+  introducedInRound: number
+  /** Families occupying at least one value. NOT the sum of value counts. */
+  assignedFamilies: number
+  residualFamilies: number
+  residualShare: number
+  /** sum(value.families) / assignedFamilies; above 1 means values overlap. */
+  multiAssignmentRatio: number
+  sampleAssignedFamilies: number
+  sampleResidualShare: number
+}
+
+export type DimensionRejectionReason =
+  | 'BELOW_SAMPLE_FLOOR'
+  | 'DUPLICATE_OF_EXISTING'
+  | 'DIMENSION_RESTATES_EXISTING'
+  | 'EXPLAINS_TOO_LITTLE_RESIDUAL'
+  | 'QUERY_STEMS_TO_NOTHING'
+  | 'REGISTRY_FULL'
+
+/**
+ * One discovery round. Every rejection is kept with its measured reason —
+ * "what we tried and dropped" is a large part of why the registry is trustable.
+ */
+export interface DimensionRound {
+  round: number
+  slice: { families: number; basis: 'sample' | 'residual' }
+  proposedDimensions: string[]
+  proposedValues: Array<{ dimension: string; value: string }>
+  acceptedDimensions: string[]
+  acceptedValues: Array<{ dimension: string; value: string }>
+  rejected: Array<{ kind: 'dimension' | 'value'; label: string; reason: DimensionRejectionReason; detail: string }>
+  /** Sample-side share of families no dimension places, after this round. */
+  residualShareAfter: number
+  modelCode: string | null
+}
+
+/** Only cells with observed > 0 are listed; absence means zero. */
+export interface DimensionMatrixCell {
+  aValueId: string
+  bValueId: string
+  observed: number
+}
+
+export interface DimensionMatrix {
+  aDimensionId: string
+  bDimensionId: string
+  /**
+   * Sample-side overlap between the two axes in [0,1]; high means they place
+   * the same documents in the same groups. Null when not measurable.
+   */
+  redundancy: number | null
+  /** Whether gaps were harvested from this pair. */
+  harvested: boolean
+  skipReason: string | null
+  cells: DimensionMatrixCell[]
+}
+
+export interface DimensionGapNearMiss {
+  valueId: string
+  valueLabel: string
+  families: number
+}
+
+/**
+ * An empty (or near-empty) cell with healthy margins. observed === 0 with
+ * expected >= 5 is what makes the zero surprising rather than arithmetic.
+ */
+export interface DimensionGap {
+  id: string
+  aDimensionId: string
+  aDimensionLabel: string
+  aValueId: string
+  aValueLabel: string
+  bDimensionId: string
+  bDimensionLabel: string
+  bValueId: string
+  bValueLabel: string
+
+  observed: number
+  marginA: number
+  marginB: number
+  expected: number
+  z: number
+  rarity: number
+
+  /** Largest co-occupancy of A with any OTHER value of B — proof the cell was reachable. */
+  nearMissB: DimensionGapNearMiss | null
+  nearMissA: DimensionGapNearMiss | null
+  /** Families on A occupying NO value of B. Large = vocabulary hole, not technology hole. */
+  unassignedOnB: number
+  unassignedOnA: number
+
+  /** Claim readability of the A-arm slice; null when the facet could not run. */
+  armFamilies: number | null
+  armClaimsReadable: number | null
+
+  coverageSuspect: boolean
+  suspectReason: string | null
+  /** Deterministic rank in [0,1]; every factor is inspectable in the row. */
+  rank: number
+  /** Set when the user promotes this gap to a hypothesis. */
+  hypothesisId: string | null
+}
+
+export type DimensionSettledReason =
+  | 'RESIDUAL_UNDER_FLOOR'
+  | 'NO_ACCEPTED_ADDITIONS'
+  | 'REGISTRY_FULL'
+  | 'MAX_ROUNDS'
+  | 'REGISTRY_SUPPLIED'
+
+export interface DimensionMapResult {
+  familyCount: number
+  publicationCount: number
+  sample: {
+    families: number
+    /** familyCount / sample size. A label, never an extrapolation factor. */
+    weight: number
+    method: 'md5-family-key'
+  }
+  registry: Dimension[]
+  rounds: DimensionRound[]
+  settled: boolean
+  settledReason: DimensionSettledReason
+  matrices: DimensionMatrix[]
+  gaps: DimensionGap[]
+  /** The thresholds actually applied, so the ranking is reproducible. */
+  thresholds: {
+    marginFloor: number
+    expectedFloor: number
+    residualCeiling: number
+    redundancyCeiling: number
+  }
+  /** Families matching no value of any dimension, census-side. */
+  unclassifiedFamilies: number
+  unclassifiedShare: number
+  coverageNotes: string[]
+  /** Harder than notes: what this result cannot answer at all. */
+  limitations: string[]
   generatedAt: string
 }
 

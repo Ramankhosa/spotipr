@@ -20,6 +20,8 @@ export const WS_CLAIM_ELEMENTS_STAGE_CODE = 'WHITESPACE_CLAIM_ELEMENTS'
 export const WS_HYPOTHESIZE_STAGE_CODE = 'WHITESPACE_HYPOTHESIZE'
 export const WS_VALIDATE_STAGE_CODE = 'WHITESPACE_VALIDATE'
 export const WS_REDTEAM_STAGE_CODE = 'WHITESPACE_REDTEAM'
+export const WS_DIMENSION_SEED_STAGE_CODE = 'WHITESPACE_DIMENSION_SEED'
+export const WS_DIMENSION_GROW_STAGE_CODE = 'WHITESPACE_DIMENSION_GROW'
 
 /**
  * Turns a plain-language brief into a reviewable research scope.
@@ -29,12 +31,20 @@ export const WS_REDTEAM_STAGE_CODE = 'WHITESPACE_REDTEAM'
  * unless written down, so the model is required to state its interpretations
  * where a reasonable reader could have read the brief differently.
  */
-export function buildScopeCompilePrompt(input: { brief: string; existingTitle?: string }): string {
+export function buildScopeCompilePrompt(input: {
+  brief: string
+  existingTitle?: string
+  framing?: 'FIELD' | 'INVENTION'
+}): string {
   const currentYear = new Date().getFullYear()
+  const inventionFraming =
+    input.framing === 'INVENTION'
+      ? `\nTHE BRIEF DESCRIBES A SPECIFIC INVENTION, NOT A FIELD. Define the scope as the technology field IMMEDIATELY SURROUNDING this invention — the space of existing approaches to the same problem, including approaches the invention rejects — not just documents matching the invention itself. A scope that only finds the invention's own wording will make everything look empty; the field around it is what the study measures.\n`
+      : ''
   return `You are a patent search strategist preparing the scope for a technology landscape study.
 
-The user described a field in their own words. Convert it into a structured, reviewable research scope. The user will read and correct this before any analysis runs, so favour making your reasoning visible over making it look complete.
-
+The user described ${input.framing === 'INVENTION' ? 'an invention' : 'a field'} in their own words. Convert it into a structured, reviewable research scope. The user will read and correct this before any analysis runs, so favour making your reasoning visible over making it look complete.
+${inventionFraming}
 USER BRIEF
 """
 ${input.brief.slice(0, 12000)}
@@ -409,4 +419,125 @@ PRODUCE
 6. "verdictReason": one sentence.
 
 Return ONLY a JSON object with exactly those keys.`
+}
+
+/** Shared JSON contract + rules for both dimension-discovery prompts. */
+const DIMENSION_SHAPE = `{ "dimensions": [ { "label": "...", "description": "...", "values": [ { "label": "...", "synonyms": ["..."] } ] } ] }`
+
+const DIMENSION_SHARED_RULES = `- Every axis must be READABLE FROM A TITLE AND ABSTRACT. An axis that needs the full description or the claims cannot be measured here and is worse than no axis.
+- Axes must be independent of each other. Two axes that would place the same documents in the same groups are one axis said twice.
+- Do NOT estimate how many documents fall anywhere. Do not use "most", "few", "common", "rare", "dominant" or any percentage. The system counts the full field in SQL and your estimate would be overwritten by a real number.
+- Do NOT identify gaps, opportunities or unoccupied space. You are describing how this field is organised; emptiness is measured later, by counting.
+- Do NOT assess novelty, patentability, inventive step, or freedom to operate.`
+
+/**
+ * Seeds the viewpoint registry for an invention-whitespace study — the JPO
+ * F-term sense of "viewpoint": an axis along which every document in a field
+ * can be placed. The synonyms decide what the SQL census can see, so the prompt
+ * pushes hard for concrete, generous vocabulary; the counting itself never
+ * touches the model (rule 1 of this module).
+ */
+export function buildDimensionSeedPrompt(input: {
+  inventionBrief: string
+  fieldTitle: string
+  scopeSummary: string
+  sample: Array<{ publicationNumber: string; title: string; abstract: string }>
+  maxDimensions: number
+  maxValuesPerDimension: number
+}): string {
+  const documents = input.sample
+    .map(doc => `- ${doc.publicationNumber}: ${doc.title.slice(0, 160)}\n  ${doc.abstract.slice(0, 400)}`)
+    .join('\n')
+
+  return `You are identifying the VIEWPOINTS that organise an existing body of patent documents — axes along which the documents in this field genuinely differ, in the sense the Japanese Patent Office's F-term system uses the word (purpose, means, material, operating condition, object acted upon, lifecycle stage, failure mode addressed...).
+
+THE INVENTION UNDER STUDY (context for which axes matter — not a document to classify)
+"""
+${input.inventionBrief.slice(0, 4000)}
+"""
+
+FIELD: ${input.fieldTitle || 'the field around this invention'}
+${input.scopeSummary ? `${input.scopeSummary.slice(0, 1200)}\n` : ''}
+DOCUMENTS (${input.sample.length} families drawn at random from the field; you are seeing a sample, and the system will count the full field itself)
+${documents}
+
+PRODUCE up to ${input.maxDimensions} viewpoints. For each:
+- "label": the axis, 2-5 words, phrased as the property being varied ("actuation principle", "sensing modality", "lifecycle stage addressed") — never as a value.
+- "description": one sentence saying what question this axis asks of a document.
+- "values": 3 to ${input.maxValuesPerDimension} positions along the axis. Each needs "label" (how a person would say it) and "synonyms" (3-8 phrasings that actually appear in patent text for this value: functional language, scientific terminology, industry jargon, acronyms, and the phrasing an attorney would use to broaden a claim). The synonyms decide what the search can see, so be concrete and generous.
+
+SIZE THE VALUES TO THE FIELD — this is what most often makes a viewpoint useless.
+Each value is matched against the documents by its vocabulary, and a value that matches only a handful of them is discarded. Every value must be a BROAD category that a substantial share of this field falls into, described in the words the documents themselves use. Three broad values that between them place most documents beat eight precise ones that each place a few. If a distinction is real but narrow, fold it into a broader value as a synonym rather than giving it its own position.
+
+Two viewpoint families reliably organise crowded fields and are worth considering alongside the domain-specific ones: LIFECYCLE STAGE (manufacture / installation / calibration / operation / diagnosis / repair / end-of-life) and FAILURE MODE ADDRESSED (which problem of prior systems the document says it fixes). Use them only if the documents support them.
+
+RULES
+${DIMENSION_SHARED_RULES}
+- Values within an axis should be the distinctions the documents actually make. Do not invent a value because the axis feels incomplete.
+- Prefer the field's terminology over the brief's, and capture both as synonyms.
+
+Return ONLY a JSON object:
+${DIMENSION_SHAPE}`
+}
+
+/**
+ * The growth pass: extends the registry from the residual — documents no
+ * current axis places. Returning nothing is a valid answer and the prompt says
+ * so; the acceptance thresholds are measured by the system, never asserted by
+ * the model.
+ */
+export function buildDimensionGrowPrompt(input: {
+  inventionBrief: string
+  fieldTitle: string
+  registry: Array<{ label: string; values: string[] }>
+  residualSample: Array<{ publicationNumber: string; title: string; abstract: string }>
+  residualCount: number
+  sampleCount: number
+  rejectedEarlier: Array<{ label: string; detail: string }>
+  maxDimensions: number
+  maxValuesPerDimension: number
+}): string {
+  const registryBlock = input.registry
+    .map(dimension => `- "${dimension.label}": ${dimension.values.join(' | ')}`)
+    .join('\n')
+  const rejectedBlock = input.rejectedEarlier.length
+    ? `\nPROPOSALS THE SYSTEM ALREADY MEASURED AND REJECTED (do not re-propose)\n${input.rejectedEarlier
+        .map(entry => `- "${entry.label}" — ${entry.detail}`)
+        .join('\n')}\n`
+    : ''
+  const documents = input.residualSample
+    .map(doc => `- ${doc.publicationNumber}: ${doc.title.slice(0, 160)}\n  ${doc.abstract.slice(0, 400)}`)
+    .join('\n')
+
+  return `You are extending a set of viewpoints that organise a patent field. An earlier pass produced the axes below. The system then matched every axis value against a sample of the field and found documents that NO axis places anywhere.
+
+THE INVENTION UNDER STUDY (context only)
+"""
+${input.inventionBrief.slice(0, 2000)}
+"""
+
+FIELD: ${input.fieldTitle || 'the field'}
+
+MEASURED FACT (computed by the system; do not restate it as an approximation)
+- ${input.residualCount} of ${input.sampleCount} sampled families matched no value of any existing axis.
+
+AXES ALREADY IN THE REGISTRY
+${registryBlock}
+${rejectedBlock}
+THE UNPLACED DOCUMENTS (all ${input.residualSample.length} shown are drawn ONLY from the families no axis explains, so they are a biased slice by construction — they are the question, not the field)
+${documents}
+
+PRODUCE whichever of these the documents actually justify, and nothing more:
+1. NEW VALUES for an existing axis, when the unplaced documents sit on an axis already in the registry but at a position it does not yet name. Return them under that axis's EXACT existing label.
+2. A NEW AXIS (up to ${input.maxDimensions} total), when the unplaced documents differ from the placed ones along a property no existing axis asks about. A new axis needs its own "description" and 3 to ${input.maxValuesPerDimension} values.
+
+Values are matched by their vocabulary and a value matching only a handful of documents is discarded, so every value must be a BROAD category covering a substantial share of these unplaced documents, in the words the documents themselves use.
+
+RULES
+- Returning { "dimensions": [] } is a valid and often correct answer. The registry is allowed to be finished. Do not invent an axis to fill this response.
+- Do not tell us whether your proposal will "cover" the residual. The system measures that and rejects any proposal that does not clear its floor.
+${DIMENSION_SHARED_RULES}
+
+Return ONLY a JSON object of the same shape as before:
+${DIMENSION_SHAPE}`
 }

@@ -618,6 +618,14 @@
 
 .article-prose figure { margin-top: 2em; }
 .article-prose img { border-radius: 12px; border: 1px solid #e4e7ec; max-width: 100%; height: auto; }
+.article-prose figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid #e4e7ec;
+  background: #fff;
+}
 .article-prose figcaption {
   margin-top: 0.6em;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

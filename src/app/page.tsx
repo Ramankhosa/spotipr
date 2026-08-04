@@ -4,6 +4,7 @@ import WorkspaceHero from '@/components/home-v2/WorkspaceHero'
 import JourneySection from '@/components/home-v2/JourneySection'
 import FeatureGrid from '@/components/home-v2/FeatureGrid'
 import AudienceStrip from '@/components/home-v2/AudienceStrip'
+import PricingSection from '@/components/home-v2/PricingSection'
 import ClosingBand from '@/components/home-v2/ClosingBand'
 import WorkspaceFooter from '@/components/home-v2/WorkspaceFooter'
 
@@ -26,6 +27,10 @@ export const metadata: Metadata = {
 // requested and approved by a person, not self-serve) and /contact. Signed-in
 // visitors go straight to /patents/draft/new. The global Header is suppressed
 // for '/' in components/ConditionalHeader.tsx — WorkspaceNav is the chrome.
+//
+// PricingSection resolves live prices on the server, which makes this route
+// dynamic. It falls back to the plan catalog if the database is unreachable, so
+// the homepage still renders when the DB is down.
 export default function HomePage() {
   return (
     <div className="min-h-screen bg-[#f6f8fd] font-sans text-ai-graphite-900 antialiased selection:bg-lamp-600 selection:text-white">
@@ -35,6 +40,7 @@ export default function HomePage() {
         <JourneySection />
         <FeatureGrid />
         <AudienceStrip />
+        <PricingSection />
         <ClosingBand />
       </main>
       <WorkspaceFooter />

@@ -11,60 +11,12 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCurrencyForCountry, formatAmount, type Currency } from '@/lib/razorpay-service'
-import { listPublicPlans, type ResolvedPlanPrice } from '@/lib/plan-pricing-service'
+import { listPublicPlans } from '@/lib/plan-pricing-service'
 import { FEATURE_DEFINITIONS, PLAN_BY_CODE } from '@/lib/plans/catalog'
+import { buildPlanFeatureBullets } from '@/lib/plans/plan-features'
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic'
-
-/**
- * Build the feature bullets for a plan straight from the catalog, so the marketing page
- * can never drift from the quotas the database actually enforces.
- */
-function getPlanFeatures(plan: ResolvedPlanPrice) {
-  const def = PLAN_BY_CODE[plan.dbPlanCode]
-  if (!def) return []
-
-  const bullets: { value?: string; label: string }[] = []
-
-  // Headline metered features, in the order buyers care about.
-  const ordered: Array<[keyof typeof def.features, string]> = [
-    ['PATENT_DRAFTING', 'Patent drafts / month'],
-    ['NOVELTY_SEARCH', 'Novelty searches / month'],
-    ['IDEATION', 'Ideation runs / month'],
-    ['DIAGRAM_GENERATION', 'Diagrams & sketches / month'],
-    ['PATENT_REVIEW', 'AI patent reviews / month'],
-    ['OFFICE_ACTION_RESPONSE', 'Office Action responses / month'],
-    ['IDEA_BANK', 'Idea Bank reservations / month'],
-    ['PERSONA_SYNC', 'PersonaSync style trainings / month'],
-  ]
-
-  for (const [code, label] of ordered) {
-    const grant = def.features[code]
-    if (!grant) continue
-    bullets.push({ value: String(grant.monthlyQuota), label })
-  }
-
-  bullets.push({
-    label:
-      def.maxJurisdictionsPerPatent === 1
-        ? 'Single-jurisdiction filing pack'
-        : `Multi-jurisdiction filing (up to ${def.maxJurisdictionsPerPatent} countries per patent)`,
-  })
-
-  bullets.push({
-    value: String(def.seats),
-    label: def.seats === 1 ? 'Seat included' : 'Seats included',
-  })
-
-  if (def.modelClasses.allowed.includes('ADVANCED')) {
-    bullets.push({ label: 'Frontier AI models (Advanced tier)' })
-  } else if (def.modelClasses.allowed.includes('PRO_M')) {
-    bullets.push({ label: 'Professional AI models' })
-  }
-
-  return bullets
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -94,7 +46,7 @@ export async function GET(request: NextRequest) {
           currencySymbol,
           isCustomPriced: true,
           pricing: null,
-          features: getPlanFeatures(monthly),
+          features: buildPlanFeatureBullets(monthly.dbPlanCode),
         }
       }
 
@@ -124,7 +76,7 @@ export async function GET(request: NextRequest) {
             savingsMonths: yearly.yearlyDiscountMonths,
           },
         },
-        features: getPlanFeatures(monthly),
+        features: buildPlanFeatureBullets(monthly.dbPlanCode),
         trialDays: def?.trialDays,
       }
     })

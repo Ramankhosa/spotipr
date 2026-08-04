@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { WhitespaceStudyApp } from '@/components/whitespace/WhitespaceStudyApp'
+import { WhitespaceStudyRouter } from '@/components/whitespace/WhitespaceStudyRouter'
 
 export const metadata: Metadata = {
   title: 'Study · Whitespace Studio · PatentNest',
@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 }
 
 export default function WhitespaceStudyPage({ params }: { params: { studyId: string } }) {
-  return <WhitespaceStudyApp studyId={params.studyId} />
+  return <WhitespaceStudyRouter studyId={params.studyId} />
 }

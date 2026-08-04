@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { motion } from 'framer-motion'
 import { Check, Star, ArrowRight, Globe, X, Loader2 } from 'lucide-react'
 import { useRazorpay } from '@/hooks/useRazorpay'
+import { CONTACT_FOR_PAYMENT, SELF_SERVE_CHECKOUT_ENABLED } from '@/lib/billing-mode'
 
 type BillingCycle = 'monthly' | 'yearly'
 type PlanCode = 'BASIC' | 'PRO' | 'ENTERPRISE'
@@ -126,8 +127,12 @@ export default function PricingPage() {
     fetchPricing()
   }, [])
 
-  // Auto-initiate checkout if redirected from registration
+  // Auto-initiate checkout if redirected from registration.
+  // Skipped entirely while self-serve checkout is closed, so a stale
+  // ?checkout=true link from a registration email cannot open a payment sheet
+  // against a gateway that is not connected.
   useEffect(() => {
+    if (!SELF_SERVE_CHECKOUT_ENABLED) return
     if (isCheckoutRedirect && redirectPlan && !isLoading && plans.length > 0) {
       // Set billing cycle from URL if provided
       if (redirectCycle && ['monthly', 'yearly'].includes(redirectCycle)) {
@@ -163,6 +168,14 @@ export default function PricingPage() {
   }, [isCheckoutRedirect, redirectPlan, redirectCycle, isLoading, plans, countryCode, billingCycle, initiateCheckout])
 
   const handleSubscribe = async (planCode: PlanCode) => {
+    // The payment gateway is not connected yet: every plan goes to the admin
+    // office rather than to checkout. Guarded here as well as at the CTA so no
+    // deep link can reach initiateCheckout while the flag is off.
+    if (!SELF_SERVE_CHECKOUT_ENABLED) {
+      router.push(CONTACT_FOR_PAYMENT.href)
+      return
+    }
+
     // Custom-priced plans are never self-serve. Guarded here as well as at the CTA so a
     // ?checkout=true&plan=ENTERPRISE deep link cannot open a checkout the API will reject.
     const target = plans.find((p) => p.code === planCode)
@@ -387,13 +400,19 @@ export default function PricingPage() {
                       ))}
                     </div>
 
-                    {/* CTA Button - custom-priced plans go to sales, not checkout */}
-                    {isCustomPriced ? (
+                    {/* CTA Button - custom-priced plans go to sales, and while the
+                        payment gateway is disconnected every other plan goes to the
+                        admin office rather than to a checkout that cannot complete. */}
+                    {isCustomPriced || !SELF_SERVE_CHECKOUT_ENABLED ? (
                       <Link
-                        href="/contact"
-                        className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg border text-sm font-medium transition-all duration-200 bg-ai-graphite-900/60 border-ai-graphite-800 text-ai-graphite-200 hover:text-white hover:border-ai-blue-500/40"
+                        href={isCustomPriced ? '/contact' : CONTACT_FOR_PAYMENT.href}
+                        className={`w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg border text-sm font-medium transition-all duration-200 ${
+                          isPopular && !isCustomPriced
+                            ? 'bg-ai-blue-500/20 border-ai-blue-400/60 text-white hover:bg-ai-blue-500/30'
+                            : 'bg-ai-graphite-900/60 border-ai-graphite-800 text-ai-graphite-200 hover:text-white hover:border-ai-blue-500/40'
+                        }`}
                       >
-                        Talk to sales
+                        {isCustomPriced ? 'Talk to sales' : CONTACT_FOR_PAYMENT.label}
                         <ArrowRight className="w-4 h-4" />
                       </Link>
                     ) : (
@@ -436,6 +455,9 @@ export default function PricingPage() {
 
           {/* Try before you buy / Contact Sales */}
           <div className="mt-12 space-y-3 text-center">
+            {!SELF_SERVE_CHECKOUT_ENABLED && (
+              <p className="text-sm text-ai-graphite-400">{CONTACT_FOR_PAYMENT.note}</p>
+            )}
             <p className="text-sm text-ai-graphite-400">
               Want to try it on your own matter first?{' '}
               <Link

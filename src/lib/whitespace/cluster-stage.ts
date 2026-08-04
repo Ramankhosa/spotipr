@@ -86,7 +86,7 @@ export async function runClusterStage(input: {
           FROM "local_patents" lp
           JOIN "local_patent_embeddings" e ON e."localPatentId" = lp."id"
           WHERE ${where} AND e."embeddingBinary" IS NOT NULL
-          ORDER BY COALESCE(lp."familyId", lp."publicationNumber"), lp."publicationDate" DESC NULLS LAST
+          ORDER BY COALESCE(lp."familyId", lp."publicationNumber"), lp."publicationDate" DESC NULLS LAST, lp."publicationNumber"
         ) t
         ORDER BY md5(t.id::text)
         LIMIT ${SAMPLE_CAP}`
@@ -218,9 +218,12 @@ export async function runClusterStage(input: {
   await heartbeat(input.runId)
 
   // --- persist: replace the study's cluster set atomically ------------------
+  // Scoped to depth 0: promoted dimension gaps live at depth 1 with their own
+  // area analyses, and WhitespaceHypothesis.clusterId has NO relation — a wider
+  // wipe would leave those hypotheses dangling and silently fail gate G1.
   await prisma.$transaction(async tx => {
     await tx.whitespaceClusterMember.deleteMany({ where: { studyId: input.studyId } })
-    await tx.whitespaceCluster.deleteMany({ where: { studyId: input.studyId } })
+    await tx.whitespaceCluster.deleteMany({ where: { studyId: input.studyId, depth: 0 } })
 
     for (let c = 0; c < result.k; c++) {
       const members = memberIndex[c]

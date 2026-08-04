@@ -69,6 +69,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
     const { scope, modelCode } = await compileScope({
       brief,
       existingTitle: study.title === 'Untitled study' ? undefined : study.title,
+      framing: study.kind === 'INVENTION' ? 'INVENTION' : 'FIELD',
       requestHeaders: headersToRecord(request),
     })
 

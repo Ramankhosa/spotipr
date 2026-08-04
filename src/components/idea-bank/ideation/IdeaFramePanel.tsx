@@ -1,34 +1,27 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X,
   Lightbulb,
   Search,
   Download,
-  Star,
   CheckCircle2,
   XCircle,
-  ArrowRight,
   ExternalLink,
   ChevronDown,
-  ChevronUp,
   Loader2,
   Maximize2,
-  Minimize2,
   Copy,
   Check,
-  FileText,
   Scale,
   AlertTriangle,
   Trash2,
-  CheckSquare,
-  Square,
   Sparkles,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Hint } from '@/components/ui/hint'
 
 // Preliminary Novelty Assessment (LLM-only, NO prior art per SRS)
 interface NoveltyAssessment {
@@ -98,6 +91,36 @@ interface IdeaFramePanelProps {
   qualityMetrics?: QualityMetrics | null
 }
 
+// Plain-language labels. The raw enum ("HIGH") means nothing on its own — every
+// badge says what the value is *about*, and pairs colour with a word so colour
+// is never the only signal.
+const ORIGINALITY_LABEL: Record<string, string> = {
+  HIGH: 'Highly original',
+  MEDIUM: 'Moderately original',
+  LOW: 'Close to known art',
+}
+
+const RISK_LABEL: Record<string, string> = {
+  LOW: 'Low novelty risk',
+  MODERATE: 'Moderate novelty risk',
+  HIGH: 'High novelty risk',
+}
+
+const BADGE_LEGEND =
+  'Originality is how far the idea departs from what already exists. Novelty risk is how likely ' +
+  'an examiner is to find something similar. Both come from a first-pass read of the idea itself — ' +
+  'run a novelty search to check it against real patents.'
+
+// Plain-language captions for the patent vocabulary used in each idea.
+const FIELD_HELP = {
+  coreMechanism: 'The physical or logical thing that actually does the work.',
+  inventiveLeap: 'What makes this different from the obvious solution.',
+  eliminatedAssumption: 'The constraint everyone else takes for granted, that this idea drops.',
+  contradictionResolved: 'The trade-off this idea escapes instead of balancing.',
+  whyNotObvious: 'The argument you would make to an examiner who says "anyone would do this".',
+  boundaries: 'What this idea deliberately does not cover — useful when drafting claims.',
+}
+
 // Professional subtle color helpers
 const getOriginalityIndicator = (strength?: string) => {
   if (!strength) return { bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' }
@@ -116,19 +139,33 @@ const getRiskIndicator = (risk?: string) => {
 const getStatusIcon = (status: string) => {
   switch (status) {
     case 'SHORTLISTED':
-      return <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+      return <CheckCircle2 className="w-4 h-4 text-emerald-500" aria-hidden="true" />
     case 'REJECTED':
-      return <XCircle className="w-4 h-4 text-rose-500" />
+      return <XCircle className="w-4 h-4 text-rose-500" aria-hidden="true" />
     case 'EXPORTED':
-      return <ExternalLink className="w-4 h-4 text-lamp-500" />
+      return <ExternalLink className="w-4 h-4 text-lamp-500" aria-hidden="true" />
     default:
-      return <Lightbulb className="w-4 h-4 text-slate-400" />
+      return <Lightbulb className="w-4 h-4 text-slate-400" aria-hidden="true" />
   }
+}
+
+const iconButton =
+  'p-2 rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-lamp-500'
+
+/** Section heading inside an idea, with an optional plain-language explainer. */
+function FieldLabel({ children, help }: { children: React.ReactNode; help?: string }) {
+  return (
+    <div className="mb-2 flex items-center gap-1.5">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">{children}</h3>
+      {help && <Hint text={help} />}
+    </div>
+  )
 }
 
 // Fullscreen Modal Component
 interface FullscreenIdeaModalProps {
   idea: IdeaFrame
+  index: number
   onClose: () => void
   onCopy: (idea: IdeaFrame) => void
   copied: boolean
@@ -142,6 +179,7 @@ interface FullscreenIdeaModalProps {
 
 function FullscreenIdeaModal({
   idea,
+  index,
   onClose,
   onCopy,
   copied,
@@ -164,36 +202,49 @@ function FullscreenIdeaModal({
       onClick={onClose}
     >
       <motion.div
-        initial={{ scale: 0.95, opacity: 0 }}
+        initial={{ scale: 0.98, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
+        exit={{ scale: 0.98, opacity: 0 }}
+        transition={{ duration: 0.15 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="idea-modal-title"
         className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
-        {/* Modal Header - Professional subtle design */}
+        {/* Modal Header */}
         <div className="p-5 md:p-6 border-b border-slate-200 bg-slate-50 flex-shrink-0">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-2">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600">
+                  Idea {index + 1}
+                </span>
                 {getStatusIcon(idea.status)}
-                <h2 className="text-lg md:text-xl font-semibold text-slate-900 line-clamp-2">
-                  {idea.coreMechanism || idea.title || 'Mechanism-based Idea'}
-                </h2>
               </div>
+              <h2
+                id="idea-modal-title"
+                className="text-lg md:text-xl font-semibold text-slate-900 leading-snug"
+              >
+                {idea.coreMechanism || idea.title || 'Mechanism-based Idea'}
+              </h2>
               {idea.noveltyAssessment && (
-                <div className="flex flex-wrap items-center gap-3 mt-2">
-                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md ${originalityStyle.bg}`}>
-                    <div className={`w-2 h-2 rounded-full ${originalityStyle.dot}`} />
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md ${originalityStyle.bg}`}>
+                    <span className={`w-2 h-2 rounded-full ${originalityStyle.dot}`} aria-hidden="true" />
                     <span className={`text-xs font-medium ${originalityStyle.text}`}>
-                      {idea.noveltyAssessment.originalityStrength} Originality
+                      {ORIGINALITY_LABEL[idea.noveltyAssessment.originalityStrength] ??
+                        idea.noveltyAssessment.originalityStrength}
                     </span>
-                  </div>
-                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md ${riskStyle.bg}`}>
-                    <div className={`w-2 h-2 rounded-full ${riskStyle.dot}`} />
+                  </span>
+                  <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md ${riskStyle.bg}`}>
+                    <span className={`w-2 h-2 rounded-full ${riskStyle.dot}`} aria-hidden="true" />
                     <span className={`text-xs font-medium ${riskStyle.text}`}>
-                      {idea.noveltyAssessment.noveltyRiskLevel} Risk
+                      {RISK_LABEL[idea.noveltyAssessment.noveltyRiskLevel] ??
+                        idea.noveltyAssessment.noveltyRiskLevel}
                     </span>
-                  </div>
+                  </span>
+                  <Hint title="What do these mean?" text={BADGE_LEGEND} />
                 </div>
               )}
             </div>
@@ -201,75 +252,59 @@ function FullscreenIdeaModal({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation()
                   onCopy(idea)
                 }}
-                className="hidden md:flex text-slate-600 border-slate-300 hover:bg-slate-100"
+                className="hidden md:flex"
               >
                 {copied ? (
                   <>
-                    <Check className="w-4 h-4 mr-1 text-emerald-500" />
+                    <Check className="w-4 h-4 mr-1 text-emerald-500" aria-hidden="true" />
                     Copied
                   </>
                 ) : (
                   <>
-                    <Copy className="w-4 h-4 mr-1" />
+                    <Copy className="w-4 h-4 mr-1" aria-hidden="true" />
                     Copy
                   </>
                 )}
               </Button>
-              <button
-                onClick={onClose}
-                className="p-2 hover:bg-slate-200 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-500" />
+              <button onClick={onClose} className={iconButton} aria-label="Close idea">
+                <X className="w-5 h-5" />
               </button>
             </div>
           </div>
         </div>
 
-        {/* Modal Content - Clean, professional layout */}
+        {/* Modal Content */}
         <div className="flex-1 overflow-auto p-5 md:p-6">
           <div className="grid gap-5">
-            {/* Core Mechanism */}
             <section>
-              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Core Mechanism
-              </h3>
+              <FieldLabel help={FIELD_HELP.coreMechanism}>Core mechanism</FieldLabel>
               <p className="text-sm md:text-base text-slate-800 leading-relaxed bg-slate-50 p-4 rounded-lg border border-slate-200">
                 {idea.coreMechanism}
               </p>
             </section>
 
-            {/* Inventive Leap */}
             <section>
-              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Inventive Leap
-              </h3>
+              <FieldLabel help={FIELD_HELP.inventiveLeap}>Inventive leap</FieldLabel>
               <p className="text-sm md:text-base text-slate-800 leading-relaxed bg-slate-50 p-4 rounded-lg border border-slate-200">
                 {idea.inventiveLeap}
               </p>
             </section>
 
-            {/* Two Column Layout for Secondary Fields */}
             <div className="grid md:grid-cols-2 gap-4">
-              {/* Eliminated Assumption */}
               <section>
-                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                  Eliminated Assumption
-                </h3>
+                <FieldLabel help={FIELD_HELP.eliminatedAssumption}>Eliminated assumption</FieldLabel>
                 <p className="text-sm text-slate-700 leading-relaxed p-3 bg-slate-50 rounded-lg border border-slate-200">
                   {idea.eliminatedAssumption || 'Not specified'}
                 </p>
               </section>
 
-              {/* Contradiction Resolved */}
               {idea.contradictionResolved && (
                 <section>
-                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                    Contradiction Resolved
-                  </h3>
+                  <FieldLabel help={FIELD_HELP.contradictionResolved}>Contradiction resolved</FieldLabel>
                   <p className="text-sm text-slate-700 leading-relaxed p-3 bg-slate-50 rounded-lg border border-slate-200">
                     {idea.contradictionResolved}
                   </p>
@@ -277,32 +312,26 @@ function FullscreenIdeaModal({
               )}
             </div>
 
-            {/* Why Not Obvious */}
             <section>
-              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Why This Is Non-Obvious
-              </h3>
+              <FieldLabel help={FIELD_HELP.whyNotObvious}>Why this is non-obvious</FieldLabel>
               <p className="text-sm md:text-base text-slate-800 leading-relaxed bg-emerald-50/50 p-4 rounded-lg border border-emerald-100">
                 {idea.whyNotObvious}
               </p>
             </section>
 
-            {/* Mechanism Boundaries */}
             {idea.mechanismBoundaryTest && (
               <section className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-                  Mechanism Boundaries
-                </h3>
+                <FieldLabel help={FIELD_HELP.boundaries}>Mechanism boundaries</FieldLabel>
                 <div className="grid md:grid-cols-2 gap-3">
                   <div>
-                    <span className="text-xs font-medium text-slate-600 block mb-1">Does NOT Solve:</span>
+                    <span className="text-xs font-medium text-slate-600 block mb-1">Does not solve</span>
                     <p className="text-sm text-slate-700">{idea.mechanismBoundaryTest.whatItDoesNotSolve}</p>
                   </div>
                   {/* Support both legacy (outOfScope) and new (failureByDesign) fields */}
                   {(idea.mechanismBoundaryTest.failureByDesign || idea.mechanismBoundaryTest.outOfScope) && (
                     <div>
                       <span className="text-xs font-medium text-slate-600 block mb-1">
-                        {idea.mechanismBoundaryTest.failureByDesign ? 'Failure by Design:' : 'Out of Scope:'}
+                        {idea.mechanismBoundaryTest.failureByDesign ? 'Fails by design when' : 'Out of scope'}
                       </span>
                       <p className="text-sm text-slate-700">
                         {idea.mechanismBoundaryTest.failureByDesign || idea.mechanismBoundaryTest.outOfScope}
@@ -318,91 +347,103 @@ function FullscreenIdeaModal({
               <section className="border border-slate-200 rounded-lg overflow-hidden">
                 <div className="bg-slate-50 px-4 py-3 border-b border-slate-200">
                   <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                    <Scale className="w-4 h-4 text-slate-500" />
-                    Preliminary Novelty Assessment
+                    <Scale className="w-4 h-4 text-slate-500" aria-hidden="true" />
+                    First-pass novelty read
                   </h3>
                 </div>
-                
+
                 <div className="p-4 space-y-4">
-                  {/* Assessment Summary */}
                   <div className="grid md:grid-cols-2 gap-3">
                     {idea.noveltyAssessment.strongestNovelAspect && (
                       <div className="p-3 bg-emerald-50/50 rounded-lg border border-emerald-100">
-                        <span className="text-xs font-semibold text-emerald-700 block mb-1">Strongest Aspect</span>
+                        <span className="text-xs font-semibold text-emerald-700 block mb-1">
+                          Strongest aspect
+                        </span>
                         <p className="text-sm text-slate-700">{idea.noveltyAssessment.strongestNovelAspect}</p>
                       </div>
                     )}
                     {idea.noveltyAssessment.weakestNovelAspect && (
                       <div className="p-3 bg-amber-50/50 rounded-lg border border-amber-100">
-                        <span className="text-xs font-semibold text-amber-700 block mb-1">Area for Improvement</span>
+                        <span className="text-xs font-semibold text-amber-700 block mb-1">
+                          Where to push further
+                        </span>
                         <p className="text-sm text-slate-700">{idea.noveltyAssessment.weakestNovelAspect}</p>
                       </div>
                     )}
                   </div>
 
-                  {/* Examiner Objection */}
                   {idea.noveltyAssessment.likelyExaminerObjection && (
                     <div className="p-3 bg-rose-50/50 rounded-lg border border-rose-100">
-                      <span className="text-xs font-semibold text-rose-700 block mb-1">Likely Examiner Objection</span>
+                      <span className="text-xs font-semibold text-rose-700 block mb-1">
+                        Objection to expect
+                      </span>
                       <p className="text-sm text-slate-700">{idea.noveltyAssessment.likelyExaminerObjection}</p>
                     </div>
                   )}
 
-                  {/* Redundancy Risk */}
                   {idea.noveltyAssessment.redundancyRisk && (
                     <div className="text-sm text-slate-600">
-                      <span className="font-medium">Redundancy Risk:</span> {idea.noveltyAssessment.redundancyRisk}
+                      <span className="font-medium">Overlap with your other ideas:</span>{' '}
+                      {idea.noveltyAssessment.redundancyRisk}
                     </div>
                   )}
 
                   {/* Improvement Directions - Selectable */}
-                  {idea.noveltyAssessment.improvementDirections && idea.noveltyAssessment.improvementDirections.length > 0 && (
-                    <div className="border-t border-slate-200 pt-4 mt-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-lamp-500" />
-                          Holistic Improvement Directions
-                        </h4>
-                        <span className="text-xs text-slate-500">
-                          {selectedSuggestions.size} selected
-                        </span>
+                  {idea.noveltyAssessment.improvementDirections &&
+                    idea.noveltyAssessment.improvementDirections.length > 0 && (
+                      <div className="border-t border-slate-200 pt-4 mt-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-lamp-600" aria-hidden="true" />
+                            Ways to strengthen it
+                          </h4>
+                          <span className="text-xs text-slate-500 tabular-nums">
+                            {selectedSuggestions.size} selected
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mb-3">
+                          Tick any you want carried into the Idea Bank with this idea.
+                        </p>
+                        <div className="space-y-2">
+                          {idea.noveltyAssessment.improvementDirections.map((direction, i) => {
+                            const checked = selectedSuggestions.has(direction)
+                            return (
+                              <label
+                                key={i}
+                                className={`flex w-full cursor-pointer items-start gap-3 rounded-lg border p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-lamp-500 ${
+                                  checked
+                                    ? 'bg-lamp-50 border-lamp-200'
+                                    : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => onToggleSuggestion(direction)}
+                                  className="sr-only"
+                                />
+                                <span
+                                  className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center mt-0.5 ${
+                                    checked ? 'bg-lamp-600 border-lamp-600' : 'border-slate-300 bg-white'
+                                  }`}
+                                  aria-hidden="true"
+                                >
+                                  {checked && <Check className="w-3 h-3 text-white" />}
+                                </span>
+                                <span className="text-sm text-slate-700 leading-relaxed">{direction}</span>
+                              </label>
+                            )
+                          })}
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-500 mb-3">
-                        Select suggestions to include when exporting to Idea Bank
-                      </p>
-                      <div className="space-y-2">
-                        {idea.noveltyAssessment.improvementDirections.map((direction, i) => (
-                          <button
-                            key={i}
-                            onClick={() => onToggleSuggestion(direction)}
-                            className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
-                              selectedSuggestions.has(direction)
-                                ? 'bg-lamp-50 border-lamp-200'
-                                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                            }`}
-                          >
-                            <div className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center mt-0.5 ${
-                              selectedSuggestions.has(direction)
-                                ? 'bg-lamp-500 border-lamp-500'
-                                : 'border-slate-300'
-                            }`}>
-                              {selectedSuggestions.has(direction) && (
-                                <Check className="w-3 h-3 text-white" />
-                              )}
-                            </div>
-                            <span className="text-sm text-slate-700 leading-relaxed">{direction}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Disclaimer */}
-                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 mt-4">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 mt-4">
                     <div className="flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                      <p className="text-xs text-amber-800">
-                        This is a preliminary novelty assessment. Perform exhaustive prior-art search before filing.
+                      <AlertTriangle className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        This read is based on the idea alone. Run a novelty search before you rely on it
+                        for filing.
                       </p>
                     </div>
                   </div>
@@ -418,17 +459,17 @@ function FullscreenIdeaModal({
             variant="outline"
             onClick={() => onRunNoveltySearch(idea.id)}
             disabled={runningNoveltySearch === idea.id}
-            className="flex-1 border-slate-300"
+            className="flex-1"
           >
             {runningNoveltySearch === idea.id ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Opening search...
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+                Opening search…
               </>
             ) : (
               <>
-                <Search className="w-4 h-4 mr-2" />
-                Run Novelty Search
+                <Search className="w-4 h-4 mr-2" aria-hidden="true" />
+                Check against patents
               </>
             )}
           </Button>
@@ -437,10 +478,11 @@ function FullscreenIdeaModal({
               onToggleExport(idea.id)
               onClose()
             }}
-            className="flex-1 bg-slate-800 hover:bg-slate-900 text-white"
+            variant={isSelectedForExport ? 'outline' : 'default'}
+            className="flex-1"
           >
-            <Download className="w-4 h-4 mr-2" />
-            {isSelectedForExport ? 'Remove from Export' : 'Add to Export'}
+            <Download className="w-4 h-4 mr-2" aria-hidden="true" />
+            {isSelectedForExport ? 'Remove from export' : 'Add to export'}
           </Button>
         </div>
       </motion.div>
@@ -450,13 +492,10 @@ function FullscreenIdeaModal({
 
 export default function IdeaFramePanel({
   ideas,
-  onSelectIdea,
   onRunNoveltySearch,
   onExport,
   onClose,
   onDeleteIdea,
-  feedbackLoopResults,
-  qualityMetrics,
 }: IdeaFramePanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set())
@@ -465,6 +504,7 @@ export default function IdeaFramePanel({
   const [fullscreenIdea, setFullscreenIdea] = useState<IdeaFrame | null>(null)
   const [copied, setCopied] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  const [sortByOriginality, setSortByOriginality] = useState(false)
 
   // Check for mobile viewport
   useEffect(() => {
@@ -494,6 +534,22 @@ export default function IdeaFramePanel({
       }
     }
   }, [ideas])
+
+  // Generation order is the default — it is what the user watched being produced.
+  // Sorting is opt-in and never changes an idea's displayed number.
+  const numberedIdeas = useMemo(
+    () => ideas.map((idea, index) => ({ idea, number: index + 1 })),
+    [ideas]
+  )
+  const visibleIdeas = useMemo(() => {
+    if (!sortByOriginality) return numberedIdeas
+    const rank: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
+    return [...numberedIdeas].sort(
+      (a, b) =>
+        (rank[a.idea.noveltyAssessment?.originalityStrength ?? ''] ?? 3) -
+        (rank[b.idea.noveltyAssessment?.originalityStrength ?? ''] ?? 3)
+    )
+  }, [numberedIdeas, sortByOriginality])
 
   const handleRunNoveltySearch = async (ideaId: string) => {
     setRunningNoveltySearch(ideaId)
@@ -581,6 +637,8 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const allSelected = ideas.length > 0 && selectedForExport.size === ideas.length
+
   return (
     <>
       {/* Fullscreen Modal */}
@@ -588,6 +646,7 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
         {fullscreenIdea && (
           <FullscreenIdeaModal
             idea={fullscreenIdea}
+            index={ideas.findIndex(i => i.id === fullscreenIdea.id)}
             onClose={() => setFullscreenIdea(null)}
             onCopy={handleCopyToClipboard}
             copied={copied}
@@ -596,302 +655,311 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
             onToggleExport={toggleExportSelection}
             isSelectedForExport={selectedForExport.has(fullscreenIdea.id)}
             selectedSuggestions={selectedSuggestions[fullscreenIdea.id] || new Set()}
-            onToggleSuggestion={(suggestion) => toggleSuggestion(fullscreenIdea.id, suggestion)}
+            onToggleSuggestion={suggestion => toggleSuggestion(fullscreenIdea.id, suggestion)}
           />
         )}
       </AnimatePresence>
 
-      <div className="flex flex-col h-full bg-white">
-        {/* Header - Professional subtle design */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50 flex-shrink-0">
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="font-semibold text-slate-800 flex items-center gap-2 text-sm">
-              <FileText className="w-4 h-4 text-slate-500" />
-              Generated Ideas
-              <span className="text-slate-400 font-normal">({ideas.length})</span>
+      <div className="flex h-full flex-col bg-white">
+        {/* Header */}
+        <div className="flex-shrink-0 border-b border-slate-200 bg-slate-50 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <Lightbulb className="h-4 w-4 text-slate-500" aria-hidden="true" />
+              Your ideas
+              <span className="font-normal tabular-nums text-slate-500">({ideas.length})</span>
             </h3>
-            <button
-              onClick={onClose}
-              className="p-1.5 hover:bg-slate-200 rounded-md transition-colors"
-            >
-              <X className="w-4 h-4 text-slate-500" />
+            <button onClick={onClose} className={iconButton} aria-label="Hide ideas panel">
+              <X className="h-4 w-4" />
             </button>
           </div>
-          <p className="text-xs text-slate-500">
-            Click to expand • Double-click for full view
+
+          <p className="mb-3 text-xs leading-relaxed text-slate-500">
+            Open one to read it in full, tick the ones worth keeping, then send them to your Idea Bank.
           </p>
 
-          {/* Quality Metrics */}
-          {qualityMetrics && (
-            <div className="mt-3 flex gap-4">
-              <div className="text-xs">
-                <span className="text-slate-500">Inventive Leap:</span>{' '}
-                <span className="font-medium text-slate-700">{Math.round(qualityMetrics.inventiveLeapRatio * 100)}%</span>
-              </div>
-              <div className="text-xs">
-                <span className="text-slate-500">Cross-Domain:</span>{' '}
-                <span className="font-medium text-slate-700">{Math.round(qualityMetrics.analogyRatio * 100)}%</span>
-              </div>
+          {ideas.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedForExport(allSelected ? new Set() : new Set(ideas.map(i => i.id)))
+                }
+                className="rounded text-xs font-medium text-lamp-700 transition-colors hover:text-lamp-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-lamp-500"
+              >
+                {allSelected ? 'Clear selection' : 'Select all'}
+              </button>
+              {ideas.length > 2 && (
+                <button
+                  type="button"
+                  onClick={() => setSortByOriginality(prev => !prev)}
+                  className="rounded text-xs text-slate-500 transition-colors hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-lamp-500"
+                  aria-pressed={sortByOriginality}
+                >
+                  {sortByOriginality ? 'Sorted by originality' : 'Sort by originality'}
+                </button>
+              )}
+              <span className="flex items-center gap-1 text-xs text-slate-500">
+                What the badges mean
+                <Hint title="Originality and risk" text={BADGE_LEGEND} />
+              </span>
             </div>
           )}
         </div>
 
         {/* Ideas List */}
         <div className="flex-1 overflow-auto">
-          {ideas.map((idea, index) => {
-            const originalityStyle = getOriginalityIndicator(idea.noveltyAssessment?.originalityStrength)
-            const riskStyle = getRiskIndicator(idea.noveltyAssessment?.noveltyRiskLevel)
-            
-            return (
-              <motion.div
-                key={idea.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.03 }}
-                className="border-b border-slate-100"
-              >
-                {/* Idea Header */}
-                <div
-                  className={`p-4 cursor-pointer hover:bg-slate-50 transition-colors ${
-                    selectedForExport.has(idea.id) ? 'bg-lamp-50/50' : ''
+          {ideas.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
+              <Lightbulb className="mb-3 h-6 w-6 text-slate-300" aria-hidden="true" />
+              <p className="text-sm font-medium text-slate-700">No ideas yet</p>
+              <p className="mt-1 max-w-[240px] text-xs leading-relaxed text-slate-500">
+                Select a few directions in the map, then generate ideas from the idea builder.
+              </p>
+            </div>
+          ) : (
+            visibleIdeas.map(({ idea, number }) => {
+              const originalityStyle = getOriginalityIndicator(idea.noveltyAssessment?.originalityStrength)
+              const riskStyle = getRiskIndicator(idea.noveltyAssessment?.noveltyRiskLevel)
+              const isExpanded = expandedId === idea.id
+              const isSelected = selectedForExport.has(idea.id)
+
+              return (
+                <motion.div
+                  key={idea.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className={`border-b border-slate-100 transition-colors ${
+                    isSelected ? 'bg-lamp-50/40' : ''
                   }`}
-                  onClick={() => setExpandedId(expandedId === idea.id ? null : idea.id)}
-                  onDoubleClick={() => setFullscreenIdea(idea)}
                 >
-                  <div className="flex items-start gap-3">
-                    {/* Selection Checkbox */}
+                  <div className="flex items-start gap-2 p-3">
+                    {/* Export selection */}
+                    <label className="mt-0.5 flex cursor-pointer items-center rounded p-1 focus-within:ring-2 focus-within:ring-lamp-500">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleExportSelection(idea.id)}
+                        className="sr-only"
+                      />
+                      <span className="sr-only">Select idea {number} for export</span>
+                      <span
+                        className={`flex h-5 w-5 items-center justify-center rounded border transition-colors ${
+                          isSelected ? 'border-lamp-600 bg-lamp-600' : 'border-slate-300 bg-white'
+                        }`}
+                        aria-hidden="true"
+                      >
+                        {isSelected && <Check className="h-3 w-3 text-white" />}
+                      </span>
+                    </label>
+
+                    {/* Summary — the whole block toggles the details */}
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        toggleExportSelection(idea.id)
-                      }}
-                      className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center mt-0.5 transition-colors ${
-                        selectedForExport.has(idea.id)
-                          ? 'bg-slate-800 border-slate-800'
-                          : 'border-slate-300 hover:border-slate-400'
-                      }`}
+                      type="button"
+                      onClick={() => setExpandedId(isExpanded ? null : idea.id)}
+                      onDoubleClick={() => setFullscreenIdea(idea)}
+                      aria-expanded={isExpanded}
+                      className="min-w-0 flex-1 rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-lamp-500"
                     >
-                      {selectedForExport.has(idea.id) && (
-                        <Check className="w-3 h-3 text-white" />
+                      <span className="mb-1 flex items-center gap-1.5">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-slate-500">
+                          {String(number).padStart(2, '0')}
+                        </span>
+                        {getStatusIcon(idea.status)}
+                        <ChevronDown
+                          className={`ml-auto h-3.5 w-3.5 flex-shrink-0 text-slate-500 transition-transform ${
+                            isExpanded ? 'rotate-180' : ''
+                          }`}
+                          aria-hidden="true"
+                        />
+                      </span>
+                      <span className="block text-sm font-medium leading-snug text-slate-800 line-clamp-2">
+                        {idea.coreMechanism || idea.title || 'Mechanism-based Idea'}
+                      </span>
+                      {!isExpanded && (
+                        <span className="mt-1 block text-xs leading-relaxed text-slate-500 line-clamp-2">
+                          {idea.inventiveLeap}
+                        </span>
+                      )}
+
+                      {idea.noveltyAssessment && (
+                        <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${originalityStyle.bg}`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${originalityStyle.dot}`} aria-hidden="true" />
+                            <span className={originalityStyle.text}>
+                              {ORIGINALITY_LABEL[idea.noveltyAssessment.originalityStrength] ??
+                                idea.noveltyAssessment.originalityStrength}
+                            </span>
+                          </span>
+                          <span className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${riskStyle.bg}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${riskStyle.dot}`} aria-hidden="true" />
+                            <span className={riskStyle.text}>
+                              {RISK_LABEL[idea.noveltyAssessment.noveltyRiskLevel] ??
+                                idea.noveltyAssessment.noveltyRiskLevel}
+                            </span>
+                          </span>
+                        </span>
                       )}
                     </button>
 
-                    {/* Content */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {getStatusIcon(idea.status)}
-                        <h4 className="font-medium text-slate-800 text-sm line-clamp-1">
-                          {idea.coreMechanism || idea.title || 'Mechanism-based Idea'}
-                        </h4>
-                      </div>
-                      <p className="text-xs text-slate-500 line-clamp-2 mb-2">
-                        {idea.inventiveLeap}
-                      </p>
-
-                      {/* Assessment Indicators */}
-                      {idea.noveltyAssessment && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${originalityStyle.bg}`}>
-                            <div className={`w-1.5 h-1.5 rounded-full ${originalityStyle.dot}`} />
-                            <span className={originalityStyle.text}>{idea.noveltyAssessment.originalityStrength}</span>
-                          </div>
-                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${riskStyle.bg}`}>
-                            <div className={`w-1.5 h-1.5 rounded-full ${riskStyle.dot}`} />
-                            <span className={riskStyle.text}>{idea.noveltyAssessment.noveltyRiskLevel} risk</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-1 flex-shrink-0">
+                    {/* Row actions */}
+                    <div className="flex flex-shrink-0 items-center">
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setFullscreenIdea(idea)
-                        }}
-                        className="p-1.5 hover:bg-slate-200 rounded-md transition-colors"
-                        title="View fullscreen"
+                        onClick={() => setFullscreenIdea(idea)}
+                        className={iconButton}
+                        aria-label={`Open idea ${number} in full view`}
                       >
-                        <Maximize2 className="w-4 h-4 text-slate-400" />
+                        <Maximize2 className="h-4 w-4" />
                       </button>
                       {onDeleteIdea && (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation()
+                          onClick={() => {
                             if (window.confirm('Delete this idea? This cannot be undone.')) {
                               onDeleteIdea(idea.id)
                             }
                           }}
-                          className="p-1.5 hover:bg-rose-100 rounded-md transition-colors group"
-                          title="Delete idea"
+                          className={`${iconButton} hover:bg-rose-50 hover:text-rose-600`}
+                          aria-label={`Delete idea ${number}`}
                         >
-                          <Trash2 className="w-4 h-4 text-slate-400 group-hover:text-rose-500" />
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       )}
-                      <div className="hidden md:block ml-1">
-                        {expandedId === idea.id ? (
-                          <ChevronUp className="w-4 h-4 text-slate-400" />
-                        ) : (
-                          <ChevronDown className="w-4 h-4 text-slate-400" />
-                        )}
-                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Expanded Details */}
-                <AnimatePresence>
-                  {expandedId === idea.id && !isMobile && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="px-4 pb-4 space-y-3">
-                        {/* Eliminated Assumption */}
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                            Eliminated Assumption
-                          </label>
-                          <p className="text-sm text-slate-700 mt-1">
-                            {idea.eliminatedAssumption || 'Not specified'}
-                          </p>
-                        </div>
-
-                        {/* Why Not Obvious */}
-                        <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-                          <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                            Why Non-Obvious
-                          </label>
-                          <p className="text-sm text-slate-700 mt-1">
-                            {idea.whyNotObvious}
-                          </p>
-                        </div>
-
-                        {/* Assessment Summary */}
-                        {idea.noveltyAssessment && (
-                          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-                            <div className="flex items-center justify-between mb-2">
-                              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                                <Scale className="w-3 h-3" />
-                                Assessment
-                              </label>
-                              <div className="flex gap-2">
-                                <span className={`text-xs px-2 py-0.5 rounded ${originalityStyle.bg} ${originalityStyle.text}`}>
-                                  {idea.noveltyAssessment.originalityStrength}
-                                </span>
-                                <span className={`text-xs px-2 py-0.5 rounded ${riskStyle.bg} ${riskStyle.text}`}>
-                                  {idea.noveltyAssessment.noveltyRiskLevel}
-                                </span>
-                              </div>
+                  {/* Expanded Details */}
+                  <AnimatePresence initial={false}>
+                    {isExpanded && !isMobile && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.18 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="space-y-3 px-4 pb-4 pl-11">
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                Inventive leap
+                              </span>
+                              <Hint text={FIELD_HELP.inventiveLeap} />
                             </div>
-                            {idea.noveltyAssessment.strongestNovelAspect && (
-                              <p className="text-xs text-slate-600 line-clamp-2">
-                                <span className="text-emerald-600 font-medium">✓</span> {idea.noveltyAssessment.strongestNovelAspect}
-                              </p>
-                            )}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setFullscreenIdea(idea)
-                              }}
-                              className="text-xs text-lamp-600 hover:text-lamp-800 mt-2"
-                            >
-                              View full assessment →
-                            </button>
+                            <p className="mt-1 text-sm leading-relaxed text-slate-700">{idea.inventiveLeap}</p>
                           </div>
-                        )}
 
-                        {/* Actions */}
-                        <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleRunNoveltySearch(idea.id)
-                            }}
-                            disabled={runningNoveltySearch === idea.id}
-                            className="text-xs border-slate-300"
-                          >
-                            {runningNoveltySearch === idea.id ? (
-                              <>
-                                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                                Opening...
-                              </>
-                            ) : (
-                              <>
-                                <Search className="w-3 h-3 mr-1" />
-                                Run Novelty Search
-                              </>
-                            )}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setFullscreenIdea(idea)
-                            }}
-                            className="text-xs border-slate-300"
-                          >
-                            <Maximize2 className="w-3 h-3 mr-1" />
-                            Full View
-                          </Button>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                Eliminated assumption
+                              </span>
+                              <Hint text={FIELD_HELP.eliminatedAssumption} />
+                            </div>
+                            <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                              {idea.eliminatedAssumption || 'Not specified'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                Why non-obvious
+                              </span>
+                              <Hint text={FIELD_HELP.whyNotObvious} />
+                            </div>
+                            <p className="mt-1 text-sm leading-relaxed text-slate-700">{idea.whyNotObvious}</p>
+                          </div>
+
+                          {idea.noveltyAssessment?.strongestNovelAspect && (
+                            <p className="text-xs leading-relaxed text-slate-600">
+                              <span className="font-medium text-emerald-700">Strongest aspect:</span>{' '}
+                              {idea.noveltyAssessment.strongestNovelAspect}
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRunNoveltySearch(idea.id)}
+                              disabled={runningNoveltySearch === idea.id}
+                              className="text-xs"
+                            >
+                              {runningNoveltySearch === idea.id ? (
+                                <>
+                                  <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden="true" />
+                                  Opening…
+                                </>
+                              ) : (
+                                <>
+                                  <Search className="mr-1 h-3 w-3" aria-hidden="true" />
+                                  Check against patents
+                                </>
+                              )}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setFullscreenIdea(idea)}
+                              className="text-xs"
+                            >
+                              <Maximize2 className="mr-1 h-3 w-3" aria-hidden="true" />
+                              Read in full
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-                {/* Mobile Expand */}
-                {expandedId === idea.id && isMobile && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="px-4 pb-4"
-                  >
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setFullscreenIdea(idea)}
-                      className="w-full text-xs border-slate-300"
-                    >
-                      <Maximize2 className="w-3 h-3 mr-1" />
-                      View Full Details
-                    </Button>
-                  </motion.div>
-                )}
-              </motion.div>
-            )
-          })}
+                  {/* Mobile Expand */}
+                  {isExpanded && isMobile && (
+                    <div className="px-4 pb-4 pl-11">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setFullscreenIdea(idea)}
+                        className="w-full text-xs"
+                      >
+                        <Maximize2 className="mr-1 h-3 w-3" aria-hidden="true" />
+                        Read in full
+                      </Button>
+                    </div>
+                  )}
+                </motion.div>
+              )
+            })
+          )}
         </div>
 
         {/* Export Footer */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50 flex-shrink-0">
-          <div className="flex items-center justify-between mb-3">
+        <div className="flex-shrink-0 border-t border-slate-200 bg-slate-50 p-4">
+          <div className="mb-2 flex items-center justify-between">
             <span className="text-xs text-slate-500">
-              {selectedForExport.size} idea{selectedForExport.size !== 1 ? 's' : ''} selected
+              <span className="font-medium tabular-nums text-slate-700">{selectedForExport.size}</span>{' '}
+              of {ideas.length} selected
             </span>
             {selectedForExport.size > 0 && (
               <button
                 onClick={() => setSelectedForExport(new Set())}
-                className="text-xs text-slate-600 hover:text-slate-800"
+                className="rounded text-xs text-slate-500 transition-colors hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-lamp-500"
               >
                 Clear
               </button>
             )}
           </div>
-          <Button
-            onClick={handleExport}
-            disabled={selectedForExport.size === 0}
-            className="w-full bg-slate-800 hover:bg-slate-900 text-white"
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Export to Idea Bank
+          <Button onClick={handleExport} disabled={selectedForExport.size === 0} className="w-full">
+            <Download className="mr-2 h-4 w-4" aria-hidden="true" />
+            Send to Idea Bank
           </Button>
+          {selectedForExport.size === 0 && (
+            <p className="mt-2 text-center text-[11px] text-slate-500">
+              Tick an idea above to send it to your Idea Bank
+            </p>
+          )}
         </div>
       </div>
     </>

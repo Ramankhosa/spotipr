@@ -105,10 +105,15 @@ export interface CompileScopeResult {
 export async function compileScope(input: {
   brief: string
   existingTitle?: string
+  framing?: 'FIELD' | 'INVENTION'
   requestHeaders: Record<string, string>
 }): Promise<CompileScopeResult> {
   const { llmGateway } = await import('@/lib/metering/gateway')
-  const prompt = buildScopeCompilePrompt({ brief: input.brief, existingTitle: input.existingTitle })
+  const prompt = buildScopeCompilePrompt({
+    brief: input.brief,
+    existingTitle: input.existingTitle,
+    framing: input.framing,
+  })
 
   // Stage-coded resolution is fail-closed: model-resolver throws unless a super
   // admin (or scripts/add-whitespace-stages.js) has mapped a model to this exact
@@ -494,6 +499,33 @@ async function executeRun(input: {
       }`
       break
     }
+    case 'DIMENSION_MAP': {
+      const { runDimensionMapStage } = await import('./dimension-stage')
+      // params.registry carries a user-edited registry for a re-census; its
+      // absence means full discovery.
+      const suppliedRegistry =
+        params.registry && typeof params.registry === 'object' && Array.isArray((params.registry as { dimensions?: unknown }).dimensions)
+          ? (params.registry as { dimensions: Array<{ label: string; description?: string; values: Array<{ label: string; synonyms: string[] }> }> })
+          : null
+      const result = await runDimensionMapStage({
+        runId: input.runId,
+        studyId: input.studyId,
+        scope: input.scope,
+        requestHeaders: input.requestHeaders,
+        suppliedRegistry,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      gateCounts = {
+        corpus: result.publicationCount,
+        afterFilters: result.publicationCount,
+        afterConcepts: result.publicationCount,
+        families: result.familyCount,
+      } as unknown as Prisma.InputJsonValue
+      trailSummary = `Dimension map complete — ${result.registry.length} viewpoints, ${result.gaps.length} candidate gaps, ${Math.round(
+        result.unclassifiedShare * 100
+      )}% of the field unplaced`
+      break
+    }
     default:
       throw new Error(`Stage ${input.stage} is not implemented yet.`)
   }
@@ -520,6 +552,7 @@ export function runPayload(row: {
   status: string
   results: Prisma.JsonValue | null
   gateCounts: Prisma.JsonValue | null
+  progress?: Prisma.JsonValue | null
   lastError: string | null
   durationMs: number | null
   createdAt: Date
@@ -531,6 +564,9 @@ export function runPayload(row: {
     status: row.status,
     results: row.status === 'COMPLETED' ? row.results : null,
     gateCounts: row.gateCounts,
+    // Live narration is readable while PROCESSING; results stay hidden until
+    // COMPLETED — partial results are never exposed, narration is.
+    progress: row.status === 'PROCESSING' ? (row.progress ?? null) : null,
     error: row.lastError,
     durationMs: row.durationMs,
     startedAt: row.createdAt.toISOString(),

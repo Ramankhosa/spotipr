@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Compass, Plus, Loader2, AlertCircle } from 'lucide-react'
+import { Compass, Plus, Loader2, AlertCircle, Lightbulb, Map } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
@@ -13,10 +13,13 @@ interface StudySummary {
   id: string
   title: string
   scopeVersion: number
+  kind?: string
   createdAt: string
   updatedAt: string
   _count: { runs: number; clusters: number; hypotheses: number }
 }
+
+type StudyKind = 'FIELD' | 'INVENTION'
 
 function formatWhen(iso: string) {
   const date = new Date(iso)
@@ -43,6 +46,10 @@ export function WhitespaceStudiesApp() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [brief, setBrief] = useState('')
   const [creating, setCreating] = useState(false)
+  const [kind, setKind] = useState<StudyKind>('INVENTION')
+  const [problem, setProblem] = useState('')
+  const [approach, setApproach] = useState('')
+  const [constraints, setConstraints] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -76,7 +83,18 @@ export function WhitespaceStudiesApp() {
       router.push('/login?next=/whitespace')
       return
     }
-    if (brief.trim().length < 20) {
+
+    const inventionReady = problem.trim().length >= 20 && approach.trim().length >= 20
+    if (kind === 'INVENTION' && !inventionReady) {
+      toast({
+        variant: 'warning',
+        title: 'Describe the invention first',
+        description:
+          'The problem and how it works both need a sentence or two — they decide which field gets read.',
+      })
+      return
+    }
+    if (kind === 'FIELD' && brief.trim().length < 20) {
       toast({
         variant: 'warning',
         title: 'Describe the field first',
@@ -84,12 +102,24 @@ export function WhitespaceStudiesApp() {
       })
       return
     }
+
     setCreating(true)
     try {
+      const body =
+        kind === 'INVENTION'
+          ? {
+              kind,
+              invention: {
+                problem: problem.trim(),
+                approach: approach.trim(),
+                constraints: constraints.trim(),
+              },
+            }
+          : { kind, seedText: brief.trim() }
       const response = await fetch('/api/whitespace/studies', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ seedText: brief.trim() }),
+        body: JSON.stringify(body),
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data?.error || 'Could not create the study.')
@@ -102,7 +132,7 @@ export function WhitespaceStudiesApp() {
       })
       setCreating(false)
     }
-  }, [brief, router, toast, user])
+  }, [approach, brief, constraints, kind, problem, router, toast, user])
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-12">
@@ -115,26 +145,83 @@ export function WhitespaceStudiesApp() {
           Find what is left to invent — and why nobody has
         </h1>
         <p className="mt-3 max-w-2xl text-muted-foreground">
-          Describe a technology field. The studio maps what has already been patented, names the areas
-          it breaks into, and shows you where the field is crowded and where it is not. An empty area is
-          treated as a question, not an answer.
+          Start from your own invention, or from a whole field. Either way the studio maps what has
+          already been patented and shows you where the space is crowded and where it is not. An empty
+          spot is treated as a question, not an answer.
         </p>
       </header>
 
       <section className="mb-12 rounded-lg border border-border bg-card p-5 sm:p-6">
-        <label htmlFor="brief" className="mb-2 block text-sm font-semibold text-foreground">
-          What field do you want to understand?
-        </label>
-        <Textarea
-          id="brief"
-          value={brief}
-          onChange={event => setBrief(event.target.value)}
-          rows={4}
-          placeholder="Describe the technology area or the problem you are trying to solve. Plain language is fine — you do not need classification codes or search syntax."
-          className="resize-y"
-          disabled={creating}
-        />
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 grid gap-2 sm:grid-cols-2">
+          <KindOption
+            active={kind === 'INVENTION'}
+            onClick={() => setKind('INVENTION')}
+            icon={<Lightbulb className="h-4 w-4" />}
+            title="Explore my invention"
+            description="Find the unclaimed directions next to something you are building."
+            disabled={creating}
+          />
+          <KindOption
+            active={kind === 'FIELD'}
+            onClick={() => setKind('FIELD')}
+            icon={<Map className="h-4 w-4" />}
+            title="Map a field"
+            description="Survey a whole technology area: who files, where, and how it breaks up."
+            disabled={creating}
+          />
+        </div>
+
+        {kind === 'INVENTION' ? (
+          <div className="space-y-4">
+            <BriefField
+              id="problem"
+              label="What problem does it solve?"
+              hint="The difficulty with how it is done today."
+              value={problem}
+              onChange={setProblem}
+              rows={3}
+              placeholder="e.g. Farmers over-water crops because irrigation runs on a fixed schedule rather than what the soil and plants actually need."
+              disabled={creating}
+            />
+            <BriefField
+              id="approach"
+              label="How does it work?"
+              hint="The mechanism, in your own words. This decides which field gets read."
+              value={approach}
+              onChange={setApproach}
+              rows={4}
+              placeholder="e.g. Capacitive probes read soil moisture, the reading is combined with a weather forecast, and solenoid valves open per field zone only when the crop needs water."
+              disabled={creating}
+            />
+            <BriefField
+              id="constraints"
+              label="Any constraints? (optional)"
+              hint="Materials, power, cost, regulation — anything the design must live with."
+              value={constraints}
+              onChange={setConstraints}
+              rows={2}
+              placeholder="e.g. Must run on solar power and work without continuous internet."
+              disabled={creating}
+            />
+          </div>
+        ) : (
+          <div>
+            <label htmlFor="brief" className="mb-2 block text-sm font-semibold text-foreground">
+              What field do you want to understand?
+            </label>
+            <Textarea
+              id="brief"
+              value={brief}
+              onChange={event => setBrief(event.target.value)}
+              rows={4}
+              placeholder="Describe the technology area or the problem you are trying to solve. Plain language is fine — you do not need classification codes or search syntax."
+              className="resize-y"
+              disabled={creating}
+            />
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
             You will review and correct the research scope before anything runs.
           </p>
@@ -147,7 +234,7 @@ export function WhitespaceStudiesApp() {
             ) : (
               <>
                 <Plus className="mr-2 h-4 w-4" />
-                Start a study
+                {kind === 'INVENTION' ? 'Explore this invention' : 'Map this field'}
               </>
             )}
           </Button>
@@ -199,7 +286,29 @@ export function WhitespaceStudiesApp() {
                   className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-medium text-foreground">{study.title}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate font-medium text-foreground">{study.title}</p>
+                      <span
+                        className={[
+                          'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium',
+                          study.kind === 'INVENTION'
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                            : 'border-border bg-muted text-muted-foreground',
+                        ].join(' ')}
+                      >
+                        {study.kind === 'INVENTION' ? (
+                          <>
+                            <Lightbulb className="h-2.5 w-2.5" />
+                            invention
+                          </>
+                        ) : (
+                          <>
+                            <Map className="h-2.5 w-2.5" />
+                            field
+                          </>
+                        )}
+                      </span>
+                    </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       Scope v{study.scopeVersion} · {study._count.runs}{' '}
                       {study._count.runs === 1 ? 'run' : 'runs'} · updated {formatWhen(study.updatedAt)}
@@ -216,6 +325,80 @@ export function WhitespaceStudiesApp() {
           </ul>
         )}
       </section>
+    </div>
+  )
+}
+
+function KindOption({
+  active,
+  onClick,
+  icon,
+  title,
+  description,
+  disabled,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  title: string
+  description: string
+  disabled: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      className={[
+        'rounded-lg border p-3.5 text-left transition-colors',
+        active ? 'border-primary bg-primary/[0.04]' : 'border-border hover:bg-accent/40',
+        disabled ? 'opacity-60' : '',
+      ].join(' ')}
+    >
+      <span className={`flex items-center gap-2 text-sm font-semibold ${active ? 'text-primary' : 'text-foreground'}`}>
+        {icon}
+        {title}
+      </span>
+      <span className="mt-1 block text-xs leading-snug text-muted-foreground">{description}</span>
+    </button>
+  )
+}
+
+function BriefField({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+  rows,
+  placeholder,
+  disabled,
+}: {
+  id: string
+  label: string
+  hint: string
+  value: string
+  onChange: (value: string) => void
+  rows: number
+  placeholder: string
+  disabled: boolean
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-semibold text-foreground">
+        {label}
+      </label>
+      <p className="mb-1.5 text-xs text-muted-foreground">{hint}</p>
+      <Textarea
+        id={id}
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        rows={rows}
+        placeholder={placeholder}
+        className="resize-y"
+        disabled={disabled}
+      />
     </div>
   )
 }

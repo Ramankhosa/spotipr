@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
       title: true,
       scopeVersion: true,
       role: true,
+      kind: true,
       createdAt: true,
       updatedAt: true,
       _count: { select: { runs: true, clusters: true, hypotheses: true } },
@@ -44,7 +45,34 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}))
-  const seedText = typeof body?.seedText === 'string' ? body.seedText.slice(0, 60000) : null
+  const kind = body?.kind === 'INVENTION' ? 'INVENTION' : 'FIELD'
+
+  // Invention studies arrive as a structured brief; it is kept verbatim for
+  // display and recompiles, and flattened into seedText for the compiler.
+  const rawInvention = (body?.invention ?? null) as Record<string, unknown> | null
+  const invention =
+    kind === 'INVENTION' && rawInvention
+      ? {
+          problem: typeof rawInvention.problem === 'string' ? rawInvention.problem.trim().slice(0, 4000) : '',
+          approach: typeof rawInvention.approach === 'string' ? rawInvention.approach.trim().slice(0, 4000) : '',
+          constraints:
+            typeof rawInvention.constraints === 'string' ? rawInvention.constraints.trim().slice(0, 2000) : '',
+        }
+      : null
+  const inventionText = invention
+    ? [
+        invention.problem ? `PROBLEM: ${invention.problem}` : null,
+        invention.approach ? `APPROACH: ${invention.approach}` : null,
+        invention.constraints ? `CONSTRAINTS: ${invention.constraints}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : ''
+
+  const seedText =
+    typeof body?.seedText === 'string' && body.seedText.trim()
+      ? body.seedText.slice(0, 60000)
+      : inventionText || null
   const title =
     typeof body?.title === 'string' && body.title.trim()
       ? body.title.trim().slice(0, 200)
@@ -60,10 +88,17 @@ export async function POST(request: NextRequest) {
       title,
       seedText,
       role: typeof body?.role === 'string' ? body.role.slice(0, 40) : null,
+      kind,
+      inventionJson: invention ? (invention as unknown as Prisma.InputJsonValue) : undefined,
       scope: scope as unknown as Prisma.InputJsonValue,
     },
   })
 
-  await appendTrail(study.id, 'SYSTEM', `user:${auth.user.id}`, 'Study created')
+  await appendTrail(
+    study.id,
+    'SYSTEM',
+    `user:${auth.user.id}`,
+    kind === 'INVENTION' ? 'Invention study created' : 'Study created'
+  )
   return NextResponse.json({ study }, { status: 201 })
 }

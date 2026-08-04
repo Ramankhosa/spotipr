@@ -26,6 +26,41 @@ export function supportFloor(familyCount: number): number {
   return Math.max(Math.min(20, Math.ceil(familyCount * 0.5)), Math.ceil(familyCount * 0.05))
 }
 
+/**
+ * The rarity formula applied to counts measured elsewhere (e.g. an exact SQL
+ * census). Kept here so Z_REF and the arithmetic exist in exactly one place —
+ * computeRarePairs delegates to it for its in-memory counts.
+ */
+export function rarePairFromCounts(input: {
+  a: string
+  b: string
+  supportA: number
+  supportB: number
+  observed: number
+  total: number
+}): RarePair | null {
+  const expected = (input.supportA * input.supportB) / input.total
+  if (expected <= 0) return null
+  const z = (input.observed - expected) / Math.sqrt(expected)
+  const rarity = Math.min(1, Math.max(0, -z / Z_REF))
+  return {
+    a: input.a,
+    b: input.b,
+    supportA: input.supportA,
+    supportB: input.supportB,
+    observed: input.observed,
+    expected,
+    z,
+    rarity,
+  }
+}
+
+/**
+ * Pair keys are NUL-delimited: labels are free text and often multi-word, so a
+ * space join would merge ("a", "b c") with ("a b", "c") and corrupt both counts.
+ */
+const pairKey = (a: string, b: string) => `${a}\u0000${b}`
+
 export function computeRarePairs(elementSets: string[][], floor = supportFloor(elementSets.length)): RarePair[] {
   const N = elementSets.length
   if (!N) return []
@@ -47,7 +82,7 @@ export function computeRarePairs(elementSets: string[][], floor = supportFloor(e
       .sort()
     for (let a = 0; a < present.length; a++) {
       for (let b = a + 1; b < present.length; b++) {
-        const key = `${present[a]} ${present[b]}`
+        const key = pairKey(present[a], present[b])
         pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1)
       }
     }
@@ -56,16 +91,15 @@ export function computeRarePairs(elementSets: string[][], floor = supportFloor(e
   const pairs: RarePair[] = []
   for (let a = 0; a < established.length; a++) {
     for (let b = a + 1; b < established.length; b++) {
-      const supportA = support.get(established[a])!
-      const supportB = support.get(established[b])!
-      const observed = pairCounts.get(`${established[a]} ${established[b]}`) ?? 0
-      const expected = (supportA * supportB) / N
-      if (expected <= 0) continue
-      const z = (observed - expected) / Math.sqrt(expected)
-      const rarity = Math.min(1, Math.max(0, -z / Z_REF))
-      if (rarity > 0) {
-        pairs.push({ a: established[a], b: established[b], supportA, supportB, observed, expected, z, rarity })
-      }
+      const pair = rarePairFromCounts({
+        a: established[a],
+        b: established[b],
+        supportA: support.get(established[a])!,
+        supportB: support.get(established[b])!,
+        observed: pairCounts.get(pairKey(established[a], established[b])) ?? 0,
+        total: N,
+      })
+      if (pair && pair.rarity > 0) pairs.push(pair)
     }
   }
   return pairs.sort((a, b) => b.rarity - a.rarity)

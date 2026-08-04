@@ -602,6 +602,7 @@ enum TaskCode {
   WS_HYPOTHESIZE // Synthesise whitespace hypotheses from signals + elements
   WS_VALIDATE // Element-map disproof candidates against a hypothesis
   WS_REDTEAM // Adversarial pass: name and run the strongest remaining attack
+  WS_DIMENSIONS // Invention whitespace: propose/grow viewpoint taxonomies (counts stay SQL)
 }
 
 enum ModelClass {
@@ -5435,6 +5436,12 @@ model WhitespaceStudy {
   seedText     String? @db.Text
   /// UI tailoring only (attorney | rnd | tto | founder | investor). Never gates analysis.
   role         String?
+  /// FIELD (landscape census pipeline) | INVENTION (dimension-map pipeline).
+  /// Chosen at creation; decides which stage graph and layout the study gets.
+  kind          String  @default("FIELD")
+  /// Structured invention brief ({ problem, approach, constraints }) for
+  /// INVENTION studies. Kept for display and scope recompiles.
+  inventionJson Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5460,7 +5467,7 @@ model WhitespaceStudy {
 model WhitespaceRun {
   id      String @id @default(cuid())
   studyId String
-  stage   String // SCOPE | FIELD_MAP | CLUSTER | SIGNALS | DEEP_DIVE | VALIDATE
+  stage   String // FIELD_MAP | CLUSTER | SIGNALS | DEEP_DIVE | VALIDATE | DIMENSION_MAP
 
   scopeVersion  Int
   scopeSnapshot Json
@@ -5480,6 +5487,9 @@ model WhitespaceRun {
   results    Json?
   /// Funnel transparency, Studio-style: corpus -> filters -> concepts -> families.
   gateCounts Json?
+  /// Live phase narration ({ phase, round?, detail }) written at heartbeat
+  /// points. Readable while PROCESSING; results stay hidden until COMPLETED.
+  progress   Json?
 
   durationMs  Int?
   completedAt DateTime?

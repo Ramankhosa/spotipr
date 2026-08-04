@@ -308,8 +308,8 @@ export const PLAN_PRICING_CATALOG: Record<PlanCatalogCode, PlanPricingDefinition
     yearlyDiscountMonths: 2,
   },
   PRO_PLAN: {
-    monthly: { priceUSD: 2_000, priceINR: 199_900 }, // $20 / ₹1,999
-    yearly: { priceUSD: 20_000, priceINR: 1_999_000 }, // $200 / ₹19,990
+    monthly: { priceUSD: 3_000, priceINR: 299_900 }, // $30 / ₹2,999
+    yearly: { priceUSD: 30_000, priceINR: 2_999_000 }, // $300 / ₹29,990
     yearlyDiscountMonths: 2,
   },
   ENTERPRISE_PLAN: {
@@ -374,6 +374,7 @@ export const TASK_TO_FEATURE: Record<TaskCode, FeatureCode> = {
   WS_HYPOTHESIZE: 'WHITESPACE_ANALYSIS',
   WS_VALIDATE: 'WHITESPACE_ANALYSIS',
   WS_REDTEAM: 'WHITESPACE_ANALYSIS',
+  WS_DIMENSIONS: 'WHITESPACE_ANALYSIS',
   IDEA_BANK_ACCESS: 'IDEA_BANK',
   IDEA_BANK_RESERVE: 'IDEA_BANK',
   IDEA_BANK_EDIT: 'IDEA_BANK',
@@ -404,6 +405,7 @@ export const TASK_LABELS: Record<TaskCode, string> = {
   WS_HYPOTHESIZE: 'Whitespace: Hypothesis Generation',
   WS_VALIDATE: 'Whitespace: Validation Mapping',
   WS_REDTEAM: 'Whitespace: Red Team',
+  WS_DIMENSIONS: 'Whitespace: Viewpoint Discovery',
   IDEA_BANK_ACCESS: 'Idea Bank Access',
   IDEA_BANK_RESERVE: 'Idea Reservation',
   IDEA_BANK_EDIT: 'Idea Editing',
