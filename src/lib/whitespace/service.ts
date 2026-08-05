@@ -15,6 +15,7 @@ import { normalizeScope, scopeIsRunnable, validateWhitespaceScope } from './scop
 import {
   CORPUS_FIRST_YEAR,
   emptyWhitespaceScope,
+  stableJson,
   type FieldMapResult,
   type TrailKind,
   type WhitespaceRunStage,
@@ -378,9 +379,13 @@ export async function startWhitespaceRun(input: {
   })
   for (const live of liveRuns) {
     const resolved = await resolveStaleRun(live)
+    // stableJson, not JSON.stringify: resolved.params round-tripped through
+    // jsonb, which reorders object keys, so a plain stringify comparison let
+    // identical multi-key params (a dimension re-census registry) through as
+    // "different work" and started duplicate live runs.
     if (
       (resolved.status === 'QUEUED' || resolved.status === 'PROCESSING') &&
-      JSON.stringify(resolved.params ?? null) === JSON.stringify(input.params ?? null)
+      stableJson(resolved.params ?? null) === stableJson(input.params ?? null)
     ) {
       return { runId: resolved.id, existing: true }
     }
@@ -445,7 +450,12 @@ async function executeRun(input: {
 
   switch (input.stage) {
     case 'FIELD_MAP': {
-      const result = await runFieldMap(input.scope)
+      const { resolveFieldCandidates, candidateCoverageNote } = await import('./candidates')
+      const candidates = await resolveFieldCandidates(input.scope)
+      const result = await runFieldMap(input.scope, {
+        candidateIds: candidates.ids,
+        candidateNote: candidateCoverageNote(candidates),
+      })
       const narrative = await narrateField({
         scope: input.scope,
         result,

@@ -154,12 +154,51 @@ export function computeDeadlines(
   return computed.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
 }
 
+/** Today in the office's own calendar day (IST), not UTC. */
+export function officeToday(timeZone = 'Asia/Kolkata'): string {
+  // UTC is up to 5h30m behind IST, so between 00:00 and 05:30 local a UTC "today"
+  // is yesterday — every deadline then reads one day further away than it is.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date())
+}
+
+/**
+ * Re-derive `daysRemaining`/`urgency` from `dueDate` as of now.
+ *
+ * `computeDeadlines` bakes these in relative to the day the document was
+ * ingested, and they are then stored in `deadlinesJson` and re-served for the
+ * life of the case. Months later, a lapsed deadline still reported the days it
+ * had left on ingest day — including in the outcome email, which sorted on the
+ * stale number and could mail "86 days left" for a deadline that had passed.
+ * The due date is the fact; everything relative to today is derived on read.
+ */
+export function refreshDeadline<T extends { dueDate?: string }>(
+  deadline: T,
+  today = officeToday()
+): T & { daysRemaining: number; urgency: ComputedDeadline['urgency'] } {
+  const due = String(deadline?.dueDate || '')
+  if (!/^\d{4}-\d{2}-\d{2}/.test(due)) {
+    return { ...deadline, daysRemaining: 0, urgency: 'expired' as const }
+  }
+  const daysRemaining = daysBetween(today, due)
+  return { ...deadline, daysRemaining, urgency: urgencyFor(daysRemaining) }
+}
+
+export function refreshDeadlines<T extends { dueDate?: string }>(
+  deadlines: T[],
+  today = officeToday()
+): Array<T & { daysRemaining: number; urgency: ComputedDeadline['urgency'] }> {
+  return (deadlines || []).filter(Boolean).map(d => refreshDeadline(d, today))
+}
+
 /**
  * The single most urgent deadline across all documents of a case —
  * what the workspace banner shows.
  */
 export function mostUrgentDeadline(deadlines: ComputedDeadline[]): ComputedDeadline | null {
-  const active = deadlines.filter(d => d.urgency !== 'expired')
-  const pool = active.length > 0 ? active : deadlines
+  const fresh = refreshDeadlines(deadlines || []) as ComputedDeadline[]
+  const active = fresh.filter(d => d.urgency !== 'expired')
+  const pool = active.length > 0 ? active : fresh
   return pool.length > 0 ? pool.reduce((a, b) => (a.dueDate <= b.dueDate ? a : b)) : null
 }

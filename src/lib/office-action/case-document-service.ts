@@ -87,9 +87,22 @@ export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocum
     })
   }
 
-  // Keep the case's canonical spec/claims text in sync for the pipeline.
+  /**
+   * Keep the case's canonical spec/claims text in sync for the pipeline — and
+   * drop the cached invention digest with it.
+   *
+   * The digest is built once and reused by every objection's strategy, argument
+   * and s.59 basis pointers. Replacing the specification without clearing it
+   * meant the next prepare run drafted the whole reply from the superseded
+   * document — citing paragraphs that may not exist in the operative spec — with
+   * nothing to indicate anything was stale. removeCaseDocument already does
+   * this; the add path did not.
+   */
   if (input.kind === 'SPECIFICATION') {
-    const data: { specificationText: string; claimsText?: string } = { specificationText: input.text }
+    const data: { specificationText: string; claimsText?: string; inventionDigest?: any } = {
+      specificationText: input.text,
+      inventionDigest: null
+    }
     // A complete specification usually contains the claims (standard Indian
     // filing). If no separate CLAIMS document exists yet, extract them so the
     // claim charts and amendment pipeline don't silently run without claims.
@@ -100,9 +113,12 @@ export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocum
       const claims = extractClaimsText(input.text)
       if (claims) data.claimsText = claims
     }
-    await prisma.officeActionCase.update({ where: { id: input.caseId }, data })
+    await prisma.officeActionCase.update({ where: { id: input.caseId }, data: data as any })
   } else if (input.kind === 'CLAIMS') {
-    await prisma.officeActionCase.update({ where: { id: input.caseId }, data: { claimsText: input.text } })
+    await prisma.officeActionCase.update({
+      where: { id: input.caseId },
+      data: { claimsText: input.text, inventionDigest: null as any }
+    })
   }
 
   // Kinds nothing retrieves are marked NOT_REQUIRED rather than left PENDING —
@@ -110,9 +126,14 @@ export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocum
   if (!EMBEDDED_KINDS.has(input.kind)) {
     await prisma.oaCaseDocument.update({ where: { id: doc.id }, data: { indexStatus: 'NOT_REQUIRED' } })
   } else {
-    const embedded = await embedChunks(doc.id).catch(() => false)
+    // INDEXED only when EVERY chunk embedded. `embedded > 0` marked a document
+    // fully indexed when one chunk of fifty succeeded, and nothing re-processes
+    // PENDING rows, so retrieval over that specification was permanently reduced
+    // to the handful of chunks that happened to land — silently.
+    const result = await embedChunks(doc.id).catch(() => ({ embedded: 0, total: 0 }))
     await prisma.oaCaseDocument.update({
-      where: { id: doc.id }, data: { indexStatus: embedded ? 'INDEXED' : 'PENDING' }
+      where: { id: doc.id },
+      data: { indexStatus: result.total > 0 && result.embedded === result.total ? 'INDEXED' : 'PENDING' }
     })
   }
 
@@ -130,9 +151,9 @@ export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocum
  * Uses the existing corpus embedding service; returns false if unavailable so the
  * document stays PENDING rather than failing the upload.
  */
-export async function embedChunks(documentId: string): Promise<boolean> {
+export async function embedChunks(documentId: string): Promise<{ embedded: number; total: number }> {
   const chunks = await prisma.oaDocumentChunk.findMany({ where: { documentId }, select: { id: true, text: true } })
-  if (!chunks.length) return true
+  if (!chunks.length) return { embedded: 0, total: 0 }
 
   // Destructured dynamic import so TypeScript type-checks these names — an
   // untyped `as any` handle would let a rename compile fine and silently turn
@@ -154,7 +175,7 @@ export async function embedChunks(documentId: string): Promise<boolean> {
       dimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
     }
   } catch { /* embedding stack unavailable */ }
-  if (!corpus) return false
+  if (!corpus) return { embedded: 0, total: chunks.length }
 
   // Derived, not hardcoded: if the corpus dtype ever flips to float,
   // corpusEmbeddingToLiteral returns a bracketed list and this cast follows it.
@@ -177,9 +198,45 @@ export async function embedChunks(documentId: string): Promise<boolean> {
       console.warn('[OA embed] chunk embedding failed:', e instanceof Error ? e.message : e)
     }
   }
-  // Zero successes must leave the document PENDING — returning true here used to
-  // mark documents INDEXED with no vectors behind them (silent retrieval outage).
-  return embedded > 0
+  if (embedded < chunks.length) {
+    console.warn(`[OA embed] document ${documentId}: only ${embedded}/${chunks.length} chunks embedded — left PENDING for re-indexing.`)
+  }
+  return { embedded, total: chunks.length }
+}
+
+/**
+ * Embed any case document whose indexing did not complete.
+ *
+ * Embedding was attempted exactly once, at upload, and nothing anywhere
+ * re-processed a PENDING row — so a rate limit or a transient outage during
+ * upload permanently reduced retrieval over that specification to nothing, with
+ * only a badge to show for it. Called at the start of a prepare run, which is
+ * the moment the vectors are actually needed.
+ *
+ * Never throws: a reply run must not fail because indexing could not catch up.
+ */
+export async function reindexPendingCaseDocuments(caseId: string): Promise<{ reindexed: number; stillPending: number }> {
+  let reindexed = 0
+  let stillPending = 0
+  try {
+    const pending = await prisma.oaCaseDocument.findMany({
+      where: { caseId, indexStatus: 'PENDING', kind: { in: Array.from(EMBEDDED_KINDS) } },
+      select: { id: true }
+    })
+    for (const doc of pending) {
+      const result = await embedChunks(doc.id).catch(() => ({ embedded: 0, total: 0 }))
+      const complete = result.total > 0 && result.embedded === result.total
+      if (complete) {
+        await prisma.oaCaseDocument.update({ where: { id: doc.id }, data: { indexStatus: 'INDEXED' } })
+        reindexed++
+      } else {
+        stillPending++
+      }
+    }
+  } catch (e) {
+    console.warn('[OA embed] re-index pass failed:', e instanceof Error ? e.message : e)
+  }
+  return { reindexed, stillPending }
 }
 
 /** Attach an uploaded document to a citation the system could not fetch (NPL). */

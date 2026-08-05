@@ -11,9 +11,13 @@
  *   - The model proposes taxonomy (labels, descriptions, synonym vocabulary).
  *     It never labels individual patents and never produces a count.
  *   - Postgres counts. Sample-side acceptance and the final census both run the
- *     SAME websearch_to_tsquery vocabulary over the SAME document expression,
- *     so the loop's settle decision and the published numbers cannot diverge
- *     by construction.
+ *     SAME matching rule — the value's websearch_to_tsquery vocabulary over the
+ *     SAME document expression, UNIONed (when the calibrated semantic lane is
+ *     on) with stored-vector distance to the value's vocabulary embedding under
+ *     the SAME ceiling — so the loop's settle decision and the published
+ *     numbers cannot diverge by construction. On an uncalibrated installation
+ *     the semantic arm is off on both sides and matching is wording-only,
+ *     exactly as it always was.
  *
  * The census is exact or refused, like the field map: value hit-extraction and
  * the pairwise join run bare (their failure fails the stage with advice), and
@@ -28,12 +32,15 @@ import {
   assertConceptQueryUsable,
   buildConceptQuery,
   buildScopeFilter,
+  emptyFieldAdvice,
   facet,
   isStatementTimeout,
   narrowingAdvice,
   quotePhrase,
   setStatementTimeout,
 } from './field-map'
+import { candidateCoverageNote, resolveFieldCandidates, resolveMaxDistance, semanticArmUnavailableReason } from './candidates'
+import { comparableVectorSql, embedQueryTexts, semanticLaneConfigured, semanticMatchSql } from './embedding'
 import { rarePairFromCounts } from './rarity'
 import { parseModelJson, runWhitespaceLLM } from './llm'
 import {
@@ -226,6 +233,82 @@ export function compileValueQuery(label: string, synonyms: string[]): string {
   return valueTerms(label, synonyms).map(quotePhrase).join(' OR ')
 }
 
+/** The text a value puts to the encoder: its deduped vocabulary as one subject. */
+export function valueEmbeddingText(label: string, synonyms: string[]): string {
+  return valueTerms(label, synonyms).join(', ')
+}
+
+// ---------------------------------------------------------------------------
+// The semantic arm of VALUE matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-run state for matching families to values by MEANING as well as wording.
+ *
+ * Values are keyword vocabularies, and the same vocabulary trap that emptied
+ * lexical-only fields empties cells: a family admitted to the field by
+ * embedding similarity — which by definition uses different words — matches no
+ * value's phrases, lands in the residual, and inflates exactly the empty cells
+ * the gap detector reads. The semantic arm admits a family to a value when its
+ * stored vector sits within the calibrated ceiling of the value's vocabulary.
+ *
+ * Same discipline as the field arm: gated on the SAME calibrated ceiling
+ * (uncalibrated binary installations run wording-only, exactly as before), and
+ * the SAME rule on both sides of the invariant — sample-side acceptance and the
+ * final census — so the settle decision and the published numbers cannot
+ * diverge. If embedding fails mid-run the lane switches off for everything
+ * AFTER that point; `degraded` records it so the stage can say so rather than
+ * publish the mismatch silently.
+ *
+ * The literal cache is why the arm is affordable: discovery rounds, the refresh
+ * pass and the census all ask for the same value texts, and each text costs one
+ * embedding exactly once.
+ */
+interface ValueSemanticLane {
+  enabled: boolean
+  /** Why the lane is off (never set while enabled). */
+  reason: string | null
+  /** Normalised [0,1] distance ceiling; 0 when the lane is off. */
+  ceiling: number
+  /** True when the lane failed AFTER matching had already used it. */
+  degraded: boolean
+  cache: Map<string, string | null>
+}
+
+function createValueLane(): ValueSemanticLane {
+  const off = (reason: string): ValueSemanticLane => ({ enabled: false, reason, ceiling: 0, degraded: false, cache: new Map() })
+  if (!semanticLaneConfigured()) return off('Semantic search is not configured (no embedding key).')
+  const unavailable = semanticArmUnavailableReason()
+  if (unavailable) return off(unavailable)
+  const ceiling = resolveMaxDistance()
+  if (ceiling === null) return off(semanticArmUnavailableReason() ?? 'No semantic distance ceiling is available.')
+  return { enabled: true, reason: null, ceiling, degraded: false, cache: new Map() }
+}
+
+/**
+ * Literals for the given texts, index-aligned, from the cache plus at most one
+ * batched embedding call for the misses. An embedding failure disables the
+ * lane (degraded, with the reason recorded) and returns all-null — matching
+ * carries on wording-only rather than failing the stage.
+ */
+async function laneLiterals(lane: ValueSemanticLane, texts: string[]): Promise<Array<string | null>> {
+  if (!lane.enabled) return texts.map(() => null)
+  const misses = Array.from(new Set(texts.filter(text => !lane.cache.has(text))))
+  if (misses.length) {
+    try {
+      const embedded = await embedQueryTexts(misses)
+      misses.forEach((text, index) => lane.cache.set(text, embedded[index] ?? null))
+    } catch (error) {
+      lane.enabled = false
+      lane.degraded = true
+      lane.reason = `Embedding the value vocabularies failed mid-run: ${error instanceof Error ? error.message : 'unknown error'}`
+      console.error('[Whitespace] Value semantic lane disabled:', lane.reason)
+      return texts.map(() => null)
+    }
+  }
+  return texts.map(text => lane.cache.get(text) ?? null)
+}
+
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (!a.size || !b.size) return 0
   let intersection = 0
@@ -272,14 +355,20 @@ async function queryNodeCounts(queries: string[]): Promise<number[]> {
 }
 
 /**
- * Assigns the sample to value queries — in SQL, over the UNTRUNCATED document,
- * with the exact expression the census uses. The prompt's 400-char abstracts
- * are a display slice; the measurement never reads them.
+ * Assigns the sample to values — in SQL, over the UNTRUNCATED document, with
+ * the exact expressions the census uses. The prompt's 400-char abstracts are a
+ * display slice; the measurement never reads them.
+ *
+ * Two arms, unioned per value, mirroring the census by construction:
+ *   - lexical: the value's phrase vocabulary against the tsvector document;
+ *   - semantic (when the lane is on): the family's stored vector within the
+ *     calibrated ceiling of the value's vocabulary embedding.
  */
 async function assignSample(
   sampleIds: number[],
   idToFamily: Map<number, string>,
-  queries: string[]
+  queries: string[],
+  semantic?: { lane: ValueSemanticLane; texts: string[] }
 ): Promise<Array<Set<string>>> {
   const sets: Array<Set<string>> = queries.map(() => new Set<string>())
   if (!queries.length || !sampleIds.length) return sets
@@ -301,6 +390,44 @@ async function assignSample(
     const set = sets[Number(row.value_idx) - 1]
     if (family && set) set.add(family)
   }
+
+  if (semantic?.lane.enabled) {
+    const literals = await laneLiterals(semantic.lane, semantic.texts)
+    if (literals.some(Boolean)) {
+      // Nulls travel as '' so ordinality keeps every literal aligned with its
+      // value index; the WHERE filters them after the index is assigned.
+      const padded = literals.map(literal => literal ?? '')
+      try {
+        const semanticRows = await withTimeout<{ id: number; value_idx: number }>(
+          Prisma.sql`
+            WITH q AS (
+              SELECT t.idx::int AS value_idx, t.lit AS lit
+              FROM unnest(${padded}::text[]) WITH ORDINALITY AS t(lit, idx)
+              WHERE t.lit <> ''
+            )
+            SELECT e."localPatentId" AS id, q.value_idx AS value_idx
+            FROM "local_patent_embeddings" e
+            CROSS JOIN q
+            WHERE e."localPatentId" = ANY(${sampleIds}::int[])
+              AND ${comparableVectorSql()}
+              AND ${semanticMatchSql(Prisma.sql`q.lit`, semantic.lane.ceiling)}`,
+          PRECHECK_TIMEOUT_MS
+        )
+        for (const row of semanticRows) {
+          const family = idToFamily.get(Number(row.id))
+          const set = sets[Number(row.value_idx) - 1]
+          if (family && set) set.add(family)
+        }
+      } catch (error) {
+        // Same degradation contract as a failed embedding: wording-only from
+        // here on, and the stage says so instead of publishing the mismatch.
+        semantic.lane.enabled = false
+        semantic.lane.degraded = true
+        semantic.lane.reason = `Semantic value matching failed mid-run: ${error instanceof Error ? error.message : 'unknown error'}`
+        console.error('[Whitespace] Value semantic lane disabled:', semantic.lane.reason)
+      }
+    }
+  }
   return sets
 }
 
@@ -318,8 +445,13 @@ function totalValues(registry: WorkingDimension[]): number {
   return registry.reduce((sum, dimension) => sum + dimension.values.length, 0)
 }
 
-function tooNarrowMessage(familyCount: number, scope: WhitespaceScope): string {
+function tooNarrowMessage(familyCount: number, scope: WhitespaceScope, semanticNote?: string): string {
   const required = scope.concepts.filter(concept => concept.required && concept.label.trim())
+
+  // Nothing at all is a different diagnosis from "a few": the scope missed on
+  // both wording and meaning, so the structural filters are the first suspect
+  // and the intersecting-concepts advice below would be a guess.
+  if (familyCount === 0) return emptyFieldAdvice(scope, semanticNote)
 
   // Intersecting required concepts is by far the most common cause, and the
   // generic "widen the scope" advice sends people to the wrong dial. When two
@@ -361,8 +493,12 @@ export async function runDimensionMapStage(input: {
   // Outside any transaction: a scope whose concepts stem away must fail with
   // the concept named, not census a silently different field.
   if (conceptQuery) await assertConceptQueryUsable(conceptQuery)
-  const where = buildScopeFilter(scope)
-  const coverageNotes: string[] = []
+  const candidates = await resolveFieldCandidates(scope)
+  const where = buildScopeFilter(scope, candidates.ids)
+  const coverageNotes: string[] = [candidateCoverageNote(candidates)]
+  // One lane for the whole run: discovery, refresh and census share its literal
+  // cache, which is what keeps the semantic arm to one embedding per value text.
+  const valueLane = createValueLane()
 
   // --- Pre-check: size the field, refuse too broad AND too narrow -----------
   await progress(runId, 'precheck', 'Sizing the field')
@@ -395,7 +531,7 @@ export async function runDimensionMapStage(input: {
     )
   }
   if (familyCount < MIN_FIELD_FAMILIES) {
-    throw new Error(tooNarrowMessage(familyCount, scope))
+    throw new Error(tooNarrowMessage(familyCount, scope, candidates.reason))
   }
 
   // --- Deterministic sample --------------------------------------------------
@@ -436,7 +572,7 @@ export async function runDimensionMapStage(input: {
   let settledReason: DimensionSettledReason
 
   if (input.suppliedRegistry) {
-    registry = await compileSuppliedRegistry(input.suppliedRegistry, sampleIds, idToFamily)
+    registry = await compileSuppliedRegistry(input.suppliedRegistry, sampleIds, idToFamily, valueLane)
     settledReason = 'REGISTRY_SUPPLIED'
     coverageNotes.push('Viewpoints were supplied by the user (registry edit); discovery did not re-run.')
   } else {
@@ -449,6 +585,7 @@ export async function runDimensionMapStage(input: {
       sampleIds,
       idToFamily,
       rounds,
+      valueLane,
     })
     registry = discovered.registry
     settledReason = discovered.settledReason
@@ -474,7 +611,18 @@ export async function runDimensionMapStage(input: {
   // --- The exact census + gap detection (one transaction) ---------------------
   await progress(runId, 'census', `Counting ${flatValues.length} values across ${familyCount.toLocaleString()} families`)
   const marginFloor = Math.max(30, Math.ceil(0.02 * familyCount))
-  const censusTxTimeout = 2 * CENSUS_TIMEOUT_MS + MAX_TOTAL_VALUES * 2_000 + 8 * FACET_TIMEOUT_MS + 20_000
+  // Outside the transaction, deliberately: the discovery rounds already cached
+  // these literals, so this is normally a pure cache read — but a cold miss is
+  // an embedding API call, and an API call must never hold the census
+  // transaction (and its temp tables' connection) open.
+  const censusLiterals = await laneLiterals(
+    valueLane,
+    flatValues.map(value => valueEmbeddingText(value.label, value.synonyms))
+  )
+  // The semantic arm turns each value probe from a GIN index probe into an
+  // additional join-scan of the staged set; budget accordingly.
+  const censusTxTimeout =
+    2 * CENSUS_TIMEOUT_MS + MAX_TOTAL_VALUES * (valueLane.enabled ? 5_000 : 2_000) + 8 * FACET_TIMEOUT_MS + 20_000
   const facetGaps: string[] = []
 
   const census = await prisma.$transaction(
@@ -512,6 +660,24 @@ export async function runDimensionMapStage(input: {
         )
       }
 
+      // How much of the field the semantic arm can actually see. Families with
+      // no comparable vector are matchable by wording only, and if that share
+      // is large the reader must know it before trusting cell emptiness.
+      let embeddedFamilies: number | null = null
+      if (valueLane.enabled) {
+        const embeddedRows = await facet<{ families: bigint }>(
+          tx,
+          'semanticCoverage',
+          Prisma.sql`
+            SELECT COUNT(DISTINCT c.family_key)::bigint AS families
+            FROM ws_dim_census c
+            JOIN "local_patent_embeddings" e ON e."localPatentId" = c.id
+            WHERE ${comparableVectorSql()}`,
+          facetGaps
+        )
+        if (embeddedRows) embeddedFamilies = Number(embeddedRows[0]?.families ?? 0)
+      }
+
       // The GIN index is what turns M value probes from M sequential scans into
       // M index probes; ANALYZE is what convinces the planner to use it.
       await setStatementTimeout(tx, CENSUS_TIMEOUT_MS)
@@ -521,16 +687,40 @@ export async function runDimensionMapStage(input: {
 
       // Hit extraction: one bounded probe per value. Bare — a value that cannot
       // be counted fails the census; counting it as zero would fabricate a gap.
+      //
+      // Each probe is the SAME two-arm rule assignSample applied to the sample:
+      // wording (tsquery over the staged doc) UNION meaning (stored vector
+      // within the ceiling of the value's vocabulary embedding). UNION rather
+      // than OR so the lexical arm keeps its GIN plan, and the DISTINCT the
+      // margins depend on is preserved by construction.
       await tx.$executeRaw(Prisma.sql`
         CREATE TEMP TABLE ws_dim_hits (family_key TEXT NOT NULL, value_idx INT NOT NULL) ON COMMIT DROP`)
       await setStatementTimeout(tx, FACET_TIMEOUT_MS)
       try {
         for (let m = 0; m < flatValues.length; m++) {
-          await tx.$executeRaw(Prisma.sql`
-            INSERT INTO ws_dim_hits
-            SELECT DISTINCT family_key, ${m}::int
-            FROM ws_dim_census
-            WHERE doc @@ websearch_to_tsquery('english'::regconfig, ${flatValues[m].query})`)
+          const literal = valueLane.enabled ? censusLiterals[m] : null
+          if (literal) {
+            await tx.$executeRaw(Prisma.sql`
+              INSERT INTO ws_dim_hits
+              SELECT DISTINCT u.family_key, ${m}::int
+              FROM (
+                SELECT c.family_key
+                FROM ws_dim_census c
+                WHERE c.doc @@ websearch_to_tsquery('english'::regconfig, ${flatValues[m].query})
+                UNION
+                SELECT c.family_key
+                FROM ws_dim_census c
+                JOIN "local_patent_embeddings" e ON e."localPatentId" = c.id
+                WHERE ${comparableVectorSql()}
+                  AND ${semanticMatchSql(Prisma.sql`${literal}`, valueLane.ceiling)}
+              ) u`)
+          } else {
+            await tx.$executeRaw(Prisma.sql`
+              INSERT INTO ws_dim_hits
+              SELECT DISTINCT family_key, ${m}::int
+              FROM ws_dim_census
+              WHERE doc @@ websearch_to_tsquery('english'::regconfig, ${flatValues[m].query})`)
+          }
           if (m % 8 === 7) await progress(runId, 'census', `Matched ${m + 1} of ${flatValues.length} values`)
         }
       } catch (error) {
@@ -641,6 +831,7 @@ export async function runDimensionMapStage(input: {
         matrices,
         gaps,
         armClaimsAvailable,
+        embeddedFamilies,
       }
     },
     { timeout: censusTxTimeout, maxWait: 20_000 }
@@ -710,6 +901,29 @@ export async function runDimensionMapStage(input: {
       (sampleN / Math.max(1, census.familyCount)) * 100
     )}% of the field); every published count is an exact SQL census of the full field.`
   )
+  // How families were matched to values — the reader is entitled to know which
+  // rule produced the counts before drawing a conclusion from cell emptiness.
+  if (valueLane.enabled) {
+    const embeddedPct =
+      census.embeddedFamilies !== null && census.familyCount
+        ? Math.round((census.embeddedFamilies / census.familyCount) * 100)
+        : null
+    coverageNotes.push(
+      `Families were matched to values by wording OR meaning (embedding-distance ceiling ${valueLane.ceiling})` +
+        (embeddedPct !== null ? `; ${embeddedPct}% of the field carries a comparable vector.` : '.')
+    )
+    if (embeddedPct !== null && embeddedPct < 70) {
+      coverageNotes.push(
+        'A substantial share of this field carries no embedding vector and could only be matched by wording — its cell placements may undercount.'
+      )
+    }
+  } else if (valueLane.degraded) {
+    coverageNotes.push(
+      `Semantic value matching switched off partway through this run — ${valueLane.reason} Counts after that point are wording-only, so cell placements may sit below what viewpoint discovery saw.`
+    )
+  } else if (valueLane.reason) {
+    coverageNotes.push(`Families were matched to values by wording alone — ${valueLane.reason}`)
+  }
   coverageNotes.push(
     'Value matching reads titles and abstracts. A family whose distinguishing vocabulary appears only in claims or description is not placed.'
   )
@@ -765,8 +979,9 @@ async function discoverRegistry(input: {
   sampleIds: number[]
   idToFamily: Map<number, string>
   rounds: DimensionRound[]
+  valueLane: ValueSemanticLane
 }): Promise<{ registry: WorkingDimension[]; settledReason: DimensionSettledReason }> {
-  const { runId, sampleRows, sampleIds, idToFamily, rounds } = input
+  const { runId, sampleRows, sampleIds, idToFamily, rounds, valueLane } = input
   const sampleN = sampleRows.length
   /**
    * A position on an axis has to cover a meaningful slice of the field. At 1%
@@ -913,7 +1128,10 @@ async function discoverRegistry(input: {
     // --- measure everything at once -----------------------------------------
     const allCandidateValues = candidates.flatMap(candidate => candidate.values)
     const nodeCounts = await queryNodeCounts(allCandidateValues.map(value => value.query))
-    const sampleSets = await assignSample(sampleIds, idToFamily, allCandidateValues.map(value => value.query))
+    const sampleSets = await assignSample(sampleIds, idToFamily, allCandidateValues.map(value => value.query), {
+      lane: valueLane,
+      texts: allCandidateValues.map(value => valueEmbeddingText(value.label, value.synonyms)),
+    })
 
     const existingValues = registry.flatMap(dimension => dimension.values.map(value => ({ dimension, value })))
     const residualSet = new Set(residualRows.map(row => row.familyKey))
@@ -1093,7 +1311,10 @@ async function discoverRegistry(input: {
     // the residual the next round reasons from matches the queries on record.
     const refreshTargets = registry.flatMap(dimension => dimension.values)
     if (refreshTargets.length) {
-      const refreshedSets = await assignSample(sampleIds, idToFamily, refreshTargets.map(value => value.query))
+      const refreshedSets = await assignSample(sampleIds, idToFamily, refreshTargets.map(value => value.query), {
+        lane: valueLane,
+        texts: refreshTargets.map(value => valueEmbeddingText(value.label, value.synonyms)),
+      })
       refreshTargets.forEach((value, index) => {
         value.sampleSet = refreshedSets[index]
       })
@@ -1131,7 +1352,8 @@ async function discoverRegistry(input: {
 async function compileSuppliedRegistry(
   supplied: SuppliedDimensionRegistry,
   sampleIds: number[],
-  idToFamily: Map<number, string>
+  idToFamily: Map<number, string>,
+  valueLane: ValueSemanticLane
 ): Promise<WorkingDimension[]> {
   const registry: WorkingDimension[] = []
   for (const rawDimension of (supplied.dimensions ?? []).slice(0, MAX_DIMENSIONS)) {
@@ -1184,7 +1406,10 @@ async function compileSuppliedRegistry(
       } no searchable words after common-word removal. Reword or remove ${dead.length === 1 ? 'it' : 'them'} before re-counting.`
     )
   }
-  const sets = await assignSample(sampleIds, idToFamily, allValues.map(value => value.query))
+  const sets = await assignSample(sampleIds, idToFamily, allValues.map(value => value.query), {
+    lane: valueLane,
+    texts: allValues.map(value => valueEmbeddingText(value.label, value.synonyms)),
+  })
   allValues.forEach((value, index) => {
     value.sampleSet = sets[index]
   })

@@ -229,6 +229,39 @@ export function textMatchPredicate(plan: ConceptQueryPlan): Prisma.Sql {
 }
 
 /**
+ * Membership of the readable corpus slice, with no text condition.
+ *
+ * The semantic candidate lane needs this: it matches by vector rather than by
+ * tsvector, but it must still see EXACTLY the corpora the census counts, or the
+ * hybrid field would quietly acquire 'epo-ops' and 'pqai' rows that the lexical
+ * arm is documented above as excluding — and the census would stop being
+ * reproducible for the reason stated there.
+ */
+export function corpusMembershipPredicate(): Prisma.Sql {
+  const arms = TEXT_CORPORA.map(
+    tag => Prisma.sql`lp."corpusSources" @> ${Prisma.raw(`ARRAY['${tag}']::TEXT[]`)}`
+  )
+  return Prisma.sql`(${Prisma.join(arms, ' OR ')})`
+}
+
+/**
+ * The scope's exclusions as a standalone negative predicate, or null when there
+ * are none.
+ *
+ * Inside the lexical arm exclusions ride along inside the composed tsquery
+ * (`&& !!terms`). A vector-matched candidate never touches that tsquery, so
+ * without this the semantic lane would reintroduce precisely the subject matter
+ * the user excluded — the one way the hybrid could produce a WORSE field than
+ * the lexical one it widens.
+ */
+export function exclusionPredicate(scope: WhitespaceScope): Prisma.Sql | null {
+  const terms = scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)
+  if (!terms.length) return null
+  const query = terms.map(quotePhrase).join(' OR ')
+  return Prisma.sql`NOT (${SEARCH_TSVECTOR} @@ websearch_to_tsquery('english'::regconfig, ${query}))`
+}
+
+/**
  * Verifies every group survives stemming/stopword removal. A group whose every
  * term is stopwords ("the", "of") composes to an EMPTY tsquery, and the tsquery
  * && operator treats empty as identity — the group would silently vanish from
@@ -271,7 +304,7 @@ function normalizeClassificationCode(code: string): string {
  * expression this reproduces exactly, including the corpusSources predicate the
  * planner needs in order to choose it.
  */
-export function buildScopeFilter(scope: WhitespaceScope): Prisma.Sql {
+export function buildScopeFilter(scope: WhitespaceScope, candidateIds?: readonly number[]): Prisma.Sql {
   const clauses: Prisma.Sql[] = [Prisma.sql`lp."filingDate" IS NOT NULL`]
 
   const yearFrom = Math.max(CORPUS_FIRST_YEAR, scope.filters.yearFrom)
@@ -297,9 +330,26 @@ export function buildScopeFilter(scope: WhitespaceScope): Prisma.Sql {
     clauses.push(Prisma.sql`(${Prisma.join([exact, ...prefixes], ' OR ')})`)
   }
 
+  // The concept gate, hybrid: a document qualifies by matching the concept text
+  // OR by being one of the semantically nearest documents in the same corpus
+  // slice (resolveFieldCandidates, which pre-applies these same structural
+  // filters and the exclusions).
+  //
+  // The lexical arm alone made every concept a LITERAL requirement — with two
+  // required concepts a family had to contain both, post-stemming, in title,
+  // abstract or ragText. Patent drafters routinely describe the same thing in
+  // other words, so scopes that a vector search answers with hundreds of
+  // families were returning zero. The OR only ever widens: nothing the lexical
+  // arm found is lost, and the structural filters (years, CPC, jurisdiction,
+  // assignee) still apply to the ANN ids because they are separate AND clauses.
   const conceptQuery = buildConceptQuery(scope)
   if (conceptQuery) {
-    clauses.push(textMatchPredicate(conceptQuery))
+    const lexical = textMatchPredicate(conceptQuery)
+    clauses.push(
+      candidateIds?.length
+        ? Prisma.sql`(${lexical} OR lp."id" = ANY(${candidateIds as number[]}::int[]))`
+        : lexical
+    )
   }
 
   if (scope.filters.jurisdictions.length) {
@@ -374,6 +424,17 @@ export interface FieldMapOptions {
   censusTimeoutMs?: number
   /** Ceiling on staged publications. Defaults to WHITESPACE_CENSUS_ROW_CAP or 250k. */
   censusRowCap?: number
+  /**
+   * Semantically-admitted local_patents ids, ORed into the concept gate.
+   *
+   * Resolved by the CALLER (resolveFieldCandidates in candidates.ts) rather than
+   * here, so this module keeps no dependency on the embedding path — candidates.ts
+   * imports field-map.ts for the structural predicates, and the reverse import
+   * would close a cycle.
+   */
+  candidateIds?: readonly number[]
+  /** How the field was assembled, recorded in the census coverage notes. */
+  candidateNote?: string
 }
 
 /**
@@ -419,6 +480,47 @@ export function narrowingAdvice(scope: WhitespaceScope): string {
 }
 
 /**
+ * Advice for the opposite failure: a scope that matched nothing at all.
+ *
+ * Distinct from narrowingAdvice because the two need opposite actions, and an
+ * empty field used to inherit the "narrow it" wording — which reads as nonsense
+ * when the answer is zero. With the hybrid gate an empty field now means the
+ * scope missed on BOTH wording and meaning, so the structural filters are the
+ * first thing to suspect; when the semantic arm could not run, that is the
+ * likeliest cause and is named first.
+ */
+export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string): string {
+  const parts: string[] = ['No publication in the readable corpus matches this scope.']
+  // Keyword match over every did-not-run reason the candidate resolver emits:
+  // unconfigured key, embed/retrieval failure, no vector, and — the one an
+  // earlier regex missed — the uncalibrated-ceiling refusal, which is exactly
+  // the state of a binary-vector installation before it is measured. The
+  // "found no additional documents" note must NOT match: there the lane RAN,
+  // and blaming it would send the user away from the structural filters.
+  if (semanticNote && /not configured|failed|calibrated|unavailable|disabled|returned no vector/i.test(semanticNote)) {
+    parts.push(
+      'The semantic lane did not run, so the field was matched on concept wording alone — that is the most likely reason this is empty rather than small.'
+    )
+  }
+  const cpc = acceptedCpc(scope)
+  if (cpc.length) {
+    parts.push(
+      `Check the accepted classifications (${cpc.slice(0, 4).join(', ')}${cpc.length > 4 ? ', …' : ''}) — a CPC code that does not cover this subject matter excludes the whole field on its own.`
+    )
+  }
+  if (scope.filters.jurisdictions.length) {
+    parts.push(`Widen the jurisdictions (currently ${scope.filters.jurisdictions.join(', ')}).`)
+  }
+  if (scope.filters.assignees.length) {
+    parts.push('Remove the assignee restriction and re-run to see whether the field exists at all.')
+  }
+  parts.push(
+    `Widen the filing years (currently ${Math.max(CORPUS_FIRST_YEAR, scope.filters.yearFrom)}–${scope.filters.yearTo}), or mark fewer concepts as required — every required concept must be present.`
+  )
+  return parts.join(' ')
+}
+
+/**
  * The message the user sees when the census cannot finish. It has to say what to
  * do about it — "statement timeout" is true and useless.
  */
@@ -442,11 +544,12 @@ export async function runFieldMap(
   // fail with the concept named, not count a silently different field.
   if (conceptQuery) await assertConceptQueryUsable(conceptQuery)
 
-  const where = buildScopeFilter(scope)
+  const where = buildScopeFilter(scope, options.candidateIds)
   const sampleCap = options.assigneeSampleCap ?? ASSIGNEE_SAMPLE_CAP
   const censusTimeoutMs = options.censusTimeoutMs ?? CENSUS_TIMEOUT_MS
   const rowCap = options.censusRowCap ?? CENSUS_ROW_CAP
   const coverageNotes: string[] = []
+  if (options.candidateNote) coverageNotes.push(options.candidateNote)
   const gaps: string[] = []
 
   // One interactive transaction, because the temp table lives on a single
@@ -490,6 +593,13 @@ export async function runFieldMap(
   // real number rather than publish proportions of an unknown population.
   if (publicationCount > rowCap) {
     throw new Error(overCapMessage(scope, rowCap))
+  }
+
+  // An empty census is not an error — the map renders, with zeros — but shipping
+  // it without saying why reads as "this field does not exist", which is a
+  // conclusion the census has not earned. Say what to change instead.
+  if (publicationCount === 0) {
+    coverageNotes.push(emptyFieldAdvice(scope, options.candidateNote))
   }
 
   // --- Facet 2: filing trend ----------------------------------------------

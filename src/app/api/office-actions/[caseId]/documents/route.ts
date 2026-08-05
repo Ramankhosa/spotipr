@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { enforceOfficeActionAccess } from '@/lib/office-action/route-guards'
 import { ingestDocument, OaProfileUnavailableError } from '@/lib/office-action/oa-case-service'
 import { extractUploadText, UnreadableUploadError } from '@/lib/office-action/file-text-extract'
-import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
+import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL, MAX_OA_TEXT_CHARS, MAX_OA_TEXT_LABEL } from '@/lib/office-action/upload-formats'
 import { prisma } from '@/lib/prisma'
 
 // Long-running: parse + classify are LLM calls.
@@ -23,10 +23,8 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   if (!owner) return NextResponse.json({ error: 'Case not found' }, { status: 404 })
   if (owner.userId !== auth.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  if (auth.user.tenantId) {
-    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
-    if (!access.allowed) return access.response
-  }
+  const access = await enforceOfficeActionAccess(auth.user)
+  if (!access.allowed) return access.response
 
   // Accepts a PDF / Word / text upload (multipart) or { rawText } JSON.
   const contentType = request.headers.get('content-type') || ''
@@ -66,6 +64,13 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   }
 
   if (!rawText.trim()) return NextResponse.json({ error: 'No text could be read from the report' }, { status: 400 })
+  // The multipart branch is size-capped; the JSON branch was not, so a pasted
+  // body of any size flowed straight into the paid parse + classify calls.
+  if (rawText.length > MAX_OA_TEXT_CHARS) {
+    return NextResponse.json({
+      error: `That document is too long (max ${MAX_OA_TEXT_LABEL}). Upload it as a file, or split it.`
+    }, { status: 413 })
+  }
 
   // Forward the auth header so the metering gateway resolves the same tenant.
   const requestHeaders: Record<string, string> = {}
@@ -86,8 +91,13 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     }
     return NextResponse.json(result, { status: 201 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Ingest failed'
-    const status = err instanceof OaProfileUnavailableError ? 503 : 500
-    return NextResponse.json({ error: message }, { status })
+    if (err instanceof OaProfileUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 })
+    }
+    // Internal detail (Prisma constraints, gateway internals) stays in the log.
+    console.error('[OA documents] ingest failed:', err instanceof Error ? err.message : err)
+    return NextResponse.json({
+      error: 'The report could not be processed. Please try again, or upload it as a file.'
+    }, { status: 500 })
   }
 }

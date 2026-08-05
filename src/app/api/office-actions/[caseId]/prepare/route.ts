@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { enforceOfficeActionAccess } from '@/lib/office-action/route-guards'
 import { prisma } from '@/lib/prisma'
 import { kickOfficeActionJobsInline } from '@/lib/office-action-job-service'
 
@@ -25,19 +25,17 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   if (!owner) return NextResponse.json({ error: 'Case not found' }, { status: 404 })
   if (owner.userId !== auth.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  if (auth.user.tenantId) {
-    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
-    if (!access.allowed) return access.response
-  }
+  const access = await enforceOfficeActionAccess(auth.user)
+  if (!access.allowed) return access.response
 
   let body: any = {}
   try { body = await request.json() } catch { /* optional */ }
 
-  // Concurrency guard: one prepare per case at a time.
-  const active = await prisma.officeActionJob.findFirst({
-    where: { caseId: params.caseId, jobType: 'PREPARE_REPLY', status: { in: ['QUEUED', 'PROCESSING'] } },
-    orderBy: { createdAt: 'desc' }
-  })
+  const ACTIVE = {
+    caseId: params.caseId,
+    jobType: 'PREPARE_REPLY' as const,
+    status: { in: ['QUEUED' as const, 'PROCESSING' as const] }
+  }
 
   /**
    * Pause: flag the running job. The worker checks the flag between objections
@@ -46,6 +44,7 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
    * that document in play for the objections not yet drafted.
    */
   if (body.action === 'pause') {
+    const active = await prisma.officeActionJob.findFirst({ where: ACTIVE, orderBy: { createdAt: 'desc' } })
     if (!active) return NextResponse.json({ error: 'Nothing is running to pause.' }, { status: 409 })
     await prisma.officeActionJob.update({
       where: { id: active.id },
@@ -54,25 +53,47 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     return NextResponse.json({ jobId: active.id, status: active.status, pausing: true }, { status: 202 })
   }
 
-  if (active) {
-    return NextResponse.json({ jobId: active.id, status: active.status, alreadyRunning: true }, { status: 202 })
-  }
+  /**
+   * Claim-or-create, atomically.
+   *
+   * The check and the create have to happen under one lock. As a plain findFirst
+   * followed by a create, two simultaneous POSTs (a double-click) both saw no
+   * active job and both enqueued. The worker's lease serialized them, but the
+   * second run then found the first's finished draft, opened a new version and
+   * re-bought every LLM call — precisely the "double-clicks must not double the
+   * LLM spend" this route documents. A transaction-scoped advisory lock on the
+   * case serializes the pair without a new DB constraint, and Postgres releases
+   * it when the transaction ends, however it ends.
+   */
+  const { job, alreadyRunning } = await prisma.$transaction(async tx => {
+    await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `oa-prepare:${params.caseId}`)
 
-  const job = await prisma.officeActionJob.create({
-    data: {
-      caseId: params.caseId,
-      userId: auth.user.id,
-      jobType: 'PREPARE_REPLY',
-      status: 'QUEUED',
-      payload: {
-        tenantId: auth.user.tenantId || null,
-        objectionIds: Array.isArray(body.objectionIds) ? body.objectionIds : undefined,
-        // 'resume' continues the latest draft and redrafts only its gaps;
-        // anything else opens a fresh version.
-        resume: body.action === 'resume'
-      } as any
-    }
+    const existing = await tx.officeActionJob.findFirst({ where: ACTIVE, orderBy: { createdAt: 'desc' } })
+    if (existing) return { job: existing, alreadyRunning: true }
+
+    const created = await tx.officeActionJob.create({
+      data: {
+        caseId: params.caseId,
+        userId: auth.user.id,
+        jobType: 'PREPARE_REPLY',
+        status: 'QUEUED',
+        payload: {
+          tenantId: auth.user.tenantId || null,
+          objectionIds: Array.isArray(body.objectionIds)
+            ? body.objectionIds.map(String).slice(0, 500)
+            : undefined,
+          // 'resume' continues the latest draft and redrafts only its gaps;
+          // anything else opens a fresh version.
+          resume: body.action === 'resume'
+        } as any
+      }
+    })
+    return { job: created, alreadyRunning: false }
   })
+
+  if (alreadyRunning) {
+    return NextResponse.json({ jobId: job.id, status: job.status, alreadyRunning: true }, { status: 202 })
+  }
 
   // Drain inline (detached) so the job runs even without the standalone worker.
   kickOfficeActionJobsInline('prepare')

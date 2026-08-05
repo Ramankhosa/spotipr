@@ -32,9 +32,39 @@ async function heartbeat(jobId: string, workerId: string) {
   if (updated.count !== 1) throw new OaJobLeaseLostError()
 }
 
+/**
+ * Run `work` while renewing the lease, and ABORT if the lease is lost.
+ *
+ * The failure this closes: heartbeat() throws OaJobLeaseLostError when its
+ * guarded renew updates 0 rows, but the error was swallowed by the interval's
+ * `.catch(() => undefined)`, so nothing ever stopped the running work. After a
+ * DB blip longer than LEASE_MS another worker (or the poll route's inline drain)
+ * re-claims the job and starts a second `prepareReply` while the first is still
+ * running — two pipelines writing the same draft row and double LLM spend, with
+ * the loser's completion write merely skipped by the lockedBy guard, after the
+ * money was spent.
+ *
+ * Racing the lease loss against the work makes the error observable so the
+ * caller's `instanceof OaJobLeaseLostError` branch can finally be reached.
+ */
 async function withHeartbeat<T>(jobId: string, workerId: string, work: () => Promise<T>): Promise<T> {
-  const timer = setInterval(() => void heartbeat(jobId, workerId).catch(() => undefined), 60_000)
-  try { return await work() } finally { clearInterval(timer) }
+  let onLeaseLost: ((err: Error) => void) | null = null
+  const leaseLost = new Promise<never>((_, reject) => { onLeaseLost = reject })
+
+  const timer = setInterval(() => {
+    void heartbeat(jobId, workerId).catch(err => {
+      if (err instanceof OaJobLeaseLostError) onLeaseLost?.(err)
+      // A transient DB error is not a lost lease — keep going and let the next
+      // tick decide. Only a successful query that matched no row means another
+      // worker owns this job now.
+    })
+  }, 60_000)
+
+  try {
+    return await Promise.race([work(), leaseLost])
+  } finally {
+    clearInterval(timer)
+  }
 }
 
 /** Atomically claim the next runnable job for this worker (guarded updateMany). */
@@ -50,9 +80,47 @@ export async function claimNextOfficeActionJob(workerId: string) {
     take: 10
   })
   for (const candidate of candidates) {
+    /**
+     * Re-claiming a PROCESSING job counts as an attempt.
+     *
+     * attemptCount used to be bumped only in the catch path, which a worker that
+     * dies mid-job (OOM on a large specification, container restart) never
+     * reaches. The lock then expires, the job is re-claimed, and `maxAttempts`
+     * never triggers — so it re-ran every ~5 minutes forever, re-spending the
+     * LLM calls up to the crash point each time, never reaching FAILED and never
+     * mailing the attorney. Counting the re-claim makes the retry budget apply
+     * to crashes, not just to caught errors.
+     */
+    const isReclaim = candidate.status === 'PROCESSING'
+    const attempts = (candidate.attemptCount || 0) + (isReclaim ? 1 : 0)
+    const maxAttempts = candidate.maxAttempts || 3
+
+    if (isReclaim && attempts >= maxAttempts) {
+      const written = await (prisma as any).officeActionJob.updateMany({
+        where: { id: candidate.id, status: 'PROCESSING', OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }] },
+        data: {
+          status: 'FAILED', attemptCount: attempts, lockedBy: null, lockedUntil: null,
+          lastError: candidate.lastError || 'The run stopped without recording an error (the worker did not survive it).'
+        }
+      })
+      if (written.count === 1 && candidate.jobType === 'PREPARE_REPLY') {
+        await notifyPrepareOutcome(candidate, {
+          status: 'FAILED',
+          error: 'The run stopped unexpectedly and did not recover. Whatever had been drafted is saved — open the case and choose "Resume preparation".'
+        }).catch(() => undefined)
+      }
+      continue
+    }
+
     const claimed = await (prisma as any).officeActionJob.updateMany({
       where: { id: candidate.id, status: { in: ['QUEUED', 'PROCESSING'] }, OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }] },
-      data: { status: 'PROCESSING', lockedBy: workerId, lockedUntil: lockExpiry(), heartbeatAt: now, startedAt: candidate.startedAt || now, lastError: null }
+      data: {
+        status: 'PROCESSING', lockedBy: workerId, lockedUntil: lockExpiry(), heartbeatAt: now,
+        startedAt: candidate.startedAt || now, attemptCount: attempts,
+        // Keep the previous error on a re-claim: it is the only record of why the
+        // last run did not finish, and clearing it erased the evidence each cycle.
+        ...(isReclaim ? {} : { lastError: null })
+      }
     })
     if (claimed.count === 1) {
       return (prisma as any).officeActionJob.findUnique({ where: { id: candidate.id } })

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { enforceOfficeActionAccess } from '@/lib/office-action/route-guards'
 import { prisma } from '@/lib/prisma'
 
 /**
@@ -39,6 +39,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
   if (!draft) return NextResponse.json({ error: 'No reply draft yet — prepare the reply first' }, { status: 409 })
 
   const sections = (draft.sectionsJson as any) || {}
+  /**
+   * Refuse edits while a prepare run owns this draft.
+   *
+   * The pipeline holds its own in-memory copy of the section array from the
+   * moment the run starts and rewrites the whole JSON after every objection. An
+   * edit or approval landing mid-run was therefore silently discarded by the next
+   * persist — the attorney watched their approval disappear with no error. Say so
+   * instead of accepting a write that is about to be thrown away.
+   */
+  if (sections.inProgress === true) {
+    return NextResponse.json({
+      error: 'This reply is still being prepared. Pause the run (or wait for it to finish) before editing — an edit made now would be overwritten by the run.',
+      code: 'DRAFT_IN_PROGRESS'
+    }, { status: 409 })
+  }
   const replies: any[] = Array.isArray(sections.objectionReplies) ? sections.objectionReplies : []
 
   if (Array.isArray(body.objectionReplies)) {
@@ -130,7 +145,18 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
         }
       }
 
-      if (typeof edit.approved === 'boolean') target.approved = edit.approved
+      /**
+       * Approval is applied only when this edit did not also change the text.
+       *
+       * Sending { bodyText, approved: true } in one call set approved=false for
+       * the edit and then immediately back to true here — so replacement text
+       * became export-eligible in a single request without anyone re-reading it,
+       * defeating the "edits re-open approval" rule this route documents.
+       * Approving is a separate act from editing, and now has to be a separate
+       * call.
+       */
+      const alsoEditedText = typeof edit.bodyText === 'string'
+      if (typeof edit.approved === 'boolean' && !alsoEditedText) target.approved = edit.approved
     }
   }
 
@@ -226,10 +252,8 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   if (!oaCase) return NextResponse.json({ error: 'Case not found' }, { status: 404 })
   if (oaCase.userId !== auth.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  if (auth.user.tenantId) {
-    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
-    if (!access.allowed) return access.response
-  }
+  const access = await enforceOfficeActionAccess(auth.user)
+  if (!access.allowed) return access.response
 
   let body: any
   try { body = await request.json() } catch {
@@ -249,6 +273,12 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     where: { caseId: params.caseId }, orderBy: { version: 'desc' }
   })
   if (!draft) return NextResponse.json({ error: 'No reply draft yet — prepare the reply first' }, { status: 409 })
+  if (((draft.sectionsJson as any) || {}).inProgress === true) {
+    return NextResponse.json({
+      error: 'This reply is still being prepared. Pause the run before redrafting a section — the run would overwrite it.',
+      code: 'DRAFT_IN_PROGRESS'
+    }, { status: 409 })
+  }
 
   const { loadOfficeActionProfile } = await import('@/lib/office-action/oa-case-service')
   const profile = await loadOfficeActionProfile(oaCase.jurisdictionCode)
@@ -293,13 +323,28 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   // Keep the attorney's remark with the section: it is the record of why the
   // wording changed, and it pre-fills the box if they want to refine again.
   const next = { ...(current || {}), ...drafted, approved: false, attorneyRemarks: remarks }
-  const merged = current
-    ? replies.map(r => r.objectionId === objectionId ? next : r)
-    : [...replies, next].sort((a, b) => a.sortOrder - b.sortOrder)
+
+  /**
+   * Re-read the row before writing.
+   *
+   * The redraft is one LLM call and takes a while, and `sections` was read before
+   * it. Writing that stale snapshot back would discard anything the attorney (or
+   * another tab) changed on OTHER sections in the meantime. Merge into the
+   * current row and touch only this objection's entry.
+   */
+  const fresh = await prisma.oaResponseDraft.findUnique({
+    where: { id: draft.id }, select: { sectionsJson: true }
+  })
+  const freshSections = (fresh?.sectionsJson as any) || sections
+  const freshReplies: any[] = Array.isArray(freshSections.objectionReplies) ? freshSections.objectionReplies : []
+  const exists = freshReplies.some(r => r.objectionId === objectionId)
+  const merged = exists
+    ? freshReplies.map(r => r.objectionId === objectionId ? { ...r, ...next } : r)
+    : [...freshReplies, next].sort((a, b) => a.sortOrder - b.sortOrder)
 
   await prisma.oaResponseDraft.update({
     where: { id: draft.id },
-    data: { sectionsJson: { ...sections, objectionReplies: merged } as any }
+    data: { sectionsJson: { ...freshSections, objectionReplies: merged } as any }
   })
   await prisma.oaObjection.updateMany({ where: { id: objectionId }, data: { status: 'DRAFTED' } }).catch(() => {})
 

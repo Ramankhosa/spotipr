@@ -51,9 +51,12 @@ export async function notifyPrepareOutcome(job: { id: string; caseId: string; us
     const docs = await prisma.officeActionDocument.findMany({
       where: { caseId: job.caseId }, select: { deadlinesJson: true }
     })
-    const upcoming = docs
-      .flatMap(d => (d.deadlinesJson as any[]) || [])
-      .filter(d => d?.dueDate && typeof d.daysRemaining === 'number' && d.daysRemaining >= 0)
+    // Recomputed against today. The stored daysRemaining is frozen at ingest, so
+    // filtering and sorting on it mailed the attorney a long-lapsed deadline as
+    // still having months left.
+    const { refreshDeadlines } = await import('./deadline-engine')
+    const upcoming = refreshDeadlines(docs.flatMap(d => (d.deadlinesJson as any[]) || []))
+      .filter(d => d?.dueDate && d.daysRemaining >= 0)
       .sort((a, b) => a.daysRemaining - b.daysRemaining)[0]
     const deadlineLine = upcoming
       ? `<p style="margin:0 0 12px"><strong>${esc(upcoming.what || 'Reply')}</strong> is due ${esc(String(upcoming.dueDate))} — ${upcoming.daysRemaining} day${upcoming.daysRemaining === 1 ? '' : 's'} left.</p>`

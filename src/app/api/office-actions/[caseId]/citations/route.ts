@@ -3,7 +3,7 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { toAttorneyView } from '@/lib/office-action/citation-resolver'
 import { extractUploadText, UnreadableUploadError } from '@/lib/office-action/file-text-extract'
-import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
+import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL, MAX_OA_TEXT_CHARS, MAX_OA_TEXT_LABEL } from '@/lib/office-action/upload-formats'
 
 /**
  * GET /api/office-actions/:caseId/citations
@@ -58,6 +58,9 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   let label = ''
   let title: string | undefined
   let text = ''
+  // Which communication's citation this copy belongs to, when the label alone is
+  // ambiguous across the case.
+  let requestedDocumentId = ''
 
   const contentType = request.headers.get('content-type') || ''
   if (contentType.includes('multipart/form-data')) {
@@ -65,6 +68,7 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
       const form = await request.formData()
       label = String(form.get('label') || '').trim()
       title = String(form.get('title') || '').trim() || undefined
+      requestedDocumentId = String(form.get('documentId') || '').trim()
       const file = form.get('file') as File | null
       if (!file) return NextResponse.json({ error: 'file is required' }, { status: 400 })
       if (file.size > MAX_OA_UPLOAD_BYTES) {
@@ -88,14 +92,52 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     label = String(body.label || '').trim()
     title = body.title ? String(body.title).trim() : undefined
     text = String(body.text || '')
+    requestedDocumentId = String(body.documentId || '').trim()
   }
 
   if (!label) return NextResponse.json({ error: 'Tell us which cited document this is (e.g. D1).' }, { status: 400 })
   if (!text.trim()) return NextResponse.json({ error: 'No text could be read from the document' }, { status: 400 })
+  // The JSON branch had no size bound; this text lands whole in a JSONB column
+  // and is fed to the claim chart.
+  if (text.length > MAX_OA_TEXT_CHARS) {
+    return NextResponse.json({
+      error: `That document is too long (max ${MAX_OA_TEXT_LABEL}). Upload it as a file, or split it.`
+    }, { status: 413 })
+  }
 
-  // Labels are per communication; match case-insensitively across the case.
-  const citations = await prisma.oaCitation.findMany({ where: { document: { caseId: params.caseId } } })
-  const target = citations.find(c => c.label.toLowerCase() === label.toLowerCase())
+  /**
+   * Labels are per communication, so "D1" can name two different documents on a
+   * case that has both a FER and a later notice. An unordered findMany + find
+   * attached the attorney's copy to whichever row came back first — potentially
+   * the wrong instrument's citation, whose claim chart then charts against text
+   * the examiner never cited.
+   *
+   * Resolve deterministically (oldest communication first), and when the label is
+   * genuinely ambiguous, ask which one rather than guessing.
+   */
+  const citations = await prisma.oaCitation.findMany({
+    where: { document: { caseId: params.caseId } },
+    include: { document: { select: { id: true, createdAt: true, instrumentType: true } } },
+    orderBy: [{ document: { createdAt: 'asc' } }, { label: 'asc' }]
+  })
+  const matches = citations.filter(c => c.label.toLowerCase() === label.toLowerCase())
+
+  const target = requestedDocumentId
+    ? matches.find(c => c.documentId === requestedDocumentId)
+    : matches[0]
+
+  if (matches.length > 1 && !requestedDocumentId) {
+    return NextResponse.json({
+      error: `This case has more than one cited document labelled "${label}". Say which communication it belongs to.`,
+      ambiguousLabel: label,
+      candidates: matches.map(c => ({
+        documentId: c.documentId,
+        instrumentType: c.document?.instrumentType || null,
+        docNumber: c.docNumber
+      }))
+    }, { status: 409 })
+  }
+
   if (!target) {
     return NextResponse.json({
       error: citations.length

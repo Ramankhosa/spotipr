@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { enforceOfficeActionAccess } from '@/lib/office-action/route-guards'
 import { prisma } from '@/lib/prisma'
 import { addCaseDocument, listCaseDocuments, removeCaseDocument, type CaseDocumentKind, type CaseDocumentSource } from '@/lib/office-action/case-document-service'
 import { extractUploadText, UnreadableUploadError } from '@/lib/office-action/file-text-extract'
-import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
+import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL, MAX_OA_TEXT_CHARS, MAX_OA_TEXT_LABEL } from '@/lib/office-action/upload-formats'
 
 export const maxDuration = 120
 
@@ -46,10 +46,8 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   if ('error' in guard) return guard.error
 
   // Indexing embeds every chunk — gate it like the other OA write routes.
-  if (auth.user.tenantId) {
-    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
-    if (!access.allowed) return access.response
-  }
+  const access = await enforceOfficeActionAccess(auth.user)
+  if (!access.allowed) return access.response
 
   const contentType = request.headers.get('content-type') || ''
   let kind: CaseDocumentKind = 'SPECIFICATION'
@@ -109,6 +107,13 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
 
   if (!KINDS.includes(kind)) return NextResponse.json({ error: `kind must be one of ${KINDS.join(', ')}` }, { status: 400 })
   if (!text.trim()) return NextResponse.json({ error: 'No text could be read from the document' }, { status: 400 })
+  // Only the multipart branch was size-capped. The JSON branch chunked and
+  // paid-embedded whatever it was given, with no bound at all.
+  if (text.length > MAX_OA_TEXT_CHARS) {
+    return NextResponse.json({
+      error: `That document is too long (max ${MAX_OA_TEXT_LABEL}). Upload it as a file, or split it.`
+    }, { status: 413 })
+  }
 
   const result = await addCaseDocument({ caseId: params.caseId, kind, source, title, text, intentNote, targetCodes })
   return NextResponse.json({ ...result, ...(uploadWarning ? { warning: uploadWarning } : {}) }, { status: 201 })

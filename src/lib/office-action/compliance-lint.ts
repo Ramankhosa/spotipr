@@ -1,12 +1,15 @@
 import type { AssembledReply, DraftedObjectionReply, AmendedClaim } from './reply-assembly'
 import {
-  extractCitedParagraphNumbers, formatParagraphRefsForPreview, resolveBasisRefs,
+  extractCitedParagraphNumbers, formatParagraphRefsForFiling, resolveBasisRefs,
+  UNVERIFIED_REF_PLACEHOLDER,
   type Paragraph, type MarkerAnalysis
 } from './document-intake'
 import type { BasisSourceIdentity, CitationOverride } from './oa-json-schema'
 import { isComplianceConfirmed } from './oa-json-schema'
 import { complianceRuleFor } from './procedural-reply'
 import { findContradictions, type ChartFact } from './contradiction-lint'
+import { checkQuotations, checkAuthorities, checkQuantitativeClaims, type EvidenceSource, type ProseFinding } from './prose-evidence'
+import { allProfileAuthorities } from './objection-doctrine'
 import type { OfficeActionProfile } from './oa-profile-schema'
 
 /**
@@ -118,6 +121,17 @@ export interface LintInput {
 
   /** Every charted cell on the case — what the drafted prose is checked against. */
   chartFacts?: ChartFact[]
+
+  /**
+   * Documents whose text is on file, so a quotation or a figure in the reply can
+   * be checked against them: the cited references (D1, D2…), the specification
+   * as filed, the claims, the communication being answered, and any
+   * attorney-supplied evidence.
+   *
+   * Absent, the quotation and quantity checks are skipped rather than guessed —
+   * an absent optional must not fail open into a green tick.
+   */
+  evidenceSources?: EvidenceSource[]
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +269,7 @@ export function lintReply(input: LintInput): LintResult {
   checks.push(...paragraphCitationChecks(input))
   checks.push(...chartConflictChecks(input))
   checks.push(...contradictionChecks(input))
+  checks.push(...proseEvidenceChecks(input))
   checks.push(...proceduralChecks(input))
   checks.push(...identityChecks(input))
 
@@ -299,6 +314,8 @@ function paragraphCitationChecks(input: LintInput): LintCheck[] {
   const sources = filedTexts(input)
   const derived = input.numbering.mode === 'DERIVED'
   const citable = new Set(input.specParagraphs.filter(p => p.citable).map(p => p.id.slice(1)))
+  // Full anchor ids ("¶0007"), the form the filing renderer checks against.
+  const citableSet = new Set(input.specParagraphs.filter(p => p.citable).map(p => p.id))
 
   const overrides = new Map(
     (input.citationOverrides || [])
@@ -354,13 +371,24 @@ function paragraphCitationChecks(input: LintInput): LintCheck[] {
     })
   }
 
-  // Residue: no internal anchor may survive into the filing. Normalise FIRST —
-  // stored text keeps its anchors by design, so testing the raw body would fail
-  // every correct reply.
-  const residue = sources.filter(s => /[¶§]\s?\d/.test(formatParagraphRefsForPreview(s.text, input.numbering.mode)))
-  checks.push(residue.length === 0
-    ? { id: 'anchorResidue', label: 'No internal anchors in the filed text', status: 'pass' }
-    : { id: 'anchorResidue', label: 'No internal anchors in the filed text', status: 'fail', detail: `Internal paragraph anchors remain in: ${residue.map(r => r.where).slice(0, 5).join(', ')}` })
+  /**
+   * Anchors the filing renderer will not stand behind.
+   *
+   * This used to test for `[¶§]\d` AFTER running the preview formatter, which by
+   * construction removes every such anchor — so the check could only ever pass
+   * and verified nothing. Run the FILING renderer instead and look for the
+   * placeholder it substitutes: that is the actual thing the attorney would find
+   * mid-sentence in the exported document, and it is falsifiable.
+   */
+  const unverifiable = sources.filter(s =>
+    formatParagraphRefsForFiling(s.text, { numbering: input.numbering.mode, citableIds: citableSet })
+      .includes(UNVERIFIED_REF_PLACEHOLDER))
+  checks.push(unverifiable.length === 0
+    ? { id: 'anchorResidue', label: 'Every paragraph reference resolves in the filed text', status: 'pass' }
+    : {
+        id: 'anchorResidue', label: 'Every paragraph reference resolves in the filed text', status: 'fail',
+        detail: `The exported document will read "${UNVERIFIED_REF_PLACEHOLDER}" in place of ${unverifiable.length} reference(s) we cannot vouch for, in: ${unverifiable.map(r => r.where).slice(0, 5).join(', ')}. Fix or remove them before filing.`
+      })
 
   // Amendment basis must resolve, and must come from the designated as-filed source.
   const allRefs = input.amendedClaims.flatMap(c => c.basisRefs || [])
@@ -436,6 +464,65 @@ function contradictionChecks(input: LintInput): LintCheck[] {
 }
 
 // ---------------------------------------------------------------------------
+// Evidence behind the drafted prose
+// ---------------------------------------------------------------------------
+
+/** Collapse per-section findings into one check; a single 'fail' makes it fail. */
+function rollUp(id: string, label: string, findings: ProseFinding[], passDetail?: string): LintCheck {
+  if (!findings.length) return { id, label, status: 'pass', detail: passDetail }
+  const failures = findings.filter(f => f.status === 'fail')
+  const shown = (failures.length ? failures : findings).slice(0, 3)
+  return {
+    id, label,
+    status: failures.length ? 'fail' : 'warn',
+    detail: shown.map(f => `${f.where}: ${f.detail}`).join(' ')
+  }
+}
+
+/**
+ * What the filed prose asserts, against what the case can actually support.
+ *
+ * Everything else in this lint checks structured artefacts — chart cells,
+ * amendment basis, paragraph anchors. These three check the sentences, which is
+ * what the Controller reads. Each is a deterministic function over the finished
+ * text: none of them can be satisfied by the drafting model asserting that it
+ * complied, which is the whole reason they exist. The prompt already says "do
+ * not fabricate quotes or authorities"; that is an instruction, not a control.
+ */
+function proseEvidenceChecks(input: LintInput): LintCheck[] {
+  const checks: LintCheck[] = []
+  const sources = input.evidenceSources || []
+  const sections = filedTexts(input)
+  if (!sections.length) return checks
+
+  // Quotations and figures can only be checked against text we hold. With no
+  // sources the checks are SKIPPED, not passed — an absent optional must never
+  // render as a green tick that verified nothing.
+  if (sources.length) {
+    checks.push(rollUp(
+      'quotations', 'Quoted passages appear in the documents on file',
+      checkQuotations(sections, sources),
+      'every quotation located'
+    ))
+    checks.push(rollUp(
+      'quantitativeClaims', 'Figures cited in the reply are supported by the record',
+      checkQuantitativeClaims(sections, sources)
+    ))
+  }
+
+  // Authorities are checked against the jurisdiction profile, which is always
+  // present on the export path.
+  if (input.profile) {
+    checks.push(rollUp(
+      'authorities', 'Authorities cited are those this jurisdiction allows',
+      checkAuthorities(sections, allProfileAuthorities(input.profile))
+    ))
+  }
+
+  return checks
+}
+
+// ---------------------------------------------------------------------------
 // Procedural compliance
 // ---------------------------------------------------------------------------
 
@@ -447,17 +534,33 @@ function proceduralChecks(input: LintInput): LintCheck[] {
   const procedural = input.objectionReplies.filter(r => r.attorneyAction)
   if (!procedural.length) return []
 
-  // Only one question is asked here: has the attorney confirmed the act?
+  // Only one question is asked here: has the attorney SETTLED the act?
   //
   // We deliberately do NOT also require a copy of the document. The filing
   // happens at the office, outside this system, so an attachment would prove
   // nothing — and a warning that fires on every procedural confirmation, which
   // nobody can act on, only teaches people to ignore the lint panel.
-  const unconfirmed = procedural.filter(r => !isComplianceConfirmed(r as any))
+  //
+  // NOT_APPLICABLE is settled too. That section contributes no text at all (the
+  // draft route clears its body), so there is no unconfirmed assertion to catch
+  // — treating it as one produced a blocking finding with no state that could
+  // ever clear it, which the attorney had to acknowledge on every single export.
+  const unconfirmed = procedural.filter(r => {
+    const status = (r as any)?.compliance?.status
+    if (status === 'NOT_APPLICABLE') return false
+    return !isComplianceConfirmed(r as any)
+  })
+  const notApplicable = procedural.filter(r => (r as any)?.compliance?.status === 'NOT_APPLICABLE')
 
+  const settled = procedural.length - unconfirmed.length
   const checks: LintCheck[] = []
   checks.push(unconfirmed.length === 0
-    ? { id: 'procedural', label: 'Procedural requirements confirmed', status: 'pass', detail: `${procedural.length} confirmed` }
+    ? {
+        id: 'procedural', label: 'Procedural requirements confirmed', status: 'pass',
+        detail: notApplicable.length
+          ? `${settled} settled (${notApplicable.length} marked not applicable)`
+          : `${settled} confirmed`
+      }
     : {
         id: 'procedural', label: 'Procedural requirements confirmed', status: 'fail',
         detail: `${unconfirmed.length} section(s) state compliance you have not confirmed. These are acts you perform, not arguments — confirm each one before this reply is filed.`

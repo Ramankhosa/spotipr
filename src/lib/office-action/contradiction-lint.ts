@@ -38,7 +38,11 @@ export interface ContradictionMatch {
   matchedFeatures: string[]
   confidence: MatchConfidence
   verdict: string
-  /** Only ever true at HIGH confidence. */
+  /**
+   * HIGH confidence, or an absence asserted against a document that is not
+   * completely on file — that one does not depend on resolving which limitation
+   * the sentence means.
+   */
   blocking: boolean
   message: string
 }
@@ -56,8 +60,18 @@ const PRESENT_PATTERNS = [
   /\bdiscloses\b/i, /\bteaches\b/i, /\bdescribes\b/i, /\bshows\b/i
 ]
 
-/** A sentence about the examiner's reasoning is not a claim about a document. */
-const NOT_A_DOCUMENT_CLAIM = /\bexaminer\b|\bcontroller\b|\bobjection\b|\bhindsight\b|\bcombination is\b/i
+/**
+ * A sentence ABOUT the examiner's reasoning is not a claim about a document.
+ *
+ * This has to be narrow. Bare "objection" and "controller" matched almost every
+ * sentence this check exists to catch — Indian reply style is "In response to
+ * the objection, it is submitted that D1 does not disclose X" and "the
+ * Controller is respectfully requested…" — so the check was silently skipped on
+ * a large fraction of real drafted prose. Match the reasoning-ABOUT-reasoning
+ * shapes instead of the nouns.
+ */
+const NOT_A_DOCUMENT_CLAIM =
+  /\b(?:examiner|controller)\s+(?:has\s+|had\s+)?(?:alleged|asserted|contended|argued|objected|observed|stated|held|considered|combined|relied|reasoned)\b|\bhindsight\b|\bex\s+post\s+facto\b|\bcombination is\b|\bmotivation to combine\b/i
 
 function splitSentences(text: string): string[] {
   return (text || '')
@@ -106,9 +120,29 @@ function matchFeatures(sentence: string, facts: ChartFact[]): { features: ChartF
   const strong = scored.filter(s => s.exact || s.rareHits >= 1)
   if (!strong.length) return { features: [], confidence: 'LOW' }
 
-  // Exactly one feature, matched on something specific → confident.
-  if (strong.length === 1 && (strong[0].exact || strong[0].rareHits >= 1)) {
-    return { features: [strong[0].fact], confidence: 'HIGH' }
+  /**
+   * Count DISTINCT limitations, not chart rows.
+   *
+   * The same limitation is charted once per claim it appears in, so "the
+   * phaseolin promoter" routinely matches two or three rows that are all the
+   * same feature with the same verdict. Counting rows made that look ambiguous
+   * and downgraded a real, blocking contradiction to an advisory warning — the
+   * normal case, not the edge case. Ambiguity is several DIFFERENT limitations,
+   * or the same one charted to opposite verdicts.
+   */
+  const byFeature = new Map<string, typeof strong>()
+  for (const s of strong) {
+    const key = normalize(s.fact.feature)
+    const bucket = byFeature.get(key)
+    if (bucket) bucket.push(s)
+    else byFeature.set(key, [s])
+  }
+  const verdictsAgree = new Set(strong.map(s => s.fact.verdict)).size === 1
+
+  if (byFeature.size === 1 && verdictsAgree) {
+    // One limitation, one verdict — report every row so the message names each
+    // affected claim, but this is a confident match.
+    return { features: strong.map(s => s.fact), confidence: 'HIGH' }
   }
   return { features: strong.map(s => s.fact), confidence: 'MEDIUM' }
 }
@@ -154,6 +188,21 @@ export function findContradictions(input: ContradictionInput): ContradictionMatc
         const assertsFromUnknown = polarity === 'ABSENT' && fact.verdict === 'UNKNOWN_DOCUMENT_INCOMPLETE'
         if (!contradictsPresence && !contradictsAbsence && !assertsFromUnknown) continue
 
+        /**
+         * Asserting absence from a document we could not read blocks REGARDLESS
+         * of how many documents the sentence names.
+         *
+         * The general confidence rule exists because mapping a sentence to the
+         * right limitation is unreliable when several documents are in play —
+         * fair for a contradiction, where being wrong about WHICH limitation
+         * matters. It does not apply here. "Neither D1 nor D2 discloses X",
+         * where only D2's abstract is on file, is wrong about D2 whatever X
+         * turns out to be: we never read the document. Under the old rule that
+         * sentence scored MEDIUM purely for naming two documents and went out as
+         * an advisory warning — the single most common shape of the error.
+         */
+        const blocking = assertsFromUnknown || confidence === 'HIGH'
+
         const message = contradictsPresence
           ? `The reply states that ${fact.citationLabel} does not disclose "${fact.feature}", but the evidence on this case records that it does.`
           : contradictsAbsence
@@ -163,7 +212,7 @@ export function findContradictions(input: ContradictionInput): ContradictionMatc
         out.push({
           sentence, where: section.where, citationLabels: labels, polarity,
           matchedFeatures: [fact.feature], confidence, verdict: fact.verdict,
-          blocking: confidence === 'HIGH',
+          blocking,
           message
         })
       }

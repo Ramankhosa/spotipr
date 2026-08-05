@@ -92,7 +92,23 @@ export type ReplyBlock =
   | { type: 'subjectLine'; text: string }
   | { type: 'salutation'; text: string }
   | { type: 'namedSection'; key: string; title: string; body: string }
-  | { type: 'objections'; title: string; objections: DraftedObjectionReply[] }
+  /**
+   * `objections` is what is FILED: approved sections that carry text. Nothing
+   * else may reach the letter — an unapproved or failed section is model output
+   * the attorney has not read, and the lint scopes every one of its checks to
+   * approved text, so filing the rest would put unchecked prose in front of the
+   * Controller under their signature.
+   *
+   * `omitted` is what was left out and why. The preview shows it (clearly marked
+   * as not filed) so the gap is visible rather than silent; the DOCX renderer
+   * never sees it.
+   */
+  | {
+      type: 'objections'
+      title: string
+      objections: DraftedObjectionReply[]
+      omitted: Array<{ reply: DraftedObjectionReply; reason: 'unapproved' | 'empty' }>
+    }
   /**
    * The amended claims, in the body of the letter — marked-up and clean.
    *
@@ -159,10 +175,16 @@ export function buildBasisSentence(
   const tail = ', and fall wholly within the scope of the claims as originally filed (Section 59).'
 
   if (numbering === 'AUTHORED') {
+    // Refs arrive as ranges too — retrieval labels a chunk "[¶0038-¶0041]" and
+    // the prompt asks the model to cite those tags. Taking only the first digit
+    // run understated the support in the filed letter ("at [0038]" for an
+    // amendment supported across [0038]–[0041]).
     const cited = refs
-      .map(r => (r.match(/(\d{1,6})/) || [])[1])
-      .filter(Boolean)
-      .map(d => `[${String(d).padStart(4, '0')}]`)
+      .flatMap(r => {
+        const digits = (String(r).match(/\d{1,6}/g) || []).map(d => d.padStart(4, '0'))
+        if (!digits.length) return []
+        return digits.length === 1 ? [`[${digits[0]}]`] : [`[${digits[0]}]–[${digits[digits.length - 1]}]`]
+      })
     if (!cited.length) return ''
     return `The foregoing amendments find support in the specification as filed at ${uniq(cited).join(', ')}${tail}`
   }
@@ -199,6 +221,18 @@ export function assembleReply(input: AssembleInput): AssembledReply {
   }
 
   const ordered = [...input.objectionReplies].sort((a, b) => a.sortOrder - b.sortOrder)
+
+  // Only approved sections with text are filed. Everything else is recorded as
+  // omitted so the preview can show the gap instead of the letter carrying
+  // unreviewed prose (or a bare numbered heading with nothing under it).
+  const filedObjections: DraftedObjectionReply[] = []
+  const omitted: Array<{ reply: DraftedObjectionReply; reason: 'unapproved' | 'empty' }> = []
+  for (const r of ordered) {
+    if (!(r.bodyText || '').trim()) omitted.push({ reply: r, reason: 'empty' })
+    else if (!r.approved) omitted.push({ reply: r, reason: 'unapproved' })
+    else filedObjections.push(r)
+  }
+
   const marked = input.amendedClaims.filter(c => c.markedText?.trim())
   const clean = input.amendedClaims.filter(c => c.cleanText?.trim())
   const salutation = profile.response.export?.formatting?.salutation
@@ -218,7 +252,12 @@ export function assembleReply(input: AssembleInput): AssembledReply {
           body: input.namedSections.preliminarySubmissions || fill(phrases.opening, vars) })
         break
       case 'objectionWiseReply':
-        blocks.push({ type: 'objections', title: titleFor(profile, key, 'Response to the Objections'), objections: ordered })
+        blocks.push({
+          type: 'objections',
+          title: titleFor(profile, key, 'Response to the Objections'),
+          objections: filedObjections,
+          omitted
+        })
         break
       case 'amendedClaimsMarked':
         // Both claim slots collapse into one block on first encounter: the

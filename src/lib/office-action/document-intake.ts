@@ -303,15 +303,25 @@ export function splitParagraphs(text: string, analysis?: MarkerAnalysis): Paragr
  * file. Anything that cannot be filed is shown as an obvious placeholder rather
  * than quietly rewritten — a bare number would look correct and be wrong.
  */
-export function formatParagraphRefsForPreview(text: string, numbering: ParagraphNumbering): string {
+export function formatParagraphRefsForPreview(
+  text: string,
+  numbering: ParagraphNumbering,
+  citableIds?: Set<string>
+): string {
   const src = text || ''
   if (numbering === 'DERIVED') {
     return src.replace(/[¶§]\s?\d{1,6}/g, '⟨unverified paragraph reference⟩')
   }
+  // Unwrap a bracketed anchor to a bare one FIRST, so "[¶0007]" and "¶0007" take
+  // the same citable check below. Stripping the ¶ here without checking is what
+  // let an unvetted anchor through as an authoritative-looking "[0007]".
   return src
     .replace(/§\s?\d{1,6}/g, '⟨unverified paragraph reference⟩')
-    .replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => `[${inner.replace(/¶\s?/g, '')}]`)
-    .replace(/¶\s?(\d{1,6})/g, '[$1]')
+    .replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => inner.trim())
+    .replace(/¶\s?(\d{1,6})/g, (_m, digits: string) => {
+      if (citableIds && !citableIds.has(`¶${padNum(digits)}`)) return '⟨unverified paragraph reference⟩'
+      return `[${padNum(digits)}]`
+    })
 }
 
 /** The filing renderer refused to emit text it cannot stand behind. */
@@ -352,7 +362,11 @@ export function formatParagraphRefsForFiling(
     return out.replace(/¶\s?\d{1,6}/g, UNVERIFIED_REF_PLACEHOLDER)
   }
 
-  out = out.replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => `[${inner.replace(/¶\s?/g, '')}]`)
+  // Unwrap a bracketed anchor to a bare one so it takes the SAME citable check
+  // below. Stripping the ¶ here and emitting the brackets unchanged is what let
+  // "[¶0007]" reach the filing as an authoritative-looking "[0007]" that nothing
+  // had vetted — the one hole in this function's guarantee.
+  out = out.replace(/\[([^\]]*¶[^\]]*)\]/g, (_m, inner: string) => inner.trim())
   return out.replace(/¶\s?(\d{1,6})/g, (_m, digits: string) => {
     if (opts.citableIds && !opts.citableIds.has(`¶${padNum(digits)}`)) return UNVERIFIED_REF_PLACEHOLDER
     return `[${padNum(digits)}]`
@@ -449,7 +463,10 @@ const SECTION_PATTERNS: Array<{ key: string; re: RegExp }> = [
   { key: 'summary', re: /^summary\b/i },
   { key: 'briefDescriptionOfDrawings', re: /^brief description of (the )?(drawings|figures)\b/i },
   { key: 'detailedDescription', re: /^detailed description\b|^description of (the )?embodiments?\b/i },
-  { key: 'claims', re: /^(what is claimed|claims?|i\/we claim)\b/i },
+  // "WE CLAIM:" is the standard Indian Form 2 claims heading, and "I claim" /
+  // "We claim" are equally routine. Matching only the literal "i/we claim" meant
+  // claims inside a complete specification were silently never extracted.
+  { key: 'claims', re: /^(what is claimed|claims?|(i|we|i\s*\/\s*we)\s+claim)\b/i },
   { key: 'abstract', re: /^abstract\b/i },
 ]
 
@@ -537,22 +554,46 @@ function hashElement(claimNumber: number, start: number, end: number, sourceText
  * shift whenever the splitting logic changes or a claim is amended, and a merge
  * keyed on them silently replaces one limitation with another.
  */
+/**
+ * Does this claim body refer back to another claim?
+ *
+ * Indian claim sets routinely phrase the reference without a number ("as claimed
+ * in any of the preceding claims") and often place it well past the opening
+ * words ("A medium storing instructions which … cause performance of the method
+ * of claim 1"). A numbered-reference test over only the first 80 characters
+ * marked both of those independent, which propagates into every chart row and
+ * amendment that keys on independence.
+ */
+function isDependentClaimBody(body: string): boolean {
+  const flat = (body || '').replace(/\s+/g, ' ')
+  if (/\bclaims?\s+\d+/i.test(flat)) return true
+  if (/\b(?:of|in|to|per)\s+claims?\s+\d+/i.test(flat)) return true
+  // Numberless back-references: "the preceding claims", "any one of the previous
+  // claims", "any of claims", "the immediately preceding claim".
+  return /\b(?:preceding|previous|foregoing|above|earlier)\s+claims?\b/i.test(flat)
+    || /\bany\s+(?:one\s+)?of\s+(?:the\s+)?(?:preceding\s+|previous\s+|foregoing\s+)?claims?\b/i.test(flat)
+}
+
 export function parseClaimElements(claimsText: string): ClaimElement[] {
   const text = (claimsText || '').replace(/\r\n/g, '\n')
   const elements: ClaimElement[] = []
 
   const claimRe = /(?:^|\n)\s*(\d+)\s*[.)]\s/g
-  const starts: Array<{ number: number; bodyStart: number }> = []
+  const starts: Array<{ number: number; matchStart: number; bodyStart: number }> = []
   let m: RegExpExecArray | null
   while ((m = claimRe.exec(text)) !== null) {
-    starts.push({ number: Number(m[1]), bodyStart: m.index + m[0].length })
+    // Record where the MATCH began, not a width reconstructed from the number's
+    // digits. Any extra whitespace in the next claim's marker ("2 . The method")
+    // used to leak that claim's number onto the end of this claim's last element.
+    const leading = m[0].length - m[0].replace(/^\n/, '').length
+    starts.push({ number: Number(m[1]), matchStart: m.index + leading, bodyStart: m.index + m[0].length })
   }
 
   for (let i = 0; i < starts.length; i++) {
     const { number: claimNumber, bodyStart } = starts[i]
-    const bodyEnd = i + 1 < starts.length ? starts[i + 1].bodyStart - String(starts[i + 1].number).length - 2 : text.length
+    const bodyEnd = i + 1 < starts.length ? starts[i + 1].matchStart : text.length
     const body = text.slice(bodyStart, Math.max(bodyStart, bodyEnd))
-    const isIndependent = !/\bclaim(?:s)?\s+\d+/i.test(body.replace(/\s+/g, ' ').slice(0, 80))
+    const isIndependent = !isDependentClaimBody(body)
 
     // Walk the clause boundaries so every element keeps its true offsets.
     const spans: Array<{ start: number; end: number }> = []
@@ -608,10 +649,46 @@ export function assertClaimElementSpans(elements: ClaimElement[], claimsText: st
 // Chunking
 // ---------------------------------------------------------------------------
 
+/**
+ * Break a single over-long run into token-bounded pieces, on whitespace where
+ * there is any and by raw length where there is not.
+ */
+function hardSplit(sentence: string, maxTokens: number): string[] {
+  if (estimateTokens(sentence) <= maxTokens) return [sentence]
+  const out: string[] = []
+  const words = sentence.split(/\s+/).filter(Boolean)
+  let buf: string[] = []
+  let tokens = 0
+  for (const w of words) {
+    const t = Math.max(1, estimateTokens(w))
+    if (tokens + t > maxTokens && buf.length) {
+      out.push(buf.join(' '))
+      buf = []
+      tokens = 0
+    }
+    buf.push(w)
+    tokens += t
+  }
+  if (buf.length) out.push(buf.join(' '))
+  // A single unbroken token longer than the cap (base64-ish blob): slice it.
+  const CHARS_PER_TOKEN = 4
+  return out.flatMap(piece => {
+    if (estimateTokens(piece) <= maxTokens) return [piece]
+    const size = Math.max(1, maxTokens * CHARS_PER_TOKEN)
+    const parts: string[] = []
+    for (let i = 0; i < piece.length; i += size) parts.push(piece.slice(i, i + size))
+    return parts
+  })
+}
+
 /** Split an oversized paragraph on sentence boundaries so no chunk blows the caps. */
 function splitOversized(p: Paragraph, maxTokens: number): Paragraph[] {
   if (estimateTokens(p.text) <= maxTokens * 2) return [p]
-  const sentences = p.text.split(/(?<=[.;:])\s+/)
+  // A run with no sentence punctuation at all — a sequence listing, a table row,
+  // OCR garbage — yields ONE "sentence", so splitting on boundaries alone left
+  // the chunk unbounded no matter what maxTokens said. Hard-split any sentence
+  // that is itself over the cap before packing.
+  const sentences = p.text.split(/(?<=[.;:])\s+/).flatMap(s => hardSplit(s, maxTokens))
   const out: Paragraph[] = []
   let buf: string[] = []
   let tokens = 0

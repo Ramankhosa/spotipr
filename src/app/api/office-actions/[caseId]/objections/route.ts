@@ -37,8 +37,32 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
 
   const data: Record<string, unknown> = {}
   if (typeof body.dismiss === 'boolean') {
-    // Restoring returns the card to its pre-dismissal life-cycle state.
-    data.status = body.dismiss ? 'DISMISSED' : (objection.strategyJson ? 'STRATEGY_CHOSEN' : 'EXTRACTED')
+    if (body.dismiss) {
+      data.status = 'DISMISSED'
+    } else {
+      /**
+       * Restoring returns the card to its pre-dismissal life-cycle state.
+       *
+       * That state has to be read from what actually exists, not inferred from
+       * strategyJson alone: an objection that was drafted and approved before
+       * being dismissed still has its section in the draft, so mapping it back to
+       * STRATEGY_CHOSEN/EXTRACTED under-reported it — the rail showed work still
+       * to do on a section that was already written and approved.
+       */
+      const draft = await prisma.oaResponseDraft.findFirst({
+        where: { caseId: params.caseId }, orderBy: { version: 'desc' },
+        select: { sectionsJson: true }
+      })
+      const replies: any[] = Array.isArray((draft?.sectionsJson as any)?.objectionReplies)
+        ? (draft!.sectionsJson as any).objectionReplies
+        : []
+      const section = replies.find(r => r?.objectionId === objection.id)
+
+      data.status = section?.approved ? 'APPROVED'
+        : (section?.bodyText || '').trim() ? 'DRAFTED'
+        : objection.strategyJson ? 'STRATEGY_CHOSEN'
+        : 'EXTRACTED'
+    }
   }
   if (typeof body.canonicalCode === 'string') {
     if (!(CANONICAL_OBJECTION_CODES as readonly string[]).includes(body.canonicalCode)) {

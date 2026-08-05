@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { enforceOfficeActionAccess } from '@/lib/office-action/route-guards'
 import { recordServiceCompletion } from '@/lib/service-completion'
 import { prisma } from '@/lib/prisma'
 import { loadOfficeActionProfile } from '@/lib/office-action/oa-case-service'
@@ -31,10 +31,8 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   if (!oaCase) return NextResponse.json({ error: 'Case not found' }, { status: 404 })
   if (oaCase.userId !== auth.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  if (auth.user.tenantId) {
-    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
-    if (!access.allowed) return access.response
-  }
+  const access = await enforceOfficeActionAccess(auth.user)
+  if (!access.allowed) return access.response
 
   const profile = await loadOfficeActionProfile(oaCase.jurisdictionCode)
   if (!profile) return NextResponse.json({ error: `No office-action profile for ${oaCase.jurisdictionCode}` }, { status: 400 })
@@ -148,6 +146,29 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   const respondingTo = oaCase.documents.find(d => d.id === draft.documentId)
     || [...oaCase.documents].reverse().find(d => d.parseStatus === 'COMPLETED')
 
+  /**
+   * Everything on this case whose text a quotation or a figure can be checked
+   * against. Labelled the way the reply would name it, so a quote attributed to
+   * "D1" is checked against D1 specifically — a passage that appears nowhere is
+   * a warning, but one attributed to a document we hold and absent from it is a
+   * misquotation of cited art, and blocks.
+   */
+  const supplementary = await prisma.oaCaseDocument.findMany({
+    where: { caseId: params.caseId },
+    select: { kind: true, title: true, text: true }
+  })
+  const evidenceSources = [
+    ...oaCase.documents.flatMap(d => d.citations.map(c => {
+      const full = (c.passagesJson as any)?.fullDocument
+      const text = [full?.title, full?.abstract, full?.claims, full?.description].filter(Boolean).join('\n\n')
+      return text ? { label: c.label, text } : null
+    })),
+    { label: 'the specification as filed', text: specText },
+    { label: 'the claims', text: oaCase.claimsText || '' },
+    { label: 'the examination report', text: respondingTo?.rawText || '' },
+    ...supplementary.map(d => ({ label: d.title || d.kind, text: d.text || '' }))
+  ].filter((s): s is { label: string; text: string } => Boolean(s && s.text.trim()))
+
   const meta: CaseMeta = {
     jurisdictionOffice: profile.meta.office,
     applicationNumber: oaCase.applicationNumber,
@@ -170,7 +191,8 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     caseApplicationNumber: oaCase.applicationNumber,
     caseApplicantName: oaCase.applicantName || undefined,
     computedDeadlines: (respondingTo?.deadlinesJson as any) || [],
-    identityOverride: compliance.identityOverride
+    identityOverride: compliance.identityOverride,
+    evidenceSources
   })
 
   // Persist the lint result on the draft either way. When the attorney accepts
@@ -197,7 +219,9 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
                    firstMarker: markerAnalysis.firstMarker, lastMarker: markerAnalysis.lastMarker,
                    paragraphCount: specParagraphs.length },
       blocks: assembled.blocks.map(b => b.type),
-      html: renderReplyHtml(assembled, profile)
+      // Same citable set the DOCX uses, so the preview cannot show a clean
+      // "[0999]" for an anchor the filing renders as "[reference to verify]".
+      html: renderReplyHtml(assembled, profile, { citableIds })
     })
   }
 
@@ -238,9 +262,9 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
 
   // A lint-passing exported reply is what an OFFICE_ACTION_RESPONSE quota unit buys.
   // Keyed on the case, so re-exporting the same reply does not consume a second unit.
-  if (auth.user.tenantId) {
+  {
     await recordServiceCompletion({
-      tenantId: auth.user.tenantId,
+      tenantId: access.tenantId,
       userId: auth.user.id,
       serviceType: 'OFFICE_ACTION_RESPONSE',
       operationId: oaCase.id,
@@ -249,11 +273,18 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     })
   }
 
+  // The application number is attorney-supplied. Interpolated raw, a quote made
+  // the filename parameter malformed and a CR/LF or non-latin1 character made
+  // this constructor throw — after the case had been marked REPLIED and the
+  // quota unit recorded, so the export failed permanently with the side effects
+  // already applied. Restrict the filename to characters that are safe in the
+  // header, and keep the full number in the document itself.
+  const safeName = oaCase.applicationNumber.replace(/[^A-Za-z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 64) || 'reply'
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'Content-Disposition': `attachment; filename="FER-Reply-${oaCase.applicationNumber}.docx"`
+      'Content-Disposition': `attachment; filename="FER-Reply-${safeName}.docx"`
     }
   })
 }

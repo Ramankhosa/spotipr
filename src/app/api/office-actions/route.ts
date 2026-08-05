@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { enforceOfficeActionAccess } from '@/lib/office-action/route-guards'
 import { createCase, OaProfileUnavailableError } from '@/lib/office-action/oa-case-service'
 import { prisma } from '@/lib/prisma'
 
@@ -28,10 +28,8 @@ export async function POST(request: NextRequest) {
   const auth = await authenticateUser(request)
   if (auth.error) return NextResponse.json({ error: auth.error.message }, { status: auth.error.status })
 
-  if (auth.user.tenantId) {
-    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
-    if (!access.allowed) return access.response
-  }
+  const access = await enforceOfficeActionAccess(auth.user)
+  if (!access.allowed) return access.response
 
   let body: any
   try {
@@ -44,6 +42,15 @@ export async function POST(request: NextRequest) {
   const applicationNumber = String(body.applicationNumber || '').trim()
   if (!jurisdictionCode || !applicationNumber) {
     return NextResponse.json({ error: 'jurisdictionCode and applicationNumber are required' }, { status: 400 })
+  }
+  // An application number ends up in the reply letter, the subject line and the
+  // export's Content-Disposition filename. A quote or CR/LF there made the export
+  // throw while constructing the response — AFTER the case had been flipped to
+  // REPLIED and the quota unit recorded, with no route to correct it afterwards.
+  if (applicationNumber.length > 64 || /[\r\n"\\]/.test(applicationNumber)) {
+    return NextResponse.json({
+      error: 'applicationNumber must be at most 64 characters and cannot contain quotes, backslashes or line breaks.'
+    }, { status: 400 })
   }
 
   try {
@@ -61,10 +68,14 @@ export async function POST(request: NextRequest) {
     )
     return NextResponse.json({ case: created }, { status: 201 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create case'
     // A missing/invalid jurisdiction profile is a deployment gap, not bad input —
     // 503 so it is not mistaken for a validation failure, with the fix in the body.
-    const status = err instanceof OaProfileUnavailableError ? 503 : 500
-    return NextResponse.json({ error: message }, { status })
+    if (err instanceof OaProfileUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 })
+    }
+    // Anything else is internal: Prisma constraint text, gateway internals,
+    // tenant-resolution detail. Log it, return a generic message.
+    console.error('[OA cases] create failed:', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Could not create the case. Please try again.' }, { status: 500 })
   }
 }

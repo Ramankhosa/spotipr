@@ -137,16 +137,22 @@ export async function classifyObjections(
 
 /** Deterministic cards from the raw parse — used when classification fails. */
 export function fallbackCards(rawObjections: ParsedObjection[], sourceText: string): ClassifiedObjection[] {
-  return rawObjections.map((raw, i) => ({
-    sortOrder: i,
-    canonicalCode: 'OTHER' as CanonicalObjectionCode,
-    localBasis: raw.legalBasisMentioned?.join(', ') || undefined,
-    officeNumber: raw.number,
-    examinerText: raw.examinerText,
-    quoteVerified: verifyQuote(raw.examinerText, sourceText),
-    claimsAffected: raw.claimsAffected,
-    citationLabels: raw.citationLabels
-  }))
+  // examinerText is a required, non-null column. The parse output it comes from
+  // is an unvalidated cast of LLM JSON, so a model that omits the field used to
+  // reach prisma.create as `undefined` and throw — failing the whole ingest after
+  // every paid call, and returning a 500 instead of the objection cards.
+  return rawObjections
+    .map((raw, i) => ({
+      sortOrder: i,
+      canonicalCode: 'OTHER' as CanonicalObjectionCode,
+      localBasis: raw.legalBasisMentioned?.join(', ') || undefined,
+      officeNumber: raw.number,
+      examinerText: String(raw.examinerText || '').trim(),
+      quoteVerified: verifyQuote(String(raw.examinerText || ''), sourceText),
+      claimsAffected: raw.claimsAffected,
+      citationLabels: raw.citationLabels
+    }))
+    .filter(c => c.examinerText)
 }
 
 /**
@@ -178,7 +184,9 @@ export function normalizeClassified(
     const raw = idx >= 0 ? rawObjections[idx] : undefined
     if (idx >= 0) consumed.add(idx)
 
-    let examinerText = typeof o?.examinerText === 'string' && o.examinerText.trim() ? o.examinerText : (raw?.examinerText || '')
+    let examinerText = typeof o?.examinerText === 'string' && o.examinerText.trim()
+      ? o.examinerText
+      : String(raw?.examinerText || '')
     // If the model's quote doesn't verify but the raw parsed text does, trust the raw text.
     let quoteVerified = verifyQuote(examinerText, sourceText)
     if (!quoteVerified && raw?.examinerText && verifyQuote(raw.examinerText, sourceText)) {
@@ -202,17 +210,21 @@ export function normalizeClassified(
     }
   }).filter(c => c.examinerText.trim())
 
-  // Any raw objection the model dropped is appended as an OTHER card.
+  // Any raw objection the model dropped is appended as an OTHER card. Coerced
+  // and filtered like the mapped cards: this path bypassed the text filter
+  // above, so an undefined examinerText from the parse reached Prisma directly.
   rawObjections.forEach((raw, idx) => {
     if (consumed.has(idx)) return
+    const text = String(raw.examinerText || '').trim()
+    if (!text) return
     cards.push({
       sortOrder: idx,
       canonicalCode: 'OTHER',
       subTypeId: undefined,
       localBasis: raw.legalBasisMentioned?.join(', ') || undefined,
       officeNumber: raw.number,
-      examinerText: raw.examinerText,
-      quoteVerified: verifyQuote(raw.examinerText, sourceText),
+      examinerText: text,
+      quoteVerified: verifyQuote(text, sourceText),
       claimsAffected: raw.claimsAffected,
       citationLabels: raw.citationLabels,
       rationale: 'Not classified by the model — review and re-categorize.'

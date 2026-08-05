@@ -26,10 +26,17 @@ import {
   packBitString,
   wordsToHex,
 } from './binary-kmeans'
+import {
+  PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+  PATENT_CORPUS_EMBEDDING_DTYPE,
+  PATENT_CORPUS_EMBEDDING_MODEL,
+} from '@/lib/patent-corpus-service'
 import { buildScopeFilter, canonicaliseAssignee, extractApplicantNames } from './field-map'
+import { candidateCoverageNote, resolveFieldCandidates } from './candidates'
+import { comparableVectorSql } from './embedding'
 import { runWhitespaceLLM, parseModelJson } from './llm'
 import { buildClusterLabelPrompt, WS_CLUSTER_LABEL_STAGE_CODE } from './prompts'
-import type { ClusterStageResult, WhitespaceScope } from './types'
+import { stableJson, type ClusterStageResult, type WhitespaceScope } from './types'
 
 /** Sample ceiling. 20k × 64B vectors ≈ 1.3MB packed; k-means cost is trivial. */
 const SAMPLE_CAP = Math.max(1000, Number(process.env.WHITESPACE_CLUSTER_SAMPLE_CAP) || 20_000)
@@ -58,8 +65,33 @@ export async function runClusterStage(input: {
   scope: WhitespaceScope
   requestHeaders: Record<string, string>
 }): Promise<ClusterStageResult> {
-  const where = buildScopeFilter(input.scope)
-  const coverageNotes: string[] = []
+  // binary-kmeans is a Hamming clusterer over fixed-width bit vectors; it
+  // cannot read a float corpus. Refuse up front with the real reason — the
+  // old path fell through to "the embedding pipeline has not covered this
+  // corpus slice yet", which on a float installation is simply untrue (the
+  // pipeline covered it, in float), and sent operators chasing a phantom
+  // ingestion gap.
+  if (PATENT_CORPUS_EMBEDDING_DTYPE !== 'binary') {
+    throw new Error(
+      `The area map clusters binary (Hamming) vectors, but this installation stores ${PATENT_CORPUS_EMBEDDING_DTYPE} ` +
+        `vectors (${PATENT_CORPUS_EMBEDDING_MODEL}). The rest of the study — census, signals, validation — works ` +
+        `without it; area clustering needs a binary-embedded corpus.`
+    )
+  }
+  if (PATENT_CORPUS_EMBEDDING_DIMENSIONS !== BITS) {
+    throw new Error(
+      `The area map clusters ${BITS}-bit vectors, but this installation is configured for ` +
+        `${PATENT_CORPUS_EMBEDDING_DIMENSIONS}-bit vectors — the sample would fail to pack mid-stage.`
+    )
+  }
+
+  // The same hybrid field the census counted. Resolving it here rather than
+  // threading it from the census run matters: each stage is its own run, and an
+  // area map drawn over a narrower field than the census reported would make
+  // every area's share of the field wrong.
+  const candidates = await resolveFieldCandidates(input.scope)
+  const where = buildScopeFilter(input.scope, candidates.ids)
+  const coverageNotes: string[] = [candidateCoverageNote(candidates)]
 
   // --- field size + sample ---------------------------------------------------
   // Field size comes from the completed census when one exists — re-counting the
@@ -85,7 +117,7 @@ export async function runClusterStage(input: {
                  e."embeddingBinary"::text                       AS bits
           FROM "local_patents" lp
           JOIN "local_patent_embeddings" e ON e."localPatentId" = lp."id"
-          WHERE ${where} AND e."embeddingBinary" IS NOT NULL
+          WHERE ${where} AND ${comparableVectorSql()}
           ORDER BY COALESCE(lp."familyId", lp."publicationNumber"), lp."publicationDate" DESC NULLS LAST, lp."publicationNumber"
         ) t
         ORDER BY md5(t.id::text)
@@ -327,7 +359,12 @@ async function familyCountFromCensus(studyId: string, scope: WhitespaceScope): P
     orderBy: { createdAt: 'desc' },
     select: { results: true, scopeSnapshot: true },
   })
-  if (!run || JSON.stringify(run.scopeSnapshot ?? null) !== JSON.stringify(scope)) return null
+  // stableJson, not JSON.stringify: the snapshot round-tripped through jsonb,
+  // which reorders object keys, so a plain stringify comparison rejected every
+  // census — even of the identical scope — and this stage re-ran the most
+  // expensive count in the studio on every area map (or refused outright on
+  // fields too big to count inside this stage's timeout).
+  if (!run || stableJson(run.scopeSnapshot ?? null) !== stableJson(scope)) return null
   const familyCount = (run.results as { familyCount?: unknown } | null)?.familyCount
   return typeof familyCount === 'number' && familyCount > 0 ? familyCount : null
 }

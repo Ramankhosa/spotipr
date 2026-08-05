@@ -5309,9 +5309,22 @@ model OaDocumentChunk {
   sectionRef String? // e.g. "¶0038-¶0041"
   text       String
   tokenCount Int                      @default(0)
-  // pgvector column, bit(512) — matches the corpus contract (voyage-3.5-lite,
-  // 512-dim binary, Hamming <~>). Migration adds the column + bit_hamming_ops
-  // ANN index. Keep in sync with PATENT_CORPUS_EMBEDDING_* in patent-corpus-service.ts.
+  // pgvector column. It MUST match what PATENT_CORPUS_EMBEDDING_* actually
+  // produces — vector(1536)/cosine for text-embedding-3-small (the pinned
+  // default), bit(512)/Hamming for voyage-3.5-lite. When the two disagree, every
+  // write AND every search throws a type error that the callers catch, so
+  // retrieval silently returns nothing and replies get drafted with no
+  // specification basis at all.
+  //
+  // The type here is whatever the deployment's DB actually has; like
+  // local_patent_embeddings.embeddingBinary, this column is NOT managed by
+  // `prisma migrate` (a column-level ALTER is a full-table rewrite the safety
+  // contract forbids — see 20260721120000_epo_bdds_ingest). Change it
+  // deliberately with `npm run oa:fix-embedding-column`.
+  //
+  // checkRetrievalConfig() in office-action/context-budget.ts compares the live
+  // column against the configured model and reports the drift, and prepareReply
+  // refuses to run on a mismatch rather than producing baseless drafts.
   embedding  Unsupported("bit(512)")?
   createdAt  DateTime                 @default(now())
 

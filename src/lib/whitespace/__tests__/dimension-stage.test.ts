@@ -3,6 +3,7 @@ import {
   compileValueQuery,
   detectGaps,
   dimensionRedundancy,
+  valueEmbeddingText,
   type WorkingDimension,
   type WorkingValue,
 } from '../dimension-stage'
@@ -40,6 +41,22 @@ describe('compileValueQuery', () => {
     expect(query).not.toContain('"4""')
     expect(query.startsWith('"')).toBe(true)
     expect(query.endsWith('"')).toBe(true)
+  })
+})
+
+describe('valueEmbeddingText', () => {
+  it('joins the deduped vocabulary as one subject line, mirroring compileValueQuery term-for-term', () => {
+    const label = 'piezo actuator'
+    const synonyms = ['Piezo Actuator', 'piezoelectric stack', 'piezo actuator ']
+
+    // Same dedupe as the lexical query: the two arms must describe the same
+    // vocabulary or they would measure different values.
+    expect(valueEmbeddingText(label, synonyms)).toBe('piezo actuator, piezoelectric stack')
+    expect(compileValueQuery(label, synonyms).split(' OR ')).toHaveLength(2)
+  })
+
+  it('is empty only when the vocabulary is', () => {
+    expect(valueEmbeddingText('  ', ['', '  '])).toBe('')
   })
 })
 

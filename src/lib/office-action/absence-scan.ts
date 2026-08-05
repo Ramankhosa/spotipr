@@ -33,7 +33,27 @@ const GENERIC_PATENT_TERMS = new Set([
   'means', 'element', 'elements', 'member', 'portion', 'surface', 'layer', 'unit',
   'first', 'second', 'third', 'said', 'wherein', 'thereof', 'therein', 'therefrom',
   'least', 'about', 'between', 'plurality', 'configured', 'adapted', 'formed',
-  'having', 'including', 'provided', 'associated', 'respective', 'suitable'
+  'having', 'including', 'provided', 'associated', 'respective', 'suitable',
+  // Engineering/software vocabulary that appears in essentially every document
+  // in its field. Without these, a feature like "a sensor coupled to a processor
+  // configured to output a control signal" matched almost any electronics
+  // citation on one word and overturned a genuine absence finding — which then
+  // emptied chart.distinctions and cost the reply its novelty argument.
+  'sensor', 'sensors', 'processor', 'processors', 'controller', 'controllers',
+  'signal', 'signals', 'circuit', 'circuits', 'module', 'modules', 'memory',
+  'network', 'networks', 'interface', 'interfaces', 'output', 'outputs',
+  'input', 'inputs', 'coupled', 'connected', 'attached', 'mounted', 'disposed',
+  'control', 'controls', 'data', 'value', 'values', 'threshold', 'thresholds',
+  'server', 'servers', 'client', 'clients', 'database', 'databases', 'storage',
+  'computer', 'software', 'hardware', 'program', 'programs', 'instruction',
+  'instructions', 'operation', 'operations', 'function', 'functions', 'model',
+  'models', 'algorithm', 'algorithms', 'parameter', 'parameters', 'component',
+  'components', 'assembly', 'housing', 'chamber', 'channel', 'channels',
+  'temperature', 'pressure', 'voltage', 'current', 'frequency', 'power',
+  'transmit', 'transmitting', 'receive', 'receiving', 'generate', 'generating',
+  'determine', 'determining', 'display', 'displaying', 'detect', 'detecting',
+  'obtain', 'obtaining', 'measure', 'measuring', 'solution', 'mixture',
+  'reaction', 'temperature', 'concentration', 'treatment', 'container'
 ])
 
 export type AbsenceHitRule = 'exact-phrase' | 'rare-token' | 'co-occurrence'
@@ -66,8 +86,26 @@ function tokens(s: string): string[] {
  */
 export function isRareToken(token: string): boolean {
   if (GENERIC_PATENT_TERMS.has(token)) return false
+  // Anything carrying digits is an identifier — accession number, strain, vector
+  // name, measured value — and stays a strong signal at short length.
   if (/\d/.test(token) && token.length >= 3) return true
-  return token.length >= 6
+  // A purely alphabetic token has to be genuinely unusual to prove anything on
+  // its own. At >= 6 characters this admitted ordinary field vocabulary
+  // ("coupled", "sensor", "control"), and since ONE such hit overturns an
+  // absence verdict, nearly every real distinction was being downgraded.
+  return token.length >= 8
+}
+
+/**
+ * Does `token` occur in the normalized haystack as a whole word?
+ *
+ * The haystack is normalized to space-separated tokens, so a raw `indexOf` is a
+ * substring test: "100" matched inside "1000 rpm", and "vector" inside
+ * "vectorial". Pad both sides and search that.
+ */
+function containsToken(normHaystack: string, token: string): boolean {
+  if (!token) return false
+  return ` ${normHaystack} `.includes(` ${token} `)
 }
 
 /**
@@ -120,8 +158,9 @@ export function scanForFeature(feature: string, fullText: string): AbsenceScanRe
   // 2. A single rare technical token — this is the phaseolin case.
   const rare = featureTokens.filter(isRareToken)
   for (const token of rare) {
-    const at = normHay.indexOf(token)
-    if (at >= 0) return { found: true, rule: 'rare-token', term: token, passage: excerpt(hay, token) }
+    if (containsToken(normHay, token)) {
+      return { found: true, rule: 'rare-token', term: token, passage: excerpt(hay, token) }
+    }
   }
 
   // 3. Two or more non-generic terms close enough together to be about the same
@@ -130,7 +169,7 @@ export function scanForFeature(feature: string, fullText: string): AbsenceScanRe
   if (meaningful.length >= 2) {
     const WINDOW = 100
     const positions = meaningful
-      .map(t => ({ t, at: normHay.indexOf(t) }))
+      .map(t => ({ t, at: containsToken(normHay, t) ? ` ${normHay} `.indexOf(` ${t} `) : -1 }))
       .filter(p => p.at >= 0)
       .sort((a, b) => a.at - b.at)
     for (let i = 1; i < positions.length; i++) {

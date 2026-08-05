@@ -16,7 +16,7 @@
 
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { buildScopeFilter, textMatchPredicate } from './field-map'
+import { buildScopeFilter, corpusMembershipPredicate, textMatchPredicate } from './field-map'
 import { PUBLICATION_LAG_MONTHS } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
 import type { SignalsStageResult, TermDivergence, WhitespaceScope } from './types'
@@ -182,6 +182,13 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
   // same slice and differ only in how they express the concept.
   const baseScope: WhitespaceScope = { ...scope, concepts: [], exclusions: [] }
   const baseFilter = buildScopeFilter(baseScope)
+  // The lexical lane's per-corpus arms carry the corpus restriction inside
+  // textMatchPredicate; the semantic lane matches by vector and never touches
+  // it. Without repeating the restriction here, its top-N could include
+  // epo-ops/pqai rows the lexical lane structurally cannot see — deflating the
+  // overlap and reporting "terminology divergence" that was really just the
+  // two lanes reading different corpora.
+  const semanticFilter = Prisma.sql`${baseFilter} AND ${corpusMembershipPredicate()}`
 
   for (const concept of scope.concepts.slice(0, 6)) {
     const terms = [concept.label, ...concept.synonyms].map(term => term.trim()).filter(Boolean)
@@ -222,7 +229,7 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
     const semantic = await semanticNeighbors({
       queryText: terms.join('; '),
       limit: PROBE_TOP_N,
-      scopeFilter: baseFilter,
+      scopeFilter: semanticFilter,
       timeoutMs: PROBE_TIMEOUT_MS,
     })
     if (!semantic.available) {

@@ -110,6 +110,26 @@ export function emptyWhitespaceScope(): WhitespaceScope {
   }
 }
 
+/**
+ * JSON serialisation with recursively sorted object keys.
+ *
+ * Exists for one reason: Postgres jsonb does NOT preserve object key order, so
+ * a scope or params object compared against its own database round-trip with
+ * plain JSON.stringify almost never matches — which made the run deduper admit
+ * duplicate live runs and made the cluster stage re-count a field whose census
+ * it already held. Compare jsonb-round-tripped values with THIS, never with
+ * JSON.stringify.
+ */
+export function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(entry => stableJson(entry)).join(',')}]`
+  const record = value as Record<string, unknown>
+  const keys = Object.keys(record)
+    .filter(key => record[key] !== undefined)
+    .sort()
+  return `{${keys.map(key => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`
+}
+
 // ---------------------------------------------------------------------------
 // Field map (stage 1) output
 // ---------------------------------------------------------------------------

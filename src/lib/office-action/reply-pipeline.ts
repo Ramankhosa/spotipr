@@ -2,8 +2,9 @@ import { prisma } from '../prisma'
 import { loadOfficeActionProfile } from './oa-case-service'
 import { normalizeInvention } from './document-intake'
 import { buildInventionDigest, digestFromSpotiprDraft, type InventionDigest } from './invention-digest'
-import { buildClaimChart, persistClaimChart, type CitationText } from './claim-chart-service'
+import { buildClaimChart, persistClaimChart, toClaimNumbers, type CitationText } from './claim-chart-service'
 import { buildObjectionStrategy, type ObjectionStrategy } from './strategy-service'
+import { checkRetrievalConfig } from './context-budget'
 import { draftObjectionReply, draftNamedSection } from './response-drafter'
 import { isProceduralObjection } from './procedural-reply'
 import type { ClassifiedObjection } from './objection-classifier'
@@ -72,12 +73,46 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     try { await opts.onProgress?.(step, done, total) } catch { /* progress must never break the run */ }
   }
 
+  /**
+   * Retrieval must be working before a paid run starts.
+   *
+   * Every argument, every s.59 basis pointer and every paragraph citation comes
+   * from the case-document retrieval. When the chunk column and the configured
+   * embedding model disagree, each search throws and is caught, so the run
+   * completed with an empty context for every objection and reported full
+   * success — while the drafter was still being told to cite specification
+   * paragraphs, which is how fabricated citations get into a filing draft.
+   * Refuse the run instead: nothing here is recoverable by continuing.
+   */
+  const retrievalConfig = await checkRetrievalConfig()
+  if (!retrievalConfig.ok) {
+    throw new Error(`Case-document retrieval is not operational. ${retrievalConfig.reason}`)
+  }
+
+  // Catch up any document whose upload-time indexing did not finish. Retrieval
+  // is about to be needed for every objection, and this is the only place that
+  // ever retries — without it a transient failure at upload silently degraded
+  // the whole reply to digest-only context.
+  const { reindexPendingCaseDocuments } = await import('./case-document-service')
+  const reindex = await reindexPendingCaseDocuments(caseId)
+  if (reindex.reindexed) {
+    await progress(`Indexed ${reindex.reindexed} case document${reindex.reindexed === 1 ? '' : 's'} that had not finished`, 0, 1)
+  }
+
   // Only parsed communications carry objections worth answering.
   const readyDocs = oaCase.documents.filter(d => d.parseStatus === 'COMPLETED')
-  const workItems = readyDocs.flatMap(doc =>
+  /**
+   * sortOrder is per-document — each communication numbers its objections from
+   * 0. Flat-mapping across documents and then sorting on it globally interleaved
+   * two reports' objections and, wherever the office's own numbering was absent,
+   * answered two different objections under the same label. Offset each
+   * document's block so the sequence stays global and in document order.
+   */
+  const DOC_ORDER_STRIDE = 1000
+  const workItems = readyDocs.flatMap((doc, docIndex) =>
     doc.objections
       .filter(o => o.status !== 'DISMISSED' && (!opts.objectionIds || opts.objectionIds.includes(o.id)))
-      .map(o => ({ doc, row: o })))
+      .map(o => ({ doc, row: o, globalOrder: docIndex * DOC_ORDER_STRIDE + o.sortOrder })))
   const totalSteps = workItems.length + 2 // + digest + named sections
 
   // ---- 1. Invention context (digest built once, reused by every objection) ----
@@ -97,6 +132,19 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
     }
   }
   const digestForRun = digest || digestFromSpotiprDraft({})   // empty but valid — this run still proceeds
+  /**
+   * A run on an empty digest is not a normal run.
+   *
+   * Every section is then argued by a model that knows nothing about the
+   * invention beyond per-objection retrieval, and the attorney received a
+   * complete-looking draft with zero draft errors and nothing to indicate the
+   * arguments were generic. It still proceeds — a draft they can fix beats no
+   * draft on a deadline — but it is recorded and reported.
+   */
+  const digestMissing = !digest
+  if (digestMissing) {
+    await progress('The invention summary could not be built — sections will be drafted without it. Review them closely.', 0, totalSteps)
+  }
   // Counts the attorney can check against their own file — every figure here is
   // read off the case, never estimated.
   const citedOnFile = readyDocs.flatMap(d => d.citations).filter(c => {
@@ -150,35 +198,73 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   })
 
   const resumedSections = (resumable?.sectionsJson as any) || {}
-  // Carry over only the sections that actually have text. An empty/failed one is
-  // dropped here and re-drafted below, so a retry replaces it rather than
-  // leaving the old failure sitting next to the new section.
+  /**
+   * Carry over the sections worth keeping. Two kinds qualify:
+   *
+   *  - anything with text (already paid for, and possibly attorney-edited), and
+   *  - a procedural section whose compliance the attorney has already SETTLED.
+   *
+   * The second case is why this is not a plain text test. A section marked
+   * NOT_APPLICABLE deliberately carries no body, so a text-only filter dropped
+   * it and re-created it as PENDING — silently discarding the attorney's legal
+   * determination and its written reason, and re-demanding a confirmation they
+   * had already given.
+   */
+  const settledProcedural = (r: any) => {
+    const status = r?.compliance?.status
+    return r?.attorneyAction === true && (status === 'CONFIRMED' || status === 'NOT_APPLICABLE')
+  }
   const objectionReplies: DraftedObjectionReply[] = Array.isArray(resumedSections.objectionReplies)
-    ? resumedSections.objectionReplies.filter((r: any) => (r?.bodyText || '').trim())
+    ? resumedSections.objectionReplies.filter((r: any) => (r?.bodyText || '').trim() || settledProcedural(r))
     : []
   const allAmendments: AmendedClaim[] = Array.isArray((resumable?.amendedClaimsJson as any)?.claims)
     ? [...(resumable!.amendedClaimsJson as any).claims] : []
   const judgmentFlags: PrepareResult['judgmentFlags'] = Array.isArray((resumable?.complianceJson as any)?.judgmentFlags)
     ? [...(resumable!.complianceJson as any).judgmentFlags] : []
-  // Only sections that actually carry text count as done — a failed one is retried.
-  const alreadyDrafted = new Set(objectionReplies.filter(r => (r.bodyText || '').trim()).map(r => r.objectionId))
+  const DIGEST_MISSING_FLAG = 'The invention summary could not be built for this run, so the arguments were drafted without it. Read each section against the specification before filing.'
+  if (digestMissing && !judgmentFlags.some(f => f.flag === DIGEST_MISSING_FLAG)) {
+    judgmentFlags.push({ objectionId: '', flag: DIGEST_MISSING_FLAG })
+  }
+  // A section counts as done if it has text, or if it is a procedural section the
+  // attorney has already settled — re-running either would overwrite their work.
+  const alreadyDrafted = new Set(
+    objectionReplies.filter(r => (r.bodyText || '').trim() || settledProcedural(r)).map(r => r.objectionId))
   let proposedCount = 0
   let done = objectionReplies.length
 
+  // Seed from the resumed draft BEFORE the loop. This used to start as {} and be
+  // written by the first persistPartial, so a resume wiped the attorney's edited
+  // preliminary submissions and prayer from the row mid-run — permanently, if the
+  // run was then paused or crashed.
+  let namedSections: Record<string, string> = { ...(resumedSections.namedSections || {}) }
+
+  /**
+   * Persist progress WITHOUT destroying state this pipeline does not own.
+   *
+   * complianceJson also carries the attorney's forms checklist, agent details,
+   * lint acknowledgement, citation overrides and as-filed designation — all
+   * written by the draft/export routes. Rewriting the whole object as
+   * `{ formsStatus: {}, judgmentFlags }` erased every one of them on each
+   * objection, so resuming a run silently reset the forms checklist and dropped
+   * the signature block from the next export. Merge instead.
+   */
   const persistPartial = async (finished: boolean) => {
+    const current = await prisma.oaResponseDraft.findUnique({
+      where: { id: draft.id }, select: { complianceJson: true }
+    })
+    const existingCompliance = (current?.complianceJson as any) || {}
     await prisma.oaResponseDraft.update({
       where: { id: draft.id },
       data: {
         sectionsJson: { objectionReplies, namedSections, inProgress: !finished } as any,
         amendedClaimsJson: { claims: dedupeAmendments(allAmendments) } as any,
-        complianceJson: { formsStatus: {}, judgmentFlags } as any
+        complianceJson: { ...existingCompliance, judgmentFlags } as any
       }
     })
   }
-  let namedSections: Record<string, string> = {}
 
   let stopped = false
-  for (const { doc, row } of workItems) {
+  for (const { doc, row, globalOrder } of workItems) {
     if (alreadyDrafted.has(row.id)) continue      // resumed run: keep what is already paid for
 
     // Pause point. Checked here, between objections, so a stop never lands in
@@ -216,11 +302,11 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
         })
 
       const objection: ClassifiedObjection & { id: string } = {
-        id: row.id, sortOrder: row.sortOrder, canonicalCode: row.canonicalCode as any,
+        id: row.id, sortOrder: globalOrder, canonicalCode: row.canonicalCode as any,
         subTypeId: row.subTypeId || undefined, localBasis: row.localBasis || undefined,
         officeNumber: (row.analysisJson as any)?.officeNumber || undefined,
         examinerText: row.examinerText, quoteVerified: row.quoteVerified,
-        claimsAffected: (row.claimsAffected as any) || [], citationLabels: (row.citationLabels as any) || []
+        claimsAffected: toClaimNumbers(row.claimsAffected), citationLabels: (row.citationLabels as any) || []
       }
 
       // A procedural requirement takes neither a chart nor a strategy — there is
@@ -232,13 +318,20 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
       // ---- claim chart (only for citation-driven objections) ----
       let chart
       const usesCitations = !procedural && (objection.citationLabels || []).length > 0 && citationTexts.length > 0
-      if (usesCitations && oaCase.claimsText) {
-        const relevant = citationTexts.filter(c => objection.citationLabels!.includes(c.label))
-        await progress(`${who} — charting the claims against ${(relevant.length ? relevant : citationTexts).map(c => c.label).join(', ')}`, done + 1, totalSteps)
+      // ONLY the documents this objection actually cites. Falling back to every
+      // resolved citation on the communication charted the claims against art the
+      // examiner never applied here, and fed those "distinctions" to strategy as
+      // features absent from all cited documents — an argument against the wrong
+      // references, while the objection's own citation stayed unanalyzed.
+      const relevant = usesCitations
+        ? citationTexts.filter(c => objection.citationLabels!.includes(c.label))
+        : []
+      if (usesCitations && oaCase.claimsText && relevant.length) {
+        await progress(`${who} — charting the claims against ${relevant.map(c => c.label).join(', ')}`, done + 1, totalSteps)
         const built = await buildClaimChart(profile, {
           claimsText: oaCase.claimsText,
           claimNumbers: (objection.claimsAffected as number[]) || [],
-          citations: relevant.length ? relevant : citationTexts
+          citations: relevant
         }, { tenantId: opts.tenantId, userId: opts.userId, requestHeaders: opts.requestHeaders }, opts.gateway)
         if (built.chart) {
           chart = built.chart
@@ -285,16 +378,28 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
          * model had proposed it. Deciding what goes into the filing is their
          * job; ours is to show them the options and what we could verify.
          */
-        for (const a of strategy.amendments) {
-          const verdict = strategy.basisVerdicts.find(v => v.claimNumber === a.claimNumber)
+        // Verdicts are computed positionally (basisVerdicts[i] checks
+        // amendments[i]), so pair them positionally. Looking the verdict up by
+        // claim number always returned the FIRST verdict for that claim, and the
+        // prompt asks for 2–3 options — so a second, unsupported amendment to the
+        // same claim inherited the first one's "pass" and reached the attorney
+        // labelled as having located basis.
+        strategy.amendments.forEach((a, i) => {
+          const verdict = strategy.basisVerdicts[i]?.claimNumber === a.claimNumber
+            ? strategy.basisVerdicts[i]
+            : strategy.basisVerdicts.find(v => v.claimNumber === a.claimNumber)
           allAmendments.push({
             claimNumber: a.claimNumber, markedText: a.markedText, cleanText: a.cleanText,
             basisRefs: verdict?.refsResolved ? a.basisRefs : [],
             basisVerdict: verdict?.verdict,
             basisNote: verdict?.note
           })
+        })
+        // Deduped: a resumed run seeds judgmentFlags from the persisted draft, so
+        // retrying a failed objection re-pushed the same flag every time.
+        if (strategy.judgmentFlag && !judgmentFlags.some(f => f.objectionId === row.id && f.flag === strategy.judgmentFlag)) {
+          judgmentFlags.push({ objectionId: row.id, flag: strategy.judgmentFlag })
         }
-        if (strategy.judgmentFlag) judgmentFlags.push({ objectionId: row.id, flag: strategy.judgmentFlag })
       }
 
       // ---- draft the objection reply ----
@@ -311,7 +416,7 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
       // and so a later run retries only this objection.
       objectionReplies.push({
         objectionId: row.id,
-        sortOrder: row.sortOrder,
+        sortOrder: globalOrder,
         code: row.canonicalCode as any,
         officeNumber: (row.analysisJson as any)?.officeNumber || undefined,
         title: row.canonicalCode,
@@ -346,16 +451,25 @@ export async function prepareReply(caseId: string, opts: PrepareOptions = {}): P
   // ---- named sections ----
   // Isolated too: losing the prayer must not discard every drafted objection.
   await progress('Writing the preliminary submissions and the prayer', totalSteps - 1, totalSteps)
-  namedSections = { ...(resumedSections.namedSections || {}) }
-  try {
-    namedSections = {
-      preliminarySubmissions: await draftNamedSection(ctxBase as any, 'preliminarySubmissions',
-        'Acknowledge the report, summarize the invention in two sentences, and state that each objection is answered in turn.'),
-      conclusionAndPrayer: await draftNamedSection(ctxBase as any, 'conclusionAndPrayer',
-        'Close with the prayer for grant and a request for a hearing if any objection remains.')
+  /**
+   * Draft only the sections that are actually missing.
+   *
+   * These used to be overwritten unconditionally on every run, so a resume threw
+   * away text the attorney had edited via the draft route and re-bought the LLM
+   * call to replace it with a fresh generation.
+   */
+  const NAMED_SECTION_BRIEFS: Array<{ key: string; brief: string }> = [
+    { key: 'preliminarySubmissions', brief: 'Acknowledge the report, summarize the invention in two sentences, and state that each objection is answered in turn.' },
+    { key: 'conclusionAndPrayer', brief: 'Close with the prayer for grant and a request for a hearing if any objection remains.' }
+  ]
+  for (const { key, brief } of NAMED_SECTION_BRIEFS) {
+    if ((namedSections[key] || '').trim()) continue
+    try {
+      const text = await draftNamedSection(ctxBase as any, key, brief)
+      if ((text || '').trim()) namedSections[key] = text
+    } catch (err) {
+      console.error(`[OA prepare] named section ${key} failed:`, err instanceof Error ? err.message : err)
     }
-  } catch (err) {
-    console.error('[OA prepare] named sections failed:', err instanceof Error ? err.message : err)
   }
   // The run is finished either way — inProgress:false stops a later prepare from
   // resuming this draft, and the attorney gets a fresh version next time.

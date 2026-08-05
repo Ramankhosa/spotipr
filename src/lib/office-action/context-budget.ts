@@ -40,18 +40,25 @@ export interface RetrieveOptions {
 }
 
 /**
- * Embed a query string and return the bit-string literal for the bit(512) column.
- * Voyage embeddings are ASYMMETRIC: this is a query, so it must go through
- * requestSearchQueryEmbedding (input_type: query). Embedding it as a document —
- * the old requestCorpusEmbedding default — silently degrades retrieval quality.
+ * Embed a query string and return the literal, cast and distance operator that
+ * match the CONFIGURED corpus dtype.
+ *
+ * The distance operator used to be hardcoded to Hamming (`<~>`) while the cast
+ * was derived from the mutable corpus config, so the two only agreed when the
+ * corpus happened to be binary/512. Under the pinned OpenAI config
+ * (text-embedding-3-small → vector(1536), cosine) every query ran
+ * `embedding <~> $1::vector(1536)`, threw, and was swallowed by the catch in
+ * retrieveContext — so retrieval returned [] for every objection and the whole
+ * reply was drafted with no specification basis, reporting full success.
  */
-async function embedQuery(text: string): Promise<{ literal: string; cast: string } | null> {
+async function embedQuery(text: string): Promise<{ literal: string; cast: string; op: string } | null> {
   try {
     // Destructured so TypeScript type-checks these names (a rename must not
     // silently degrade to a no-op).
     const {
       requestSearchQueryEmbedding, corpusEmbeddingToLiteral,
       PATENT_CORPUS_EMBEDDING_SQL_TYPE, PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+      PATENT_CORPUS_EMBEDDING_DISTANCE_OP,
     } = await import('../patent-corpus-service')
     const vec = await requestSearchQueryEmbedding(text)
     if (!Array.isArray(vec) || !vec.length) return null
@@ -59,10 +66,59 @@ async function embedQuery(text: string): Promise<{ literal: string; cast: string
       literal: corpusEmbeddingToLiteral(vec),
       // Derived, not hardcoded — follows the corpus dtype if it ever changes.
       cast: `${PATENT_CORPUS_EMBEDDING_SQL_TYPE}(${PATENT_CORPUS_EMBEDDING_DIMENSIONS})`,
+      op: PATENT_CORPUS_EMBEDDING_DISTANCE_OP,
     }
   } catch (e) {
     console.warn('[OA context] query embedding failed:', e instanceof Error ? e.message : e)
     return null
+  }
+}
+
+/**
+ * The SQL type `oa_document_chunks.embedding` actually has, read from the
+ * database rather than assumed from the schema file.
+ *
+ * A vector column and the configured embedding dtype can drift apart (the column
+ * is fixed by a migration; the dtype is an env var). When they do, every write
+ * and every search throws a type error that the callers catch — so the failure
+ * mode was a permanently empty retrieval that looked like "no relevant
+ * paragraphs" instead of a broken deployment. Checked once per process, cheaply,
+ * so the mismatch can be reported as what it is.
+ */
+let columnTypePromise: Promise<string | null> | null = null
+export function resetChunkColumnTypeCache(): void { columnTypePromise = null }
+
+export async function chunkEmbeddingColumnType(): Promise<string | null> {
+  if (!columnTypePromise) {
+    columnTypePromise = prisma.$queryRawUnsafe<Array<{ type: string }>>(
+      `SELECT format_type(a.atttypid, a.atttypmod) AS type
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+        WHERE c.relname = 'oa_document_chunks' AND a.attname = 'embedding' AND a.attnum > 0`
+    ).then(rows => rows?.[0]?.type || null).catch(() => null)
+  }
+  return columnTypePromise
+}
+
+/**
+ * Does the stored column accept vectors of the configured dtype?
+ *
+ * Returns a human-readable reason when it does not, so callers can surface a
+ * deployment fault instead of silently degrading a legal drafting run.
+ */
+export async function checkRetrievalConfig(): Promise<{ ok: boolean; reason?: string }> {
+  const actual = await chunkEmbeddingColumnType()
+  if (!actual) return { ok: true }        // cannot tell (no DB / no column) — do not cry wolf
+  const {
+    PATENT_CORPUS_EMBEDDING_SQL_TYPE, PATENT_CORPUS_EMBEDDING_DIMENSIONS, PATENT_CORPUS_EMBEDDING_MODEL,
+  } = await import('../patent-corpus-service')
+  const expected = `${PATENT_CORPUS_EMBEDDING_SQL_TYPE}(${PATENT_CORPUS_EMBEDDING_DIMENSIONS})`
+  const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase()
+  if (normalize(actual) === normalize(expected)) return { ok: true }
+  return {
+    ok: false,
+    reason: `oa_document_chunks.embedding is ${actual}, but PATENT_CORPUS_EMBEDDING_MODEL=${PATENT_CORPUS_EMBEDDING_MODEL} produces ${expected}. `
+      + `Case-document retrieval cannot run until the column and the embedding model agree — every reply would be drafted with no specification basis.`,
   }
 }
 
@@ -87,7 +143,7 @@ export async function retrieveContext(opts: RetrieveOptions): Promise<RetrievedC
   try {
     rows = await prisma.$queryRawUnsafe(
       `SELECT c."documentId", c."kind", c."sectionRef", c."text", c."tokenCount",
-              (c."embedding" <~> $1::${embedded.cast}) AS distance
+              (c."embedding" ${embedded.op} $1::${embedded.cast}) AS distance
          FROM "oa_document_chunks" c
          JOIN "oa_case_documents" d ON d."id" = c."documentId"
         WHERE c."caseId" = $2 AND c."embedding" IS NOT NULL ${kindFilter} ${safeFilter}
@@ -97,7 +153,10 @@ export async function retrieveContext(opts: RetrieveOptions): Promise<RetrievedC
       opts.caseId
     )
   } catch (e) {
-    console.warn('[OA context] vector search failed:', e instanceof Error ? e.message : e)
+    // A type error here is a deployment fault, not "nothing matched" — say which.
+    const config = await checkRetrievalConfig()
+    console.error('[OA context] vector search failed:', e instanceof Error ? e.message : e,
+      config.ok ? '' : `\n  CONFIG MISMATCH: ${config.reason}`)
     return []
   }
 

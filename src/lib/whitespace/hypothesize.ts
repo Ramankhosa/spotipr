@@ -19,6 +19,7 @@ import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { hamming, hexToWords, WORDS, mulberry32 } from './binary-kmeans'
 import { buildScopeFilter } from './field-map'
+import { resolveFieldCandidates } from './candidates'
 import { semanticNeighbors, semanticNoveltyScore } from './embedding'
 import { runWhitespaceLLM, parseModelJson } from './llm'
 import { buildHypothesizePrompt, WS_HYPOTHESIZE_STAGE_CODE } from './prompts'
@@ -139,6 +140,17 @@ export async function generateHypotheses(input: {
 
   const coverageBase = buildCoverageLimitations(input.scope)
 
+  // Hoisted out of the per-hypothesis loop, and built from the same hybrid field
+  // the census and area map used — a nearest-neighbour distance measured against
+  // a different field than the percentiles were calibrated on is not a novelty
+  // score, it is noise. Guarded on percentiles: without them no novelty can be
+  // scored, and resolving candidates costs a query-embedding call.
+  let fieldFilter: ReturnType<typeof buildScopeFilter> | null = null
+  if (percentiles) {
+    const candidates = await resolveFieldCandidates(input.scope)
+    fieldFilter = buildScopeFilter(input.scope, candidates.ids)
+  }
+
   const created: GeneratedHypothesis[] = []
   for (const raw of (parsed.hypotheses ?? []).slice(0, MAX_HYPOTHESES)) {
     const statement = typeof raw.statement === 'string' ? raw.statement.trim().slice(0, 600) : ''
@@ -164,8 +176,7 @@ export async function generateHypotheses(input: {
     // the limitation is recorded rather than a number invented.
     let semanticNovelty: number | null = null
     if (percentiles) {
-      const scopeFilter = buildScopeFilter(input.scope)
-      const nearest = await semanticNeighbors({ queryText: statement, limit: 1, scopeFilter })
+      const nearest = await semanticNeighbors({ queryText: statement, limit: 1, scopeFilter: fieldFilter ?? undefined })
       if (nearest.available && nearest.neighbors.length) {
         semanticNovelty = semanticNoveltyScore(nearest.neighbors[0].distance, percentiles.p05, percentiles.p50)
       }

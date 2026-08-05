@@ -28,20 +28,44 @@ function markedClaimHtml(c: AmendedClaim): string {
  * placeholder rather than throwing, which is what lets the attorney see what
  * needs fixing instead of an error page.
  */
-function paras(text: string, numbering: ParagraphNumbering): string {
-  return formatParagraphRefsForPreview(text, numbering)
-    .split(/\n{2,}/).map(p => p.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
-    .map(p => `<p>${esc(p)}</p>`).join('')
+function paras(text: string, numbering: ParagraphNumbering, citableIds?: Set<string>): string {
+  return formatParagraphRefsForPreview(text, numbering, citableIds)
+    .split(/\n{2,}/)
+    .map(block => block.split('\n').map(l => l.trim()).filter(Boolean))
+    .filter(lines => lines.length > 0)
+    // Single newlines stay as breaks, matching the DOCX. Collapsing them ran the
+    // drafter's enumerated lists together into one paragraph.
+    .map(lines => `<p>${lines.map(esc).join('<br>')}</p>`).join('')
 }
 
-export function renderReplyHtml(assembled: AssembledReply, profile: OfficeActionProfile): string {
+/**
+ * A font name from the jurisdiction profile is untrusted input — it reaches this
+ * module from the super-admin jurisdiction config and is interpolated into a
+ * <style> block that the workspace injects with dangerouslySetInnerHTML. A value
+ * containing "</style><script>…" would execute in the session of every attorney
+ * who previews a reply in that jurisdiction. Only a plain font name survives.
+ */
+function safeFontName(raw: string | undefined): string {
+  const cleaned = String(raw || '').replace(/[^A-Za-z0-9 \-]/g, '').trim().slice(0, 64)
+  return cleaned || 'Times New Roman'
+}
+
+export function renderReplyHtml(
+  assembled: AssembledReply,
+  profile: OfficeActionProfile,
+  opts: { citableIds?: Set<string> } = {}
+): string {
   const f = profile.response.export?.formatting || {}
-  const font = f.font || 'Times New Roman'
+  const font = safeFontName(f.font)
   let secNo = 0
   const parts: string[] = []
 
   const numbering = assembled.meta.numbering
-  for (const block of assembled.blocks) parts.push(renderBlockHtml(block, () => ++secNo, numbering))
+  // The same citable set the filing renderer uses. Without it the preview showed
+  // an unvetted anchor as a clean "[0999]" while the DOCX wrote
+  // "[reference to verify]" — the one divergence that matters, in the direction
+  // where the attorney reads something correct and files something else.
+  for (const block of assembled.blocks) parts.push(renderBlockHtml(block, () => ++secNo, numbering, opts.citableIds))
 
   const meta = assembled.meta
   return `<!-- generated preview: FER reply ${esc(meta.applicationNumber)} -->
@@ -70,6 +94,10 @@ export function renderReplyHtml(assembled: AssembledReply, profile: OfficeAction
   .fer-doc .attn p{background:#fff3a3;padding:2px 4px}
   .fer-doc .attn-do{background:#fff3a3;border-left:3px solid #d4a017;padding:8px 10px;margin-top:8px;font-size:.92em}
   .fer-doc .attn-do ul{margin:6px 0 0 18px}
+  /* Sections the export leaves out — shown so the gap is visible, never filed. */
+  .fer-doc .omitted{border:1px dashed var(--rule);border-radius:4px;padding:10px 12px;margin:14px 0 0;
+    color:var(--muted);font-size:.92em}
+  .fer-doc .omitted ul{margin:6px 0 0 18px}
   .fer-doc .claim{margin-left:26px;text-align:justify}
   .fer-doc .claim .cn{font-weight:700}
   .fer-doc ins{text-decoration:none;border-bottom:1.5px solid currentColor}
@@ -80,7 +108,12 @@ export function renderReplyHtml(assembled: AssembledReply, profile: OfficeAction
 <div class="fer-doc">${parts.join('')}</div>`
 }
 
-function renderBlockHtml(block: ReplyBlock, nextNo: () => number, numbering: ParagraphNumbering): string {
+function renderBlockHtml(
+  block: ReplyBlock,
+  nextNo: () => number,
+  numbering: ParagraphNumbering,
+  citableIds?: Set<string>
+): string {
   switch (block.type) {
     case 'addressBlock':
       return `<div class="addr">${block.lines.filter(Boolean).map(l => l.startsWith('Re:') ? `<span class="re">${esc(l)}</span>` : esc(l)).join('\n')}</div>`
@@ -90,22 +123,33 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number, numbering: Par
       return `<p class="salut">${esc(block.text)}</p>`
     case 'namedSection': {
       const n = nextNo()
-      return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${paras(block.body, numbering)}`
+      return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${paras(block.body, numbering, citableIds)}`
     }
     case 'objections': {
       const n = nextNo()
       const items = block.objections.map((o, i) => {
         const concern = o.examinerConcern ? `<div class="concern">Examiner's objection: ${esc(o.examinerConcern)}</div><div class="subhead">Applicant’s submission:</div>` : ''
-        // Procedural undertakings are highlighted exactly as they export, so the
-        // print preview shows the attorney what still has to be done by hand.
+        // The action list is workspace-only and is NOT in the DOCX, so it is
+        // labelled as such — an instruction to "remove before filing" pointing at
+        // text the file never contained sends the attorney hunting for nothing.
         const bodyHtml = o.attorneyAction
-          ? `<div class="attn">${paras(o.bodyText, numbering)}${(o.actionItems || []).length
-              ? `<div class="attn-do"><strong>Attorney action — remove before filing:</strong><ul>${(o.actionItems || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
+          ? `<div class="attn">${paras(o.bodyText, numbering, citableIds)}${(o.actionItems || []).length
+              ? `<div class="attn-do"><strong>Attorney action (shown here only — not in the exported file):</strong><ul>${(o.actionItems || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
               : ''}</div>`
-          : paras(o.bodyText, numbering)
+          : paras(o.bodyText, numbering, citableIds)
         return `<div class="obj"><div class="oh"><span class="no">${n}.${i + 1}</span>Objection ${esc(objectionLabel(o))} — ${esc(o.title)}${o.statuteBasis ? ` (${esc(o.statuteBasis)})` : ''}</div></div>${concern}<div class="indent">${bodyHtml}</div>`
       }).join('')
-      return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${items}`
+      // What is NOT in the letter, and why. Silence here would read as "every
+      // objection is answered" while the export quietly left sections out.
+      const gaps = block.omitted.length
+        ? `<div class="omitted"><strong>Not included in this reply (${block.omitted.length}):</strong><ul>${
+            block.omitted.map(({ reply, reason }) =>
+              `<li>Objection ${esc(objectionLabel(reply))} — ${esc(reply.title)}: ${
+                reason === 'empty' ? 'no text drafted yet' : 'drafted but not approved'
+              }</li>`).join('')
+          }</ul></div>`
+        : ''
+      return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${items}${gaps}`
     }
     case 'amendments': {
       const n = nextNo()

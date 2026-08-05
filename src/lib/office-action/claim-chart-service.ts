@@ -78,6 +78,26 @@ function citationCorpus(c: CitationText): string {
   return [c.title, c.abstract, c.claims, c.description].filter(Boolean).join('\n\n')
 }
 
+/**
+ * Claim numbers as numbers, whatever the model returned.
+ *
+ * `claimsAffected` comes straight off LLM output and is stored as JSON, so it
+ * routinely arrives as ["1","3"] or ["claim 1"]. The element filter below is a
+ * strict `includes`, so a string claim number matched nothing, `buildClaimChart`
+ * returned "No claim elements parsed", and the pipeline dropped the chart —
+ * leaving the novelty/inventive-step section drafted with no evidence at all and
+ * nothing surfaced to say so.
+ */
+export function toClaimNumbers(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  const out: number[] = []
+  for (const v of value) {
+    const n = typeof v === 'number' ? v : Number(String(v ?? '').match(/\d+/)?.[0])
+    if (Number.isFinite(n) && n > 0) out.push(n)
+  }
+  return Array.from(new Set(out))
+}
+
 export async function buildClaimChart(
   profile: OfficeActionProfile,
   input: {
@@ -89,7 +109,8 @@ export async function buildClaimChart(
   gateway?: OaGateway
 ): Promise<{ success: boolean; chart?: ClaimChart; error?: string }> {
   const allElements = parseClaimElements(input.claimsText)
-  const elements = allElements.filter(e => input.claimNumbers.length === 0 || input.claimNumbers.includes(e.claimNumber))
+  const wanted = toClaimNumbers(input.claimNumbers)
+  const elements = allElements.filter(e => wanted.length === 0 || wanted.includes(e.claimNumber))
   if (!elements.length) return { success: false, error: 'No claim elements parsed' }
   if (!input.citations.length) return { success: true, chart: emptyChart(elements) }
 

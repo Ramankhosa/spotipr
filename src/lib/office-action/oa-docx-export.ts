@@ -52,13 +52,19 @@ export async function buildReplyDocx(
   const children: Paragraph[] = []
   let sectionNo = 0
 
-  const body = (text: string, o: { italics?: boolean; bold?: boolean; indent?: number; after?: number } = {}) =>
-    new Paragraph({
+  // `text` may be a single string or the lines of one paragraph; multiple lines
+  // are emitted as breaks inside one paragraph so drafted lists keep their shape.
+  const body = (text: string | string[], o: { italics?: boolean; bold?: boolean; indent?: number; after?: number } = {}) => {
+    const lines = Array.isArray(text) ? text : [text]
+    const runs: TextRun[] = lines.map((line, i) =>
+      new TextRun({ text: line, italics: o.italics, bold: o.bold, break: i > 0 ? 1 : undefined }))
+    return new Paragraph({
       alignment: fmt.justify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
       spacing: { line: fmt.lineSpacing, after: o.after ?? 120 },
       indent: o.indent ? { left: o.indent } : undefined,
-      children: [new TextRun({ text, italics: o.italics, bold: o.bold })]
+      children: runs.length ? runs : [new TextRun({ text: '' })]
     })
+  }
 
   const numberedHeading = (title: string): Paragraph => {
     sectionNo++
@@ -117,7 +123,7 @@ export async function buildReplyDocx(
 interface Ctx {
   children: Paragraph[]
   fmt: Fmt
-  body: (t: string, o?: any) => Paragraph
+  body: (t: string | string[], o?: any) => Paragraph
   numberedHeading: (t: string) => Paragraph
   subNumbered: (runs: TextRun[]) => Paragraph
   filing: { numbering: ParagraphNumbering; citableIds?: Set<string> }
@@ -139,7 +145,7 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
       break
     case 'namedSection':
       children.push(numberedHeading(block.title))
-      for (const p of splitParas(block.body, filing)) children.push(body(p))
+      for (const lines of splitParas(block.body, filing)) children.push(body(lines))
       break
     case 'objections': {
       children.push(numberedHeading(block.title))
@@ -160,7 +166,7 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
         // is due once at RQ…") and used to be printed here under "ATTORNEY ACTION
         // — remove before filing", i.e. straight into the document sent to the
         // Controller. Marking such text up is not a safeguard; absence is.
-        for (const p of splitParas(o.bodyText, filing)) children.push(body(p, { indent: 480 }))
+        for (const lines of splitParas(o.bodyText, filing)) children.push(body(lines, { indent: 480 }))
       }
       break
     }
@@ -194,17 +200,25 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
 }
 
 /**
- * Internal anchors become filing citations here — or the render fails.
+ * Internal anchors become filing citations here.
  *
  * formatParagraphRefsForFiling converts a valid authored ¶0038 to "[0038]" and
- * THROWS on anything it cannot stand behind: a non-citable anchor, one that
+ * renders anything it cannot stand behind — a non-citable anchor, one that
  * resolves to no real paragraph, or any anchor at all when the specification
- * carries no numbering of its own. The lint catches these first in normal
- * operation; this is the guarantee for when it does not run.
+ * carries no numbering of its own — as a VISIBLE placeholder. It does not throw:
+ * whether to file is the attorney's call, and a glaring "[reference to verify]"
+ * they can fix in Word beats a fabricated number that reads as correct. The lint
+ * flags the same anchors before they get here.
+ *
+ * Single newlines are kept as line breaks. Collapsing them to spaces ran the
+ * drafter's enumerated lists ("(a) … \n(b) …") together into one paragraph in
+ * the filed document.
  */
-function splitParas(text: string, filing: { numbering: ParagraphNumbering; citableIds?: Set<string> }): string[] {
+function splitParas(text: string, filing: { numbering: ParagraphNumbering; citableIds?: Set<string> }): string[][] {
   return formatParagraphRefsForFiling(text, filing)
-    .split(/\n{2,}/).map((s: string) => s.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean)
+    .split(/\n{2,}/)
+    .map((block: string) => block.split('\n').map(l => l.trim()).filter(Boolean))
+    .filter((lines: string[]) => lines.length > 0)
 }
 
 function markedClaimParagraph(claim: AmendedClaim, fmt: Fmt): Paragraph {

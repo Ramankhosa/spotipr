@@ -17,6 +17,7 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '../src/lib/prisma'
 import { buildScopeFilter, buildConceptQuery, runFieldMap } from '../src/lib/whitespace/field-map'
+import { candidateCoverageNote, resolveFieldCandidates } from '../src/lib/whitespace/candidates'
 import { readScope } from '../src/lib/whitespace/service'
 import { emptyWhitespaceScope } from '../src/lib/whitespace/types'
 import type { WhitespaceScope } from '../src/lib/whitespace/types'
@@ -128,7 +129,47 @@ async function main() {
   console.log(`\nCorpus: ~${Number(size?.approx_rows ?? 0).toLocaleString()} rows, ${size?.total_bytes}`)
   console.log(`Session statement_timeout outside a facet: ${settings?.statement_timeout}`)
 
-  const where = buildScopeFilter(scope)
+  // --- the semantic arm of the hybrid gate ----------------------------------
+  // Reported separately from the census because "the field is empty" has two
+  // very different causes now, and this is the line that tells them apart.
+  console.log('\n--- Semantic candidate arm ---')
+  const semanticStart = Date.now()
+  const candidates = await resolveFieldCandidates(scope)
+  if (!candidates.available) {
+    console.log(`  UNAVAILABLE — ${candidates.reason}`)
+    console.log('  The field below is therefore matched on concept WORDING alone.')
+  } else {
+    console.log(
+      `  ${candidates.ids.length.toLocaleString()} documents admitted by meaning in ${Date.now() - semanticStart}ms` +
+        `${candidates.saturated ? ` (clipped at the ${candidates.cap.toLocaleString()} cap)` : ''}`
+    )
+  }
+
+  const lexicalOnly = buildScopeFilter(scope)
+  const where = buildScopeFilter(scope, candidates.ids)
+
+  // --- lexical vs hybrid, side by side --------------------------------------
+  console.log('\n--- Lexical-only vs hybrid match counts ---')
+  for (const [label, predicate] of [
+    ['lexical only', lexicalOnly],
+    ['hybrid      ', where],
+  ] as const) {
+    const started = Date.now()
+    try {
+      const [row] = await withTimeout<{ matched: bigint }>(
+        60_000,
+        Prisma.sql`
+          SELECT COUNT(*)::bigint AS matched
+          FROM (SELECT 1 FROM "local_patents" lp WHERE ${predicate} LIMIT ${PROBE_CAP}) t`
+      )
+      const matched = Number(row?.matched ?? 0)
+      console.log(
+        `  ${label}: ${matched.toLocaleString()}${matched >= PROBE_CAP ? '+ (hit the cap)' : ''} in ${Date.now() - started}ms`
+      )
+    } catch (error) {
+      console.log(`  ${label}: FAILED after ${Date.now() - started}ms — ${(error as Error).message.slice(0, 200)}`)
+    }
+  }
 
   // --- the plan the census actually gets -----------------------------------
   console.log('\n--- EXPLAIN: the staging pass (the only statement that reads the corpus) ---')
@@ -167,7 +208,11 @@ async function main() {
   const censusTimeoutMs = timeoutFlag !== -1 ? Number(process.argv[timeoutFlag + 1]) : undefined
   if (censusTimeoutMs) console.log(`  (census ceiling forced to ${censusTimeoutMs}ms)`)
   try {
-    const result = await runFieldMap(scope, censusTimeoutMs ? { censusTimeoutMs } : {})
+    const result = await runFieldMap(scope, {
+      ...(censusTimeoutMs ? { censusTimeoutMs } : {}),
+      candidateIds: candidates.ids,
+      candidateNote: candidateCoverageNote(candidates),
+    })
     const elapsed = Date.now() - start
     console.log(
       `  ${result.familyCount.toLocaleString()} families / ${result.publicationCount.toLocaleString()} publications in ${elapsed}ms`

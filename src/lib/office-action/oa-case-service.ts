@@ -1,7 +1,7 @@
 import { prisma } from '../prisma'
 import { getCountryProfile } from '../country-profile-service'
 import { officeActionProfileSchema, type OfficeActionProfile } from './oa-profile-schema'
-import { computeDeadlines, mostUrgentDeadline, type ComputedDeadline } from './deadline-engine'
+import { computeDeadlines, mostUrgentDeadline, officeToday, refreshDeadlines, type ComputedDeadline } from './deadline-engine'
 import { parseOfficeActionDocument, cleanOfficeActionText, safeIsoDate } from './oa-parser'
 import { classifyObjections } from './objection-classifier'
 import type { OaGateway } from './oa-llm-service'
@@ -16,7 +16,10 @@ import type { OaGateway } from './oa-llm-service'
  * block; this service has no country branches.
  */
 
-const ISO_TODAY_FALLBACK = () => new Date().toISOString().slice(0, 10)
+// The office's calendar day, not the server's UTC day. A UTC "today" is a day
+// behind IST between 00:00 and 05:30, which overstates every computed deadline
+// by one day for filings made in that window.
+const ISO_TODAY_FALLBACK = () => officeToday()
 
 export interface CaseActor {
   userId: string
@@ -273,10 +276,14 @@ export async function ingestDocument(
             : undefined
         }
       })),
-      ...parseResult.parsed.citedDocuments.map(c => prisma.oaCitation.create({
+      // A cited document with no label cannot be referenced by any objection and
+      // cannot be written (label is a required column) — dropping it here beats
+      // throwing out of the transaction and failing the whole ingest, which is
+      // what an undefined label from the parse used to do.
+      ...parseResult.parsed.citedDocuments.filter(c => String(c?.label || '').trim()).map(c => prisma.oaCitation.create({
         data: {
           documentId: doc.id,
-          label: c.label,
+          label: String(c.label).trim(),
           kind: c.kind || 'PATENT',
           docNumber: c.docNumber || null,
           fetchStatus: 'PENDING',
@@ -309,9 +316,20 @@ export async function ingestDocument(
       mostUrgent: urgent,
       objectionCount: objections.length,
       unverifiedQuotes: unverified,
-      warning: classification.success
-        ? undefined
-        : `Objections were extracted but could not be auto-classified (${classification.error || 'classification failed'}) — review each card's category.`
+      warning: [
+        classification.success
+          ? ''
+          : `Objections were extracted but could not be auto-classified (${classification.error || 'classification failed'}) — review each card's category.`,
+        // A deadline that could not be computed is the one omission the attorney
+        // must not discover by its absence. The trigger date is dropped whenever
+        // it does not extract as ISO ("15.03.2026" from an OCR'd PDF), and the
+        // ingest then returned 201 with an empty deadline list and nothing said —
+        // no strip in the workspace, no statutory clock, on a deemed-abandonment
+        // deadline.
+        deadlines.length === 0 && parseResult.instrument.instrumentId
+          ? `No response deadline could be computed — the date of the report was not readable, so the ${profile.meta.office} time limit is NOT being tracked for this document. Check the report date and diarise the deadline yourself.`
+          : ''
+      ].filter(Boolean).join(' ') || undefined
     }
   } catch (err) {
     await prisma.officeActionDocument.update({
@@ -338,7 +356,12 @@ export async function getCaseView(caseId: string) {
   })
   if (!oaCase) return null
 
-  const allDeadlines: ComputedDeadline[] = oaCase.documents.flatMap(d => (d.deadlinesJson as any as ComputedDeadline[]) || [])
+  // Recomputed against today, never served as stored: daysRemaining/urgency were
+  // frozen at ingest, so a case opened months later reported the days it had
+  // left on the day the report was uploaded.
+  const allDeadlines: ComputedDeadline[] = refreshDeadlines(
+    oaCase.documents.flatMap(d => (d.deadlinesJson as any as ComputedDeadline[]) || [])
+  ) as ComputedDeadline[]
 
   // Present cited documents to the attorney as patent documents — full text when
   // resolved, with a neutral source label and no retrieval detail.

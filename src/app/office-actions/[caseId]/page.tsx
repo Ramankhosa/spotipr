@@ -199,15 +199,28 @@ export default function OfficeActionWorkspacePage() {
 
   useEffect(() => { if (!isLoading && !user) router.push('/login') }, [user, isLoading, router])
 
+  /**
+   * Case refetch, ordered.
+   *
+   * Five callers can have a `load()` in flight at once (mount, the 6s citation
+   * poll, the 2.5s prepare poll, and the completion handlers). Without a
+   * sequence guard a slow earlier response could resolve last and overwrite a
+   * newer view — restoring a mid-run partial draft after the run had finished,
+   * with nothing left to refetch it. Only the newest request may write state.
+   */
+  const loadSeqRef = useRef(0)
   const load = useCallback(async () => {
     if (!caseId) return
+    const seq = ++loadSeqRef.current
     try {
       const res = await fetch(`/api/office-actions/${caseId}`, { headers: authHeaders() })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load the case')
+      if (seq !== loadSeqRef.current) return      // a newer load has already landed
       setView(data)
       setLoadError(null)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setLoadError(err instanceof Error ? err.message : 'Could not load the case')
     }
   }, [caseId])
@@ -237,12 +250,24 @@ export default function OfficeActionWorkspacePage() {
   /** Stages the worker reported, newest last — the run's visible trail. */
   const [prepareLog, setPrepareLog] = useState<Array<{ step: string; at: number }>>([])
 
+  /**
+   * A failed seed poll must not make a live run invisible.
+   *
+   * The mount-time poll ran once, and a transient 500 or network blip returned
+   * early — leaving prepareActive false, which is also the condition the retry
+   * interval is gated on. The workspace then sat static while the job actually
+   * ran: no progress, no sections streaming in, and Export still enabled over a
+   * half-built draft. Keep a slow heartbeat alive until one poll succeeds.
+   */
+  const [pollSeeded, setPollSeeded] = useState(false)
+
   const pollPrepare = useCallback(async () => {
     if (!caseId) return
     try {
       const res = await fetch(`/api/office-actions/${caseId}/prepare`, { headers: authHeaders() })
       if (!res.ok) return
       const job = (await res.json()).job
+      setPollSeeded(true)
       if (!job) { setPrepareActive(false); return }
 
       const running = job.status === 'QUEUED' || job.status === 'PROCESSING'
@@ -306,6 +331,12 @@ export default function OfficeActionWorkspacePage() {
     const t = setInterval(() => void pollPrepare(), 2500)
     return () => clearInterval(t)
   }, [prepareActive, pollPrepare])
+  // Retry the seed until it lands, so one failed poll cannot hide a running job.
+  useEffect(() => {
+    if (!user || pollSeeded || prepareActive) return
+    const t = setInterval(() => void pollPrepare(), 8000)
+    return () => clearInterval(t)
+  }, [user, pollSeeded, prepareActive, pollPrepare])
 
   const objections = useMemo(() =>
     (view?.case.documents || []).flatMap(d => d.objections).sort((a, b) => a.sortOrder - b.sortOrder), [view])
@@ -418,6 +449,10 @@ export default function OfficeActionWorkspacePage() {
     setIntakeStartedAt(Date.now())
 
     try {
+      // Counted as they land. Deriving this as materials.length - failures.length
+      // subtracted the cited-document failures too, so the toast under-reported
+      // (and could go negative).
+      let materialsAdded = 0
       for (let i = 0; i < payload.materials.length; i++) {
         const m = payload.materials[i]
         setIntakeStep(`Adding the ${MATERIAL_LABELS[m.kind] || 'document'}…`)
@@ -440,6 +475,7 @@ export default function OfficeActionWorkspacePage() {
           if (!res.ok) throw new Error(data.error || 'Could not add the document')
           if (data.warning) toast({ title: `${MATERIAL_LABELS[m.kind] || 'Document'} added`, description: data.warning, variant: 'warning' })
           mark(`material-${i}`, 'done', data.warning || undefined)
+          materialsAdded++
         } catch (err) {
           const why = err instanceof Error ? err.message : 'could not be added'
           mark(`material-${i}`, 'failed', why)
@@ -494,7 +530,7 @@ export default function OfficeActionWorkspacePage() {
         }
       }
 
-      const added = payload.materials.length - failures.length
+      const added = materialsAdded
       toast({
         title: `Report read — ${data.objectionCount} objection${data.objectionCount === 1 ? '' : 's'} found`,
         description: [
@@ -735,7 +771,10 @@ export default function OfficeActionWorkspacePage() {
       <DeadlineStrip
         view={view}
         approved={approvedCount}
-        total={replies.length || objections.length}
+        // Every objection that must be answered, not just the ones a partial run
+        // happened to draft. `replies.length` read "3/3 · ready to export" while
+        // two objections had no section at all.
+        total={objections.filter(o => o.status !== 'DISMISSED').length || replies.length}
         onOpenCaseFile={() => setShowCaseFile(true)}
         onAddDocument={() => setShowAddDocument(true)}
         onPrepare={prepare}
@@ -980,7 +1019,7 @@ function NumberingNotice(props: {
 function DeadlineStrip(props: {
   view: CaseView; approved: number; total: number
   onOpenCaseFile: () => void; onAddDocument: () => void; onPrepare: () => void; onPreview: () => void
-  onExport: (acknowledgeSignature?: string) => void
+  onExport: (acknowledgeSignature?: string) => void | Promise<void>
   onPause: () => void; pausing: boolean
   /** Every section is drafted and at least one is still unapproved. */
   canApproveAll: boolean; pendingApproval: number; onApproveAll: () => void
@@ -1363,8 +1402,21 @@ function IntakePanel(props: {
   // The examiner's own cited art (D1, D2…), attached after the report is read
   // — the labels only exist once the FER has been parsed.
   const [cited, setCited] = useState<Array<{ key: string; slot: MaterialSlot; label: string; title: string }>>([])
+  /**
+   * Row keys must be unique for the life of the form, not derived from length.
+   *
+   * `c${list.length}` collided after a remove-then-add: the new row reused a
+   * surviving row's key, so patchCited mirrored every keystroke and file choice
+   * into both, and removing one deleted both. A monotonic counter cannot repeat.
+   */
+  const citedKeyRef = useRef(0)
   const addCited = () =>
-    setCited(list => [...list, { key: `c${list.length}-${list.length}`, slot: EMPTY_SLOT, label: `D${list.length + 1}`, title: '' }])
+    setCited(list => [...list, {
+      key: `c${citedKeyRef.current++}`,
+      slot: EMPTY_SLOT,
+      label: `D${list.length + 1}`,
+      title: ''
+    }])
   const patchCited = (key: string, patch: Partial<{ slot: MaterialSlot; label: string; title: string }>) =>
     setCited(list => list.map(c => c.key === key ? { ...c, ...patch } : c))
 
@@ -1603,7 +1655,22 @@ function ObjectionWorkbench(props: {
   // Redraft box, per objection: closed and cleared whenever the selection changes.
   const [redrafting, setRedrafting] = useState(false)
   const [remarks, setRemarks] = useState('')
-  useEffect(() => { setEditing(false); setDraftText(reply?.bodyText || '') }, [o.id, reply?.bodyText])
+  /**
+   * Never discard text the attorney is currently typing.
+   *
+   * This effect used to run on every change to `reply.bodyText`, which the 2.5s
+   * prepare poll changes whenever the background run persists that section — so
+   * an attorney writing a failed section by hand had the editor closed and their
+   * work thrown away mid-sentence, with no warning. Switching objections resets
+   * the editor; an update arriving underneath an OPEN editor does not.
+   */
+  // Keyed on o.id ALONE, deliberately: reacting to bodyText here is the bug.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setEditing(false); setDraftText(reply?.bodyText || '') }, [o.id])
+  useEffect(() => {
+    if (editing) return                       // their text wins while they are in it
+    setDraftText(reply?.bodyText || '')
+  }, [reply?.bodyText, editing])
   useEffect(() => { setRedrafting(false); setRemarks((reply as any)?.attorneyRemarks || '') }, [o.id])
 
   const tabs: Array<[typeof props.tab, string]> = [['objection', 'Objection'], ['evidence', 'Evidence'], ['strategy', 'Strategy'], ['draft', 'Draft']]
@@ -2278,10 +2345,29 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
   const [saving, setSaving] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  /**
+   * A failed load must not read as "nothing on file".
+   *
+   * Rendering the empty state on an HTTP error invited the attorney to re-upload
+   * a specification that is already there — silently changing which copy is
+   * latest, and with it the amendment basis. A network throw left the panel on
+   * "Loading…" forever with no retry.
+   */
+  const [docsError, setDocsError] = useState<string | null>(null)
   const load = useCallback(async () => {
-    const res = await fetch(`/api/office-actions/${props.caseId}/case-documents`, { headers: authHeaders() })
-    const data = await res.json().catch(() => ({}))
-    setDocs(res.ok ? data.documents || [] : [])
+    try {
+      const res = await fetch(`/api/office-actions/${props.caseId}/case-documents`, { headers: authHeaders() })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setDocsError(data.error || 'Could not load the case file.')
+        return
+      }
+      setDocsError(null)
+      setDocs(data.documents || [])
+    } catch {
+      setDocsError('Could not reach the server. Check your connection and try again.')
+      setDocs(d => d ?? [])
+    }
   }, [props.caseId])
   useEffect(() => { void load() }, [load])
 
@@ -2340,7 +2426,12 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
 
         <div className="mb-5">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">On file</h3>
-          {docs === null ? (
+          {docsError ? (
+            <div className="text-sm text-destructive flex items-center gap-2">
+              <span>{docsError}</span>
+              <button type="button" className="underline hover:no-underline" onClick={() => void load()}>Retry</button>
+            </div>
+          ) : docs === null ? (
             <div className="text-sm text-muted-foreground">Loading…</div>
           ) : docs.length === 0 ? (
             <div className="text-sm text-muted-foreground">Nothing yet — add the as-filed specification and claims below.</div>
@@ -2422,7 +2513,7 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
 function PreviewModal(props: {
   preview: { lint: any; html: string }
   onClose: () => void
-  onExport: (acknowledgeSignature?: string) => void
+  onExport: (acknowledgeSignature?: string) => void | Promise<void>
   busy: boolean
   agent: { name?: string; regNo?: string }
   onSaveAgent: (agent: { name?: string; regNo?: string }) => Promise<any> | void
@@ -2434,6 +2525,18 @@ function PreviewModal(props: {
   const form3Blocked = (lint?.checks || []).some((c: any) => c.id === 'form3' && c.status === 'fail')
   const outstanding = (lint?.checks || []).filter((c: any) => c.status !== 'pass')
   const [acknowledged, setAcknowledged] = useState(false)
+  /**
+   * The signature-block save and the export must not overlap.
+   *
+   * Both used the shared toolbar `busy` flag, whose `finally` cleared it while
+   * the export fetch was still running — so Export re-enabled mid-export and a
+   * second click issued a duplicate export (a second REPLIED write and a second
+   * download). Worse, clicking Save then Export immediately could send the
+   * export before the agent PATCH committed, producing a DOCX with no signatory
+   * block after the attorney had explicitly saved one.
+   */
+  const [savingAgent, setSavingAgent] = useState(false)
+  const [exporting, setExporting] = useState(false)
   // A new set of findings is a new thing to read — an earlier tick cannot cover it.
   useEffect(() => { setAcknowledged(false) }, [lint?.signature])
   return (
@@ -2473,9 +2576,13 @@ function PreviewModal(props: {
               <input id="oa-agent-reg" className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
                 placeholder="IN/PA-…" value={agentRegNo} onChange={e => setAgentRegNo(e.target.value)} />
             </div>
-            <Button size="sm" variant="outline"
-              onClick={() => void props.onSaveAgent({ name: agentName, regNo: agentRegNo })}>
-              Save signature block
+            <Button size="sm" variant="outline" disabled={savingAgent || props.busy}
+              onClick={async () => {
+                setSavingAgent(true)
+                try { await props.onSaveAgent({ name: agentName, regNo: agentRegNo }) }
+                finally { setSavingAgent(false) }
+              }}>
+              {savingAgent ? 'Saving…' : 'Save signature block'}
             </Button>
             {form3Blocked && <span className="text-xs text-muted-foreground">Re-run Preview after resolving checks.</span>}
           </div>
@@ -2498,9 +2605,17 @@ function PreviewModal(props: {
               </span>
             </label>
           )}
-          <Button onClick={() => props.onExport(outstanding.length ? lint?.signature : undefined)}
-            disabled={props.busy || (outstanding.length > 0 && !acknowledged)}>
-            {props.busy ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Exporting…</> : <><Download className="w-4 h-4 mr-1.5" aria-hidden /> Export DOCX</>}
+          <Button
+            onClick={async () => {
+              if (exporting) return
+              setExporting(true)
+              try { await props.onExport(outstanding.length ? lint?.signature : undefined) }
+              finally { setExporting(false) }
+            }}
+            disabled={props.busy || exporting || savingAgent || (outstanding.length > 0 && !acknowledged)}>
+            {props.busy || exporting
+              ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Exporting…</>
+              : <><Download className="w-4 h-4 mr-1.5" aria-hidden /> Export DOCX</>}
           </Button>
         </div>
       </div>

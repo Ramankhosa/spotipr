@@ -91,6 +91,23 @@ export function checkAmendmentBasis(
   const { resolved, unresolved } = resolveBasisRefs(refs, paragraphs)
   const refsResolved = refs.length > 0 && unresolved.length === 0 && resolved.length > 0
 
+  /**
+   * A deletion needs no basis paragraph.
+   *
+   * Section 59 governs what may be ADDED — narrowing by cancelling a claim or
+   * striking words introduces no new matter, so there is nothing to support.
+   * Condemning a cancellation as "without basis" told the attorney a perfectly
+   * valid amendment was legally defective.
+   */
+  const insertedText = Array.from(amendment.markedText.matchAll(INS_RE)).map(m => m[1]).join(' ')
+  if (!insertedText.trim() && /<del>/i.test(amendment.markedText)) {
+    return {
+      claimNumber: amendment.claimNumber, refsResolved: true, supported: true,
+      unsupportedInsertions: [], verdict: 'pass',
+      note: 'Deletion only — no new matter is introduced, so no Section 59 basis is required.'
+    }
+  }
+
   if (!resolved.length) {
     return {
       claimNumber: amendment.claimNumber, refsResolved: false, supported: false,
