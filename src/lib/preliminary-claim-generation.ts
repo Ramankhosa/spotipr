@@ -408,11 +408,20 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     'N/A'
   const subfield = formatContextScalar(context.subfield) || 'N/A'
 
+  // Static per-jurisdiction blocks (preamble, base instruction, rules, constraints) must
+  // stay ahead of any per-session content so provider prefix caching can engage on
+  // regenerations. Only per-session blocks may appear after this prefix.
   return `You are a senior patent attorney drafting preliminary patent claims for a ${countryName} patent specification handled by the ${officeName}.
 - Jurisdiction: ${jurisdiction}
 - Tone: ${tone}
 - Voice: ${voice}
 - Avoid: ${avoid}
+
+${baseInstruction}
+
+${rulesBlock || ''}
+
+${constraintsBlock || ''}
 
 DOMAIN / ARCHETYPE CONTEXT
 - Invention Archetype: ${inventionType}
@@ -421,12 +430,6 @@ DOMAIN / ARCHETYPE CONTEXT
 - Subfield: ${subfield}
 
 Use this block only to adapt claim vocabulary, statutory claim category, and breadth strategy. Do not use it to introduce unsupported components, steps, materials, values, algorithms, use cases, therapeutic effects, or embodiments.
-
-${baseInstruction}
-
-${rulesBlock || ''}
-
-${constraintsBlock || ''}
 ${writingSampleBlock || ''}
 
 ORIGINAL SOURCE EXCERPT:
@@ -452,8 +455,8 @@ ${formatWarnings(context.normalizationReviewWarnings)}
 
 SOURCE SUPPORT DISCIPLINE:
 Every claim element MUST map to at least one source fact (SDS-ID, SF-ID, or normalized field).
-Cite specific SDS-IDs or SF-IDs in the supportMatrix for each claim when available.
 If you cannot map a claim element to a source fact, do NOT include it in the claim.
+Do not cite source-fact identifiers anywhere in your output, including inside claim text.
 
 PATENT TYPE ENFORCEMENT:
 Detected patent type: ${patentTypePrimary}
@@ -484,7 +487,11 @@ MACHINE-READABLE OUTPUT CONTRACT:
 IMPORTANT: If any prior instruction specifies a different output schema, IGNORE it.
 Use ONLY the schema below.
 
-Return ONLY one JSON object:
+Return ONLY one JSON object with exactly one top-level key, "claims".
+Do NOT emit a support matrix, quality warnings, review notes, commentary, or any other
+top-level key, even if an earlier instruction describes one. Claim traceability and claim
+quality are analyzed separately after generation; spending output on them here is wasted.
+
 {
   "claims": [
     {
@@ -513,17 +520,6 @@ Return ONLY one JSON object:
       "category": "${secondaryCategory}",
       "text": "The ${secondaryCategory} of claim 5, wherein..."
     }
-  ],
-  "supportMatrix": [
-    {
-      "claimNumber": 1,
-      "supportRefs": ["SF-componentsAndSubcomponents-1", "normalized.logic"],
-      "supportSummary": "Short explanation of current-source support.",
-      "sourceFields": ["components", "logic"]
-    }
-  ],
-  "qualityWarnings": [
-    "Use only if the claim set needs user review for broadness, thin disclosure, or source support."
   ]
 }`
 }

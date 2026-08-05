@@ -5069,6 +5069,15 @@ async function handleGenerateClaims(
       prompt,
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
+      parameters: {
+        // The prompt opens with a large static per-jurisdiction prefix; keying the cache
+        // by jurisdiction routes same-prefix requests to the same shard so prefix caching
+        // can engage on regenerations. Non-OpenAI providers ignore both parameters.
+        prompt_cache_key: `claims:${activeJurisdiction}`,
+        // Constrain decoding to valid JSON so the machine-readable contract cannot be
+        // wrapped in prose or markdown (the only source of CLAIMS_PARSE_FAILED).
+        response_format: { type: 'json_object' },
+      },
       metadata: {
         purpose: 'claims_generation',
         jurisdiction: activeJurisdiction,
@@ -5105,6 +5114,13 @@ async function handleGenerateClaims(
 
     // Parse the LLM response. Do not silently save an empty claim set:
     // LLMs sometimes wrap valid claims in markdown/prose or return numbered text instead of JSON.
+    //
+    // The output contract asks for claims only — the support matrix and quality warnings are
+    // derived locally by analyzePreliminaryClaimQuality, so generating them here cost output
+    // tokens (and wall-clock) for data no consumer reads. The parser tolerates their absence
+    // and yields empty arrays; these locals stay because the claim-cap notice below still
+    // travels through the warnings channel, and a model that emits the old shape anyway is
+    // still honoured rather than discarded.
     let generatedClaims: any[] = []
     let generatedSupportMatrix: any[] = []
     let generatedQualityWarnings: string[] = []

@@ -42,6 +42,7 @@ import {
   ChevronRight,
   MoreHorizontal
 } from 'lucide-react'
+import FigureWorkProgress from './FigureWorkProgress'
 
 // DnD Kit imports
 import {
@@ -193,29 +194,9 @@ type DiagramFailurePayload = {
   automaticCorrection?: { attempted?: boolean; attempts?: number; result?: string }
 }
 
-// Phases shown while the planner runs. Planning is the fast half of the
-// pipeline, so these advance quicker than the drawing messages below.
-const FIGURE_PLANNING_MESSAGES = [
-  'Reading your specification...',
-  'Identifying the components to illustrate...',
-  'Deciding which figures your claims need...',
-  'Writing the figure plan...'
-]
-
-// Plain-language progress messages shown while figures generate.
-// They describe the phases of the real pipeline in order, but advance on a
-// timer — so the last one is written to stay honest for long-running jobs.
-const FIGURE_GENERATION_MESSAGES = [
-  "Reading your specification...",
-  "Identifying the components to illustrate...",
-  "Choosing figure types that fit your invention...",
-  "Planning the system overview figure...",
-  "Laying out method and flow figures...",
-  "Drawing the diagrams...",
-  "Adding reference numerals that match your specification...",
-  "Checking the figures against your claims...",
-  "Still working — large inventions can take 2–3 minutes..."
-]
+// Progress narration for both waits now lives in FigureWorkProgress, which
+// describes the checks the server is actually running instead of a flat
+// message rotation, and deliberately shows no elapsed timer.
 
 type ActionableErrorPanelProps = {
   message: string
@@ -338,14 +319,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // User can optionally override by entering a number
   const [diagramCount, setDiagramCount] = useState<number | null>(null)
   
-  // Elapsed time while generating; the phase message is derived from it.
-  const [generationSeconds, setGenerationSeconds] = useState(0)
-  const generationMessageIndex = Math.min(
-    Math.floor(generationSeconds / 4),
-    FIGURE_GENERATION_MESSAGES.length - 1
-  )
-  const generationElapsedLabel = `${Math.floor(generationSeconds / 60)}:${String(generationSeconds % 60).padStart(2, '0')}`
-
   // Helper for cleaning titles
   const sanitizeFigureLabel = (text?: string | null) => {
     const raw = typeof text === 'string' ? text : ''
@@ -527,19 +500,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // to double the set to 10-15 figures. Append stays available by unchecking.
   const [replaceExistingDiagrams, setReplaceExistingDiagrams] = useState(true)
 
-  // Tick elapsed time while figure generation runs
-  useEffect(() => {
-    if (!isGenerating) {
-      setGenerationSeconds(0)
-      return
-    }
-
-    const interval = setInterval(() => {
-      setGenerationSeconds(prev => prev + 1)
-    }, 1000)
-
-    return () => clearInterval(interval)
-  }, [isGenerating])
 
   const [manualUploadSlots, setManualUploadSlots] = useState<ManualUploadSlot[]>([])
   const [showManual, setShowManual] = useState(false)
@@ -578,7 +538,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // the server keeps the authoritative plan (component ids and the rest).
   const [planFigures, setPlanFigures] = useState<PlanFigure[] | null>(null)
   const [isPlanning, setIsPlanning] = useState(false)
-  const [planningSeconds, setPlanningSeconds] = useState(0)
   const [planError, setPlanError] = useState<string | null>(null)
   const [planDirty, setPlanDirty] = useState(false)
   // Any claim/disclosure requirements automatic repair could not assign.
@@ -594,17 +553,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     note?: string | null
   } | null>(null)
   const [planRepairSummary, setPlanRepairSummary] = useState<any | null>(null)
-  const planningMessageIndex = Math.min(
-    Math.floor(planningSeconds / 5),
-    FIGURE_PLANNING_MESSAGES.length - 1
-  )
-  const planningElapsedLabel = `${Math.floor(planningSeconds / 60)}:${String(planningSeconds % 60).padStart(2, '0')}`
 
-  useEffect(() => {
-    if (!isPlanning) { setPlanningSeconds(0); return }
-    const interval = setInterval(() => setPlanningSeconds(prev => prev + 1), 1000)
-    return () => clearInterval(interval)
-  }, [isPlanning])
   
   // === ARRANGE TAB STATE ===
   const [arrangedFigures, setArrangedFigures] = useState<any[]>([])
@@ -3011,26 +2960,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
           {/* Planning is the fast half of the pipeline, but it is still an LLM
               call — the wait is narrated rather than left as a dead button. */}
-          {isPlanning && (
-            <div className="rounded-lg border border-ai-blue-100 bg-ai-blue-50/40 p-5">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-ai-blue-100 flex items-center justify-center shrink-0">
-                  <Loader2 className="w-4 h-4 text-ai-blue-600 animate-spin" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-ai-blue-900">
-                    Planning your figures — {planningElapsedLabel}
-                  </p>
-                  <p className="text-sm text-ai-blue-700 mt-0.5">
-                    {FIGURE_PLANNING_MESSAGES[planningMessageIndex]}
-                  </p>
-                  <p className="text-xs text-ai-graphite-500 mt-2">
-                    Nothing is drawn yet. You will see the plan and can change it before any figure is created.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
+          {isPlanning && <FigureWorkProgress phase="planning" />}
 
           {/* PLAN REVIEW — the approval gate. Drawing is the slow, expensive
               step, so a wrong figure is caught here rather than after a render. */}
@@ -3193,7 +3123,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2 w-full sm:w-auto"
                 >
                   {isGenerating
-                    ? <><Loader2 className="w-4 h-4 animate-spin" />Drawing your figures — {generationElapsedLabel}</>
+                    ? <><Loader2 className="w-4 h-4 animate-spin" />Drawing your figures</>
                     : <><Check className="w-4 h-4" />Approve plan &amp; draw {planFigures.length} figure{planFigures.length === 1 ? '' : 's'}</>}
                 </Button>
                 <Button
@@ -3217,6 +3147,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   {planDirty ? 'Your edits will be saved when you approve.' : 'Only approved figures are drawn.'}
                 </span>
               </div>
+
+              {/* Drawing is the long half of the pipeline. The plan above stays
+                  on screen so the attorney keeps their context while it runs. */}
+              {isGenerating && (
+                <div className="border-t border-paper-200 p-5">
+                  <FigureWorkProgress
+                    phase="drawing"
+                    figureCount={planFigures.length}
+                    requirementCount={planCoverageSummary?.required}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -3315,11 +3257,19 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2 w-full sm:w-auto"
               >
                 {isGenerating
-                  ? <><Loader2 className="w-4 h-4 animate-spin" />Drawing your figures — {generationElapsedLabel}</>
+                  ? <><Loader2 className="w-4 h-4 animate-spin" />Drawing your figures</>
                   : manualFiguresReady.length === 0
                     ? <>Draw my figures</>
                     : <>Draw {manualFiguresReady.length} figure{manualFiguresReady.length === 1 ? '' : 's'}</>}
               </Button>
+
+              {/* Manual mode draws one figure per written instruction, so the
+                  same narration applies — it just already knows the count. */}
+              {isGenerating && (
+                <div className="mt-5">
+                  <FigureWorkProgress phase="drawing" figureCount={manualFiguresReady.length} />
+                </div>
+              )}
             </div>
           )}
 

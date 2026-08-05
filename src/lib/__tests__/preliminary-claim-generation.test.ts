@@ -44,8 +44,6 @@ describe('preliminary claim generation helper', () => {
     expect(prompt).toContain('Expected Claim 1 category: system or apparatus')
     expect(prompt).toContain('"category": "system"')
     expect(prompt).not.toContain('PRELIMINARY CLAIM DRAFTING RULES')
-    expect(prompt).toContain('supportMatrix')
-    expect(prompt).toContain('qualityWarnings')
     expect(prompt).toContain('SF-numericValuesAndUnits-1')
     expect(prompt).toContain('CLAIM SCOPE STYLE STRATEGY')
     expect(prompt).toContain('Selected style: Default Style')
@@ -71,7 +69,45 @@ describe('preliminary claim generation helper', () => {
     expect(prompt).toContain('Put concrete embodiments, numeric values, materials, examples, alternatives, and fallback limitations into dependent claims')
     expect(prompt).toContain('Broad does not mean generic')
     expect(prompt).toContain('Return ONLY one JSON object')
-    expect(prompt).toContain('supportMatrix')
+  })
+
+  test('asks for claims only, never for a support matrix or quality warnings', () => {
+    // The support matrix and quality warnings are derived locally after generation. Asking
+    // the model for them costs output tokens (and wall-clock) for data nothing reads, so the
+    // contract must request claims alone and override any base prompt that says otherwise.
+    const prompt = buildPreliminaryClaimsPrompt(basePromptParams)
+
+    expect(prompt).toContain('exactly one top-level key, "claims"')
+    expect(prompt).toContain('Do NOT emit a support matrix, quality warnings')
+    expect(prompt).not.toContain('"supportMatrix"')
+    expect(prompt).not.toContain('"qualityWarnings"')
+    expect(prompt).not.toContain('"supportRefs"')
+    expect(prompt).not.toContain('"supportSummary"')
+    expect(prompt).not.toContain('Cite specific SDS-IDs')
+  })
+
+  test('still parses and analyzes a claims-only payload with no LLM metadata', () => {
+    // Guards the runtime consequence of the trimmed contract: the analyzer must produce a
+    // full support matrix from source context alone when the model returns claims only.
+    const quality = analyzePreliminaryClaimQuality({
+      claims: [
+        {
+          number: 1,
+          type: 'independent',
+          category: 'system',
+          text: 'A system comprising a moisture sensor and an irrigation valve, wherein the irrigation valve activates drip irrigation when soil moisture detected by the moisture sensor is below 18 percent unless rain is forecast.',
+        },
+      ],
+      patentTypePrimary: 'SYSTEM',
+      context: basePromptParams.context,
+      llmSupportMatrix: [],
+      llmQualityWarnings: [],
+    })
+
+    expect(quality.source).toBe('static')
+    expect(quality.supportMatrix).toHaveLength(1)
+    expect(quality.supportMatrix[0].supportRefs.length).toBeGreaterThanOrEqual(2)
+    expect(quality.supportMatrix[0].supportSummary).toContain('Supported by')
   })
 
   test('injects narrow claim scope strategy without relaxing source support', () => {
