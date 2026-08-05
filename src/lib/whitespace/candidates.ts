@@ -28,7 +28,12 @@ import {
 } from '@/lib/patent-corpus-service'
 import type { WhitespaceScope } from './types'
 import { buildScopeFilter, corpusMembershipPredicate, exclusionPredicate } from './field-map'
-import { semanticLaneConfigured, semanticNeighbors } from './embedding'
+import {
+  corpusVectorRowEstimate,
+  semanticLaneConfigured,
+  semanticNeighbors,
+  type SemanticBackground,
+} from './embedding'
 
 /**
  * Ceiling on NORMALISED distance for admission. Two gates, not one, because
@@ -41,32 +46,53 @@ import { semanticLaneConfigured, semanticNeighbors } from './embedding'
  *     same ceiling selects far more rows than it does in dev, which would blow
  *     through the census row cap.
  *
- * THE CEILING IS NOT PORTABLE ACROSS EMBEDDING MODELS. It is a cut through one
- * model's distance distribution, and the two deployments do not share one:
+ * AN ABSOLUTE CEILING IS NOT PORTABLE — and not only across embedding models,
+ * which is what this comment used to say. Measured on the production corpus with
+ * five unrelated probes, it is not portable across QUERIES either:
  *
- *   - dev / OpenAI text-embedding-3-small: float vectors, COSINE distance.
- *     Measured across three unrelated subjects (irrigation, wearable heart-rate,
- *     battery electrolytes); every distribution sat in the same narrow band with
- *     a cliff just past ~0.375 where ranking flattens and results stop being
- *     about the subject. 0.35 sits below that cliff on all three.
- *   - production / Voyage voyage-3.5-lite: BINARY vectors, HAMMING distance.
- *     A completely different distribution. The cosine figure above is not
- *     evidence about it and must not be reused as one.
+ *     ceiling 0.275   "moisture sensor, irrigation valve"       49 documents
+ *                     "lithium battery electrolyte additive"  >8,000 documents
  *
- * So there is no binary default. Rather than guess a threshold for the 35M-row
- * production corpus — where too loose silently admits an enormous unrelated
- * field and too tight silently admits nothing — an unmeasured binary
- * installation leaves the semantic arm OFF and the field exactly as it behaves
- * today. Measure with `npx tsx scripts/whitespace-semantic-calibrate.ts`, then
- * set WHITESPACE_SEMANTIC_MAX_DISTANCE to what it reports.
+ * Those two need ceilings ~0.04 apart to select comparable fields, so no single
+ * constant serves both: whichever value is chosen, one subject gets a reading
+ * list and the other gets a sector. The offset is a property of the query
+ * VECTOR (each sits at its own mean distance from the corpus), not of how
+ * crowded the subject is — so subtracting each query's own background removes
+ * it, which is what `adaptive` mode does. See resolveSemanticCeiling.
+ *
+ * The old design refused to run at all on a binary installation until an
+ * operator supplied a measured constant. No constant could be measured, because
+ * none exists; the studio therefore ran lexical-only, and fields that should
+ * have held thousands of families held 21.
+ *
+ * 0.35 survives as the absolute-mode default for float installations already
+ * configured around it: measured across three unrelated subjects on
+ * text-embedding-3-small, where every distribution sat in the same narrow band
+ * with a cliff just past ~0.375.
  */
 const CALIBRATED_COSINE_MAX_DISTANCE = 0.35
 
+/**
+ * Target field size, in documents, that the adaptive ceiling aims at. A patent
+ * FIELD is thousands of documents; below that it is a reading list and above it
+ * a technology sector.
+ */
+const TARGET_FIELD_DOCUMENTS = Math.max(100, Number(process.env.WHITESPACE_SEMANTIC_TARGET_FIELD) || 5_000)
+
+/**
+ * Hard cap on the share of the corpus the semantic arm may admit — applied to a
+ * configured WHITESPACE_SEMANTIC_SELECTIVITY as well as to the derived one. A
+ * 38k-row corpus does not contain 5,000 documents about one subject, and without
+ * this the target would demand 13% of it — the exact failure the old bare
+ * candidate cap produced. Above 1% the candidate cap binds first anyway, so a
+ * looser setting buys nothing but a saturated arm.
+ */
+const MAX_CORPUS_SHARE = 0.01
+
 export const UNCALIBRATED_REASON =
-  `No semantic distance ceiling is calibrated for ${PATENT_CORPUS_EMBEDDING_MODEL} ` +
+  `No semantic distance ceiling could be estimated for ${PATENT_CORPUS_EMBEDDING_MODEL} ` +
   `(${PATENT_CORPUS_EMBEDDING_DTYPE} vectors), so the field was matched on concept wording alone. ` +
-  `Measure the corpus with "npx tsx scripts/whitespace-semantic-calibrate.ts" and set ` +
-  `WHITESPACE_SEMANTIC_MAX_DISTANCE to enable semantic matching.`
+  `Check embedding coverage, or measure the corpus with "npx tsx scripts/whitespace-semantic-calibrate.ts".`
 
 export const DISABLED_REASON =
   'Semantic matching is disabled by configuration (WHITESPACE_SEMANTIC_MAX_DISTANCE=off), so matching ran on wording alone.'
@@ -89,32 +115,99 @@ function killSwitchEngaged(): boolean {
 }
 
 /**
- * Why the semantic arm may not run right now, or null when it may. The two
- * reasons demand opposite actions — "go calibrate" is wrong advice for an
- * operator who deliberately switched the arm off — so they are never conflated.
+ * Why the semantic arm may not run right now, or null when it may. Only the
+ * kill switch can rule it out ahead of time now: the adaptive ceiling is
+ * resolved per query, so "no ceiling" is a runtime outcome, not a configuration
+ * state.
  */
 export function semanticArmUnavailableReason(): string | null {
-  if (killSwitchEngaged()) return DISABLED_REASON
-  if (resolveMaxDistance() === null) return UNCALIBRATED_REASON
-  return null
+  return killSwitchEngaged() ? DISABLED_REASON : null
 }
 
 /**
- * The configured ceiling, or null when this installation has none — in which
- * case the semantic arm must not run at all. Never falls back to a default for
- * a distance metric it was not measured on.
+ * How the ceiling for a query is decided.
+ *
+ * `absolute` is the operator override and the legacy path. `adaptive` is the
+ * default and the fix: it carries a z-score, and each query's ceiling becomes
+ * `mean - z * sd` of that query's OWN background distance distribution. One z
+ * therefore means the same selectivity for every query, which no single
+ * distance ever could — five unrelated probes on the production corpus needed
+ * ceilings 0.04 apart to select comparable numbers of documents.
+ */
+export type SemanticCeiling =
+  | { mode: 'absolute'; maxDistance: number }
+  | { mode: 'adaptive'; z: number; selectivity: number }
+
+/**
+ * Φ⁻¹ — Acklam's rational approximation, |error| < 1.15e-9 on (0,1). Needed to
+ * turn a target share of the corpus into the z the background rule applies.
+ */
+function inverseNormalCdf(p: number): number {
+  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239]
+  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1]
+  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783]
+  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416]
+  const pLow = 0.02425
+  if (p < pLow) {
+    const q = Math.sqrt(-2 * Math.log(p))
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+  }
+  if (p <= 1 - pLow) {
+    const q = p - 0.5
+    const r = q * q
+    return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) /
+      (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+  }
+  const q = Math.sqrt(-2 * Math.log(1 - p))
+  return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+    ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+}
+
+/** The share of the corpus the adaptive ceiling aims to admit, and its z. */
+export async function resolveSelectivity(): Promise<{ selectivity: number; z: number }> {
+  const configured = Number((process.env.WHITESPACE_SEMANTIC_SELECTIVITY || '').trim())
+  let share: number
+  if (Number.isFinite(configured) && configured > 0 && configured < 1) {
+    share = configured
+  } else {
+    // Self-scaling: a fixed share means 4 documents on the 38k dev slice and
+    // 4,500 on the 45M production corpus. Deriving it from a target COUNT keeps
+    // "a field" the same size on both, and the clamp keeps a small corpus from
+    // being asked for more subject than it contains.
+    const rows = await corpusVectorRowEstimate()
+    share = rows > 0 ? Math.min(MAX_CORPUS_SHARE, TARGET_FIELD_DOCUMENTS / rows) : MAX_CORPUS_SHARE
+  }
+  const selectivity = Math.min(MAX_CORPUS_SHARE, Math.max(1e-9, share))
+  return { selectivity, z: -inverseNormalCdf(selectivity) }
+}
+
+/**
+ * The ceiling policy for this installation, or null when the arm is switched off.
  *
  * `WHITESPACE_SEMANTIC_MAX_DISTANCE=off` (or any number <= 0) is the operator
- * kill switch: without it a float installation could never turn the semantic
- * arm off, since an unset value falls through to the measured cosine default.
+ * kill switch; a positive value pins an absolute ceiling (the legacy behaviour,
+ * kept because an operator who has measured their corpus is entitled to say so);
+ * unset means adaptive.
+ *
+ * There is no longer a "binary installations get nothing" branch. That branch
+ * existed because an absolute ceiling is not portable across embedding models —
+ * true, and it is not portable across QUERIES either, which is why the ceiling
+ * is no longer absolute. The measured cosine constant survives only as the
+ * absolute-mode default, for installations already configured around it.
  */
-export function resolveMaxDistance(): number | null {
+export async function resolveSemanticCeiling(): Promise<SemanticCeiling | null> {
   if (killSwitchEngaged()) return null
   const raw = (process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE || '').trim().toLowerCase()
   const configured = Number(raw)
-  if (raw && Number.isFinite(configured) && configured > 0) return Math.min(1, configured)
-  if (PATENT_CORPUS_EMBEDDING_DTYPE === 'binary') return null
-  return CALIBRATED_COSINE_MAX_DISTANCE
+  if (raw && Number.isFinite(configured) && configured > 0) {
+    return { mode: 'absolute', maxDistance: Math.min(1, configured) }
+  }
+  if (raw === 'absolute' && PATENT_CORPUS_EMBEDDING_DTYPE !== 'binary') {
+    return { mode: 'absolute', maxDistance: CALIBRATED_COSINE_MAX_DISTANCE }
+  }
+  const { selectivity, z } = await resolveSelectivity()
+  return { mode: 'adaptive', z, selectivity }
 }
 
 /**
@@ -145,8 +238,15 @@ export interface FieldCandidates {
   /** True when the cap was hit — the arm is the N nearest, not everything near. */
   saturated: boolean
   cap: number
-  /** The normalised distance ceiling actually applied. */
+  /**
+   * The normalised distance ceiling actually applied to THIS scope's query. Under
+   * `adaptive` it differs from study to study by design; 0 when nothing ran.
+   */
   maxDistance: number
+  /** How the ceiling was decided, for the coverage note. */
+  mode?: SemanticCeiling['mode']
+  /** The query's background distribution, when the ceiling was derived from it. */
+  background?: SemanticBackground
 }
 
 const UNAVAILABLE = (reason: string): FieldCandidates => ({
@@ -155,7 +255,7 @@ const UNAVAILABLE = (reason: string): FieldCandidates => ({
   reason,
   saturated: false,
   cap: CANDIDATE_CAP,
-  maxDistance: resolveMaxDistance() ?? 0,
+  maxDistance: 0,
 })
 
 /**
@@ -183,7 +283,7 @@ export function candidateQueryText(scope: WhitespaceScope): string | null {
 }
 
 /** Stable identity for the memo: everything that changes the candidate set. */
-function cacheKey(scope: WhitespaceScope, cap: number, maxDistance: number): string {
+function cacheKey(scope: WhitespaceScope, cap: number, ceiling: SemanticCeiling): string {
   return JSON.stringify({
     concepts: scope.concepts.map(c => [c.label, c.required, [...c.synonyms].sort()]),
     exclusions: scope.exclusions.map(e => e.term).sort(),
@@ -194,7 +294,9 @@ function cacheKey(scope: WhitespaceScope, cap: number, maxDistance: number): str
       assignees: [...scope.filters.assignees].sort(),
     },
     cap,
-    maxDistance,
+    // The POLICY, not the resolved distance: under `adaptive` the distance is an
+    // output of the query, so keying on it would make every entry a miss.
+    ceiling,
   })
 }
 
@@ -221,7 +323,6 @@ export async function resolveFieldCandidates(
   options: { cap?: number; maxDistance?: number; timeoutMs?: number } = {}
 ): Promise<FieldCandidates> {
   const cap = options.cap ?? CANDIDATE_CAP
-  const maxDistance = options.maxDistance ?? resolveMaxDistance()
   const queryText = candidateQueryText(scope)
   // No concepts means no lexical concept gate either, so the field is already
   // the whole structural slice — there is nothing for the semantic arm to widen.
@@ -229,31 +330,44 @@ export async function resolveFieldCandidates(
   if (!semanticLaneConfigured()) {
     return UNAVAILABLE('Semantic search is not configured (no embedding key), so the field is lexical-only.')
   }
-  // Refuse rather than guess: admitting documents by an unmeasured similarity
-  // threshold would change what every study means, silently.
-  if (maxDistance === null) return UNAVAILABLE(semanticArmUnavailableReason() ?? UNCALIBRATED_REASON)
+  const ceiling: SemanticCeiling | null =
+    options.maxDistance !== undefined
+      ? { mode: 'absolute', maxDistance: options.maxDistance }
+      : await resolveSemanticCeiling()
+  // Only the deliberate kill switch stops the arm before it runs.
+  if (ceiling === null) return UNAVAILABLE(semanticArmUnavailableReason() ?? DISABLED_REASON)
 
-  const key = cacheKey(scope, cap, maxDistance)
+  const key = cacheKey(scope, cap, ceiling)
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value
 
   const result = await semanticNeighbors({
     queryText,
     limit: cap,
-    maxDistance,
+    maxDistance: ceiling.mode === 'absolute' ? ceiling.maxDistance : undefined,
+    adaptive: ceiling.mode === 'adaptive' ? { z: ceiling.z } : undefined,
     scopeFilter: structuralFilter(scope),
     timeoutMs: options.timeoutMs ?? CANDIDATE_TIMEOUT_MS,
   })
 
-  const value: FieldCandidates = result.available
-    ? {
-        ids: result.neighbors.map(neighbor => neighbor.id),
-        available: true,
-        saturated: result.neighbors.length >= cap,
-        cap,
-        maxDistance,
-      }
-    : UNAVAILABLE(result.reason)
+  // An adaptive run whose background could not be estimated comes back with no
+  // ceiling at all — that is a bare top-K, which is a RANKING and not a field
+  // definition. Admitting it would silently reinstate the "5,000 nearest however
+  // far" behaviour the ceiling exists to prevent, so it degrades to lexical-only.
+  const value: FieldCandidates =
+    result.available && result.appliedMaxDistance === null
+      ? UNAVAILABLE(UNCALIBRATED_REASON)
+      : result.available
+      ? {
+          ids: result.neighbors.map(neighbor => neighbor.id),
+          available: true,
+          saturated: result.neighbors.length >= cap,
+          cap,
+          maxDistance: result.appliedMaxDistance ?? 0,
+          mode: ceiling.mode,
+          background: result.background,
+        }
+      : UNAVAILABLE(result.reason)
 
   // Only successful resolutions are memoised. An unavailable result here is a
   // TRANSIENT failure (embed API hiccup, ANN timeout) — the configuration
@@ -298,7 +412,17 @@ export function candidateCoverageNote(candidates: FieldCandidates): string {
   if (!candidates.ids.length) {
     return 'Field matched on concept text alone — the semantic lane found no additional documents in this slice.'
   }
-  const base = `Field matched on concept text OR semantic similarity: ${candidates.ids.length.toLocaleString()} documents were admitted by meaning rather than wording (within a ${candidates.maxDistance} embedding-distance ceiling).`
+  // The ceiling is stated because it is the whole substance of "similar enough",
+  // and under `adaptive` it is stated as what it is — a cut through THIS query's
+  // own background, not a house constant — so two studies quoting different
+  // numbers do not read as inconsistency.
+  const ceiling =
+    candidates.mode === 'adaptive' && candidates.background
+      ? `an embedding-distance ceiling of ${candidates.maxDistance.toFixed(3)}, set ${(
+          (candidates.background.mean - candidates.maxDistance) / candidates.background.sd
+        ).toFixed(1)} standard deviations below this query's mean distance to the corpus`
+      : `a ${candidates.maxDistance.toFixed(3)} embedding-distance ceiling`
+  const base = `Field matched on concept text OR semantic similarity: ${candidates.ids.length.toLocaleString()} documents were admitted by meaning rather than wording (within ${ceiling}).`
   return candidates.saturated
     ? `${base} That is the ${candidates.cap.toLocaleString()}-document ceiling, so the semantic arm is the nearest ${candidates.cap.toLocaleString()} rather than every document inside the ceiling — narrow the scope for an unclipped semantic arm.`
     : base

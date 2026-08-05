@@ -146,7 +146,6 @@ import {
 } from '@/lib/figure-availability'
 import {
   addManagedFigures,
-  evaluateManagedPlanCoverage,
   extractReferenceMapComponents,
   generateManagedFigureSet,
   PatentDiagramPipelineError,
@@ -156,7 +155,6 @@ import {
   semanticChecksum,
 } from '@/lib/patent-diagrams/pipeline'
 import { DIAGRAM_KINDS, figureSetPlanSchema } from '@/lib/patent-diagrams/types'
-import { repairFigureSetCoverage } from '@/lib/patent-diagrams/coverage'
 import { saveRawPlantUmlOverride } from '@/lib/patent-diagrams/raw-source'
 import { translateAllPatentDiagrams, translatePatentDiagram } from '@/lib/patent-diagrams/translation'
 import { diagramFactsForDownstream, summarizeDiagramPlan } from '@/lib/patent-diagrams/facts'
@@ -5293,7 +5291,6 @@ async function handleResetClaims(user: any, patentId: string, data: any) {
   ])
 
   const downstreamStarted = shouldBlockPreliminaryClaimReset({
-    status: session.status,
     normalizedData: existingNormalized,
     relatedArtRunCount,
     relatedArtSelectionCount,
@@ -5303,8 +5300,20 @@ async function handleResetClaims(user: any, patentId: string, data: any) {
   })
 
   if (downstreamStarted) {
+    // Name the work that is actually in the way. A bare "downstream stages have started"
+    // is unactionable when the user is looking at a session they believe is untouched.
+    const blockers = [
+      relatedArtRunCount > 0 ? `${relatedArtRunCount} related art run${relatedArtRunCount === 1 ? '' : 's'}` : '',
+      relatedArtSelectionCount > 0 ? `${relatedArtSelectionCount} related art selection${relatedArtSelectionCount === 1 ? '' : 's'}` : '',
+      referenceMapCount > 0 ? 'a component reference map' : '',
+      figurePlanCount > 0 ? `${figurePlanCount} figure plan${figurePlanCount === 1 ? '' : 's'}` : '',
+      annexureDraftCount > 0 ? `${annexureDraftCount} annexure draft${annexureDraftCount === 1 ? '' : 's'}` : '',
+    ].filter(Boolean)
+
     return NextResponse.json({
-      error: CLAIMS_RESET_BLOCKED_DOWNSTREAM_ERROR,
+      error: blockers.length
+        ? `${CLAIMS_RESET_BLOCKED_DOWNSTREAM_ERROR} Already built from these claims: ${blockers.join(', ')}.`
+        : `${CLAIMS_RESET_BLOCKED_DOWNSTREAM_ERROR} These claims have already been refined against prior art.`,
       code: 'CLAIMS_RESET_BLOCKED_DOWNSTREAM'
     }, { status: 400 })
   }
@@ -8041,7 +8050,6 @@ function patentDiagramPipelineError(error: unknown): NextResponse {
         whatHappened: error.message,
         retryable: error.retryable,
         actions: error.actions,
-        automaticCorrection: error.automaticCorrection || { attempted: false, attempts: 0, result: 'NOT_ATTEMPTED' },
       },
     }, { status: error.status })
   }
@@ -8100,7 +8108,6 @@ function managedPipelineInput(user: any, patentId: string, data: any, requestHea
     figureCount: parsedCount,
     instructions: managedDiagramInstructions(data),
     includeExistingFigures: data.includeExistingFigures === true,
-    mode: data.mode === 'manual' ? 'manual' as const : 'ai' as const,
   }
 }
 
@@ -8138,14 +8145,9 @@ async function handlePlanFiguresManaged(user: any, patentId: string, data: any, 
     const input = managedPipelineInput(user, patentId, data, requestHeaders)
     if (input.instructions && physicalViewInstruction(input.instructions)) return physicalViewHandoff(input.instructions)
     const plan = await planManagedFigureSet(input)
-    // Coverage and automatic repairs ride along with the plan so the attorney
-    // can review every claim-driven addition before the first render.
-    const coverage = evaluateManagedPlanCoverage(plan)
     return NextResponse.json({
       success: true,
       plan: compatiblePlan(plan),
-      coverage,
-      repairSummary: plan.repairSummary,
       message: `Planned ${plan.figures.length} managed diagrams`,
     })
   } catch (error) {
@@ -8206,22 +8208,19 @@ async function handleSaveFigurePlanManaged(user: any, patentId: string, data: an
         kind,
         title: title || original.title,
         purpose: purpose || original.purpose,
-        ...(kind !== original.kind ? { coverageRequirementIds: [], evidenceIds: [] } : {}),
+        ...(kind !== original.kind ? { evidenceIds: [] } : {}),
       })
     }
     if (figures.length === 0) {
       return NextResponse.json({ error: 'The edited plan has no recognisable figures' }, { status: 400 })
     }
 
-    const editedPlan = figureSetPlanSchema.parse({ ...storedPlan.data, figures })
-    const plan = editedPlan.coverageLedger
-      ? repairFigureSetCoverage({ plan: editedPlan, ledger: editedPlan.coverageLedger }).plan
-      : editedPlan
+    const plan = figureSetPlanSchema.parse({ ...storedPlan.data, figures })
     await prisma.draftingSession.update({
       where: { id: sessionId },
       data: { aiAnalysisData: { ...previousAnalysis, figurePlan: plan } as any },
     })
-    return NextResponse.json({ success: true, plan: compatiblePlan(plan), coverage: evaluateManagedPlanCoverage(plan), repairSummary: plan.repairSummary })
+    return NextResponse.json({ success: true, plan: compatiblePlan(plan) })
   } catch (error) {
     return patentDiagramPipelineError(error)
   }
@@ -8302,15 +8301,7 @@ async function handleRegenerateDiagramManaged(user: any, patentId: string, data:
     const result = await regenerateManagedFigure({
       ...managedPipelineInput(user, patentId, data, requestHeaders),
       figureNo: Number(data.figureNo),
-      approveSplit: data.approveSplit === true,
     })
-    if (result.status === 'SPLIT_REQUIRED') {
-      return NextResponse.json({
-        error: 'This revision requires additional detail figures. Approve the split before changing figure ordering.',
-        code: 'SPLIT_APPROVAL_REQUIRED',
-        splitProposal: result.splitProposal,
-      }, { status: 409 })
-    }
     const diagramSource = await prisma.diagramSource.findUnique({
       where: { sessionId_figureNo_language: { sessionId: data.sessionId, figureNo: Number(data.figureNo), language: 'en' } },
     })
@@ -8340,12 +8331,7 @@ async function handleFixPlantUMLRenderManaged(user: any, patentId: string, data:
           ...managedPipelineInput(user, patentId, { ...data, instructions: `Repair the managed semantic figure after this render failure: ${String(data.renderError || 'render failed').slice(0, 500)}` }, requestHeaders),
           figureNo: Number(data.figureNo),
         })
-        if (regenerated.status === 'SPLIT_REQUIRED') {
-          throw new PatentDiagramPipelineError('Repair requires splitting this figure into filing-scale detail figures.', 409, regenerated.splitProposal, {
-            code: 'SPLIT_APPROVAL_REQUIRED', stage: 'VALIDATION', retryable: false,
-            actions: ['Open Modify, review the split proposal, and approve it.'],
-          })
-        }
+        void regenerated
         const repairedSource = await prisma.diagramSource.findUnique({
           where: { sessionId_figureNo_language: { sessionId: String(data.sessionId), figureNo: Number(data.figureNo), language: 'en' } },
         })
@@ -8373,7 +8359,6 @@ ${rawCode}`
       throw new PatentDiagramPipelineError(repair.error?.message || 'Raw PlantUML repair did not return source code.', 422, undefined, {
         code: 'RAW_REPAIR_FAILED', stage: 'RENDER', retryable: true,
         actions: ['Open the advanced PlantUML editor and correct the source manually.', 'Use Modify to replace it with a managed semantic figure.'],
-        automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
       })
     }
     const fixedCode = repair.response.output.trim().replace(/^```(?:plantuml|puml)?\s*/i, '').replace(/\s*```$/, '')
@@ -8381,7 +8366,6 @@ ${rawCode}`
       throw new PatentDiagramPipelineError('Automatic raw-source repair did not produce a meaningful change.', 422, undefined, {
         code: 'RAW_REPAIR_NO_CHANGE', stage: 'RENDER', retryable: false,
         actions: ['Open the advanced PlantUML editor and correct the source manually.'],
-        automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
       })
     }
     const saved = await saveRawPlantUmlOverride({

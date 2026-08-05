@@ -206,17 +206,41 @@ async function main() {
   const planStart = Date.now()
   const plan = await planManagedFigureSet(input)
   const planMs = Date.now() - planStart
-  console.log(`\n>>> PLANNING TOTAL: ${planMs} ms — ${plan.figures.length} figures, ${plan.coverageLedger?.requirements.length ?? 0} coverage requirements`)
-  plan.figures.forEach(f => console.log(`      ${f.kind.padEnd(11)} ${f.title} (covers ${f.coverageRequirementIds.length})`))
+  console.log(`\n>>> PLANNING TOTAL: ${planMs} ms — ${plan.figures.length} figures`)
+  plan.figures.forEach(f => console.log(`      ${f.kind.padEnd(11)} ${f.title} (${f.componentIds.length} components)`))
 
   const generateStart = Date.now()
   const result = await generateManagedFigureSet({ ...input, plan })
   const generateMs = Date.now() - generateStart
-  console.log(`\n>>> GENERATION TOTAL: ${generateMs} ms — ${result.figures.length} figures rendered, filingReady=${result.filingReadiness.ready}`)
+  console.log(`\n>>> GENERATION TOTAL: ${generateMs} ms — ${result.figures.length} figures rendered`)
   result.figures.forEach(f => console.log(`      FIG.${f.figureNo} ${f.kind.padEnd(11)} ${f.title} — ${f.plantuml.split('\n').length} PlantUML lines`))
-  if (!result.filingReadiness.ready) console.log('      blocking:', JSON.stringify(result.filingReadiness.blockingIssues))
+  if (result.filingReadiness.reviewNotes.length) console.log('      review notes:', JSON.stringify(result.filingReadiness.reviewNotes))
+
+  // Numbering audit. Only drawn element boxes are checked: their aliases are
+  // hashed (C/M/P/K + 12 hex), so the SYSTEM and BAND container rectangles —
+  // which correctly carry no numeral — are excluded automatically.
+  console.log('\n>>> NUMBERING AUDIT (every drawn element must carry a reference sign)')
+  let unnumberedTotal = 0
+  for (const figure of result.figures) {
+    const declarations = Array.from(figure.plantuml.matchAll(/^\s*(?:rectangle|participant)\s+"((?:\\.|[^"\\])*)"\s+as\s+([CMPK][0-9A-F]{12}\w*)/gm))
+    const unnumbered = declarations.filter(([, label]) => !/\((?:[^()]+)\)|\\n[SD]\d+|^[SD]\d+/i.test(label))
+    unnumberedTotal += unnumbered.length
+    console.log(`      FIG.${figure.figureNo} ${figure.kind.padEnd(11)} ${declarations.length} elements, ${unnumbered.length} without a sign${unnumbered.length ? ` -> ${unnumbered.map(m => JSON.stringify(m[1])).join(', ')}` : ''}`)
+  }
+  console.log(`      ${unnumberedTotal === 0 ? 'PASS — every drawn element is numbered' : `FAIL — ${unnumberedTotal} unnumbered element(s)`}`)
+
+  console.log('\n>>> CLAIM COMPONENT COVERAGE (warning only, never blocks)')
+  if (!result.claimCoverage.evaluated) {
+    console.log('      not evaluated (no Stage 0 claim matching on this registry)')
+  } else if (!result.claimCoverage.missing.length) {
+    console.log('      PASS — every claim-recited component appears in at least one figure')
+  } else {
+    result.claimCoverage.missing.forEach(m => console.log(`      MISSING: ${m.name} (${m.referenceLabel}) — claim(s) ${m.matchedClaims.join(', ')}`))
+  }
 
   console.log(`\n>>> END-TO-END: ${planMs + generateMs} ms (plan ${planMs} + generate ${generateMs})`)
+
+  result.figures.forEach(f => console.log(`\n===== FIG.${f.figureNo} (${f.kind}) — ${f.title} =====\n${f.plantuml}`))
 }
 
 main()

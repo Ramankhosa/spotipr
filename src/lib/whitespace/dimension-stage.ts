@@ -39,8 +39,21 @@ import {
   quotePhrase,
   setStatementTimeout,
 } from './field-map'
-import { candidateCoverageNote, resolveFieldCandidates, resolveMaxDistance, semanticArmUnavailableReason } from './candidates'
-import { comparableVectorSql, embedQueryTexts, semanticLaneConfigured, semanticMatchSql } from './embedding'
+import {
+  candidateCoverageNote,
+  resolveFieldCandidates,
+  resolveSemanticCeiling,
+  semanticArmUnavailableReason,
+  type SemanticCeiling,
+} from './candidates'
+import {
+  backgroundCeiling,
+  comparableVectorSql,
+  embedQueryTexts,
+  semanticBackground,
+  semanticLaneConfigured,
+  semanticMatchSql,
+} from './embedding'
 import { rarePairFromCounts } from './rarity'
 import { parseModelJson, runWhitespaceLLM } from './llm'
 import {
@@ -264,40 +277,77 @@ export function valueEmbeddingText(label: string, synonyms: string[]): string {
  * pass and the census all ask for the same value texts, and each text costs one
  * embedding exactly once.
  */
+/**
+ * One value's query vector and the ceiling that applies TO IT.
+ *
+ * The ceiling is per-vector, not per-lane: value texts are short phrases
+ * ("aqueous electrolyte", "capacitive sensing") and each sits at its own mean
+ * distance from the corpus, exactly like the scope-level probes do. A single
+ * lane-wide constant matched far too much for some values and nothing for
+ * others, which is invisible in the output — every value still reports a count.
+ */
+interface LaneVector {
+  literal: string
+  /** Normalised [0,1] ceiling for this vector. */
+  ceiling: number
+}
+
 interface ValueSemanticLane {
   enabled: boolean
   /** Why the lane is off (never set while enabled). */
   reason: string | null
-  /** Normalised [0,1] distance ceiling; 0 when the lane is off. */
-  ceiling: number
+  /** How ceilings are decided for this lane's vectors. */
+  policy: SemanticCeiling
   /** True when the lane failed AFTER matching had already used it. */
   degraded: boolean
-  cache: Map<string, string | null>
+  cache: Map<string, LaneVector | null>
 }
 
-function createValueLane(): ValueSemanticLane {
-  const off = (reason: string): ValueSemanticLane => ({ enabled: false, reason, ceiling: 0, degraded: false, cache: new Map() })
+async function createValueLane(): Promise<ValueSemanticLane> {
+  const off = (reason: string): ValueSemanticLane => ({
+    enabled: false,
+    reason,
+    policy: { mode: 'absolute', maxDistance: 0 },
+    degraded: false,
+    cache: new Map(),
+  })
   if (!semanticLaneConfigured()) return off('Semantic search is not configured (no embedding key).')
-  const unavailable = semanticArmUnavailableReason()
-  if (unavailable) return off(unavailable)
-  const ceiling = resolveMaxDistance()
-  if (ceiling === null) return off(semanticArmUnavailableReason() ?? 'No semantic distance ceiling is available.')
-  return { enabled: true, reason: null, ceiling, degraded: false, cache: new Map() }
+  const policy = await resolveSemanticCeiling()
+  if (!policy) return off(semanticArmUnavailableReason() ?? 'The semantic arm is switched off by configuration.')
+  return { enabled: true, reason: null, policy, degraded: false, cache: new Map() }
 }
 
 /**
- * Literals for the given texts, index-aligned, from the cache plus at most one
- * batched embedding call for the misses. An embedding failure disables the
- * lane (degraded, with the reason recorded) and returns all-null — matching
- * carries on wording-only rather than failing the stage.
+ * Vectors for the given texts, index-aligned, from the cache plus at most one
+ * batched embedding call and one batched background query for the misses. An
+ * embedding failure disables the lane (degraded, with the reason recorded) and
+ * returns all-null — matching carries on wording-only rather than failing the
+ * stage.
  */
-async function laneLiterals(lane: ValueSemanticLane, texts: string[]): Promise<Array<string | null>> {
+async function laneLiterals(lane: ValueSemanticLane, texts: string[]): Promise<Array<LaneVector | null>> {
   if (!lane.enabled) return texts.map(() => null)
   const misses = Array.from(new Set(texts.filter(text => !lane.cache.has(text))))
   if (misses.length) {
     try {
       const embedded = await embedQueryTexts(misses)
-      misses.forEach((text, index) => lane.cache.set(text, embedded[index] ?? null))
+      const policy = lane.policy
+      let ceilings: Array<number | null>
+      if (policy.mode === 'absolute') {
+        ceilings = embedded.map(literal => (literal ? policy.maxDistance : null))
+      } else {
+        // One query for every miss: the background sample is materialised once
+        // and cross-joined against all the literals, so adding the per-value
+        // ceiling costs a single round trip per discovery round, not one per value.
+        const background = await semanticBackground({ literals: embedded })
+        ceilings = background.map(stats => (stats ? backgroundCeiling(stats, policy.z) : null))
+      }
+      misses.forEach((text, index) => {
+        const literal = embedded[index]
+        const ceiling = ceilings[index]
+        // A value with no estimable ceiling stays wording-only rather than
+        // borrowing another value's cut.
+        lane.cache.set(text, literal && ceiling !== null ? { literal, ceiling } : null)
+      })
     } catch (error) {
       lane.enabled = false
       lane.degraded = true
@@ -392,17 +442,19 @@ async function assignSample(
   }
 
   if (semantic?.lane.enabled) {
-    const literals = await laneLiterals(semantic.lane, semantic.texts)
-    if (literals.some(Boolean)) {
+    const vectors = await laneLiterals(semantic.lane, semantic.texts)
+    if (vectors.some(Boolean)) {
       // Nulls travel as '' so ordinality keeps every literal aligned with its
-      // value index; the WHERE filters them after the index is assigned.
-      const padded = literals.map(literal => literal ?? '')
+      // value index; the WHERE filters them after the index is assigned. The
+      // ceiling rides alongside because it now varies per value, not per lane.
+      const padded = vectors.map(vector => vector?.literal ?? '')
+      const ceilings = vectors.map(vector => vector?.ceiling ?? 0)
       try {
         const semanticRows = await withTimeout<{ id: number; value_idx: number }>(
           Prisma.sql`
             WITH q AS (
-              SELECT t.idx::int AS value_idx, t.lit AS lit
-              FROM unnest(${padded}::text[]) WITH ORDINALITY AS t(lit, idx)
+              SELECT t.idx::int AS value_idx, t.lit AS lit, t.cutoff AS cutoff
+              FROM unnest(${padded}::text[], ${ceilings}::float8[]) WITH ORDINALITY AS t(lit, cutoff, idx)
               WHERE t.lit <> ''
             )
             SELECT e."localPatentId" AS id, q.value_idx AS value_idx
@@ -410,7 +462,7 @@ async function assignSample(
             CROSS JOIN q
             WHERE e."localPatentId" = ANY(${sampleIds}::int[])
               AND ${comparableVectorSql()}
-              AND ${semanticMatchSql(Prisma.sql`q.lit`, semantic.lane.ceiling)}`,
+              AND ${semanticMatchSql(Prisma.sql`q.lit`, Prisma.sql`q.cutoff`)}`,
           PRECHECK_TIMEOUT_MS
         )
         for (const row of semanticRows) {
@@ -498,7 +550,7 @@ export async function runDimensionMapStage(input: {
   const coverageNotes: string[] = [candidateCoverageNote(candidates)]
   // One lane for the whole run: discovery, refresh and census share its literal
   // cache, which is what keeps the semantic arm to one embedding per value text.
-  const valueLane = createValueLane()
+  const valueLane = await createValueLane()
 
   // --- Pre-check: size the field, refuse too broad AND too narrow -----------
   await progress(runId, 'precheck', 'Sizing the field')
@@ -698,8 +750,8 @@ export async function runDimensionMapStage(input: {
       await setStatementTimeout(tx, FACET_TIMEOUT_MS)
       try {
         for (let m = 0; m < flatValues.length; m++) {
-          const literal = valueLane.enabled ? censusLiterals[m] : null
-          if (literal) {
+          const vector = valueLane.enabled ? censusLiterals[m] : null
+          if (vector) {
             await tx.$executeRaw(Prisma.sql`
               INSERT INTO ws_dim_hits
               SELECT DISTINCT u.family_key, ${m}::int
@@ -712,7 +764,7 @@ export async function runDimensionMapStage(input: {
                 FROM ws_dim_census c
                 JOIN "local_patent_embeddings" e ON e."localPatentId" = c.id
                 WHERE ${comparableVectorSql()}
-                  AND ${semanticMatchSql(Prisma.sql`${literal}`, valueLane.ceiling)}
+                  AND ${semanticMatchSql(Prisma.sql`${vector.literal}`, vector.ceiling)}
               ) u`)
           } else {
             await tx.$executeRaw(Prisma.sql`
@@ -908,8 +960,16 @@ export async function runDimensionMapStage(input: {
       census.embeddedFamilies !== null && census.familyCount
         ? Math.round((census.embeddedFamilies / census.familyCount) * 100)
         : null
+    // Under `adaptive` there is no single ceiling to quote — each value gets its
+    // own — so the note states the RULE. Quoting one value's number as though it
+    // governed the whole grid would be the same false precision the lane-wide
+    // constant used to imply.
+    const rule =
+      valueLane.policy.mode === 'adaptive'
+        ? `each value's embedding-distance ceiling set ${valueLane.policy.z.toFixed(1)} standard deviations below its own mean distance to the corpus`
+        : `embedding-distance ceiling ${valueLane.policy.maxDistance}`
     coverageNotes.push(
-      `Families were matched to values by wording OR meaning (embedding-distance ceiling ${valueLane.ceiling})` +
+      `Families were matched to values by wording OR meaning (${rule})` +
         (embeddedPct !== null ? `; ${embeddedPct}% of the field carries a comparable vector.` : '.')
     )
     if (embeddedPct !== null && embeddedPct < 70) {

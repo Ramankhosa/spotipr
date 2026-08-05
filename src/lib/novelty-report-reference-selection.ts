@@ -2,11 +2,43 @@ import { normalizeRerankDecision, type RerankDecision } from './novelty-prior-ar
 
 export const REPORT_REFERENCE_SELECTION_VERSION = 1 as const;
 
+/**
+ * Hard ceilings on caller-supplied selection options.
+ *
+ * `POST /api/novelty-search` forwards the client `config` straight into
+ * `mergeConfig`, so these values are reachable from a request body. Clamping here
+ * protects both the pipeline writer and the report renderer with one change.
+ */
+export const MAIN_REFERENCE_CEILING = 20;
+const MIN_MAIN_REFERENCES_CEILING = 10;
+const UNMAPPED_SUPPLEMENTARY_CEILING = 50;
+
+/**
+ * Which selection rule produced a stored selection.
+ *
+ * Carried inside the persisted blob rather than encoded in
+ * REPORT_REFERENCE_SELECTION_VERSION on purpose: bumping the version would make
+ * every historical selection fail validation and recompute, which would change
+ * reports an attorney has already downloaded. The discriminator lets a stale or
+ * absent selection recompute under the rule it was written with.
+ *
+ * - `fixed_target_v1` — fill `main` to `mainReferenceTarget` (legacy, the default).
+ * - `materiality_v1`  — include references that clear the materiality bar.
+ */
+export type ReportReferenceSelectionRule = 'fixed_target_v1' | 'materiality_v1';
+
+export const DEFAULT_REPORT_REFERENCE_SELECTION_RULE: ReportReferenceSelectionRule = 'fixed_target_v1';
+
+export function normalizeReportReferenceSelectionRule(value: unknown): ReportReferenceSelectionRule {
+  return value === 'materiality_v1' ? 'materiality_v1' : DEFAULT_REPORT_REFERENCE_SELECTION_RULE;
+}
+
 export type ReportReferencePriority = 'Critical' | 'High' | 'Medium' | 'Low';
 export type ReportReferenceSelectionReason =
   | 'decisive'
   | 'high_overlap'
   | 'ranked_fill'
+  | 'coverage_diversity'
   | 'mapped_supplementary'
   | 'gate_accept'
   | 'gate_component'
@@ -26,6 +58,23 @@ export interface ReportReferenceCandidate {
   canonicalDecisive?: boolean;
   noveltyThreat?: string | null;
   overlapRiskLevel?: string | null;
+  /**
+   * Priority tier before the display caps in `applySelectivePriorities` are
+   * applied. The capped `priority` would re-impose an arbitrary bound of 12
+   * (4 Critical + 8 High) on the materiality rule, so the bar reads this instead
+   * and falls back to `priority` when a caller does not supply it.
+   */
+  desiredPriority?: ReportReferencePriority | string;
+  /** Important features (core_technical / novelty_candidate) this reference maps with strong evidence. */
+  mappedImportantFeatures?: string[];
+  /** True when at least one feature is Present or Partial, i.e. not an all-Unknown degraded map. */
+  hasMappedEvidence?: boolean;
+  /**
+   * Patent family this reference belongs to. When absent, or when it degrades to
+   * the publication number itself, no family relationship is asserted and the
+   * reference is treated as its own family.
+   */
+  familyKey?: string;
 }
 
 export interface SelectedReportReference {
@@ -33,6 +82,8 @@ export interface SelectedReportReference {
   canonicalPublicationNumber: string;
   reason: ReportReferenceSelectionReason;
   gateDecision?: RerankDecision;
+  /** Persisted so a later render reproduces the same family decision without its own lookup. */
+  familyKey?: string;
 }
 
 export interface ReportReferenceSelectionCounts {
@@ -46,10 +97,18 @@ export interface ReportReferenceSelectionCounts {
   ungatedExcluded: number;
   invalidPublicationNumbersExcluded: number;
   protectedOverflow: number;
+  /** materiality_v1 only: references that cleared the bar but did not fit under the ceiling. */
+  materialityOverflow?: number;
+  /** materiality_v1 only: references admitted purely to cover an otherwise-uncovered important feature. */
+  diversityAdmitted?: number;
+  /** materiality_v1 only: references moved to the appendix because a family sibling is already shown. */
+  familyDemoted?: number;
 }
 
 export interface ReportReferenceSelectionV1 {
   version: typeof REPORT_REFERENCE_SELECTION_VERSION;
+  /** Absent on selections written before the rule was introduced; treat as `fixed_target_v1`. */
+  rule?: ReportReferenceSelectionRule;
   main: SelectedReportReference[];
   mappedSupplementary: SelectedReportReference[];
   unmappedSupplementary: SelectedReportReference[];
@@ -60,6 +119,8 @@ export interface ReportReferenceSelectionOptions {
   mainReferenceTarget?: number;
   minMainReferences?: number;
   maxUnmappedSupplementaryReferences?: number;
+  /** Defaults to `fixed_target_v1` so existing call sites are unchanged. */
+  rule?: ReportReferenceSelectionRule;
 }
 
 export interface ReportReferenceSelectionValidation {
@@ -83,9 +144,9 @@ function finiteNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function boundedInteger(value: unknown, fallback: number, minimum: number): number {
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number {
   const numeric = Math.trunc(finiteNumber(value, fallback));
-  return Math.max(minimum, numeric);
+  return Math.min(maximum, Math.max(minimum, numeric));
 }
 
 function priorityRank(value: unknown): number {
@@ -202,12 +263,29 @@ function selectedReference(
   const gateDecision = candidate.hasGateRecord
     ? normalizeRerankDecision(candidate.gateDecision)
     : undefined;
+  const familyKey = familyKeyOf(candidate);
   return {
     publicationNumber: candidate.publicationNumber,
     canonicalPublicationNumber: candidate.canonicalPublicationNumber,
     reason,
     ...(gateDecision ? { gateDecision } : {}),
+    ...(familyKey ? { familyKey } : {}),
   };
+}
+
+/**
+ * The family this reference belongs to, or undefined when no family relationship
+ * is known. A key equal to the reference's own canonical publication number
+ * carries no grouping information — that is what the family-key helper returns
+ * when a provider supplied no family id — so it is treated as absent.
+ */
+function familyKeyOf(candidate: ReportReferenceCandidate & { canonicalPublicationNumber?: string }): string | undefined {
+  const raw = String(candidate.familyKey || '').trim();
+  if (!raw) return undefined;
+  const canonicalSelf = candidate.canonicalPublicationNumber
+    || canonicalReportPublicationNumber(candidate.publicationNumber);
+  if (canonicalReportPublicationNumber(raw) === canonicalSelf) return undefined;
+  return raw;
 }
 
 function unmappedReason(decision: RerankDecision): ReportReferenceSelectionReason {
@@ -216,17 +294,176 @@ function unmappedReason(decision: RerankDecision): ReportReferenceSelectionReaso
   return 'gate_borderline';
 }
 
+/**
+ * The materiality bar: a reference earns a detailed feature-by-feature card when
+ * its uncapped priority tier is Critical or High.
+ *
+ * Those tiers already encode the thresholds used elsewhere in the report
+ * (`Critical` = a mapped primary claim relationship, or >=75% important-feature
+ * coverage with >=2 strongly mapped important features; `High` = >=2 strongly
+ * mapped important features, or >=1 novelty-candidate feature, or >=50% important
+ * coverage). A looser bar such as "maps any important feature" admits nearly every
+ * mapped reference and simply relocates the fixed count.
+ */
+function clearsMaterialityBar(candidate: NormalizedCandidate): boolean {
+  const tier = String(candidate.desiredPriority ?? candidate.priority ?? '').trim().toLowerCase();
+  return tier === 'critical' || tier === 'high';
+}
+
+function importantFeatureKeys(candidate: NormalizedCandidate): string[] {
+  if (!Array.isArray(candidate.mappedImportantFeatures)) return [];
+  return candidate.mappedImportantFeatures
+    .map(feature => String(feature || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * A reference with no Present/Partial cell anywhere carries no evidence — an
+ * all-Unknown degraded batch produces exactly that. It may still be admitted to
+ * satisfy the floor, but only after every reference that does carry evidence.
+ */
+function hasEvidence(candidate: NormalizedCandidate): boolean {
+  if (typeof candidate.hasMappedEvidence === 'boolean') return candidate.hasMappedEvidence;
+  return finiteNumber(candidate.featureCoverage) > 0 || importantFeatureKeys(candidate).length > 0;
+}
+
+interface MaterialityMainSelection {
+  main: NormalizedCandidate[];
+  reasons: Map<string, ReportReferenceSelectionReason>;
+  materialityOverflow: number;
+  diversityAdmitted: number;
+  familyDemoted: number;
+}
+
+/**
+ * Build `main` from evidence rather than from a fixed count.
+ *
+ * Order of operations:
+ * 1. Every decisive reference, exempt from the ceiling — a report must always show
+ *    the reference its own verdict names, and the decisive set is small by
+ *    construction.
+ * 2. References clearing the materiality bar, plus high-overlap references. Unlike
+ *    decisive, high overlap is model-assigned and unbounded, so it competes for
+ *    slots under the ceiling instead of overflowing it.
+ * 3. Diversity: a reference that is the only remaining source of an important
+ *    feature no selected reference maps. It displaces the lowest-ranked ordinary
+ *    fill when the ceiling is already reached, never a decisive reference.
+ * 4. Floor: top up to `floor` so a report is never built on one or two references,
+ *    preferring references that carry evidence.
+ */
+function selectMaterialityMain(
+  mapped: NormalizedCandidate[],
+  ceiling: number,
+  floor: number
+): MaterialityMainSelection {
+  const reasons = new Map<string, ReportReferenceSelectionReason>();
+  const keyOf = (candidate: NormalizedCandidate) => candidate.canonicalPublicationNumber;
+
+  const decisive = mapped.filter(candidate => Boolean(candidate.canonicalDecisive));
+  decisive.forEach(candidate => reasons.set(keyOf(candidate), 'decisive'));
+  const decisiveKeys = new Set(decisive.map(keyOf));
+
+  const rest = mapped.filter(candidate => !decisiveKeys.has(keyOf(candidate)));
+
+  // Family demotion: the same invention filed in three countries is one piece of
+  // prior art, and letting all three occupy detail slots crowds out distinct
+  // references. Decisive references are never demoted — the report's own verdict
+  // names them. Applied only to `main`; the partition is untouched, so every
+  // sibling is still counted as analysed and still appears in the appendix.
+  const familySeen = new Set<string>();
+  decisive.forEach(candidate => {
+    const family = familyKeyOf(candidate);
+    if (family) familySeen.add(family);
+  });
+  const familyDemoted: NormalizedCandidate[] = [];
+  const familyEligible = rest.filter(candidate => {
+    const family = familyKeyOf(candidate);
+    if (!family) return true;
+    if (familySeen.has(family)) {
+      familyDemoted.push(candidate);
+      return false;
+    }
+    familySeen.add(family);
+    return true;
+  });
+
+  const qualifying = familyEligible.filter(candidate => clearsMaterialityBar(candidate) || isHighOverlap(candidate));
+  const slots = Math.max(0, ceiling - decisive.length);
+  const admitted = qualifying.slice(0, slots);
+  admitted.forEach(candidate => reasons.set(
+    keyOf(candidate),
+    isHighOverlap(candidate) ? 'high_overlap' : 'ranked_fill'
+  ));
+  const materialityOverflow = Math.max(0, qualifying.length - admitted.length);
+
+  let main = [...decisive, ...admitted];
+  let diversityAdmitted = 0;
+
+  // 3. Coverage diversity.
+  const selectedKeys = new Set(main.map(keyOf));
+  const covered = new Set<string>();
+  main.forEach(candidate => importantFeatureKeys(candidate).forEach(feature => covered.add(feature)));
+  const displaceable = () => {
+    for (let index = main.length - 1; index >= 0; index -= 1) {
+      const candidate = main[index];
+      if (reasons.get(keyOf(candidate)) === 'ranked_fill') return index;
+    }
+    return -1;
+  };
+  for (const candidate of familyEligible) {
+    if (selectedKeys.has(keyOf(candidate))) continue;
+    const unique = importantFeatureKeys(candidate).filter(feature => !covered.has(feature));
+    if (unique.length === 0) continue;
+    if (main.length >= ceiling) {
+      const displaceIndex = displaceable();
+      if (displaceIndex < 0) break;
+      const removed = main[displaceIndex];
+      main.splice(displaceIndex, 1);
+      reasons.delete(keyOf(removed));
+      selectedKeys.delete(keyOf(removed));
+    }
+    main.push(candidate);
+    selectedKeys.add(keyOf(candidate));
+    reasons.set(keyOf(candidate), 'coverage_diversity');
+    unique.forEach(feature => covered.add(feature));
+    diversityAdmitted += 1;
+  }
+
+  // 4. Floor. Never fabricates: it can only promote references that exist.
+  // Distinct families first — a family sibling is only re-admitted when there is
+  // nothing else left to show.
+  if (main.length < floor) {
+    const remaining = [...familyEligible, ...familyDemoted]
+      .filter(candidate => !selectedKeys.has(keyOf(candidate)))
+      .sort((a, b) => Number(hasEvidence(b)) - Number(hasEvidence(a)));
+    for (const candidate of remaining) {
+      if (main.length >= floor) break;
+      main.push(candidate);
+      selectedKeys.add(keyOf(candidate));
+      reasons.set(keyOf(candidate), 'ranked_fill');
+    }
+  }
+
+  // Keep `main` in ranked order so downstream consumers that take the first N
+  // (the drafting handoff digest takes 5) get the strongest references.
+  main = main.sort(compareMapped);
+  const familyDemotedFromMain = familyDemoted.filter(candidate => !selectedKeys.has(keyOf(candidate))).length;
+  return { main, reasons, materialityOverflow, diversityAdmitted, familyDemoted: familyDemotedFromMain };
+}
+
 export function selectNoveltyReportReferences(
   inputCandidates: ReportReferenceCandidate[],
   options: ReportReferenceSelectionOptions = {}
 ): ReportReferenceSelectionV1 {
   const { candidates, invalidPublicationNumbersExcluded } = normalizeCandidates(inputCandidates);
-  const mainReferenceTarget = boundedInteger(options.mainReferenceTarget, 10, 0);
-  const minMainReferences = boundedInteger(options.minMainReferences, 3, 0);
+  const rule = normalizeReportReferenceSelectionRule(options.rule);
+  const mainReferenceTarget = boundedInteger(options.mainReferenceTarget, 10, 0, MAIN_REFERENCE_CEILING);
+  const minMainReferences = boundedInteger(options.minMainReferences, 3, 0, MIN_MAIN_REFERENCES_CEILING);
   const maxUnmappedSupplementaryReferences = boundedInteger(
     options.maxUnmappedSupplementaryReferences,
     20,
-    0
+    0,
+    UNMAPPED_SUPPLEMENTARY_CEILING
   );
   const effectiveMainTarget = Math.max(mainReferenceTarget, minMainReferences);
 
@@ -234,10 +471,16 @@ export function selectNoveltyReportReferences(
   const protectedMapped = mapped.filter(candidate => Boolean(protectedReason(candidate)));
   const protectedKeys = new Set(protectedMapped.map(candidate => candidate.canonicalPublicationNumber));
   const rankedFill = mapped.filter(candidate => !protectedKeys.has(candidate.canonicalPublicationNumber));
-  const mainCandidates = [
-    ...protectedMapped,
-    ...rankedFill.slice(0, Math.max(0, effectiveMainTarget - protectedMapped.length)),
-  ];
+
+  const materiality = rule === 'materiality_v1'
+    ? selectMaterialityMain(mapped, MAIN_REFERENCE_CEILING, minMainReferences)
+    : null;
+  const mainCandidates = materiality
+    ? materiality.main
+    : [
+      ...protectedMapped,
+      ...rankedFill.slice(0, Math.max(0, effectiveMainTarget - protectedMapped.length)),
+    ];
   const mainKeys = new Set(mainCandidates.map(candidate => candidate.canonicalPublicationNumber));
   const mappedSupplementaryCandidates = mapped.filter(candidate => !mainKeys.has(candidate.canonicalPublicationNumber));
 
@@ -254,9 +497,12 @@ export function selectNoveltyReportReferences(
 
   return {
     version: REPORT_REFERENCE_SELECTION_VERSION,
+    rule,
     main: mainCandidates.map(candidate => selectedReference(
       candidate,
-      protectedReason(candidate) || 'ranked_fill'
+      materiality
+        ? (materiality.reasons.get(candidate.canonicalPublicationNumber) || 'ranked_fill')
+        : (protectedReason(candidate) || 'ranked_fill')
     )),
     mappedSupplementary: mappedSupplementaryCandidates.map(candidate =>
       selectedReference(candidate, 'mapped_supplementary')
@@ -276,6 +522,11 @@ export function selectNoveltyReportReferences(
       ungatedExcluded,
       invalidPublicationNumbersExcluded,
       protectedOverflow: Math.max(0, protectedMapped.length - effectiveMainTarget),
+      ...(materiality ? {
+        materialityOverflow: materiality.materialityOverflow,
+        diversityAdmitted: materiality.diversityAdmitted,
+        familyDemoted: materiality.familyDemoted,
+      } : {}),
     },
   };
 }

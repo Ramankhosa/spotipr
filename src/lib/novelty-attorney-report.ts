@@ -1,7 +1,9 @@
 import type { ClaimConcept, ClaimConceptMapping, FeatureMapCell, NormalizedIdea, PatentFeatureMap, PerPatentRemark } from './novelty-search-service';
 import { buildNoveltyReportCountSummary } from './novelty-report-counts';
 import { matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
+import { canonicalStudioFamilyKey } from './prior-art-studio/family-key';
 import {
+  normalizeReportReferenceSelectionRule,
   selectNoveltyReportReferences,
   validateReportReferenceSelection,
   type ReportReferenceCandidate,
@@ -148,6 +150,11 @@ export interface AttorneyReportPatentComparison extends AttorneyReportCitation {
   strongImportantFeatureCount?: number;
   strongNoveltyFeatureCount?: number;
   relationshipBonus?: number;
+  /** Priority tier before the Critical/High/Medium display caps are applied. */
+  desiredPriority?: AttorneyReportPatentComparison['reviewPriority'];
+  strongImportantFeatures?: string[];
+  hasMappedEvidence?: boolean;
+  familyKey?: string;
   citationCount: number | null;
   coverage: {
     present: number;
@@ -1766,8 +1773,16 @@ function sourceModeLabel(value: unknown): string {
   return mode;
 }
 
+/**
+ * The analyzed threshold tracks the deep-analysis floor (MIN_DEEP_ANALYSIS_TARGET
+ * in novelty-search-service). Leaving it above the floor would mark every sparse
+ * run "Medium" for the mechanical reason that a sparse field needs fewer
+ * references analyzed, not because the assessment is weaker.
+ */
+const HIGH_CONFIDENCE_ANALYZED_MINIMUM = 8;
+
 function confidenceFromCounts(counts: AttorneyReportModel['counts'], quality = 'medium'): string {
-  if (counts.analyzed >= 10 && counts.reviewed >= 20 && !/low/i.test(quality)) return 'High';
+  if (counts.analyzed >= HIGH_CONFIDENCE_ANALYZED_MINIMUM && counts.reviewed >= 20 && !/low/i.test(quality)) return 'High';
   if (counts.analyzed > 0 && counts.reviewed > 0) return 'Medium';
   return 'Low';
 }
@@ -1868,6 +1883,10 @@ function postMappingPriorityMetrics(
     anyImportantMapped: important.some(feature => evidenceFactor(rowByFeature.get(feature.feature.toLowerCase())) > 0),
     primaryRelationshipMapped,
     relationshipBonus,
+    // Named important features, so report selection can tell whether a reference is
+    // the only remaining source of coverage for one of them.
+    strongImportantFeatures: stronglyMapped.map(feature => feature.feature),
+    hasMappedEvidence: comparison.rows.some(row => row.status === 'Present' || row.status === 'Partial'),
   };
 }
 
@@ -1909,6 +1928,11 @@ function applySelectivePriorities(
       strongImportantFeatureCount: metrics.strongImportantCount,
       strongNoveltyFeatureCount: metrics.strongNoveltyCount,
       relationshipBonus: metrics.relationshipBonus,
+      // `reviewPriority` above is capped for display; the uncapped tier is what
+      // report selection reads, so a cap never bounds how many references qualify.
+      desiredPriority: desired,
+      strongImportantFeatures: metrics.strongImportantFeatures,
+      hasMappedEvidence: metrics.hasMappedEvidence,
     };
   });
 }
@@ -2145,6 +2169,12 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
       venue: firstText(meta.venue, '-'),
       doi: firstText(meta.doi, '-'),
       sourceProviders: sourceCorpus,
+      // Papers have no family; a key derived from a DOI would group unrelated works.
+      familyKey: referenceType === 'paper' ? undefined : canonicalStudioFamilyKey(
+        firstText(meta.familyId, (rawMeta as any).familyId, (ipIndiaDetails as any).familyId, ''),
+        originalPn,
+        firstText(meta.applicationNumberRaw, meta.applicationNumber, (rawMeta as any).applicationNumberRaw, ''),
+      ),
       citationCount: Number.isFinite(Number(meta.citationCount)) ? Math.max(0, Math.trunc(Number(meta.citationCount))) : null,
       coverage: { present, partial, absent, unknown, score },
       summary: reportSafeText(firstText(remark?.summary, remark?.remarks, map.remarks, 'Reference summary prepared for feature comparison.')),
@@ -2183,6 +2213,10 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
         sourceOrder,
         priority: comparison.reviewPriority,
         priorityScore: comparison.priorityScore,
+        desiredPriority: comparison.desiredPriority,
+        mappedImportantFeatures: comparison.strongImportantFeatures,
+        hasMappedEvidence: comparison.hasMappedEvidence,
+        familyKey: comparison.familyKey,
         featureCoverage: comparison.importantFeatureCoverage ?? comparison.coverage.score,
         gateScore: comparison.relevanceScore,
         gateDecision: gate?.rerankDecision || gate?.decision,
@@ -2204,16 +2238,25 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     })),
   ];
   const stage4Config = (searchRun.config as any)?.stage4 || {};
-  const computedReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
-    mainReferenceTarget: stage4Config.mainReferenceTarget ?? stage4Config.maxRefsForReportMain ?? 10,
-    minMainReferences: stage4Config.minMainReferences ?? 3,
-    maxUnmappedSupplementaryReferences: stage4Config.maxUnmappedSupplementaryReferences ?? 20,
-  });
   const persistedReferenceSelection = stage4?.report_reference_selection;
   const persistedSelectionValidation = validateReportReferenceSelection(
     persistedReferenceSelection,
     reportReferenceCandidates
   );
+  // A recompute must reproduce the rule the stored selection was written with, so
+  // a run whose blob went stale — and a legacy run with no blob at all, which
+  // recomputes on every single render — keeps rendering as it always has. The rule
+  // comes from the blob, never from config: idea-bank runs persist no stage4 config
+  // and would otherwise render under a different rule than the pipeline wrote.
+  const recomputeRule = normalizeReportReferenceSelectionRule(
+    (persistedReferenceSelection as ReportReferenceSelectionV1 | undefined)?.rule
+  );
+  const computedReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
+    mainReferenceTarget: stage4Config.mainReferenceTarget ?? stage4Config.maxRefsForReportMain ?? 10,
+    minMainReferences: stage4Config.minMainReferences ?? 3,
+    maxUnmappedSupplementaryReferences: stage4Config.maxUnmappedSupplementaryReferences ?? 20,
+    rule: recomputeRule,
+  });
   const reportReferenceSelection: ReportReferenceSelectionV1 = persistedSelectionValidation.valid
     ? persistedReferenceSelection as ReportReferenceSelectionV1
     : computedReferenceSelection;
@@ -2222,6 +2265,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
       event: persistedReferenceSelection ? 'stale_selection_recomputed' : 'legacy_selection_recomputed',
       searchId: searchRun.id,
       reason: persistedSelectionValidation.reason,
+      rule: recomputeRule,
       counts: reportReferenceSelection.counts,
     }));
   }
@@ -2269,7 +2313,13 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     canonicalPatentNumber(getPublicationNumber(entry.item)),
     entry,
   ]));
+  // Number after filtering: a selected reference missing from the shortlist index
+  // is dropped below, and numbering inside the map would leave gaps (S1, S3, S4).
   const otherShortlistedCitations = reportReferenceSelection.unmappedSupplementary
+    .filter(selectedReference => {
+      const entry = shortlistByPn.get(selectedReference.canonicalPublicationNumber);
+      return Boolean(entry && entry.decision);
+    })
     .map((selectedReference, index) => {
       const entry = shortlistByPn.get(selectedReference.canonicalPublicationNumber);
       if (!entry || !entry.decision) return null;
@@ -2359,7 +2409,13 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     `${riskAssessment.noveltyRiskExplanation} ${riskAssessment.combinationRiskExplanation}`
   );
   const adaptiveScreening = stage4?.adaptiveScreening || stage35?.adaptiveScreening;
-  const stopReason = cleanText(stage4?.screeningStopReason || adaptiveScreening?.terminalStopReason || adaptiveScreening?.projectedStopReason);
+  const stopReason = cleanText(
+    stage4?.screeningStopReason
+    // Why relevance screening stopped walking the ranked pool.
+    || stage1?.aiRelevance?.screeningStopReason
+    || adaptiveScreening?.terminalStopReason
+    || adaptiveScreening?.projectedStopReason
+  );
 
   return {
     reportNumber,

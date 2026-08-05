@@ -492,12 +492,14 @@ export function narrowingAdvice(scope: WhitespaceScope): string {
 export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string): string {
   const parts: string[] = ['No publication in the readable corpus matches this scope.']
   // Keyword match over every did-not-run reason the candidate resolver emits:
-  // unconfigured key, embed/retrieval failure, no vector, and — the one an
-  // earlier regex missed — the uncalibrated-ceiling refusal, which is exactly
-  // the state of a binary-vector installation before it is measured. The
-  // "found no additional documents" note must NOT match: there the lane RAN,
-  // and blaming it would send the user away from the structural filters.
-  if (semanticNote && /not configured|failed|calibrated|unavailable|disabled|returned no vector/i.test(semanticNote)) {
+  // unconfigured key, embed/retrieval failure, no vector, the deliberate kill
+  // switch, and the no-ceiling refusal — which now reads "could not be
+  // ESTIMATED" (the ceiling is derived per query from a background sample)
+  // rather than "not calibrated". Matching only the old word would have quietly
+  // stopped naming the lane on exactly the installations that need it named.
+  // The "found no additional documents" note must NOT match: there the lane
+  // RAN, and blaming it would send the user away from the structural filters.
+  if (semanticNote && /not configured|failed|calibrated|estimated|unavailable|disabled|returned no vector/i.test(semanticNote)) {
     parts.push(
       'The semantic lane did not run, so the field was matched on concept wording alone — that is the most likely reason this is empty rather than small.'
     )

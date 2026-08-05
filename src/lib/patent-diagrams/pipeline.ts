@@ -8,57 +8,58 @@ import { coerceSupportDataSources } from '@/lib/support-data-sources'
 import { EXTREME_ASPECT_RATIO_MAXIMUM, EXTREME_ASPECT_RATIO_MINIMUM } from '@/lib/plantuml-renderer'
 import { renderAndWriteDiagramArtifacts, resolveDiagramPagePolicy } from './artifacts'
 import { buildPatentDiagram } from './builders'
-import { decomposePatentDiagram } from './complexity'
-import { normalizePatentDiagram } from './normalize'
-import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
-import { PATENT_DIAGRAM_STYLE } from './style'
-import { validatePatentDiagram } from './validation'
-import { buildDiagramDetailPrompt, buildFigureSetPlanningPrompt, extractJsonObject } from './prompts'
-import { COVERAGE_EXTRACTION_RESPONSE_SCHEMA, FIGURE_SET_PLAN_RESPONSE_SCHEMA, diagramDetailResponseSchema } from './response-schemas'
+import { buildDiagramBatchPrompt, buildFigureSetPlanningPrompt, extractJsonObject } from './prompts'
+import { FIGURE_SET_PLAN_RESPONSE_SCHEMA, diagramBatchResponseSchema } from './response-schemas'
 import {
-  buildCoverageExtractionPrompt,
-  buildDisclosureCoverageLedger,
-  coverageEvidenceEntries,
-  coverageExtractionSchema,
-  evaluateCoverageLedger,
-  materializeCoverageLedger,
-  normalizeCoverageClaims,
-  repairFigureSetCoverage,
-  stageCoverageComponentAdditions,
-  uncoveredClaimLimitations,
-} from './coverage'
-import {
+  DEFAULT_FIGURE_KINDS,
   figureSetPlanSchema,
+  patentDiagramBatchSchema,
   patentDiagramSchema,
   type BuiltPatentDiagram,
+  type DiagramKind,
   type FigureSetPlan,
   type FigureSetPlanItem,
-  type FigureCoverageLedger,
   type PatentDiagram,
   type PatentDiagramComponent,
 } from './types'
 
+/**
+ * Managed patent figure pipeline.
+ *
+ * Two LLM stages, and nothing else between the attorney and a drawing:
+ *
+ *   1. ONE planning call produces the whole figure set. The default set is one
+ *      figure of each supported kind (COMPONENT, PROCESS, SEQUENCE,
+ *      CONSTITUENT); an explicit figureCount cycles through those kinds.
+ *   2. Generation calls detail the planned figures TWO AT A TIME, run
+ *      concurrently up to the tenant's metered limit.
+ *
+ * Everything after that is deterministic: normalize the model's output, build
+ * PlantUML, render, save. There is no coverage ledger, no automatic figure
+ * decomposition, no density gate and no filing-readiness veto — a figure that
+ * parses gets drawn, and validation findings are advisory notes attached to the
+ * saved figure rather than reasons to fail a run the attorney is waiting on.
+ */
+
+// Figures at or above this number are user-imported and are never touched by
+// managed generation — not their rows and not their files.
 const GENERATED_FIGURE_LIMIT = 900
-// Six is the planning target, not a truncation limit. Coverage repair and
-// filing-scale decomposition may exceed it, subject to the per-run safety cap.
-const AUTO_MODE_FIGURE_TARGET = 6
-const MAXIMUM_MANAGED_FIGURES_PER_RUN = 20
+const MAXIMUM_FIGURES_PER_RUN = 20
+const FIGURES_PER_GENERATION_CALL = 2
 
 export class PatentDiagramPipelineError extends Error {
   status: number
   details?: unknown
   code: string
-  stage: 'COVERAGE' | 'PLAN' | 'DETAIL' | 'VALIDATION' | 'RENDER' | 'PERSIST' | 'GENERAL'
+  stage: 'PLAN' | 'DETAIL' | 'RENDER' | 'PERSIST' | 'GENERAL'
   retryable: boolean
   actions: string[]
-  automaticCorrection?: { attempted: boolean; attempts: number; result: 'FAILED' | 'NOT_ATTEMPTED' }
 
   constructor(message: string, status = 400, details?: unknown, options?: {
     code?: string
     stage?: PatentDiagramPipelineError['stage']
     retryable?: boolean
     actions?: string[]
-    automaticCorrection?: PatentDiagramPipelineError['automaticCorrection']
   }) {
     super(message)
     this.name = 'PatentDiagramPipelineError'
@@ -67,14 +68,13 @@ export class PatentDiagramPipelineError extends Error {
     this.code = options?.code || 'PATENT_DIAGRAM_PIPELINE_ERROR'
     this.stage = options?.stage || 'GENERAL'
     this.retryable = options?.retryable ?? status >= 500
-    this.actions = options?.actions || ['Try the operation again.', 'If it repeats, simplify the requested figure and review the technical details.']
-    this.automaticCorrection = options?.automaticCorrection
+    this.actions = options?.actions || ['Try the operation again.']
   }
 }
 
 // Stage 0 stores richer claim-support metadata than figure planning needs; only
-// the two fields that decide coverage are carried through. Anything unparseable
-// becomes null, which downstream code reads as "unknown", not "not claimed".
+// the two fields that matter are carried through. Anything unparseable becomes
+// null, which downstream code reads as "unknown", not "not claimed".
 function normalizeComponentClaimSupport(value: any): PatentDiagramComponent['claimSupport'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const matchedClaims: number[] = Array.isArray(value.matchedClaims)
@@ -109,9 +109,6 @@ export function extractReferenceMapComponents(referenceMap: any): PatentDiagramC
       referenceLabel: String(component?.referenceLabel || component?.numeral || component?.range || index + 1),
       parentId: component?.parentId ? String(component.parentId) : component?.parent?.id ? String(component.parent.id) : null,
       parentName: typeof component?.parent === 'string' ? component.parent.trim() : null,
-      // Stage 0 already works out which components the claims name; this
-      // extraction used to drop that, so figure planning had no idea which
-      // components the claims actually depend on.
       claimSupport: normalizeComponentClaimSupport(component?.claimSupport),
     }]
   })
@@ -176,19 +173,8 @@ async function loadPipelineContext(userId: string, patentId: string, sessionId: 
   if (!session) throw new PatentDiagramPipelineError('Session not found or access denied', 404)
   const components = extractReferenceMapComponents(session.referenceMap)
   if (!components.length) throw new PatentDiagramPipelineError('Save a valid Component Plan before generating figures')
-  if (session.referenceMap && session.referenceMap.isValid === false) {
-    throw new PatentDiagramPipelineError('The Component Plan is stale or invalid. Re-save it before generating figures')
-  }
   const idea = (session.ideaRecord?.normalizedData as any) || {}
   const countryCode = session.activeJurisdiction || session.draftingJurisdictions[0] || 'US'
-  const evidenceCatalog = evidenceCatalogFromIdea(idea)
-  const storedReferenceMap = (session.referenceMap?.components as any) || {}
-  const storedComponents = Array.isArray(storedReferenceMap)
-    ? storedReferenceMap
-    : Array.isArray(storedReferenceMap?.components)
-      ? storedReferenceMap.components
-      : []
-  const numberingStyle = String(storedReferenceMap?.numberingStyle || 'NUMERIC_BUCKET')
   const existingFigures = session.figurePlans
     .filter(figure => figure.figureNo < GENERATED_FIGURE_LIMIT)
     .map(figure => {
@@ -199,13 +185,7 @@ async function loadPipelineContext(userId: string, patentId: string, sessionId: 
         ...(Array.isArray(semantic?.nodes) ? semantic.nodes.flatMap((item: any) => [item?.componentId, ...(item?.relatedComponentIds || [])]) : []),
         ...(Array.isArray(semantic?.constituents) ? semantic.constituents.map((item: any) => item?.componentId) : []),
       ].filter(Boolean)))
-      return {
-        figureNo: figure.figureNo,
-        title: figure.title,
-        kind: figure.diagramType,
-        componentIds,
-        coverageRequirementIds: Array.isArray(semantic?.coverageRequirementIds) ? semantic.coverageRequirementIds.filter((id: unknown) => typeof id === 'string') : [],
-      }
+      return { figureNo: figure.figureNo, title: figure.title, kind: figure.diagramType, componentIds }
     })
   return {
     session,
@@ -213,15 +193,14 @@ async function loadPipelineContext(userId: string, patentId: string, sessionId: 
     referenceMapChecksum: semanticChecksum((session.referenceMap as any)?.components || []),
     idea,
     claims: claimsContextFromIdea(idea),
-    evidenceCatalog,
-    supportedEvidenceIds: new Set(evidenceCatalog.map(entry => entry.id)),
+    evidenceCatalog: evidenceCatalogFromIdea(idea),
     pagePolicy: await resolveDiagramPagePolicy(countryCode),
     countryCode,
-    storedComponents,
-    numberingStyle,
     existingFigures,
   }
 }
+
+type PipelineContext = Awaited<ReturnType<typeof loadPipelineContext>>
 
 // OpenAI strict structured outputs cannot express "omit this key", so optional
 // fields arrive as explicit nulls. The Zod contracts use .optional(), which
@@ -239,29 +218,19 @@ function withoutNullValues<T>(value: T): T {
   return value
 }
 
-type StructuredStageCode = 'DRAFT_FIGURE_COVERAGE' | 'DRAFT_FIGURE_PLANNER' | 'DRAFT_DIAGRAM_GENERATION'
+type StructuredStageCode = 'DRAFT_FIGURE_PLANNER' | 'DRAFT_DIAGRAM_GENERATION'
 
 interface StructuredStageInput<S extends z.ZodTypeAny> {
   userHeaders: Record<string, string>
   stageCode: StructuredStageCode
   prompt: string
-  /** A function receives the attempt index, letting a retry validate against a
-   *  relaxed contract instead of costing a whole second operation. */
-  schema: S | ((attempt: number) => S)
+  schema: S
   metadata: Record<string, unknown>
   /** Strict OpenAI json_schema for the reply; providers without support ignore it. */
   responseSchema?: { name: string; schema: Record<string, unknown> }
   /** Session-stable key so same-prefix prompts land on the same provider cache shard. */
   promptCacheKey?: string
-  /** Expected near-copy output (predicted outputs); mutually exclusive with responseSchema. */
-  prediction?: string
-  /** Total tries before giving up. Two suits single-contract calls; the detail
-   *  stage takes three because its first try also carries the density budget. */
   maxAttempts?: number
-}
-
-function errorStageFor(stageCode: StructuredStageCode): PatentDiagramPipelineError['stage'] {
-  return stageCode === 'DRAFT_DIAGRAM_GENERATION' ? 'DETAIL' : stageCode === 'DRAFT_FIGURE_COVERAGE' ? 'COVERAGE' : 'PLAN'
 }
 
 export async function executeStructured<S extends z.ZodTypeAny>(input: StructuredStageInput<S>): Promise<z.output<S>> {
@@ -276,7 +245,6 @@ export async function executeStructured<S extends z.ZodTypeAny>(input: Structure
       const boundedOutput = previousOutput.slice(0, 12_000)
       prompt = `${input.prompt}\n\nYour previous JSON was invalid. Correct it without changing supported semantics.\nVALIDATION ERRORS:\n${boundedErrors}\nPREVIOUS OUTPUT (bounded):\n${boundedOutput}`
     }
-    const schema = typeof input.schema === 'function' ? input.schema(attempt) : input.schema
     const startedAt = Date.now()
     const result = await llmGateway.executeLLMOperation({ headers: input.userHeaders || {} }, {
       taskCode: 'LLM3_DIAGRAM',
@@ -284,11 +252,9 @@ export async function executeStructured<S extends z.ZodTypeAny>(input: Structure
       prompt,
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
-      // Diagram stages are structured extraction against a validated schema,
-      // not open-ended judgment: correctness is enforced by the Zod contract
-      // and coverage repair, so high thinking budgets only buy latency. Gemini 3
-      // otherwise defaults thinking_level to high. Providers ignore keys they
-      // do not understand, and temperature is dropped where a model rejects it.
+      // Diagram stages are structured extraction against a validated schema, not
+      // open-ended judgment, so high thinking budgets only buy latency. Providers
+      // ignore keys they do not understand.
       parameters: {
         thinking_level: 'low',
         reasoning_effort: 'low',
@@ -300,20 +266,19 @@ export async function executeStructured<S extends z.ZodTypeAny>(input: Structure
           },
         } : {}),
         ...(input.promptCacheKey ? { prompt_cache_key: input.promptCacheKey } : {}),
-        ...(input.prediction ? { prediction: { type: 'content', content: input.prediction } } : {}),
       },
       metadata: { ...input.metadata, structuredDiagram: true, attempt: attempt + 1 },
     })
     console.log(`[DiagramPipeline] ${input.stageCode} purpose=${String(input.metadata.purpose || 'unknown')} attempt=${attempt + 1} model=${result.response?.modelClass || 'unresolved'} ms=${Date.now() - startedAt}`)
     if (!result.success || !result.response?.output) {
       throw new PatentDiagramPipelineError(result.error?.message || 'Diagram LLM request failed', 502, result.error, {
-        code: 'DIAGRAM_PROVIDER_FAILED', stage: errorStageFor(input.stageCode), retryable: true,
+        code: 'DIAGRAM_PROVIDER_FAILED', stage: input.stageCode === 'DRAFT_FIGURE_PLANNER' ? 'PLAN' : 'DETAIL', retryable: true,
         actions: ['Try again.', 'If it repeats, ask an administrator to verify the configured diagram model and token limits.'],
       })
     }
     previousOutput = result.response.output
     try {
-      const parsed = schema.safeParse(withoutNullValues(extractJsonObject(previousOutput)))
+      const parsed = input.schema.safeParse(withoutNullValues(extractJsonObject(previousOutput)))
       if (parsed.success) return parsed.data
       previousErrors = parsed.error.issues.map(issue => `${issue.path.join('.') || 'root'}: ${issue.message}`).join('\n')
     } catch (error) {
@@ -325,39 +290,9 @@ export async function executeStructured<S extends z.ZodTypeAny>(input: Structure
     console.warn(`[DiagramPipeline] ${input.stageCode} purpose=${String(input.metadata.purpose || 'unknown')} attempt=${attempt + 1} REJECTED: ${previousErrors.slice(0, 600).replace(/\n/g, ' | ')}`)
   }
   throw new PatentDiagramPipelineError(`The diagram model answered ${maxAttempts} times, but no reply matched the required structured format.`, 422, previousErrors, {
-    code: 'INVALID_STRUCTURED_DIAGRAM', stage: errorStageFor(input.stageCode), retryable: true,
-    actions: ['Try again to request a fresh structured reply.', 'If it repeats, simplify the figure instructions or verify the Component Plan.', 'Ask an administrator to check the model output-token limit.'],
-    automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
+    code: 'INVALID_STRUCTURED_DIAGRAM', stage: input.stageCode === 'DRAFT_FIGURE_PLANNER' ? 'PLAN' : 'DETAIL', retryable: true,
+    actions: ['Try again to request a fresh structured reply.', 'Ask an administrator to check the model output-token limit if it repeats.'],
   })
-}
-
-// Coverage extraction has its own stage code so Super Admin can route this
-// mechanical quote-and-map step to a faster model than the planning judgment
-// call. Stage-coded resolution fails closed, so a deployment whose database
-// has not seeded DRAFT_FIGURE_COVERAGE yet falls back to the planner stage's
-// model instead of losing figure planning entirely.
-async function executeCoverageExtraction<S extends z.ZodTypeAny>(
-  input: Omit<StructuredStageInput<S>, 'stageCode'>,
-): Promise<z.output<S>> {
-  try {
-    return await executeStructured({ ...input, stageCode: 'DRAFT_FIGURE_COVERAGE' })
-  } catch (error) {
-    const stageUnconfigured = error instanceof PatentDiagramPipelineError
-      && (error.details as { code?: string } | undefined)?.code === 'CONFIGURATION_ERROR'
-    if (!stageUnconfigured) throw error
-    console.warn('[DiagramPipeline] DRAFT_FIGURE_COVERAGE stage is not configured for this plan; using the DRAFT_FIGURE_PLANNER model')
-    return executeStructured({ ...input, stageCode: 'DRAFT_FIGURE_PLANNER' })
-  }
-}
-
-function assertPlanComponentIds(plan: FigureSetPlan, components: PatentDiagramComponent[]) {
-  const known = new Set(components.map(component => component.id))
-  const unknown = plan.figures.flatMap(figure => [
-    ...figure.componentIds,
-    ...figure.claimCriticalComponentIds,
-    ...figure.orderedGroups.flatMap(group => group.componentIds),
-  ]).filter(id => !known.has(id))
-  if (unknown.length) throw new PatentDiagramPipelineError(`Figure plan referenced unknown Component Planner IDs: ${Array.from(new Set(unknown)).join(', ')}`, 422)
 }
 
 export interface PatentDiagramPipelineInput {
@@ -368,268 +303,96 @@ export interface PatentDiagramPipelineInput {
   figureCount?: number | null
   instructions?: string
   includeExistingFigures?: boolean
-  mode?: 'ai' | 'manual'
 }
 
-export interface FigureSetPlanCoverage {
-  /** Claim-named components that no planned figure depicts. */
-  missing: Array<{ id: string; name: string; referenceLabel: string; matchedClaims: number[] }>
-  /** False when Stage 0 claim matching has not run, so coverage is unknown. */
-  evaluated: boolean
-}
-
-// Coverage is reported, never enforced. Validation already checks that each
-// figure delivers the claim-critical components it declared, but nothing checked
-// the set as a whole — a claimed component the planner simply never mentioned
-// was invisible. This closes that, as information for the attorney approving the
-// plan rather than as a gate: claim matching is optional upstream, so a hard
-// failure here would block figures for anyone who has not run it.
-export function evaluateFigureSetClaimCoverage(
-  plan: { figures: Array<{ componentIds: string[]; orderedGroups: Array<{ componentIds: string[] }> }> },
-  components: PatentDiagramComponent[],
-): FigureSetPlanCoverage {
-  const claimed = components.filter(component => (component.claimSupport?.matchedClaims?.length || 0) > 0)
-  if (!claimed.length) return { missing: [], evaluated: false }
-  const depicted = new Set(plan.figures.flatMap(figure => [
-    ...figure.componentIds,
-    ...figure.orderedGroups.flatMap(group => group.componentIds),
-  ]))
-  return {
-    evaluated: true,
-    missing: claimed
-      .filter(component => !depicted.has(component.id))
-      .map(component => ({
-        id: component.id,
-        name: component.name,
-        referenceLabel: component.referenceLabel,
-        matchedClaims: component.claimSupport?.matchedClaims || [],
-      })),
+function requestedFigureCount(figureCount?: number | null): number {
+  if (figureCount && Number.isInteger(figureCount) && figureCount > 0) {
+    return Math.min(figureCount, MAXIMUM_FIGURES_PER_RUN)
   }
+  return DEFAULT_FIGURE_KINDS.length
 }
 
-function planningContextChecksum(
-  context: Awaited<ReturnType<typeof loadPipelineContext>>,
-  input?: Pick<PatentDiagramPipelineInput, 'instructions'>,
-): string {
+function planningContextChecksum(context: PipelineContext, input?: Pick<PatentDiagramPipelineInput, 'instructions' | 'figureCount'>): string {
   return semanticChecksum({
-    claims: normalizeCoverageClaims(context.claims),
+    claims: context.claims,
     inventionFacts: context.idea,
-    components: context.storedComponents,
-    evidenceCatalog: context.evidenceCatalog,
+    components: context.components,
     jurisdiction: context.countryCode,
     instructions: input?.instructions || null,
-    existingFigures: context.existingFigures,
+    figureCount: requestedFigureCount(input?.figureCount),
   })
 }
 
-function persistedAutomaticComponent(addition: FigureSetPlan['pendingComponentAdditions'][number]) {
+function chunk<T>(items: T[], size: number): T[][] {
+  const result: T[][] = []
+  for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size))
+  return result
+}
+
+function fallbackPlanItem(kind: DiagramKind, index: number, components: PatentDiagramComponent[]): FigureSetPlanItem {
+  const titleByKind: Record<DiagramKind, string> = {
+    COMPONENT: 'System Architecture',
+    PROCESS: 'Method of Operation',
+    SEQUENCE: 'Interaction Sequence',
+    CONSTITUENT: 'Composition',
+  }
   return {
-    ...addition,
-    autoGenerated: true,
-    autoGeneratedBy: 'CLAIM_COVERAGE',
-    sourceRefs: addition.requirementIds,
-    claimSupport: {
-      source: 'frozen_claims',
-      basis: 'stage0_component_claim_match',
-      matchedClaims: addition.claimNumbers,
-      claimRole: addition.claimNumbers.includes(1) ? 'claim_1' : 'dependent_claim',
-      confidence: 'high',
-      matchedText: addition.sourceText,
-      reason: 'Automatically added to complete managed-figure claim coverage.',
-    },
+    key: `figure-${index + 1}-${kind.toLowerCase()}`,
+    kind,
+    title: titleByKind[kind],
+    purpose: `Depicts the ${titleByKind[kind].toLowerCase()} of the disclosed invention.`,
+    detailLevel: 'DETAIL',
+    direction: kind === 'SEQUENCE' ? 'LR' : 'TB',
+    componentIds: components.map(component => component.id).slice(0, 16),
+    claimCriticalComponentIds: [],
+    orderedGroups: [],
+    phaseHints: [],
+    evidenceIds: [],
   }
 }
 
-// Conservative tokenizer-independent estimate. Claims stay atomic: a large claim
-// gets its own chunk and is never cut mid-limitation or JSON row.
-function claimTokenEstimate(claim: { text: string }): number {
-  return Math.ceil((claim.text.length + 120) / 4)
-}
-
-/** Contiguous split into `count` runs whose lengths differ by at most one. */
-function splitEvenly<T>(items: T[], count: number): T[][] {
-  const chunks: T[][] = []
-  let start = 0
-  for (let index = 0; index < count && start < items.length; index++) {
-    const size = Math.ceil((items.length - start) / (count - index))
-    chunks.push(items.slice(start, start + size))
-    start += size
-  }
-  return chunks
-}
-
-export function claimChunks(claims: ReturnType<typeof normalizeCoverageClaims>, maximumTokens = 3_000) {
-  // Chunks are extracted concurrently, so wall-clock is the SLOWEST chunk, not
-  // the total. Greedy packing to the token ceiling leaves a remainder — a
-  // 21-claim set split 20/1 and measured 35.7s against 8.5s, so the parallelism
-  // bought almost nothing. Splitting into equal shares instead makes the chunks
-  // finish together; the ceiling is then re-checked, and the count grows until
-  // every chunk fits (or each claim stands alone, since claims are atomic).
-  if (!claims.length) return []
-  const total = claims.reduce((sum, claim) => sum + claimTokenEstimate(claim), 0)
-  let chunkCount = Math.max(1, Math.ceil(total / maximumTokens))
-  for (;;) {
-    const chunks = splitEvenly(claims, chunkCount)
-    const withinCeiling = chunks.every(chunk => chunk.reduce((sum, claim) => sum + claimTokenEstimate(claim), 0) <= maximumTokens)
-    if (withinCeiling || chunkCount >= claims.length) return chunks
-    chunkCount++
-  }
-}
-
-async function buildCoverageLedger(
-  input: PatentDiagramPipelineInput,
-  context: Awaited<ReturnType<typeof loadPipelineContext>>,
-): Promise<{ ledger: FigureCoverageLedger; additions: FigureSetPlan['pendingComponentAdditions'] }> {
-  const contextChecksum = planningContextChecksum(context, input)
-  const cached = figureSetPlanSchema.safeParse((context.session.aiAnalysisData as any)?.figurePlan)
-  if (cached.success && cached.data.contextChecksum === contextChecksum && cached.data.coverageLedger?.contextChecksum === contextChecksum) {
-    return { ledger: cached.data.coverageLedger, additions: cached.data.pendingComponentAdditions }
-  }
-
-  const claims = normalizeCoverageClaims(context.claims)
-  let ledger: FigureCoverageLedger
-  if (!claims.length) {
-    ledger = buildDisclosureCoverageLedger({ contextChecksum, evidenceCatalog: context.evidenceCatalog, components: context.components })
-  } else {
-    const knownIds = new Set(context.components.map(component => component.id))
-    // Chunks are independent extractions over disjoint claims, so they run
-    // concurrently up to the tenant's metered limit; results are collected in
-    // chunk order so requirement IDs stay deterministic for the same claim set.
-    const chunkConcurrency = await resolveDiagramConcurrency(input.requestHeaders)
-    const chunkRequirements = await mapWithConcurrency(claimChunks(claims), chunkConcurrency, async chunk => {
-      const claimByNumber = new Map(chunk.map(claim => [claim.number, claim]))
-      const schema = coverageExtractionSchema.superRefine((value, validationContext) => {
-        value.requirements.forEach((requirement, index) => {
-          const claim = claimByNumber.get(requirement.claimNumber)
-          if (!claim) {
-            validationContext.addIssue({ code: z.ZodIssueCode.custom, path: ['requirements', index, 'claimNumber'], message: `Unknown claim ${requirement.claimNumber}` })
-            return
-          }
-          const source = requirement.sourceText.replace(/\s+/g, ' ').trim()
-          if (!claim.text.replace(/\s+/g, ' ').trim().includes(source)) {
-            validationContext.addIssue({ code: z.ZodIssueCode.custom, path: ['requirements', index, 'sourceText'], message: 'Must be an exact contiguous excerpt from the identified claim' })
-          }
-          requirement.componentIds.filter(id => !knownIds.has(id)).forEach(id => validationContext.addIssue({
-            code: z.ZodIssueCode.custom, path: ['requirements', index, 'componentIds'], message: `Unknown Component Plan ID: ${id}`,
-          }))
-          if (!requirement.componentIds.length && !requirement.componentCandidate) {
-            validationContext.addIssue({ code: z.ZodIssueCode.custom, path: ['requirements', index], message: 'A Component Plan anchor or componentCandidate is required' })
-          }
-        })
-        uncoveredClaimLimitations(chunk, value.requirements).forEach(missing => validationContext.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['requirements'],
-          message: `Missing drawing-relevant limitation from claim ${missing.claimNumber}: ${missing.limitation}`,
-        }))
-      })
-      const extracted = await executeCoverageExtraction({
-        userHeaders: input.requestHeaders,
-        prompt: buildCoverageExtractionPrompt({ claims: chunk, components: context.components }),
-        schema,
-        responseSchema: { name: 'figure_coverage_extraction', schema: COVERAGE_EXTRACTION_RESPONSE_SCHEMA },
-        promptCacheKey: `patent-diagrams:${input.sessionId}`,
-        metadata: { patentId: input.patentId, sessionId: input.sessionId, purpose: 'extract_figure_coverage', claimNumbers: chunk.map(claim => claim.number) },
-      })
-      return extracted.requirements
-    })
-    const requirements: any[] = chunkRequirements.flat()
-    try {
-      ledger = materializeCoverageLedger({ contextChecksum, claims, extraction: { requirements }, components: context.components })
-    } catch (error) {
-      throw new PatentDiagramPipelineError(error instanceof Error ? error.message : 'Claim coverage could not be validated', 422, undefined, {
-        code: 'INVALID_COVERAGE_LEDGER', stage: 'COVERAGE', retryable: true,
-        actions: ['Try planning again.', 'If the issue repeats, review the claims and Component Plan for ambiguous or missing terminology.'],
-      })
+/**
+ * Makes a model-authored plan usable instead of rejecting it.
+ *
+ * Unknown component IDs are dropped, duplicate keys are made unique, a figure
+ * left with no components inherits the registry, and the set is trimmed or
+ * padded to the requested count using the default kinds. Nothing here can fail.
+ */
+function repairPlanFigures(
+  figures: FigureSetPlanItem[],
+  components: PatentDiagramComponent[],
+  desiredCount: number,
+): FigureSetPlanItem[] {
+  const known = new Set(components.map(component => component.id))
+  const allIds = components.map(component => component.id)
+  const usedKeys = new Set<string>()
+  const repaired = figures.slice(0, desiredCount).map((figure, index) => {
+    let key = figure.key
+    while (usedKeys.has(key)) key = `${figure.key}-${usedKeys.size + 1}`
+    usedKeys.add(key)
+    const componentIds = figure.componentIds.filter(id => known.has(id))
+    return {
+      ...figure,
+      key,
+      componentIds: componentIds.length ? componentIds : allIds.slice(0, 16),
+      claimCriticalComponentIds: figure.claimCriticalComponentIds.filter(id => known.has(id)),
+      orderedGroups: figure.orderedGroups
+        .map(group => ({ ...group, componentIds: group.componentIds.filter(id => known.has(id)) }))
+        .filter(group => group.componentIds.length),
     }
+  })
+  for (let index = repaired.length; index < desiredCount; index++) {
+    const kind = DEFAULT_FIGURE_KINDS[index % DEFAULT_FIGURE_KINDS.length]
+    repaired.push(fallbackPlanItem(kind, index, components))
   }
-
-  try {
-    const staged = stageCoverageComponentAdditions({ ledger, storedComponents: context.storedComponents, numberingStyle: context.numberingStyle })
-    return { ledger: staged.ledger, additions: staged.additions }
-  } catch (error) {
-    throw new PatentDiagramPipelineError(error instanceof Error ? error.message : 'The Component Plan could not be extended without renumbering existing entries.', 409, undefined, {
-      code: 'COMPONENT_NUMBERING_UNSTABLE', stage: 'COVERAGE', retryable: false,
-      actions: ['Open the Component Plan and correct duplicate or missing reference labels.', 'Save the Component Plan, then plan the figures again.'],
-      automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
-    })
-  }
+  return repaired
 }
 
-function contextWithStagedPlan(
-  context: Awaited<ReturnType<typeof loadPipelineContext>>,
-  plan: FigureSetPlan,
-): Awaited<ReturnType<typeof loadPipelineContext>> {
-  const additions = plan.pendingComponentAdditions || []
-  const components = [
-    ...context.components,
-    ...additions.map(addition => ({
-      id: addition.id,
-      name: addition.name,
-      type: addition.type,
-      description: addition.description,
-      referenceLabel: addition.referenceLabel,
-      parentId: addition.parentId || null,
-      claimSupport: { matchedClaims: addition.claimNumbers, claimRole: addition.claimNumbers.includes(1) ? 'claim_1' as const : 'dependent_claim' as const },
-    })),
-  ]
-  const claimEvidence = plan.coverageLedger ? coverageEvidenceEntries(plan.coverageLedger) : []
-  const evidenceCatalog = Array.from(new Map([...context.evidenceCatalog, ...claimEvidence].map(entry => [entry.id, entry])).values())
-  const stagedComponents = [
-    ...context.storedComponents,
-    ...additions.map(persistedAutomaticComponent),
-  ]
-  const persistedReferenceMapValue = additions.length
-    ? { components: stagedComponents, numberingStyle: context.numberingStyle }
-    : (context.session.referenceMap as any)?.components || []
-  return {
-    ...context,
-    components,
-    evidenceCatalog,
-    supportedEvidenceIds: new Set(evidenceCatalog.map(entry => entry.id)),
-    referenceMapChecksum: semanticChecksum(persistedReferenceMapValue),
-    storedComponents: stagedComponents,
-  }
-}
-
-export function evaluateManagedPlanCoverage(plan: FigureSetPlan, existingCoveredRequirementIds: Iterable<string> = []) {
-  return evaluateCoverageLedger({ ledger: plan.coverageLedger, figures: plan.figures, existingCoveredRequirementIds })
-}
-
-function legacyExistingFigureCoversRequirement(
-  requirement: FigureCoverageLedger['requirements'][number],
-  figure: { kind?: string | null; componentIds: string[] },
-): boolean {
-  // A v1 component-only semantic model can prove that a claimed component was
-  // shown, but mere presence cannot prove an interaction, condition, method
-  // step, quantity, role, or relationship. Those need explicit v2 coverage IDs.
-  return ['COMPONENT', 'DATA_STRUCTURE'].includes(requirement.type)
-    && figure.kind === 'COMPONENT'
-    && requirement.componentIds.length > 0
-    && requirement.componentIds.every(id => figure.componentIds.includes(id))
-}
-
+/** The single planning LLM call for a figure set. */
 export async function planManagedFigureSet(input: PatentDiagramPipelineInput): Promise<FigureSetPlan> {
-  const baseContext = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
-  const coverage = await buildCoverageLedger(input, baseContext)
-  const contextChecksum = planningContextChecksum(baseContext, input)
-  const stagedSeed = figureSetPlanSchema.parse({
-    schemaVersion: 2,
-    contextChecksum,
-    coverageLedger: coverage.ledger,
-    pendingComponentAdditions: coverage.additions,
-    figures: [{
-      key: 'staging-placeholder', kind: 'COMPONENT', title: 'Staging placeholder', purpose: 'Temporary planning context',
-      componentIds: [baseContext.components[0].id], claimCriticalComponentIds: [], orderedGroups: [], phaseHints: [], evidenceIds: [], coverageRequirementIds: [],
-    }],
-  })
-  const context = contextWithStagedPlan(baseContext, stagedSeed)
-  const existingFigures = input.includeExistingFigures ? context.existingFigures : []
-  const existingCoveredRequirementIds = new Set(existingFigures.flatMap(figure => figure.coverageRequirementIds))
-  coverage.ledger.requirements.forEach(requirement => {
-    if (existingFigures.some(figure => legacyExistingFigureCoversRequirement(requirement, figure))) {
-      existingCoveredRequirementIds.add(requirement.id)
-    }
-  })
+  const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
+  const figureCount = requestedFigureCount(input.figureCount)
+  const contextChecksum = planningContextChecksum(context, input)
   const prompt = buildFigureSetPlanningPrompt({
     inventionTitle: context.session.ideaRecord?.title || context.idea?.title || 'Untitled invention',
     patentType: context.session.patentTypePrimary,
@@ -637,102 +400,24 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
     claimsContext: context.claims,
     components: context.components,
     evidenceCatalog: context.evidenceCatalog,
-    coverageLedger: coverage.ledger,
-    existingFigures,
-    figureCount: input.figureCount,
-    exactFigureCount: input.mode === 'manual',
+    existingFigures: input.includeExistingFigures ? context.existingFigures : [],
+    figureCount,
     instructions: input.instructions,
-  })
-  const knownIds = new Set(context.components.map(component => component.id))
-  const knownCoverageIds = new Set(coverage.ledger.requirements.map(requirement => requirement.id))
-  // A planner occasionally emits a plausible-looking coverage ID that is not in
-  // the ledger. Rejecting the plan for that cost a full re-plan, yet the ID
-  // carries no information: dropping it loses nothing, and any requirement the
-  // planner genuinely skipped is added back by repairFigureSetCoverage, with
-  // evaluateManagedPlanCoverage still failing the run if coverage is short.
-  // Unknown component and evidence IDs stay fatal — those are real defects.
-  const dropUnknownCoverageIds = (value: unknown) => {
-    const record = value as { figures?: unknown }
-    if (!record || typeof record !== 'object' || !Array.isArray(record.figures)) return value
-    return {
-      ...record,
-      figures: record.figures.map((figure: any) => (figure && Array.isArray(figure.coverageRequirementIds)
-        ? { ...figure, coverageRequirementIds: figure.coverageRequirementIds.filter((id: unknown) => typeof id === 'string' && knownCoverageIds.has(id)) }
-        : figure)),
-    }
-  }
-  const constrainedPlanSchema = z.preprocess(dropUnknownCoverageIds, figureSetPlanSchema).superRefine((value, ctx) => {
-    const keys = value.figures.map(figure => figure.key)
-    keys.filter((key, index) => keys.indexOf(key) !== index).forEach(key => ctx.addIssue({
-      code: z.ZodIssueCode.custom, message: `Duplicate figure key: ${key}`,
-    }))
-    if (input.mode === 'manual' && input.figureCount && value.figures.length !== input.figureCount) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Manual generation requires exactly ${input.figureCount} figure(s)` })
-    }
-    value.figures.flatMap(figure => [
-      ...figure.componentIds,
-      ...figure.claimCriticalComponentIds,
-      ...figure.orderedGroups.flatMap(group => group.componentIds),
-    ]).filter(id => !knownIds.has(id)).forEach(id => ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Unknown Component Planner ID: ${id}`,
-    }))
-    // A planned step ID the catalog does not contain is the plan-time form of an
-    // invented step: the detailer would be told to cite something that does not
-    // exist. Rejecting it here costs one re-ask instead of a wasted render.
-    value.figures.flatMap(figure => figure.evidenceIds)
-      .filter(id => !context.supportedEvidenceIds.has(id))
-      .forEach(id => ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Unknown disclosed-step ID: ${id}`,
-      }))
   })
   const llmPlan = await executeStructured({
     userHeaders: input.requestHeaders,
     stageCode: 'DRAFT_FIGURE_PLANNER',
     prompt,
-    schema: constrainedPlanSchema,
+    schema: figureSetPlanSchema,
     responseSchema: { name: 'figure_set_plan', schema: FIGURE_SET_PLAN_RESPONSE_SCHEMA },
     promptCacheKey: `patent-diagrams:${input.sessionId}`,
     metadata: { patentId: input.patentId, sessionId: input.sessionId, purpose: 'plan_figures_structured' },
   })
-  const seedPlan = figureSetPlanSchema.parse({
-    ...llmPlan,
-    schemaVersion: 2,
+  const plan = figureSetPlanSchema.parse({
+    schemaVersion: 3,
     contextChecksum,
-    coverageLedger: coverage.ledger,
-    pendingComponentAdditions: coverage.additions,
+    figures: repairPlanFigures(llmPlan.figures, context.components, figureCount),
   })
-  let plan: FigureSetPlan
-  try {
-    plan = repairFigureSetCoverage({
-      plan: seedPlan,
-      ledger: coverage.ledger,
-      existingCoveredRequirementIds,
-      manualExactCount: input.mode === 'manual',
-    }).plan
-  } catch (error) {
-    throw new PatentDiagramPipelineError(error instanceof Error ? error.message : 'The figure plan could not be repaired for complete coverage', 422, undefined, {
-      code: 'COVERAGE_REPAIR_FAILED', stage: 'COVERAGE', retryable: true,
-      actions: ['Try planning again.', 'Simplify an unusually broad claim set or divide manual requests into smaller batches.'],
-      automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
-    })
-  }
-  assertPlanComponentIds(plan, context.components)
-  const coverageReport = evaluateManagedPlanCoverage(plan, existingCoveredRequirementIds)
-  if (input.mode !== 'manual' && coverageReport.status === 'INCOMPLETE') {
-    throw new PatentDiagramPipelineError('Automatic planning could not assign every required claim concept to a figure.', 422, coverageReport.missing, {
-      code: 'INCOMPLETE_CLAIM_COVERAGE', stage: 'COVERAGE', retryable: true,
-      actions: ['Try planning again.', 'Review the Component Plan and claim terminology if the same concepts remain uncovered.'],
-      automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
-    })
-  }
-  if (plan.figures.length > MAXIMUM_MANAGED_FIGURES_PER_RUN) {
-    throw new PatentDiagramPipelineError(`The repaired plan requires ${plan.figures.length} figures, above the ${MAXIMUM_MANAGED_FIGURES_PER_RUN}-figure safety limit.`, 422, undefined, {
-      code: 'FIGURE_SET_TOO_LARGE', stage: 'PLAN', retryable: false,
-      actions: ['Divide the requested drawing set into smaller batches.', 'Review whether optional embodiments can be drawn separately.'],
-    })
-  }
   const previousAnalysis = context.session.aiAnalysisData && typeof context.session.aiAnalysisData === 'object'
     ? context.session.aiAnalysisData as Record<string, unknown>
     : {}
@@ -743,134 +428,73 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
   return plan
 }
 
-async function detailManagedFigure(input: {
-  plan: FigureSetPlanItem
-  context: Awaited<ReturnType<typeof loadPipelineContext>>
+/**
+ * One generation call for a batch of planned figures (the pipeline sends two).
+ *
+ * Returned diagrams are matched back to their plan item by key, falling back to
+ * position. A plan item the model did not answer for is simply left out — the
+ * attorney gets the figures that worked rather than an error for the set.
+ */
+async function detailFigureBatch(input: {
+  plans: FigureSetPlanItem[]
+  context: PipelineContext
   pipeline: PatentDiagramPipelineInput
-  coverageLedger?: FigureCoverageLedger
-  existingDiagram?: PatentDiagram | null
-}): Promise<PatentDiagram> {
-  const prompt = buildDiagramDetailPrompt({
-    plan: input.plan,
+  existingDiagrams?: PatentDiagram[]
+}): Promise<PatentDiagram[]> {
+  const prompt = buildDiagramBatchPrompt({
+    plans: input.plans,
     inventionContext: input.context.idea,
     claimsContext: input.context.claims,
     components: input.context.components,
     evidenceCatalog: input.context.evidenceCatalog,
-    coverageLedger: input.coverageLedger,
-    existingDiagram: input.existingDiagram,
+    existingDiagrams: input.existingDiagrams,
     instructions: input.pipeline.instructions,
   })
-  // Grounding findings are warnings in the base validator so figures persisted
-  // before these rules still translate and re-render, but a NEW generation must
-  // anchor every process step to the Component Planner and cite the disclosure
-  // it paraphrases. Both are the signature of an invented step, so here they
-  // block and re-prompt the model like any other defect.
-  const GROUNDING_CODES = [
-    'UNGROUNDED_STEP', 'UNCITED_STEP', 'UNKNOWN_STEP_EVIDENCE',
-    'UNCITED_SEMANTIC_ELEMENT', 'UNKNOWN_SEMANTIC_EVIDENCE',
-  ]
-  const blocksGeneration = (issue: { severity: string; code: string }) =>
-    (issue.severity === 'error' || GROUNDING_CODES.includes(issue.code)) && issue.code !== 'SPLIT_REQUIRED'
-  // Validate what the pipeline will actually build. Re-prompting the model for
-  // a defect the normalizer repairs anyway wastes a call and can fail the
-  // figure outright when the retry reproduces it.
-  const constrainedDiagramSchema = (enforceDensityBudget: boolean) => patentDiagramSchema.superRefine((value, ctx) => {
-    const { diagram } = normalizePatentDiagram(value, input.context.components, input.context.supportedEvidenceIds)
-    const plannedCoverage = new Set(input.plan.coverageRequirementIds)
-    const plannedEvidence = new Set(input.plan.evidenceIds)
-    const semanticComponentIds = new Set(
-      diagram.kind === 'COMPONENT' ? diagram.components.map(item => item.componentId)
-        : diagram.kind === 'SEQUENCE' ? diagram.participants.map(item => item.componentId)
-          : diagram.kind === 'PROCESS' ? diagram.nodes.flatMap(item => [item.componentId, ...item.relatedComponentIds].filter(Boolean) as string[])
-            : diagram.constituents.map(item => item.componentId),
-    )
-    const atomicCoverageIds = new Set<string>([
-      ...(diagram.kind === 'COMPONENT' ? diagram.components.flatMap(item => item.coverageRequirementIds) : []),
-      ...(diagram.kind === 'COMPONENT' || diagram.kind === 'CONSTITUENT' ? diagram.relationships.flatMap(item => item.coverageRequirementIds) : []),
-      ...(diagram.kind === 'SEQUENCE' ? diagram.interactions.flatMap(item => item.coverageRequirementIds) : []),
-      ...(diagram.kind === 'PROCESS' ? diagram.nodes.flatMap(item => item.coverageRequirementIds) : []),
-      ...(diagram.kind === 'PROCESS' ? diagram.transitions.flatMap(item => item.coverageRequirementIds) : []),
-      ...(diagram.kind === 'CONSTITUENT' ? diagram.constituents.flatMap(item => item.coverageRequirementIds) : []),
-    ])
-    const mismatch = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message })
-    if (diagram.key !== input.plan.key) mismatch(`Diagram key must remain ${input.plan.key}`)
-    if (diagram.kind !== input.plan.kind) mismatch(`Diagram kind must remain ${input.plan.kind}`)
-    if (diagram.title !== input.plan.title) mismatch('Diagram title must match the approved plan')
-    if (diagram.purpose !== input.plan.purpose) mismatch('Diagram purpose must match the approved plan')
-    if (diagram.detailLevel !== input.plan.detailLevel || diagram.direction !== input.plan.direction) mismatch('Diagram detail level and direction must match the approved plan')
-    input.plan.componentIds.filter(id => !semanticComponentIds.has(id)).forEach(id => mismatch(`Planned Component Plan ID is missing from the detailed diagram: ${id}`))
-    input.plan.claimCriticalComponentIds.filter(id => !diagram.claimCriticalComponentIds.includes(id)).forEach(id => mismatch(`Claim-critical Component Plan ID is missing: ${id}`))
-    Array.from(plannedCoverage).filter(id => !diagram.coverageRequirementIds.includes(id) || !atomicCoverageIds.has(id)).forEach(id => mismatch(`Planned coverage requirement is not represented by a semantic element: ${id}`))
-    diagram.coverageRequirementIds.filter(id => !plannedCoverage.has(id)).forEach(id => mismatch(`Unplanned coverage requirement: ${id}`))
-    Array.from(atomicCoverageIds).filter(id => !plannedCoverage.has(id)).forEach(id => mismatch(`Semantic element cites unplanned coverage requirement: ${id}`))
-    Array.from(plannedEvidence).filter(id => !diagram.evidenceIds.includes(id)).forEach(id => mismatch(`Planned evidence ID is missing: ${id}`))
-    validatePatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds).issues
-      .filter(issue => blocksGeneration(issue) || (enforceDensityBudget && issue.code === 'SPLIT_REQUIRED'))
-      .forEach(issue => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${issue.code}: ${issue.message}` }))
+  const batch = await executeStructured({
+    userHeaders: input.pipeline.requestHeaders,
+    stageCode: 'DRAFT_DIAGRAM_GENERATION',
+    prompt,
+    schema: patentDiagramBatchSchema,
+    responseSchema: {
+      name: 'patent_diagram_batch',
+      schema: diagramBatchResponseSchema(input.plans.map(plan => plan.kind)),
+    },
+    promptCacheKey: `patent-diagrams:${input.pipeline.sessionId}`,
+    metadata: {
+      patentId: input.pipeline.patentId,
+      sessionId: input.pipeline.sessionId,
+      figureKeys: input.plans.map(plan => plan.key).join(','),
+      purpose: 'detail_figures_structured',
+    },
   })
-  // A regeneration's output is mostly a copy of the existing semantic model, so
-  // it is passed as an OpenAI predicted output and unchanged spans decode at
-  // near-copy speed. Predictions do not combine with a strict response schema,
-  // so that call relies on the Zod contract plus retry instead. Gated by env
-  // until the account's model support for predictions is confirmed.
-  const prediction = input.existingDiagram && process.env.OPENAI_ENABLE_PREDICTED_OUTPUTS === 'true'
-    ? JSON.stringify(input.existingDiagram)
-    : undefined
-  // An over-dense figure is not a defect the builder can repair - the
-  // decomposer splits it into an overview plus detail sheets, which is how a
-  // 5-figure plan turned into 15 rendered sheets. Attempt 1 therefore makes the
-  // published complexity budget binding; the single retry relaxes it (except in
-  // manual mode, where the figure must fit one sheet) and hands anything still
-  // over budget to the decomposer. That caps a figure at two LLM calls where
-  // the old enforced-then-relaxed structure could spend four. Content is never
-  // dropped to hit a figure count.
-  let diagram: PatentDiagram
-  try {
-    diagram = await executeStructured({
-      userHeaders: input.pipeline.requestHeaders,
-      stageCode: 'DRAFT_DIAGRAM_GENERATION',
-      prompt,
-      schema: attempt => constrainedDiagramSchema(input.pipeline.mode === 'manual' || attempt === 0),
-      responseSchema: prediction ? undefined : { name: `patent_diagram_${input.plan.kind.toLowerCase()}`, schema: diagramDetailResponseSchema(input.plan.kind) },
-      promptCacheKey: `patent-diagrams:${input.pipeline.sessionId}`,
-      prediction,
-      // Three in auto mode, not two: attempt 1 also carries the density budget,
-      // so a figure that is merely too dense would otherwise get a single try at
-      // the relaxed contract — and a content slip there failed the whole drawing
-      // set. Manual mode keeps two, because its budget never relaxes: a third
-      // try cannot succeed where the second could not, and the caller is meant
-      // to be told to simplify the instruction instead.
-      maxAttempts: input.pipeline.mode === 'manual' ? 2 : 3,
-      metadata: {
-        patentId: input.pipeline.patentId, sessionId: input.pipeline.sessionId,
-        figureKey: input.plan.key, purpose: 'detail_figure_structured',
-      },
-    })
-  } catch (error) {
-    if (error instanceof PatentDiagramPipelineError && error.status === 422 && input.pipeline.mode === 'manual') {
-      throw new PatentDiagramPipelineError(`The manual instruction for "${input.plan.title}" could not be rendered as one filing-scale figure.`, 422, error.details, {
-        code: 'MANUAL_FIGURE_NEEDS_SIMPLIFICATION', stage: 'DETAIL', retryable: true,
-        actions: ['Simplify this instruction so it fits on one figure.', 'Create a second manual instruction if the subject should be divided across two figures.'],
-        automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
-      })
+  // Match by key, then fall back to whatever is left over in order, so a model
+  // that renames or reorders its diagrams still produces the planned figures.
+  const byKey = new Map(batch.diagrams.map(diagram => [diagram.key, diagram]))
+  const spare = batch.diagrams.filter(diagram => !input.plans.some(plan => plan.key === diagram.key))
+  return input.plans.flatMap(plan => {
+    const diagram = byKey.get(plan.key) ?? spare.shift()
+    if (!diagram || diagram.kind !== plan.kind) {
+      console.warn(`[DiagramPipeline] no ${plan.kind} diagram returned for planned figure ${plan.key}; skipping it`)
+      return []
     }
-    throw error
-  }
-  diagram = { ...diagram, schemaVersion: 2 } as PatentDiagram
-  const built = buildPatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds)
-  const deterministicDefects = built.validation.issues.filter(blocksGeneration)
-  if (deterministicDefects.length) {
-    throw new PatentDiagramPipelineError(`Deterministic builder failed for ${input.plan.title}`, 500, deterministicDefects)
-  }
-  return built.diagram
+    // Plan identity and headings are server-owned so the saved figure always
+    // matches the plan the attorney approved, whatever the model echoed back.
+    return [{
+      ...diagram,
+      schemaVersion: 3,
+      key: plan.key,
+      title: plan.title,
+      purpose: plan.purpose,
+      detailLevel: plan.detailLevel,
+      direction: plan.direction,
+    } as PatentDiagram]
+  })
 }
 
 // Metering caps concurrent LLM3_DIAGRAM reservations per tenant (a per-plan
 // policy rule, default 2). Fanning out wider than that does not run faster — it
 // throws CONCURRENCY_LIMIT and fails the whole figure set. So the pipeline asks
-// for the tenant's real limit instead of hardcoding one: raising the policy rule
-// speeds generation up with no code change, and an unresolvable tenant falls
-// back to the conservative default rather than guessing high.
+// for the tenant's real limit instead of hardcoding one.
 const DIAGRAM_CONCURRENCY_FALLBACK = 2
 
 async function resolveDiagramConcurrency(requestHeaders: Record<string, string>): Promise<number> {
@@ -893,6 +517,21 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
   return result
 }
 
+/** Details every planned figure, two per LLM call, batches running concurrently. */
+async function detailPlannedFigures(plan: FigureSetPlan, context: PipelineContext, pipeline: PatentDiagramPipelineInput): Promise<PatentDiagram[]> {
+  const batches = chunk(plan.figures, FIGURES_PER_GENERATION_CALL)
+  const concurrency = await resolveDiagramConcurrency(pipeline.requestHeaders)
+  const detailed = await mapWithConcurrency(batches, concurrency, plans => detailFigureBatch({ plans, context, pipeline }))
+  const diagrams = detailed.flat()
+  if (!diagrams.length) {
+    throw new PatentDiagramPipelineError('The diagram model did not return any usable figures.', 422, undefined, {
+      code: 'NO_FIGURES_GENERATED', stage: 'DETAIL', retryable: true,
+      actions: ['Try generating again.', 'If it repeats, re-save the Component Plan and confirm the invention facts.'],
+    })
+  }
+  return diagrams
+}
+
 interface RenderedManagedFigure {
   built: BuiltPatentDiagram
   svg: Awaited<ReturnType<typeof renderAndWriteDiagramArtifacts>>['svg']
@@ -904,84 +543,8 @@ interface RenderedManagedFigure {
   pngPath: string
 }
 
-function applyRenderedLayoutValidation(built: BuiltPatentDiagram, svg: Awaited<ReturnType<typeof renderAndWriteDiagramArtifacts>>['svg']) {
-  const svgText = svg.buffer.toString('utf8')
-  const expectedReferences = built.nodes.flatMap(node => {
-    const raw = String(node.referenceLabel || node.identifier || '').trim()
-    if (!raw) return []
-    return [/^\(.+\)$/.test(raw) || /^[SD]\d+$/i.test(raw) ? raw : `(${raw})`]
-  })
-  expectedReferences.forEach(reference => {
-    if (!svgText.includes(reference)) {
-      built.validation.issues.push({ code: 'MISSING_RENDERED_REFERENCE', severity: 'error', message: `Rendered SVG is missing reference ${reference}` })
-    }
-  })
-  if (built.diagram.kind !== 'COMPONENT' || !svg.elementBounds) {
-    built.validation.filingReady = !built.validation.issues.some(issue => issue.severity === 'error')
-    return
-  }
-  const approximately = (actual: number | undefined, expected: number) => actual != null && Math.abs(actual - expected) <= 0.05
-  for (let groupIndex = 0; groupIndex < built.diagram.groups.length; groupIndex++) {
-    const group = built.diagram.groups[groupIndex]
-    for (let rowIndex = 0; rowIndex < group.rows.length; rowIndex++) {
-      const row = group.rows[rowIndex]
-      const bounds = row.componentIds.flatMap(componentId => {
-        const alias = Object.entries(built.labelMap).find(([, id]) => id === componentId)?.[0]
-        const box = alias ? svg.elementBounds?.[alias] : undefined
-        return box ? [box] : []
-      })
-      if (bounds.length < 2) continue
-      const widths = bounds.map(box => box.width)
-      const heights = bounds.map(box => box.height)
-      const widthVariance = (Math.max(...widths) - Math.min(...widths)) / Math.min(...widths)
-      const heightVariance = (Math.max(...heights) - Math.min(...heights)) / Math.min(...heights)
-      // Layout findings below are aesthetic preferences that Graphviz does not
-      // guarantee and the builder cannot force. A drawing that is merely less
-      // tidy is not an unfileable drawing, so they are reported for manual
-      // review rather than treated as fatal or used to trigger decomposition.
-      if (widthVariance > PATENT_DIAGRAM_COMPLEXITY.siblingDimensionVariance || heightVariance > PATENT_DIAGRAM_COMPLEXITY.siblingDimensionVariance) {
-        built.validation.issues.push({
-          code: 'SIBLING_DIMENSION_VARIANCE', severity: 'warning',
-          message: `Subsystem ${group.label}, row ${rowIndex + 1} exceeds the 20% sibling-size tolerance`,
-          path: `groups.${groupIndex}.rows.${rowIndex}`,
-        })
-      }
-    }
-  }
-  const bands = built.diagram.groups.map((_group, index) => svg.elementBounds?.[`BAND${index + 1}`]).filter(Boolean) as Array<{ x?: number; y?: number; width: number; height: number }>
-  if (bands.length === built.diagram.groups.length) {
-    for (let index = 1; index < bands.length; index++) {
-      if ((bands[index].y ?? 0) <= (bands[index - 1].y ?? 0)) {
-        built.validation.issues.push({ code: 'BAND_ORDER', severity: 'warning', message: 'Rendered subsystem bands are not monotonically top-to-bottom' })
-        break
-      }
-    }
-    if (bands.some(band => band.width <= band.height)) {
-      built.validation.issues.push({ code: 'BAND_ASPECT', severity: 'warning', message: 'A rendered subsystem band is not horizontally rectangular' })
-    }
-  }
-  const system = svg.elementBounds.SYSTEM
-  if (!approximately(system?.strokeWidth, PATENT_DIAGRAM_STYLE.systemBorderThickness)) {
-    built.validation.issues.push({ code: 'SYSTEM_BORDER_THICKNESS', severity: 'error', message: 'Rendered system boundary does not use the centralized border thickness' })
-  }
-  built.diagram.groups.forEach((_group, index) => {
-    const band = svg.elementBounds?.[`BAND${index + 1}`]
-    if (!approximately(band?.strokeWidth, PATENT_DIAGRAM_STYLE.subsystemBorderThickness)) {
-      built.validation.issues.push({ code: 'SUBSYSTEM_BORDER_THICKNESS', severity: 'error', message: `Rendered subsystem ${index + 1} does not use the centralized border thickness` })
-    }
-  })
-  Object.keys(built.labelMap).forEach(alias => {
-    if (!approximately(svg.elementBounds?.[alias]?.strokeWidth, PATENT_DIAGRAM_STYLE.componentBorderThickness)) {
-      built.validation.issues.push({ code: 'COMPONENT_BORDER_THICKNESS', severity: 'error', message: `Rendered component ${built.labelMap[alias]} does not use the centralized border thickness`, componentId: built.labelMap[alias] })
-    }
-  })
-  built.validation.filingReady = !built.validation.issues.some(issue => issue.severity === 'error')
-}
-
 // Rendering is an HTTP round trip to the PlantUML server, not a metered LLM
-// call, so it is bounded by that server rather than by any plan policy. The
-// default suits the shared/public renderer; point PLANTUML_BASE_URL at a private
-// one and this can go higher.
+// call, so it is bounded by that server rather than by any plan policy.
 function renderConcurrency(): number {
   const configured = Number(process.env.DIAGRAM_RENDER_CONCURRENCY)
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 4
@@ -991,18 +554,13 @@ async function renderManagedFigures(
   patentId: string,
   builtFigures: BuiltPatentDiagram[],
   figureNumbers?: number[],
-  pagePolicy?: Awaited<ReturnType<typeof resolveDiagramPagePolicy>>,
+  pagePolicy?: PipelineContext['pagePolicy'],
 ): Promise<RenderedManagedFigure[]> {
   const outcomes = await mapWithConcurrency(builtFigures, renderConcurrency(), async (built, index) => {
     try {
       const figureNo = figureNumbers?.[index] ?? index + 1
       const rendered = await renderAndWriteDiagramArtifacts({ patentId, figureNo, plantumlCode: built.plantumlCode, pagePolicy })
       const { svg, png, artifacts } = rendered
-      applyRenderedLayoutValidation(built, svg)
-      const svgFilename = artifacts.svg.filename!
-      const pngFilename = artifacts.png.filename!
-      const svgPath = artifacts.svg.path!
-      const pngPath = artifacts.png.path!
       built.validation.render = {
         width: svg.width,
         height: svg.height,
@@ -1010,21 +568,31 @@ async function renderManagedFigures(
         aspectRatio: svg.width && svg.height ? svg.width / svg.height : undefined,
         effectiveFontSizePt: rendered.effectiveFontSizePt,
       }
+      // Layout findings are review notes. A wide drawing or one that would need
+      // shrinking to fit the page is still a drawing; the attorney decides.
       const aspectRatio = built.validation.render.aspectRatio
       if (aspectRatio && (aspectRatio > EXTREME_ASPECT_RATIO_MAXIMUM || aspectRatio < EXTREME_ASPECT_RATIO_MINIMUM)) {
         built.validation.issues.push({
           code: 'EXTREME_ASPECT_RATIO', severity: 'warning',
-          message: `Rendered aspect ratio ${aspectRatio.toFixed(2)} is outside the preferred filing range; consider splitting the figure`,
+          message: `Rendered aspect ratio ${aspectRatio.toFixed(2)} is outside the preferred filing range; consider dividing the figure`,
         })
       }
       if (rendered.effectiveFontSizePt != null && pagePolicy && rendered.effectiveFontSizePt < pagePolicy.minimumTextSizePt) {
         built.validation.issues.push({
-          code: 'PAGE_FIT_MINIMUM_TEXT', severity: 'error',
-          message: `Page fitting would reduce text to ${rendered.effectiveFontSizePt.toFixed(1)} pt below the ${pagePolicy.minimumTextSizePt} pt minimum`,
+          code: 'PAGE_FIT_MINIMUM_TEXT', severity: 'warning',
+          message: `Page fitting would reduce text to ${rendered.effectiveFontSizePt.toFixed(1)} pt, below the ${pagePolicy.minimumTextSizePt} pt guideline`,
         })
-        built.validation.filingReady = false
       }
-      return { ok: true as const, value: { built, svg, png, figureNo, svgFilename, pngFilename, svgPath, pngPath } }
+      return {
+        ok: true as const,
+        value: {
+          built, svg, png, figureNo,
+          svgFilename: artifacts.svg.filename!,
+          pngFilename: artifacts.png.filename!,
+          svgPath: artifacts.svg.path!,
+          pngPath: artifacts.png.path!,
+        },
+      }
     } catch (error) {
       return { ok: false as const, error }
     }
@@ -1033,32 +601,23 @@ async function renderManagedFigures(
   const failure = outcomes.find(outcome => !outcome.ok)
   if (failure && !failure.ok) {
     await Promise.allSettled(completed.flatMap(figure => [figure.svgPath, figure.pngPath]).map(path => fs.unlink(path)))
-    throw new PatentDiagramPipelineError('The complete drawing set could not be rendered, so no partial set was saved.', 422, failure.error instanceof Error ? failure.error.message : failure.error, {
+    throw new PatentDiagramPipelineError('The drawing set could not be rendered, so no partial set was saved.', 422, failure.error instanceof Error ? failure.error.message : failure.error, {
       code: 'DIAGRAM_RENDER_FAILED', stage: 'RENDER', retryable: true,
-      actions: ['Retry the failed render.', 'If it repeats for one figure, use Modify to simplify that figure.', 'Ask an administrator to verify the PlantUML renderer.'],
+      actions: ['Retry generation.', 'Ask an administrator to verify the PlantUML renderer if it repeats.'],
     })
   }
   return completed
 }
 
 /**
- * Count rendered figures against the tenant's DIAGRAM_GENERATION quota.
- *
- * One completion per figure, keyed on session + figure number so that regenerating an
- * existing figure does not burn quota twice - only genuinely new figures count.
+ * Count rendered figures against the tenant's DIAGRAM_GENERATION quota. One
+ * completion per figure, keyed on session + figure number so regenerating an
+ * existing figure does not burn quota twice.
  */
-async function recordFigureCompletions(
-  input: PatentDiagramPipelineInput,
-  figures: RenderedManagedFigure[],
-) {
-  if (figures.length === 0) return
-
-  const user = await prisma.user.findUnique({
-    where: { id: input.userId },
-    select: { tenantId: true },
-  })
+async function recordFigureCompletions(input: PatentDiagramPipelineInput, figures: RenderedManagedFigure[]) {
+  if (!figures.length) return
+  const user = await prisma.user.findUnique({ where: { id: input.userId }, select: { tenantId: true } })
   if (!user?.tenantId) return
-
   for (const figure of figures) {
     await recordServiceCompletion({
       tenantId: user.tenantId,
@@ -1071,356 +630,304 @@ async function recordFigureCompletions(
   }
 }
 
+function renderStatusFor(built: BuiltPatentDiagram) {
+  const errors = built.validation.issues.filter(issue => issue.severity === 'error')
+  return {
+    renderStatus: errors.length ? 'REVIEW_REQUIRED' : 'SUCCESS',
+    renderError: errors.length ? errors.map(issue => issue.message).join('; ') : null,
+  }
+}
+
 async function persistManagedFigureSet(
   input: PatentDiagramPipelineInput,
   referenceMapChecksum: string,
   figures: RenderedManagedFigure[],
-  options: {
-    replace: boolean
-    plan: FigureSetPlan
-    baseContext: Awaited<ReturnType<typeof loadPipelineContext>>
-  },
+  options: { replace: boolean; plan: FigureSetPlan; baseContext: PipelineContext },
 ) {
+  // Only generated figures are replaced, so only generated artifacts may be
+  // deleted. Imported figures live at GENERATED_FIGURE_LIMIT and above; their
+  // rows survive the delete below, so unlinking their uploads would strand them.
   const supersededPaths = options.replace
-    ? Array.from(new Set(options.baseContext.session.diagramSources.flatMap(source => [
-        source.imagePath,
-        source.originalImagePath,
-        (source.renderArtifacts as any)?.svg?.path,
-        (source.renderArtifacts as any)?.png?.path,
-      ].filter((value): value is string => typeof value === 'string' && value.length > 0))))
+    ? Array.from(new Set(options.baseContext.session.diagramSources
+        .filter(source => source.figureNo < GENERATED_FIGURE_LIMIT)
+        .flatMap(source => [
+          source.imagePath,
+          source.originalImagePath,
+          (source.renderArtifacts as any)?.svg?.path,
+          (source.renderArtifacts as any)?.png?.path,
+        ].filter((value): value is string => typeof value === 'string' && value.length > 0))))
     : []
   let saved: any[]
   try {
     saved = await prisma.$transaction(async tx => {
-    if (options.plan.pendingComponentAdditions.length) {
-      const components = [
-        ...options.baseContext.storedComponents,
-        ...options.plan.pendingComponentAdditions.map(persistedAutomaticComponent),
-      ]
-      await tx.referenceMap.update({
-        where: { sessionId: input.sessionId },
-        data: { components: { components, numberingStyle: options.baseContext.numberingStyle } as any, isValid: true, validationErrors: undefined },
-      })
-      await tx.auditLog.create({
+      if (options.replace) {
+        await tx.diagramSource.deleteMany({ where: { sessionId: input.sessionId, figureNo: { lt: GENERATED_FIGURE_LIMIT } } })
+        await tx.figurePlan.deleteMany({ where: { sessionId: input.sessionId, figureNo: { lt: GENERATED_FIGURE_LIMIT } } })
+      }
+      const rows: any[] = []
+      for (const figure of figures) {
+        const semantic = figure.built.diagram
+        const semanticHash = semanticChecksum({ referenceMapChecksum, semantic })
+        const plan = await tx.figurePlan.create({
+          data: {
+            sessionId: input.sessionId,
+            figureNo: figure.figureNo,
+            title: semantic.title,
+            description: semantic.purpose,
+            nodes: figure.built.nodes as any,
+            edges: figure.built.edges as any,
+            diagramType: semantic.kind,
+            semanticSchemaVersion: semantic.schemaVersion,
+            semanticModel: semantic as any,
+            semanticChecksum: semanticHash,
+            referenceMapChecksum,
+            validationReport: figure.built.validation as any,
+          },
+        })
+        const renderArtifacts = {
+          svg: { filename: figure.svgFilename, path: figure.svgPath, checksum: figure.svg.checksum, contentType: figure.svg.contentType, width: figure.svg.width, height: figure.svg.height },
+          png: { filename: figure.pngFilename, path: figure.pngPath, checksum: figure.png.checksum, contentType: figure.png.contentType },
+        }
+        const source = await tx.diagramSource.create({
+          data: {
+            sessionId: input.sessionId,
+            figureNo: figure.figureNo,
+            language: 'en',
+            plantumlCode: figure.built.plantumlCode,
+            checksum: crypto.createHash('sha256').update(figure.built.plantumlCode).digest('hex'),
+            sourceMode: 'MANAGED',
+            labelMap: figure.built.labelMap as any,
+            renderArtifacts: renderArtifacts as any,
+            ...renderStatusFor(figure.built),
+            semanticChecksum: semanticHash,
+            referenceMapChecksum,
+            imageFilename: figure.pngFilename,
+            imagePath: figure.pngPath,
+            imageChecksum: figure.png.checksum,
+            imageUploadedAt: new Date(),
+          },
+        })
+        rows.push({ plan, source, validation: figure.built.validation, renderArtifacts })
+      }
+      const session = await tx.draftingSession.findUnique({ where: { id: input.sessionId }, select: { aiAnalysisData: true } })
+      await tx.draftingSession.update({
+        where: { id: input.sessionId },
         data: {
-          actorUserId: input.userId,
-          tenantId: options.baseContext.session.tenantId || null,
-          action: 'FIGURE_COVERAGE_COMPONENTS_AUTO_ADDED',
-          resource: `DraftingSession:${input.sessionId}`,
-          meta: {
-            patentId: input.patentId,
-            additions: options.plan.pendingComponentAdditions.map(item => ({ id: item.id, name: item.name, referenceLabel: item.referenceLabel, claimNumbers: item.claimNumbers, requirementIds: item.requirementIds })),
+          figureSequence: null as any, figureSequenceFinalized: false, figuresSkipped: false, figuresSkippedAt: null,
+          // Re-read inside the transaction: generation takes minutes, and other
+          // stages write to this shared blob while it runs.
+          aiAnalysisData: {
+            ...((session?.aiAnalysisData && typeof session.aiAnalysisData === 'object') ? session.aiAnalysisData as Record<string, unknown> : {}),
+            figurePlan: options.plan,
           } as any,
         },
       })
-    }
-    if (options.replace) {
-      await tx.diagramSource.deleteMany({ where: { sessionId: input.sessionId, figureNo: { lt: GENERATED_FIGURE_LIMIT } } })
-      await tx.figurePlan.deleteMany({ where: { sessionId: input.sessionId, figureNo: { lt: GENERATED_FIGURE_LIMIT } } })
-    }
-    const overviewFigureByRoot = new Map<string, number>()
-    figures.forEach(figure => {
-      const match = figure.built.diagram.key.match(/^(.*)-overview$/)
-      if (match) overviewFigureByRoot.set(match[1], figure.figureNo)
+      return rows
     })
-    const saved: any[] = []
-    for (const figure of figures) {
-      const semantic = figure.built.diagram
-      const semanticHash = semanticChecksum({ referenceMapChecksum, semantic })
-      const detailRoot = semantic.key.match(/^(.*)-(?:detail|interface)-\d+$/)?.[1]
-      const plan = await tx.figurePlan.create({
-        data: {
-          sessionId: input.sessionId,
-          figureNo: figure.figureNo,
-          title: semantic.title,
-          description: semantic.purpose,
-          nodes: figure.built.nodes as any,
-          edges: figure.built.edges as any,
-          diagramType: semantic.kind,
-          semanticSchemaVersion: semantic.schemaVersion,
-          semanticModel: semantic as any,
-          semanticChecksum: semanticHash,
-          referenceMapChecksum,
-          validationReport: figure.built.validation as any,
-          detailOfFigureNo: detailRoot ? overviewFigureByRoot.get(detailRoot) || null : null,
-        },
-      })
-      const renderArtifacts = {
-        svg: { filename: figure.svgFilename, path: figure.svgPath, checksum: figure.svg.checksum, contentType: figure.svg.contentType, width: figure.svg.width, height: figure.svg.height },
-        png: { filename: figure.pngFilename, path: figure.pngPath, checksum: figure.png.checksum, contentType: figure.png.contentType },
-      }
-      const source = await tx.diagramSource.create({
-        data: {
-          sessionId: input.sessionId,
-          figureNo: figure.figureNo,
-          language: 'en',
-          plantumlCode: figure.built.plantumlCode,
-          checksum: crypto.createHash('sha256').update(figure.built.plantumlCode).digest('hex'),
-          sourceMode: 'MANAGED',
-          labelMap: figure.built.labelMap as any,
-          renderArtifacts: renderArtifacts as any,
-          renderStatus: figure.built.validation.filingReady ? 'SUCCESS' : 'REVIEW_REQUIRED',
-          renderError: figure.built.validation.filingReady
-            ? null
-            : figure.built.validation.issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join('; '),
-          semanticChecksum: semanticHash,
-          referenceMapChecksum,
-          imageFilename: figure.pngFilename,
-          imagePath: figure.pngPath,
-          imageChecksum: figure.png.checksum,
-          imageUploadedAt: new Date(),
-        },
-      })
-      saved.push({ plan, source, validation: figure.built.validation, renderArtifacts })
-    }
-    await tx.draftingSession.update({
-      where: { id: input.sessionId },
-      data: {
-        figureSequence: null as any, figureSequenceFinalized: false, figuresSkipped: false, figuresSkippedAt: null,
-        aiAnalysisData: {
-          ...((options.baseContext.session.aiAnalysisData && typeof options.baseContext.session.aiAnalysisData === 'object')
-            ? options.baseContext.session.aiAnalysisData as Record<string, unknown>
-            : {}),
-          figurePlan: options.plan,
-          figureCoverage: evaluateManagedPlanCoverage(options.plan),
-        } as any,
-      },
-    })
-    return saved
-  })
   } catch (error) {
     await Promise.allSettled(figures.flatMap(figure => [figure.svgPath, figure.pngPath]).map(path => fs.unlink(path)))
-    throw new PatentDiagramPipelineError('The figures rendered, but the completed drawing set could not be saved. Temporary artifacts were cleaned up.', 500, error instanceof Error ? error.message : error, {
+    throw new PatentDiagramPipelineError('The figures rendered, but the drawing set could not be saved. Temporary artifacts were cleaned up.', 500, error instanceof Error ? error.message : error, {
       code: 'DIAGRAM_PERSIST_FAILED', stage: 'PERSIST', retryable: true,
       actions: ['Try generation again; the previous saved drawing set was left unchanged.'],
     })
   }
 
   await Promise.allSettled(supersededPaths.map(path => fs.unlink(path)))
-
   // Outside the transaction: metering must never roll back a persisted figure set.
   await recordFigureCompletions(input, figures)
-
   return saved
 }
 
-function countAdjustment(requested: number | null | undefined, generated: number) {
+export interface ClaimComponentCoverage {
+  /** False when Stage 0 claim matching has not run — unknown is not "complete". */
+  evaluated: boolean
+  missing: Array<{ id: string; name: string; referenceLabel: string; matchedClaims: number[] }>
+}
+
+/**
+ * Post-generation check: does every claim-recited component appear in at least
+ * one drawn figure? Deterministic, no LLM call, and purely informational — the
+ * result is returned as a warning alongside the saved figures, never used to
+ * fail or block a run.
+ */
+export function claimComponentCoverage(
+  diagrams: PatentDiagram[],
+  components: PatentDiagramComponent[],
+): ClaimComponentCoverage {
+  const claimed = components.filter(component => (component.claimSupport?.matchedClaims?.length || 0) > 0)
+  if (!claimed.length) return { evaluated: false, missing: [] }
+  const depicted = new Set(diagrams.flatMap(diagram =>
+    diagram.kind === 'COMPONENT' ? diagram.components.map(node => node.componentId)
+      : diagram.kind === 'SEQUENCE' ? diagram.participants.map(node => node.componentId)
+        : diagram.kind === 'PROCESS' ? diagram.nodes.flatMap(node => [node.componentId, ...node.relatedComponentIds].filter(Boolean) as string[])
+          : diagram.constituents.map(node => node.componentId)))
   return {
-    requested: requested ?? null,
-    generated,
-    adjusted: requested != null ? requested !== generated : generated > AUTO_MODE_FIGURE_TARGET,
-    reason: requested != null && requested !== generated
-      ? 'Coverage or filing-scale decomposition required a different figure count.'
-      : generated > AUTO_MODE_FIGURE_TARGET
-        ? `Complete coverage required more than the ${AUTO_MODE_FIGURE_TARGET}-figure target.`
-        : null,
+    evaluated: true,
+    missing: claimed
+      .filter(component => !depicted.has(component.id))
+      .map(component => ({
+        id: component.id,
+        name: component.name,
+        referenceLabel: component.referenceLabel,
+        matchedClaims: component.claimSupport?.matchedClaims || [],
+      })),
   }
 }
 
-function realizedRepairSummary(plan: FigureSetPlan, figures: RenderedManagedFigure[]) {
-  const summary = plan.repairSummary
-  if (!summary) return undefined
-  return {
-    ...summary,
-    figureChanges: summary.figureChanges.map(change => ({
-      ...change,
-      generatedFigureNumbers: figures
-        .filter(figure => figure.built.diagram.key === change.figureKey || figure.built.diagram.key.startsWith(`${change.figureKey}-`))
-        .map(figure => figure.figureNo),
-    })),
-  }
-}
-
-function summarizeFilingReadiness(figures: RenderedManagedFigure[]) {
-  const blockingIssues = figures.flatMap(figure => figure.built.validation.issues
-    .filter(issue => issue.severity === 'error')
+function summarizeReview(figures: RenderedManagedFigure[]) {
+  const notes = figures.flatMap(figure => figure.built.validation.issues
+    .filter(issue => issue.severity === 'warning')
     .map(issue => ({ figureNo: figure.figureNo, code: issue.code, message: issue.message })))
+  return { status: 'READY' as const, ready: true, reviewNotes: notes }
+}
+
+function figureResponse(figure: RenderedManagedFigure) {
   return {
-    status: blockingIssues.length ? 'REVIEW_REQUIRED' as const : 'READY' as const,
-    ready: blockingIssues.length === 0,
-    blockingIssues,
+    figureNo: figure.figureNo,
+    title: figure.built.diagram.title,
+    purpose: figure.built.diagram.purpose,
+    kind: figure.built.diagram.kind,
+    plantuml: figure.built.plantumlCode,
+    semanticModel: figure.built.diagram,
+    validation: figure.built.validation,
   }
 }
 
-function visibleElementCount(diagram: PatentDiagram): number {
-  if (diagram.kind === 'COMPONENT') return diagram.components.length
-  if (diagram.kind === 'SEQUENCE') return diagram.participants.length
-  if (diagram.kind === 'PROCESS') return diagram.nodes.length
-  return diagram.constituents.length
-}
-
-function jurisdictionElementLimit(diagram: PatentDiagram, policy: Awaited<ReturnType<typeof resolveDiagramPagePolicy>>): number | undefined {
-  const aliases = diagram.kind === 'COMPONENT' ? ['COMPONENT', 'BLOCK', 'SCHEMATIC']
-    : diagram.kind === 'PROCESS' ? ['PROCESS', 'FLOW', 'FLOWCHART', 'ACTIVITY']
-      : [diagram.kind]
-  return aliases.map(key => policy.maximumElementsByType[key]).find(value => Number.isFinite(value) && value > 0)
-}
-
-function decomposeForResolvedPolicy(diagram: PatentDiagram, policy: Awaited<ReturnType<typeof resolveDiagramPagePolicy>>): PatentDiagram[] {
-  const limit = jurisdictionElementLimit(diagram, policy)
-  return decomposePatentDiagram(diagram, !!limit && visibleElementCount(diagram) > limit)
-}
-
-function assertBuiltFigures(built: BuiltPatentDiagram[], message: string) {
-  const invalid = built.flatMap((figure, index) => figure.validation.issues
-    .filter(issue => issue.severity === 'error')
-    .map(issue => ({ figure: index + 1, ...issue })))
-  if (invalid.length) throw new PatentDiagramPipelineError(message, 422, invalid)
-}
-
-// Generation renders the complete filing-scale replacement set before any
-// database record is swapped. Decomposition may increase the figure count;
-// coverage is checked before those parts are accepted.
-async function buildAndRenderAdaptive(input: {
+async function buildAndRender(input: {
   patentId: string
   diagrams: PatentDiagram[]
   components: PatentDiagramComponent[]
-  supportedEvidenceIds?: Set<string>
-  pagePolicy: Awaited<ReturnType<typeof resolveDiagramPagePolicy>>
-  allocateFigureNumbers?: (count: number) => number[]
+  pagePolicy: PipelineContext['pagePolicy']
+  figureNumbers?: number[]
 }) {
-  const decomposed = input.diagrams.flatMap(diagram => {
-    const parts = decomposeForResolvedPolicy(diagram, input.pagePolicy)
-    const preserved = new Set(parts.flatMap(part => part.coverageRequirementIds))
-    const missing = diagram.coverageRequirementIds.filter(id => !preserved.has(id))
-    if (missing.length) throw new PatentDiagramPipelineError('Filing-scale decomposition would lose claim coverage.', 422, missing, {
-      code: 'DECOMPOSITION_COVERAGE_LOSS', stage: 'VALIDATION', retryable: false,
-      actions: ['Simplify the affected figure or divide it manually while preserving the listed claim requirements.'],
-    })
-    return parts
-  })
-  if (decomposed.length > MAXIMUM_MANAGED_FIGURES_PER_RUN) {
-    throw new PatentDiagramPipelineError(`Filing-scale decomposition requires ${decomposed.length} figures, above the ${MAXIMUM_MANAGED_FIGURES_PER_RUN}-figure safety limit.`, 422, undefined, {
-      code: 'FIGURE_SET_TOO_LARGE', stage: 'VALIDATION', retryable: false,
-      actions: ['Split the drawing request into smaller batches.', 'Simplify dense figures before generating again.'],
-    })
-  }
-  const built = decomposed.map(diagram => buildPatentDiagram(diagram, input.components, input.supportedEvidenceIds))
-  assertBuiltFigures(built, 'Generated figure set is not filing-ready')
-  const numbers = input.allocateFigureNumbers?.(built.length)
-  const rendered = await renderManagedFigures(input.patentId, built, numbers, input.pagePolicy)
-  const renderedInvalid = rendered.flatMap(figure => figure.built.validation.issues
-    .filter(issue => issue.severity === 'error' && issue.code !== 'PAGE_FIT_MINIMUM_TEXT'))
-  if (renderedInvalid.length) throw new PatentDiagramPipelineError('Rendered figure set is not filing-ready', 422, renderedInvalid)
-  return rendered
+  const built = input.diagrams.map(diagram => buildPatentDiagram(diagram, input.components))
+  return renderManagedFigures(input.patentId, built, input.figureNumbers, input.pagePolicy)
 }
 
-export async function generateManagedFigureSet(
-  input: PatentDiagramPipelineInput & { plan?: FigureSetPlan | null },
-) {
+/** Plan (if needed), detail two figures per call, render and replace the set. */
+export async function generateManagedFigureSet(input: PatentDiagramPipelineInput & { plan?: FigureSetPlan | null }) {
   const baseContext = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
-  // Sessions planned before this pipeline stored a {count, diagrams} plan.
-  // Parsing that strictly threw a raw ZodError and made diagram generation
-  // impossible for every pre-existing session, so an unusable stored plan is
-  // simply re-planned.
   const storedPlan = (baseContext.session.aiAnalysisData as any)?.figurePlan
   const parsedStoredPlan = storedPlan ? figureSetPlanSchema.safeParse(storedPlan) : null
   const currentChecksum = planningContextChecksum(baseContext, input)
-  const storedIsCurrent = parsedStoredPlan?.success
-    && parsedStoredPlan.data.schemaVersion === 2
-    && parsedStoredPlan.data.contextChecksum === currentChecksum
+  const storedIsCurrent = parsedStoredPlan?.success && parsedStoredPlan.data.contextChecksum === currentChecksum
   const plan = input.plan
     || (storedIsCurrent ? parsedStoredPlan.data : await planManagedFigureSet(input))
-  const context = contextWithStagedPlan(baseContext, plan)
-  assertPlanComponentIds(plan, context.components)
-  const coverage = evaluateManagedPlanCoverage(plan)
-  if (input.mode !== 'manual' && coverage.status === 'INCOMPLETE') {
-    throw new PatentDiagramPipelineError('The saved figure plan is missing required claim coverage and could not be generated safely.', 409, coverage.missing, {
-      code: 'STALE_OR_INCOMPLETE_PLAN', stage: 'COVERAGE', retryable: true,
-      actions: ['Plan the figures again so missing claim concepts can be added automatically.'],
-    })
-  }
-  const detailConcurrency = await resolveDiagramConcurrency(input.requestHeaders)
-  const detailed = await mapWithConcurrency(plan.figures, detailConcurrency, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input, coverageLedger: plan.coverageLedger }))
-  const rendered = await buildAndRenderAdaptive({
+  const detailed = await detailPlannedFigures(plan, baseContext, input)
+  const rendered = await buildAndRender({
     patentId: input.patentId,
     diagrams: detailed,
-    components: context.components,
-    supportedEvidenceIds: context.supportedEvidenceIds,
-    pagePolicy: context.pagePolicy,
+    components: baseContext.components,
+    pagePolicy: baseContext.pagePolicy,
   })
-  const saved = await persistManagedFigureSet(input, context.referenceMapChecksum, rendered, { replace: true, plan, baseContext })
-  const filingReadiness = summarizeFilingReadiness(rendered)
+  const saved = await persistManagedFigureSet(input, baseContext.referenceMapChecksum, rendered, { replace: true, plan, baseContext })
   return {
     plan,
-    coverage,
-    repairSummary: realizedRepairSummary(plan, rendered),
-    countAdjusted: countAdjustment(input.figureCount, rendered.length),
-    filingReadiness,
-    figures: rendered.map(figure => ({
-      figureNo: figure.figureNo,
-      title: figure.built.diagram.title,
-      purpose: figure.built.diagram.purpose,
-      kind: figure.built.diagram.kind,
-      plantuml: figure.built.plantumlCode,
-      semanticModel: figure.built.diagram,
-      validation: figure.built.validation,
-    })),
+    filingReadiness: summarizeReview(rendered),
+    // Computed on what was actually drawn, not on the plan.
+    claimCoverage: claimComponentCoverage(rendered.map(figure => figure.built.diagram), baseContext.components),
+    figures: rendered.map(figureResponse),
     saved,
   }
 }
 
-export async function addManagedFigures(
-  input: PatentDiagramPipelineInput & { plan?: FigureSetPlan | null },
-) {
+/** Same as generation, but appends to the existing set instead of replacing it. */
+export async function addManagedFigures(input: PatentDiagramPipelineInput & { plan?: FigureSetPlan | null }) {
   const baseContext = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const plan = input.plan || await planManagedFigureSet(input)
-  const context = contextWithStagedPlan(baseContext, plan)
-  assertPlanComponentIds(plan, context.components)
-  const occupied = new Set(context.session.figurePlans.map(figure => figure.figureNo))
-  if (plan.figures.length > MAXIMUM_MANAGED_FIGURES_PER_RUN) throw new PatentDiagramPipelineError(`A single append operation can create at most ${MAXIMUM_MANAGED_FIGURES_PER_RUN} managed figures`, 422)
-  const detailConcurrency = await resolveDiagramConcurrency(input.requestHeaders)
-  const detailed = await mapWithConcurrency(plan.figures, detailConcurrency, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input, coverageLedger: plan.coverageLedger }))
+  const detailed = await detailPlannedFigures(plan, baseContext, input)
 
-  const allocateFigureNumbers = (count: number) => {
-    const used = new Set(occupied)
-    const figureNumbers: number[] = []
-    let candidate = Math.max(0, ...Array.from(used).filter(value => value < GENERATED_FIGURE_LIMIT)) + 1
-    for (let index = 0; index < count; index++) {
-      while (used.has(candidate)) candidate++
-      if (candidate >= GENERATED_FIGURE_LIMIT) throw new PatentDiagramPipelineError('No generated figure slots remain before the imported-figure range', 409)
-      figureNumbers.push(candidate)
-      used.add(candidate++)
+  const occupied = new Set(baseContext.session.figurePlans.map(figure => figure.figureNo))
+  const figureNumbers: number[] = []
+  let candidate = Math.max(0, ...Array.from(occupied).filter(value => value < GENERATED_FIGURE_LIMIT)) + 1
+  for (let index = 0; index < detailed.length; index++) {
+    while (occupied.has(candidate)) candidate++
+    if (candidate >= GENERATED_FIGURE_LIMIT) {
+      throw new PatentDiagramPipelineError('No generated figure slots remain before the imported-figure range', 409)
     }
-    return figureNumbers
+    figureNumbers.push(candidate)
+    occupied.add(candidate++)
   }
-  const rendered = await buildAndRenderAdaptive({
+
+  const rendered = await buildAndRender({
     patentId: input.patentId,
     diagrams: detailed,
-    components: context.components,
-    supportedEvidenceIds: context.supportedEvidenceIds,
-    pagePolicy: context.pagePolicy,
-    allocateFigureNumbers,
+    components: baseContext.components,
+    pagePolicy: baseContext.pagePolicy,
+    figureNumbers,
   })
-  const saved = await persistManagedFigureSet(input, context.referenceMapChecksum, rendered, { replace: false, plan, baseContext })
-  const appendExistingCoverage = new Set(input.includeExistingFigures ? context.existingFigures.flatMap(figure => figure.coverageRequirementIds) : [])
-  if (input.includeExistingFigures && plan.coverageLedger) {
-    plan.coverageLedger.requirements.forEach(requirement => {
-      if (context.existingFigures.some(figure => legacyExistingFigureCoversRequirement(requirement, figure))) {
-        appendExistingCoverage.add(requirement.id)
-      }
-    })
-  }
-  const coverage = evaluateManagedPlanCoverage(plan, appendExistingCoverage)
+  const saved = await persistManagedFigureSet(input, baseContext.referenceMapChecksum, rendered, { replace: false, plan, baseContext })
   return {
     plan,
-    coverage,
-    repairSummary: realizedRepairSummary(plan, rendered),
-    countAdjusted: countAdjustment(input.figureCount, rendered.length),
-    filingReadiness: summarizeFilingReadiness(rendered),
-    figures: rendered.map(figure => ({
-      figureNo: figure.figureNo,
-      title: figure.built.diagram.title,
-      purpose: figure.built.diagram.purpose,
-      kind: figure.built.diagram.kind,
-      plantuml: figure.built.plantumlCode,
-      semanticModel: figure.built.diagram,
-      validation: figure.built.validation,
-    })),
+    filingReadiness: summarizeReview(rendered),
+    claimCoverage: claimComponentCoverage(rendered.map(figure => figure.built.diagram), baseContext.components),
+    figures: rendered.map(figureResponse),
     saved,
   }
 }
 
+async function replaceFigureRecords(input: {
+  sessionId: string
+  figureNo: number
+  built: BuiltPatentDiagram
+  rendered: { svg: { checksum: string; contentType: string; width?: number; height?: number }; png: { checksum: string; contentType: string } }
+  artifacts: { svg: { filename?: string; path?: string }; png: { filename?: string; path?: string } }
+  referenceMapChecksum: string
+  figurePlanId?: string
+  previousSourceChecksum?: string | null
+}) {
+  const semanticHash = semanticChecksum({ referenceMapChecksum: input.referenceMapChecksum, semantic: input.built.diagram })
+  const checksum = crypto.createHash('sha256').update(input.built.plantumlCode).digest('hex')
+  const renderArtifacts = {
+    svg: { filename: input.artifacts.svg.filename, path: input.artifacts.svg.path, checksum: input.rendered.svg.checksum, contentType: input.rendered.svg.contentType, width: input.rendered.svg.width, height: input.rendered.svg.height },
+    png: { filename: input.artifacts.png.filename, path: input.artifacts.png.path, checksum: input.rendered.png.checksum, contentType: input.rendered.png.contentType },
+  }
+  const sourceData = {
+    plantumlCode: input.built.plantumlCode,
+    checksum,
+    sourceMode: 'MANAGED' as const,
+    labelMap: input.built.labelMap as any,
+    renderArtifacts: renderArtifacts as any,
+    ...renderStatusFor(input.built),
+    semanticChecksum: semanticHash,
+    referenceMapChecksum: input.referenceMapChecksum,
+    imageFilename: input.artifacts.png.filename,
+    imagePath: input.artifacts.png.path,
+    imageChecksum: input.rendered.png.checksum,
+    imageUploadedAt: new Date(),
+  }
+  await prisma.$transaction(async tx => {
+    const planData = {
+      title: input.built.diagram.title,
+      description: input.built.diagram.purpose,
+      nodes: input.built.nodes as any,
+      edges: input.built.edges as any,
+      diagramType: input.built.diagram.kind,
+      semanticSchemaVersion: input.built.diagram.schemaVersion,
+      semanticModel: input.built.diagram as any,
+      semanticChecksum: semanticHash,
+      referenceMapChecksum: input.referenceMapChecksum,
+      validationReport: input.built.validation as any,
+    }
+    if (input.figurePlanId) {
+      await tx.figurePlan.update({ where: { id: input.figurePlanId }, data: planData })
+    } else {
+      await tx.figurePlan.create({ data: { sessionId: input.sessionId, figureNo: input.figureNo, ...planData } })
+    }
+    await tx.diagramSource.upsert({
+      where: { sessionId_figureNo_language: { sessionId: input.sessionId, figureNo: input.figureNo, language: 'en' } },
+      create: { sessionId: input.sessionId, figureNo: input.figureNo, language: 'en', ...sourceData },
+      update: sourceData,
+    })
+    await tx.diagramSource.updateMany({
+      where: { sessionId: input.sessionId, figureNo: input.figureNo, language: { not: 'en' } },
+      data: { renderStatus: 'STALE', translatedFromChecksum: input.previousSourceChecksum || null },
+    })
+  })
+  return { renderArtifacts }
+}
+
+/** Re-renders a saved semantic figure without asking the model again. */
 export async function rebuildManagedFigureSource(input: PatentDiagramPipelineInput & { figureNo: number }) {
   const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const figurePlan = context.session.figurePlans.find(figure => figure.figureNo === input.figureNo)
@@ -1429,88 +936,59 @@ export async function rebuildManagedFigureSource(input: PatentDiagramPipelineInp
   if (source.sourceMode !== 'MANAGED') {
     throw new PatentDiagramPipelineError('This figure is a raw override and requires raw-source repair.', 409, undefined, { code: 'RAW_REPAIR_REQUIRED', stage: 'RENDER' })
   }
-  if (figurePlan.referenceMapChecksum && figurePlan.referenceMapChecksum !== context.referenceMapChecksum) {
-    throw new PatentDiagramPipelineError('The Component Plan changed after this figure was generated.', 409, undefined, {
-      code: 'STALE_MANAGED_SEMANTICS', stage: 'RENDER', retryable: true,
-      actions: ['Regenerate the managed figure from its plan and current Component Plan.'],
-    })
-  }
   const parsed = patentDiagramSchema.safeParse(figurePlan.semanticModel)
   if (!parsed.success) {
     throw new PatentDiagramPipelineError('The stored semantic model is missing or invalid.', 409, parsed.error.issues, {
       code: 'STALE_MANAGED_SEMANTICS', stage: 'RENDER', retryable: true,
-      actions: ['Regenerate the managed figure from its saved plan.'],
+      actions: ['Regenerate the managed figure.'],
     })
   }
-  const built = buildPatentDiagram(parsed.data, context.components, context.supportedEvidenceIds)
-  const semanticErrors = built.validation.issues.filter(issue => issue.severity === 'error' && issue.code !== 'SPLIT_REQUIRED')
-  if (semanticErrors.length) throw new PatentDiagramPipelineError('The semantic figure must be regenerated before it can be rendered.', 422, semanticErrors, {
-    code: 'STALE_MANAGED_SEMANTICS', stage: 'VALIDATION', retryable: true,
-    actions: ['Regenerate the managed figure so its semantics can be corrected.'],
-  })
+  const built = buildPatentDiagram(parsed.data, context.components)
   let rendered: Awaited<ReturnType<typeof renderAndWriteDiagramArtifacts>>
   try {
     rendered = await renderAndWriteDiagramArtifacts({ patentId: input.patentId, figureNo: input.figureNo, plantumlCode: built.plantumlCode, pagePolicy: context.pagePolicy })
   } catch (error) {
     throw new PatentDiagramPipelineError('The managed source was rebuilt, but rendering still failed.', 422, error instanceof Error ? error.message : error, {
       code: 'MANAGED_RENDER_FAILED', stage: 'RENDER', retryable: true,
-      actions: ['Use Modify to simplify the semantic figure.', 'If it repeats, ask an administrator to check the PlantUML renderer.'],
-      automaticCorrection: { attempted: true, attempts: 1, result: 'FAILED' },
+      actions: ['Use Modify to simplify the figure.', 'Ask an administrator to check the PlantUML renderer if it repeats.'],
     })
   }
-  applyRenderedLayoutValidation(built, rendered.svg)
-  if (rendered.effectiveFontSizePt != null && rendered.effectiveFontSizePt < context.pagePolicy.minimumTextSizePt) {
-    built.validation.issues.push({
-      code: 'PAGE_FIT_MINIMUM_TEXT', severity: 'error',
-      message: `Page fitting would reduce text to ${rendered.effectiveFontSizePt.toFixed(1)} pt below the ${context.pagePolicy.minimumTextSizePt} pt minimum`,
-    })
-    built.validation.filingReady = false
-  }
-  const semanticHash = semanticChecksum({ referenceMapChecksum: context.referenceMapChecksum, semantic: built.diagram })
-  const renderArtifacts = rendered.artifacts
-  const checksum = crypto.createHash('sha256').update(built.plantumlCode).digest('hex')
-  const updated = await prisma.$transaction(async tx => {
-    await tx.figurePlan.update({
-      where: { id: figurePlan.id },
-      data: { nodes: built.nodes as any, edges: built.edges as any, validationReport: built.validation as any, semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum },
-    })
-    return tx.diagramSource.update({
-      where: { id: source.id },
-      data: {
-        plantumlCode: built.plantumlCode, checksum, labelMap: built.labelMap as any,
-        renderArtifacts: renderArtifacts as any,
-        renderStatus: built.validation.filingReady ? 'SUCCESS' : 'REVIEW_REQUIRED',
-        renderError: built.validation.filingReady ? null : built.validation.issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join('; '),
-        semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum,
-        imageFilename: renderArtifacts.png.filename, imagePath: renderArtifacts.png.path,
-        imageChecksum: rendered.png.checksum, imageUploadedAt: new Date(),
-      },
-    })
+  const { renderArtifacts } = await replaceFigureRecords({
+    sessionId: input.sessionId,
+    figureNo: input.figureNo,
+    built,
+    rendered,
+    artifacts: rendered.artifacts,
+    referenceMapChecksum: context.referenceMapChecksum,
+    figurePlanId: figurePlan.id,
+    previousSourceChecksum: source.checksum,
   })
   const previousPaths = [
     source.imagePath,
     (source.renderArtifacts as any)?.svg?.path,
     (source.renderArtifacts as any)?.png?.path,
   ].filter((value): value is string => typeof value === 'string' && value.length > 0)
-  await Promise.allSettled(previousPaths.filter(path => path !== renderArtifacts.svg.path && path !== renderArtifacts.png.path).map(path => fs.unlink(path)))
+  await Promise.allSettled(previousPaths
+    .filter(path => path !== renderArtifacts.svg.path && path !== renderArtifacts.png.path)
+    .map(path => fs.unlink(path)))
+  const updated = await prisma.diagramSource.findUnique({ where: { id: source.id } })
   return { fixedCode: built.plantumlCode, diagramSource: updated, validationReport: built.validation, renderArtifacts, repairMode: 'SEMANTIC_REBUILD' as const }
 }
 
-export async function regenerateManagedFigure(input: PatentDiagramPipelineInput & { figureNo: number; approveSplit?: boolean }) {
+/** Re-asks the model for one figure, keeping its plan entry and figure number. */
+export async function regenerateManagedFigure(input: PatentDiagramPipelineInput & { figureNo: number }) {
   const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const existingPlan = context.session.figurePlans.find(figure => figure.figureNo === input.figureNo)
   if (!existingPlan) throw new PatentDiagramPipelineError('Figure plan not found', 404)
   const source = context.session.diagramSources.find(item => item.figureNo === input.figureNo && item.language === 'en')
-  const existingDiagram = existingPlan.semanticModel
-    ? patentDiagramSchema.safeParse(existingPlan.semanticModel)
-    : null
-  const previous = existingDiagram?.success ? existingDiagram.data : null
+  const parsedExisting = existingPlan.semanticModel ? patentDiagramSchema.safeParse(existingPlan.semanticModel) : null
+  const previous = parsedExisting?.success ? parsedExisting.data : null
   const storedFigureSet = figureSetPlanSchema.safeParse((context.session.aiAnalysisData as any)?.figurePlan)
   const savedPlanItem = storedFigureSet.success
     ? storedFigureSet.data.figures.find(item => item.key === previous?.key)
       || storedFigureSet.data.figures.find(item => item.title === existingPlan.title)
     : undefined
-  const kind = savedPlanItem?.kind || previous?.kind || String(existingPlan.diagramType || 'COMPONENT') as PatentDiagram['kind']
+  const kind = (savedPlanItem?.kind || previous?.kind || String(existingPlan.diagramType || 'COMPONENT')) as DiagramKind
   const componentIds = savedPlanItem?.componentIds || (previous
     ? Array.from(new Set(
       previous.kind === 'COMPONENT' ? previous.components.map(node => node.componentId)
@@ -1518,7 +996,7 @@ export async function regenerateManagedFigure(input: PatentDiagramPipelineInput 
           : previous.kind === 'PROCESS' ? previous.nodes.flatMap(node => [node.componentId, ...node.relatedComponentIds].filter(Boolean) as string[])
             : previous.constituents.map(node => node.componentId),
     ))
-    : context.components.map(component => component.id).slice(0, 12))
+    : context.components.map(component => component.id).slice(0, 16))
   const plan: FigureSetPlanItem = {
     key: savedPlanItem?.key || previous?.key || `figure-${input.figureNo}`,
     kind,
@@ -1532,162 +1010,48 @@ export async function regenerateManagedFigure(input: PatentDiagramPipelineInput 
       ? previous.groups.map(group => ({ id: group.id, label: group.label, componentIds: group.rows.flatMap(row => row.componentIds) }))
       : []),
     phaseHints: savedPlanItem?.phaseHints || [],
-    // A regeneration keeps the disclosed operations the figure already cites, so
-    // redrawing it cannot quietly widen its factual basis.
     evidenceIds: savedPlanItem?.evidenceIds || previous?.evidenceIds || [],
-    coverageRequirementIds: savedPlanItem?.coverageRequirementIds || previous?.coverageRequirementIds || [],
   }
-  const diagram = await detailManagedFigure({ plan, context, pipeline: input, coverageLedger: storedFigureSet.success ? storedFigureSet.data.coverageLedger : undefined, existingDiagram: previous })
-  const decomposed = decomposeForResolvedPolicy(diagram, context.pagePolicy)
-  if (decomposed.length > 1) {
-    const splitProposal = decomposed.map(item => ({ title: item.title, kind: item.kind, semanticModel: item }))
-    if (!input.approveSplit) return { status: 'SPLIT_REQUIRED' as const, splitProposal }
-
-    const occupied = new Set(context.session.figurePlans.map(figure => figure.figureNo))
-    const extraNumbers: number[] = []
-    let candidate = Math.max(0, ...Array.from(occupied).filter(value => value < GENERATED_FIGURE_LIMIT)) + 1
-    for (let index = 1; index < decomposed.length; index++) {
-      while (occupied.has(candidate)) candidate++
-      if (candidate >= GENERATED_FIGURE_LIMIT) throw new PatentDiagramPipelineError('No generated figure slots remain for the approved split', 409)
-      extraNumbers.push(candidate)
-      occupied.add(candidate++)
-    }
-    const figureNumbers = [input.figureNo, ...extraNumbers]
-    const renderedSplit = await buildAndRenderAdaptive({
-      patentId: input.patentId,
-      diagrams: decomposed,
-      components: context.components,
-      supportedEvidenceIds: context.supportedEvidenceIds,
-      pagePolicy: context.pagePolicy,
-      allocateFigureNumbers: count => {
-        if (count !== figureNumbers.length) throw new PatentDiagramPipelineError('The approved split requires further decomposition; review a new split proposal', 409)
-        return figureNumbers
-      },
-    })
-    await prisma.$transaction(async tx => {
-      for (let index = 0; index < renderedSplit.length; index++) {
-        const item = renderedSplit[index]
-        const semanticHash = semanticChecksum({ referenceMapChecksum: context.referenceMapChecksum, semantic: item.built.diagram })
-        const artifacts = {
-          svg: { filename: item.svgFilename, path: item.svgPath, checksum: item.svg.checksum, contentType: item.svg.contentType, width: item.svg.width, height: item.svg.height },
-          png: { filename: item.pngFilename, path: item.pngPath, checksum: item.png.checksum, contentType: item.png.contentType },
-        }
-        if (index === 0) {
-          await tx.figurePlan.update({
-            where: { id: existingPlan.id },
-            data: {
-              title: item.built.diagram.title, description: item.built.diagram.purpose,
-              nodes: item.built.nodes as any, edges: item.built.edges as any,
-              diagramType: item.built.diagram.kind, semanticSchemaVersion: item.built.diagram.schemaVersion,
-              semanticModel: item.built.diagram as any, semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum,
-              validationReport: item.built.validation as any, detailOfFigureNo: null,
-            },
-          })
-        } else {
-          await tx.figurePlan.create({
-            data: {
-              sessionId: input.sessionId, figureNo: item.figureNo, title: item.built.diagram.title,
-              description: item.built.diagram.purpose, nodes: item.built.nodes as any, edges: item.built.edges as any,
-              diagramType: item.built.diagram.kind, semanticSchemaVersion: item.built.diagram.schemaVersion,
-              semanticModel: item.built.diagram as any, semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum,
-              validationReport: item.built.validation as any, detailOfFigureNo: input.figureNo,
-            },
-          })
-        }
-        await tx.diagramSource.upsert({
-          where: { sessionId_figureNo_language: { sessionId: input.sessionId, figureNo: item.figureNo, language: 'en' } },
-          create: {
-            sessionId: input.sessionId, figureNo: item.figureNo, language: 'en', plantumlCode: item.built.plantumlCode,
-            checksum: crypto.createHash('sha256').update(item.built.plantumlCode).digest('hex'), sourceMode: 'MANAGED',
-            labelMap: item.built.labelMap as any,
-            semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum, renderArtifacts: artifacts as any,
-            renderStatus: item.built.validation.filingReady ? 'SUCCESS' : 'REVIEW_REQUIRED',
-            renderError: item.built.validation.filingReady ? null : item.built.validation.issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join('; '),
-            imageFilename: item.pngFilename, imagePath: item.pngPath, imageChecksum: item.png.checksum, imageUploadedAt: new Date(),
-          },
-          update: {
-            plantumlCode: item.built.plantumlCode, checksum: crypto.createHash('sha256').update(item.built.plantumlCode).digest('hex'),
-            sourceMode: 'MANAGED', semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum, renderArtifacts: artifacts as any,
-            renderStatus: item.built.validation.filingReady ? 'SUCCESS' : 'REVIEW_REQUIRED',
-            renderError: item.built.validation.filingReady ? null : item.built.validation.issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join('; '),
-            labelMap: item.built.labelMap as any,
-            imageFilename: item.pngFilename, imagePath: item.pngPath, imageChecksum: item.png.checksum, imageUploadedAt: new Date(),
-          },
-        })
-      }
-      await tx.diagramSource.updateMany({
-        where: { sessionId: input.sessionId, figureNo: input.figureNo, language: { not: 'en' } },
-        data: { renderStatus: 'STALE', translatedFromChecksum: source?.checksum || null },
-      })
-      await tx.draftingSession.update({
-        where: { id: input.sessionId },
-        data: { figureSequence: null as any, figureSequenceFinalized: false },
-      })
-    })
-    return {
-      status: 'SUCCESS' as const,
-      splitApproved: true,
-      figures: renderedSplit.map(item => ({ figureNo: item.figureNo, plantuml: item.built.plantumlCode, semanticModel: item.built.diagram, validation: item.built.validation })),
-    }
-  }
-  const built = buildPatentDiagram(diagram, context.components, context.supportedEvidenceIds)
-  if (!built.validation.filingReady) throw new PatentDiagramPipelineError('The regenerated semantic figure still has filing-readiness errors.', 422, built.validation.issues, {
-    code: 'REGENERATED_FIGURE_INVALID', stage: 'VALIDATION', retryable: true,
-    actions: ['Modify the figure to reduce density or correct the listed semantic issue.', 'Create a separate detail figure if all content cannot fit safely.'],
+  const [diagram] = await detailFigureBatch({
+    plans: [plan],
+    context,
+    pipeline: input,
+    existingDiagrams: previous ? [previous] : undefined,
   })
+  if (!diagram) {
+    throw new PatentDiagramPipelineError('The diagram model did not return a usable figure.', 422, undefined, {
+      code: 'NO_FIGURES_GENERATED', stage: 'DETAIL', retryable: true,
+      actions: ['Try again.', 'Simplify the modification instruction if it repeats.'],
+    })
+  }
+  const built = buildPatentDiagram(diagram, context.components)
   const rendered = (await renderManagedFigures(input.patentId, [built], [input.figureNo], context.pagePolicy))[0]
-  if (!rendered.built.validation.filingReady) {
-    const forced = decomposePatentDiagram(diagram, true)
-    if (forced.length > 1) return { status: 'SPLIT_REQUIRED' as const, splitProposal: forced.map(item => ({ title: item.title, kind: item.kind, semanticModel: item })) }
-  }
-  const semanticHash = semanticChecksum({ referenceMapChecksum: context.referenceMapChecksum, semantic: built.diagram })
-  const renderArtifacts = {
-    svg: { filename: rendered.svgFilename, path: rendered.svgPath, checksum: rendered.svg.checksum, contentType: rendered.svg.contentType, width: rendered.svg.width, height: rendered.svg.height },
-    png: { filename: rendered.pngFilename, path: rendered.pngPath, checksum: rendered.png.checksum, contentType: rendered.png.contentType },
-  }
-  await prisma.$transaction([
-    prisma.figurePlan.update({
-      where: { id: existingPlan.id },
-      data: {
-        title: built.diagram.title,
-        description: built.diagram.purpose,
-        nodes: built.nodes as any,
-        edges: built.edges as any,
-        diagramType: built.diagram.kind,
-        semanticSchemaVersion: built.diagram.schemaVersion,
-        semanticModel: built.diagram as any,
-        semanticChecksum: semanticHash,
-        referenceMapChecksum: context.referenceMapChecksum,
-        validationReport: built.validation as any,
-      },
-    }),
-    prisma.diagramSource.upsert({
-      where: { sessionId_figureNo_language: { sessionId: input.sessionId, figureNo: input.figureNo, language: 'en' } },
-      create: {
-        sessionId: input.sessionId, figureNo: input.figureNo, language: 'en',
-        plantumlCode: built.plantumlCode, checksum: crypto.createHash('sha256').update(built.plantumlCode).digest('hex'),
-        sourceMode: 'MANAGED', semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum, renderArtifacts: renderArtifacts as any,
-        renderStatus: built.validation.filingReady ? 'SUCCESS' : 'REVIEW_REQUIRED',
-        renderError: built.validation.filingReady ? null : built.validation.issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join('; '),
-        labelMap: built.labelMap as any,
-        imageFilename: rendered.pngFilename, imagePath: rendered.pngPath, imageChecksum: rendered.png.checksum, imageUploadedAt: new Date(),
-      },
-      update: {
-        plantumlCode: built.plantumlCode, checksum: crypto.createHash('sha256').update(built.plantumlCode).digest('hex'),
-        sourceMode: 'MANAGED', semanticChecksum: semanticHash, referenceMapChecksum: context.referenceMapChecksum, renderArtifacts: renderArtifacts as any,
-        labelMap: built.labelMap as any,
-        renderStatus: built.validation.filingReady ? 'SUCCESS' : 'REVIEW_REQUIRED',
-        renderError: built.validation.filingReady ? null : built.validation.issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join('; '),
-        imageFilename: rendered.pngFilename, imagePath: rendered.pngPath, imageChecksum: rendered.png.checksum, imageUploadedAt: new Date(),
-      },
-    }),
-    prisma.diagramSource.updateMany({
-      where: { sessionId: input.sessionId, figureNo: input.figureNo, language: { not: 'en' } },
-      data: { renderStatus: 'STALE', translatedFromChecksum: source?.checksum || null },
-    }),
-  ])
+  const { renderArtifacts } = await replaceFigureRecords({
+    sessionId: input.sessionId,
+    figureNo: input.figureNo,
+    built: rendered.built,
+    rendered: rendered,
+    artifacts: { svg: { filename: rendered.svgFilename, path: rendered.svgPath }, png: { filename: rendered.pngFilename, path: rendered.pngPath } },
+    referenceMapChecksum: context.referenceMapChecksum,
+    figurePlanId: existingPlan.id,
+    previousSourceChecksum: source?.checksum,
+  })
+  const previousPaths = [
+    source?.imagePath,
+    (source?.renderArtifacts as any)?.svg?.path,
+    (source?.renderArtifacts as any)?.png?.path,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0)
+  await Promise.allSettled(previousPaths
+    .filter(path => path !== rendered.svgPath && path !== rendered.pngPath)
+    .map(path => fs.unlink(path)))
   return {
-    status: built.validation.filingReady ? 'SUCCESS' as const : 'REVIEW_REQUIRED' as const,
-    figure: { figureNo: input.figureNo, plantuml: built.plantumlCode, semanticModel: built.diagram, validation: built.validation, renderArtifacts },
+    status: 'SUCCESS' as const,
+    figure: {
+      figureNo: input.figureNo,
+      plantuml: rendered.built.plantumlCode,
+      semanticModel: rendered.built.diagram,
+      validation: rendered.built.validation,
+      renderArtifacts,
+    },
   }
 }

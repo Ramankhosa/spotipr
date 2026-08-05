@@ -72,7 +72,6 @@ export function resetPreliminaryClaimFields(normalizedData: Record<string, any> 
 }
 
 export type PreliminaryClaimResetBlockInput = {
-  status?: string | null
   normalizedData?: Record<string, any> | null
   relatedArtRunCount?: number
   relatedArtSelectionCount?: number
@@ -81,23 +80,48 @@ export type PreliminaryClaimResetBlockInput = {
   annexureDraftCount?: number
 }
 
-export function shouldBlockPreliminaryClaimReset(input: PreliminaryClaimResetBlockInput): boolean {
-  const normalized = input.normalizedData || {}
-  const hasClaimRefinementMetadata = [
-    'claimsRefinementPreview',
-    'claimsRefinementApplied',
-    'claimsRefinementNotes',
-    'claimsRefinementSource',
-  ].some((key) => normalized[key] !== undefined && normalized[key] !== null)
+// Skipping prior art or claim refinement writes a claimsRefinementSource whose mode records
+// the skip. Nothing was derived from the claims in that case — the stage only promoted them
+// to final — so a skip must not block a reset the way an applied refinement does.
+const SKIPPED_CLAIM_REFINEMENT_MODES = new Set(['SKIPPED', 'SKIPPED_REFINEMENT'])
 
+function hasClaimRefinementWork(normalized: Record<string, any>): boolean {
+  // Presence alone is not evidence of work: `claimsRefinementApplied: false` and an empty
+  // notes string both mean nothing was applied.
+  if (normalized.claimsRefinementApplied) return true
+  if (typeof normalized.claimsRefinementNotes === 'string' && normalized.claimsRefinementNotes.trim()) return true
+
+  const preview = normalized.claimsRefinementPreview
+  if (preview && typeof preview === 'object' && Object.keys(preview).length > 0) return true
+
+  const source = normalized.claimsRefinementSource
+  if (source && typeof source === 'object') {
+    const mode = String((source as any).mode || '').trim().toUpperCase()
+    // An unrecognized or missing mode is treated as real refinement — fail closed.
+    if (!SKIPPED_CLAIM_REFINEMENT_MODES.has(mode)) return true
+  }
+
+  return false
+}
+
+/**
+ * Claims may be reset until something downstream has been derived from them.
+ *
+ * This is deliberately judged by artifacts, never by the session's current stage: a user can
+ * navigate backwards freely, so `status` describes where they are standing, not what work
+ * exists. Every downstream stage leaves a row behind (related-art runs and selections,
+ * reference maps, figure plans, annexure drafts) or applied-refinement metadata, so those
+ * checks already cover the cases the stage check was standing in for — while the stage check
+ * additionally rejected sessions that had produced nothing at all.
+ */
+export function shouldBlockPreliminaryClaimReset(input: PreliminaryClaimResetBlockInput): boolean {
   return (
-    input.status !== 'PRELIMINARY_CLAIMS' ||
     (input.relatedArtRunCount || 0) > 0 ||
     (input.relatedArtSelectionCount || 0) > 0 ||
     (input.referenceMapCount || 0) > 0 ||
     (input.figurePlanCount || 0) > 0 ||
     (input.annexureDraftCount || 0) > 0 ||
-    hasClaimRefinementMetadata
+    hasClaimRefinementWork(input.normalizedData || {})
   )
 }
 

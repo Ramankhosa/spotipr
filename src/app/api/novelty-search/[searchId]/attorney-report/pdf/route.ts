@@ -5,6 +5,7 @@ import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { buildNoveltyAttorneyReportModel, formatFirmAddressLines, type AttorneyReportCitation, type AttorneyReportFeatureRow } from '@/lib/novelty-attorney-report';
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
+import { canonicalReportPublicationNumber } from '@/lib/novelty-report-reference-selection';
 import { loadFirmBranding } from '@/lib/firm-profile-service';
 
 export const runtime = 'nodejs';
@@ -2036,7 +2037,12 @@ export async function GET(
         return;
       }
       items.forEach((item, localIndex) => {
-        const itemIndex = Math.max(0, detailedComparisons.findIndex(comparison => comparison.publicationNumber === item.publicationNumber));
+        // Compare canonically: a raw-string miss would resolve to -1 and silently
+        // link the card's named destination to the first card in the report.
+        const itemKey = canonicalReportPublicationNumber(item.publicationNumber);
+        const itemIndex = Math.max(0, detailedComparisons.findIndex(
+          comparison => canonicalReportPublicationNumber(comparison.publicationNumber) === itemKey
+        ));
         const destination = patentDestination(itemIndex);
         drawCitationCardHeader(doc, item, itemIndex, detailedComparisons.length, destination);
         const tocTitle = item.referenceType === 'paper'

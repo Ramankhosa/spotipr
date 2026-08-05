@@ -727,9 +727,18 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                 ))}
               </div>
 
-              {/* The stage does not yet compute distinct gate counts — showing four
-                  identical numbers under a funnel heading would imply it does. */}
-              {new Set(Object.values(results.gateCounts)).size > 1 && (
+              {/* The stage does not yet compute distinct gate counts — showing
+                  identical numbers under a funnel heading would imply it does.
+                  Only the three NARROWING gates decide that: `families` is a
+                  different unit (families, not publications) and practically
+                  always differs, so including it in the test made this guard
+                  pass every time and rendered 66/66/66 as though the scope had
+                  been narrowed twice. */}
+              {new Set([
+                results.gateCounts.corpus,
+                results.gateCounts.afterFilters,
+                results.gateCounts.afterConcepts,
+              ]).size > 1 && (
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     How the count narrows

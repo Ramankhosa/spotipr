@@ -912,4 +912,70 @@ describe('buildNoveltyAttorneyReportModel', () => {
       ...invalidModel.appendixMappedComparisons,
     ].map(item => item.publicationNumber))).toEqual(new Set(publications));
   });
+
+  it('recomputes a stale selection under the rule it was written with', () => {
+    // 14 references, each strongly mapping two important features, so all of them
+    // clear the materiality bar and none of them is hidden by a fixed target.
+    const publications = Array.from({ length: 14 }, (_, index) => `US${900 + index}A`);
+    const featureMap = publications.map(publicationNumber => ({
+      pn: publicationNumber,
+      title: publicationNumber,
+      feature_analysis: [
+        { feature: 'adaptive control', status: 'Present', quote: 'adaptive control', field: 'abstract' },
+        { feature: 'moisture feedback', status: 'Present', quote: 'moisture feedback', field: 'abstract' },
+      ],
+    }));
+    const baseRun = {
+      id: 'stale-selection',
+      title: 'Adaptive controller',
+      jurisdiction: 'IN',
+      config: {},
+      stage0Results: { inventionFeatures: ['adaptive control', 'moisture feedback'] },
+      stage1Results: {
+        retrievalCandidates: publications.map(publicationNumber => ({ publicationNumber, title: publicationNumber })),
+        aiRelevance: { byPn: {} },
+      },
+      stage35Results: { feature_map: featureMap },
+    };
+    // Deliberately stale: the partition names references that no longer exist, so
+    // validation fails and the renderer has to recompute.
+    const staleSelection = (rule?: string) => ({
+      report_reference_selection: {
+        version: 1,
+        ...(rule ? { rule } : {}),
+        main: [{ publicationNumber: 'US1A', canonicalPublicationNumber: 'US1', reason: 'ranked_fill' }],
+        mappedSupplementary: [],
+        unmappedSupplementary: [],
+        counts: {
+          mappedTotal: 1,
+          mainDisplayed: 1,
+          mappedSupplementaryDisplayed: 0,
+          unmappedEligibleTotal: 0,
+          unmappedDisplayed: 0,
+          unmappedOmitted: 0,
+          explicitlyRejectedExcluded: 0,
+          ungatedExcluded: 0,
+          invalidPublicationNumbersExcluded: 0,
+          protectedOverflow: 0,
+        },
+      },
+    });
+
+    // No rule on the blob, and no blob at all, both mean the legacy fixed target.
+    const legacy = buildNoveltyAttorneyReportModel({ ...baseRun, stage4Results: staleSelection() });
+    expect(legacy.mainComparisons).toHaveLength(10);
+    expect(legacy.appendixMappedComparisons).toHaveLength(4);
+
+    const noBlob = buildNoveltyAttorneyReportModel({ ...baseRun, stage4Results: {} });
+    expect(noBlob.mainComparisons).toHaveLength(10);
+
+    // A materiality-era run recomputes under materiality: every qualifying
+    // reference is shown, so nothing lands in the appendix.
+    const materiality = buildNoveltyAttorneyReportModel({
+      ...baseRun,
+      stage4Results: staleSelection('materiality_v1'),
+    });
+    expect(materiality.mainComparisons).toHaveLength(14);
+    expect(materiality.appendixMappedComparisons).toHaveLength(0);
+  });
 });

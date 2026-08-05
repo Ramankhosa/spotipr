@@ -4,11 +4,10 @@ import path from 'path'
 import { PATENT_DIAGRAM_STYLE, compilePatentDiagramStyle } from '@/lib/patent-diagrams/style'
 import { buildPatentDiagram } from '@/lib/patent-diagrams/builders'
 import { analyzeDiagramComplexity, validatePatentDiagram, validatePatentPlantUmlSource } from '@/lib/patent-diagrams/validation'
-import { decomposePatentDiagram } from '@/lib/patent-diagrams/complexity'
 import { patentDiagramSchema, type PatentDiagramComponent } from '@/lib/patent-diagrams/types'
 import { cleanPlantUmlForRendering, inspectRenderedSvg, validateRenderedPatentSvg } from '@/lib/plantuml-renderer'
 import { extractRawPlantUmlFacts } from '@/lib/patent-diagrams/raw-source'
-import { claimChunks, evaluateFigureSetClaimCoverage, semanticChecksum } from '@/lib/patent-diagrams/pipeline'
+import { semanticChecksum } from '@/lib/patent-diagrams/pipeline'
 import { buildFigureSetPlanningPrompt } from '@/lib/patent-diagrams/prompts'
 import { validateDiagramExportReadiness } from '@/lib/patent-diagrams/export'
 
@@ -146,9 +145,9 @@ describe('deterministic patent diagram builders', () => {
       ],
     })
     const builtProcess = buildPatentDiagram(process, components)
-    // These fixture components carry plain component reference signs (100, 200),
-    // not step signs, so no step numeral is derivable — and none may be minted.
-    expect(builtProcess.plantumlCode).toMatch(/rectangle "Receive invention\\ndisclosure" as M[A-Z0-9_]+/)
+    // The anchored step carries the performing component's numeral as its last
+    // label line; no S-sign may be minted for plain numeric reference labels.
+    expect(builtProcess.plantumlCode).toMatch(/rectangle "Receive invention\\ndisclosure\\n\(100\)" as M[A-Z0-9_]+/)
     // PlantUML rejects `diamond` in deployment syntax; decisions render as
     // stereotyped rectangles styled centrally by rectangle<<DECISION>>.
     expect(builtProcess.plantumlCode).toMatch(/rectangle "Disclosure complete" as M[A-Z0-9_]+ <<DECISION>>/)
@@ -180,46 +179,13 @@ describe('deterministic patent diagram builders', () => {
   })
 })
 
-describe('claim chunking for concurrent coverage extraction', () => {
-  const claimsOf = (count: number, length: number) =>
-    Array.from({ length: count }, (_, index) => ({ number: index + 1, type: 'dependent' as const, text: 'w'.repeat(length) }))
-  const tokensOf = (claim: { text: string }) => Math.ceil((claim.text.length + 120) / 4)
-  const chunkTokens = (chunk: Array<{ text: string }>) => chunk.reduce((sum, claim) => sum + tokensOf(claim), 0)
-
-  test('splits evenly rather than packing one chunk full and leaving a remainder', () => {
-    // Greedy packing put 20 claims in the first chunk and 1 in the second, so
-    // the concurrent extraction was still gated on one long call.
-    const chunks = claimChunks(claimsOf(21, 460))
-    expect(chunks.length).toBeGreaterThan(1)
-    const sizes = chunks.map(chunk => chunk.length)
-    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1)
-  })
-
-  test('never exceeds the token ceiling and keeps every claim exactly once', () => {
-    const claims = claimsOf(40, 700)
-    const chunks = claimChunks(claims)
-    chunks.forEach(chunk => expect(chunkTokens(chunk)).toBeLessThanOrEqual(3_000))
-    expect(chunks.flat().map(claim => claim.number)).toEqual(claims.map(claim => claim.number))
-  })
-
-  test('a short claim set stays a single chunk', () => {
-    expect(claimChunks(claimsOf(3, 350))).toHaveLength(1)
-  })
-
-  test('an oversized single claim still gets its own chunk', () => {
-    const chunks = claimChunks(claimsOf(2, 20_000))
-    expect(chunks).toHaveLength(2)
-    expect(chunks.every(chunk => chunk.length === 1)).toBe(true)
-  })
-})
-
-describe('component uniqueness is per figure kind', () => {
-  // A live 4-figure run failed outright on DUPLICATE_COMPONENT because the check
-  // flattened every process step's component: one controller performing three
-  // steps read as three duplicates, which is what an ordinary flowchart is.
+describe('repeated components across figure kinds', () => {
+  // A live 4-figure run once failed outright on DUPLICATE_COMPONENT because the
+  // check flattened every process step's component: one controller performing
+  // three steps read as three duplicates, which is what a flowchart is.
   test('one component may perform several process steps', () => {
     const process = patentDiagramSchema.parse({
-      schemaVersion: 2, kind: 'PROCESS', key: 'method', title: 'Control Method', purpose: 'Show the method',
+      schemaVersion: 3, kind: 'PROCESS', key: 'method', title: 'Control Method', purpose: 'Show the method',
       detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
       nodes: [
         { key: 'compare', kind: 'STEP', componentId: 'c1', label: 'Compare measured level' },
@@ -231,31 +197,38 @@ describe('component uniqueness is per figure kind', () => {
         { fromId: 'suppress', toId: 'derive', category: 'PRIMARY' },
       ],
     })
-    const issues = validatePatentDiagram(process, components).issues
-    expect(issues.filter(issue => issue.code === 'DUPLICATE_COMPONENT')).toEqual([])
+    const built = buildPatentDiagram(process, components)
+    if (built.diagram.kind !== 'PROCESS') throw new Error('expected process diagram')
+    expect(built.diagram.nodes).toHaveLength(3)
+    expect(built.validation.filingReady).toBe(true)
   })
 
-  test('repeating a component in a component figure is still a defect', () => {
+  test('a component repeated in a component figure is deduped, not rejected', () => {
     const diagram = patentDiagramSchema.parse({
-      schemaVersion: 2, kind: 'COMPONENT', key: 'arch', title: 'Architecture', purpose: 'Show the system',
+      schemaVersion: 3, kind: 'COMPONENT', key: 'arch', title: 'Architecture', purpose: 'Show the system',
       detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], systemBoundaryLabel: 'System',
       groups: [{ id: 'g1', label: 'Subsystem', rows: [{ componentIds: ['c1', 'c2'] }] }],
       components: [{ componentId: 'c1' }, { componentId: 'c2' }, { componentId: 'c1' }],
       relationships: [],
     })
-    const issues = validatePatentDiagram(diagram, components).issues
-    expect(issues.some(issue => issue.code === 'DUPLICATE_COMPONENT' && issue.severity === 'error')).toBe(true)
+    const built = buildPatentDiagram(diagram, components)
+    if (built.diagram.kind !== 'COMPONENT') throw new Error('expected component diagram')
+    expect(built.diagram.components.map(node => node.componentId)).toEqual(['c1', 'c2'])
+    expect(built.validation.filingReady).toBe(true)
+    expect(built.validation.corrections.join(' ')).toMatch(/duplicate component/i)
   })
 
-  test('repeating a participant in a sequence figure is still a defect', () => {
+  test('a participant repeated in a sequence figure is deduped, not rejected', () => {
     const diagram = patentDiagramSchema.parse({
-      schemaVersion: 2, kind: 'SEQUENCE', key: 'flow', title: 'Interactions', purpose: 'Show interactions',
+      schemaVersion: 3, kind: 'SEQUENCE', key: 'flow', title: 'Interactions', purpose: 'Show interactions',
       detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
-      participants: [{ componentId: 'c1' }, { componentId: 'c1' }],
-      interactions: [{ order: 1, fromId: 'c1', toId: 'c1', label: 'reports level', category: 'PRIMARY' }],
+      participants: [{ componentId: 'c1' }, { componentId: 'c1' }, { componentId: 'c2' }],
+      interactions: [{ order: 1, fromId: 'c1', toId: 'c2', label: 'reports level', category: 'PRIMARY' }],
     })
-    const issues = validatePatentDiagram(diagram, components).issues
-    expect(issues.some(issue => issue.code === 'DUPLICATE_COMPONENT' && issue.severity === 'error')).toBe(true)
+    const built = buildPatentDiagram(diagram, components)
+    if (built.diagram.kind !== 'SEQUENCE') throw new Error('expected sequence diagram')
+    expect(built.diagram.participants.map(item => item.componentId)).toEqual(['c1', 'c2'])
+    expect(built.validation.filingReady).toBe(true)
   })
 })
 
@@ -401,42 +374,56 @@ describe('deterministic normalization before validation', () => {
     expect(built.validation.issues.some(issue => issue.code === 'UNKNOWN_COMPONENT')).toBe(false)
   })
 
-  test('citation checks stay warnings and only run when a catalog exists', () => {
+  test('an unanchored step is a review note, never a blocker', () => {
     const diagram = patentDiagramSchema.parse({
-      schemaVersion: 1, kind: 'PROCESS', key: 'cite', title: 'Process', purpose: 'Citation fixture',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], evidenceIds: ['SF-processSteps-1'],
+      schemaVersion: 3, kind: 'PROCESS', key: 'cite', title: 'Process', purpose: 'Grounding fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
       nodes: [
-        { key: 'cited', kind: 'STEP', componentId: 'c1', label: 'Perform disclosed operation', evidenceIds: ['SF-processSteps-1'] },
-        { key: 'uncited', kind: 'STEP', componentId: 'c2', label: 'Perform undisclosed operation' },
-        { key: 'bogus', kind: 'STEP', componentId: 'c3', label: 'Perform third operation', evidenceIds: ['SF-made-up-7'] },
+        { key: 'anchored', kind: 'STEP', componentId: 'c1', label: 'Perform disclosed operation' },
+        { key: 'loose', kind: 'STEP', label: 'Perform second operation' },
       ],
-      transitions: [
-        { fromId: 'cited', toId: 'uncited', label: '', category: 'PRIMARY' },
-        { fromId: 'uncited', toId: 'bogus', label: '', category: 'PRIMARY' },
-      ],
+      transitions: [{ fromId: 'anchored', toId: 'loose', label: '', category: 'PRIMARY' }],
     })
-    const catalog = new Set(['SF-processSteps-1'])
-    const built = buildPatentDiagram(diagram, components, catalog)
-
-    const codes = built.validation.issues.map(issue => `${issue.severity}:${issue.code}`)
-    expect(codes).toContain('warning:UNCITED_STEP')
-    // The invented ID is stripped by normalization, which leaves that step
-    // uncited rather than silently accepted.
-    expect(built.validation.corrections).toContain('Removed unrecognized disclosure evidence SF-made-up-7 from step bogus')
-    expect(built.validation.issues.filter(issue => issue.code === 'UNCITED_STEP')).toHaveLength(2)
-    // Warnings only: persisted figures must keep rendering, translating and exporting.
+    const built = buildPatentDiagram(diagram, components)
+    const ungrounded = built.validation.issues.filter(issue => issue.code === 'UNGROUNDED_STEP')
+    expect(ungrounded).toHaveLength(1)
+    expect(ungrounded[0].severity).toBe('warning')
     expect(built.validation.filingReady).toBe(true)
-
-    // With no catalog the gate is inert.
-    const withoutCatalog = buildPatentDiagram(diagram, components)
-    expect(withoutCatalog.validation.issues.some(issue => issue.code === 'UNCITED_STEP')).toBe(false)
   })
 
-  test('treats disclosure evidence gaps as review notes, not blockers', () => {
-    const diagram = componentDiagramWith({ evidenceIds: [] })
-    const report = validatePatentDiagram(diagram, components, new Set(['SF-1']))
-    expect(report.issues.find(i => i.code === 'MISSING_DISCLOSURE_EVIDENCE')?.severity).toBe('warning')
-    expect(report.filingReady).toBe(true)
+  test('anchored process boxes carry their component numerals', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 3, kind: 'PROCESS', key: 'numbered', title: 'Method', purpose: 'Numbering fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      nodes: [
+        { key: 'n1', kind: 'STEP', componentId: 'c1', label: 'Measure signal' },
+        { key: 'n2', kind: 'DECISION', componentId: 'c3', label: 'Above threshold' },
+      ],
+      transitions: [{ fromId: 'n1', toId: 'n2', label: '', category: 'PRIMARY' }],
+    })
+    const built = buildPatentDiagram(diagram, components)
+    // Same numbering convention as every other kind: the performing component's
+    // reference numeral is the last label line — decisions included.
+    expect(built.plantumlCode).toContain('Measure signal\\n(100)')
+    expect(built.plantumlCode).toContain('Above threshold\\n(300)')
+  })
+
+  test('a step whose only linkage is one related component inherits its anchor and numeral', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 3, kind: 'PROCESS', key: 'promoted', title: 'Method', purpose: 'Anchor promotion fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      nodes: [
+        { key: 'n1', kind: 'STEP', relatedComponentIds: ['c2'], label: 'Filter samples' },
+        { key: 'n2', kind: 'STEP', componentId: 'c1', label: 'Store result' },
+      ],
+      transitions: [{ fromId: 'n1', toId: 'n2', label: '', category: 'PRIMARY' }],
+    })
+    const built = buildPatentDiagram(diagram, components)
+    if (built.diagram.kind !== 'PROCESS') throw new Error('expected process diagram')
+    expect(built.diagram.nodes[0].componentId).toBe('c2')
+    expect(built.plantumlCode).toContain('Filter samples\\n(200)')
+    expect(built.validation.corrections).toContain('Anchored step n1 to its only related component c2')
+    expect(built.validation.issues.some(issue => issue.code === 'UNGROUNDED_STEP')).toBe(false)
   })
 
   test('normalization is idempotent', () => {
@@ -451,93 +438,33 @@ describe('deterministic normalization before validation', () => {
 })
 
 describe('complexity and filing validation', () => {
-  test('decomposes the 24-component, six-band representative case', () => {
+  test('reports a dense figure as a review note and still draws it', () => {
     const groups = Array.from({ length: 6 }, (_, groupIndex) => ({
       id: `g${groupIndex + 1}`,
       label: `Subsystem ${groupIndex + 1}`,
       rows: [{ componentIds: Array.from({ length: 4 }, (_, itemIndex) => `c${groupIndex * 4 + itemIndex + 1}`) }],
     }))
     const diagram = patentDiagramSchema.parse({
-      schemaVersion: 1, kind: 'COMPONENT', key: 'complex', title: 'Complex System', purpose: 'Show system',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c1', 'c24'],
-      evidenceIds: ['CLM-node', 'CLM-relation'], coverageRequirementIds: ['COV-node', 'COV-relation'], systemBoundaryLabel: 'Complex System',
+      schemaVersion: 3, kind: 'COMPONENT', key: 'complex', title: 'Complex System', purpose: 'Show system',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c1', 'c24'], systemBoundaryLabel: 'Complex System',
       groups,
-      components: components.map(component => ({ componentId: component.id, coverageRequirementIds: component.id === 'c24' ? ['COV-node'] : [] })),
+      components: components.map(component => ({ componentId: component.id })),
       relationships: Array.from({ length: 23 }, (_, index) => ({
         fromId: `c${index + 1}`, toId: `c${index + 2}`, label: 'technical flow', category: 'PRIMARY',
-        evidenceIds: index === 3 ? ['CLM-relation'] : [], coverageRequirementIds: index === 3 ? ['COV-relation'] : [],
       })),
     })
-    expect(analyzeDiagramComplexity(diagram).requiresSplit).toBe(true)
-    const split = decomposePatentDiagram(diagram)
-    expect(split.length).toBeGreaterThan(1)
-    expect(split[0].detailLevel).toBe('OVERVIEW')
-    expect(split.slice(1).every(item => item.kind === 'COMPONENT' && item.groups.length <= 4)).toBe(true)
-    const covered = new Set(split.slice(1).flatMap(item => item.kind === 'COMPONENT' ? item.components.map(node => node.componentId) : []))
-    expect(covered.size).toBe(24)
-    const preservedRelationships = split.slice(1).flatMap(item => item.kind === 'COMPONENT' ? item.relationships : [])
-    expect(preservedRelationships).toHaveLength(23)
-    expect(new Set(preservedRelationships.map(link => `${link.fromId}:${link.toId}`)).size).toBe(23)
-    expect(new Set(split.flatMap(item => item.coverageRequirementIds))).toEqual(new Set(['COV-node', 'COV-relation']))
-    for (const item of split) {
-      if (item.kind !== 'COMPONENT') continue
-      const atomic = new Set([
-        ...item.components.flatMap(node => node.coverageRequirementIds),
-        ...item.relationships.flatMap(link => link.coverageRequirementIds),
-      ])
-      expect(new Set(item.coverageRequirementIds)).toEqual(atomic)
-    }
-    const originalPairs = new Set((diagram.kind === 'COMPONENT' ? diagram.relationships : []).map(link => `${link.fromId}:${link.toId}`))
-    const overview = split[0]
-    expect(overview.kind).toBe('COMPONENT')
-    if (overview.kind === 'COMPONENT') {
-      expect(overview.relationships.every(link => originalPairs.has(`${link.fromId}:${link.toId}`))).toBe(true)
-    }
-  })
+    const metrics = analyzeDiagramComplexity(diagram)
+    expect(metrics.dense).toBe(true)
+    expect(metrics.densityNotes.length).toBeGreaterThan(0)
 
-  test('preserves sequence interactions, process transitions, and constituent relationships across splits', () => {
-    const sequence = patentDiagramSchema.parse({
-      schemaVersion: 1, kind: 'SEQUENCE', key: 'dense-sequence', title: 'Dense Sequence', purpose: 'Show transmissions',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
-      participants: components.slice(0, 8).map(component => ({ componentId: component.id })),
-      interactions: Array.from({ length: 16 }, (_, index) => ({
-        order: index + 1, fromId: `c${index % 8 + 1}`, toId: `c${(index + 1) % 8 + 1}`,
-        label: 'technical transmission', category: 'PRIMARY',
-      })),
-    })
-    const sequenceSplit = decomposePatentDiagram(sequence)
-    expect(sequenceSplit.flatMap(item => item.kind === 'SEQUENCE' ? item.interactions : [])).toHaveLength(16)
-    expect(sequenceSplit.every(item => item.kind === 'SEQUENCE' && item.participants.length <= 7)).toBe(true)
-
-    const process = patentDiagramSchema.parse({
-      schemaVersion: 1, kind: 'PROCESS', key: 'dense-process', title: 'Dense Process', purpose: 'Show technical method',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c1', 'c15'],
-      nodes: Array.from({ length: 15 }, (_, index) => ({ key: `step-${index + 1}`, kind: 'STEP', componentId: `c${index + 1}`, label: `Perform technical step ${index + 1}` })),
-      transitions: Array.from({ length: 14 }, (_, index) => ({ fromId: `step-${index + 1}`, toId: `step-${index + 2}`, label: 'next technical step', category: 'PRIMARY' })),
-    })
-    const processSplit = decomposePatentDiagram(process)
-    expect(processSplit.flatMap(item => item.kind === 'PROCESS' ? item.transitions : [])).toHaveLength(14)
-
-    const constituent = patentDiagramSchema.parse({
-      schemaVersion: 1, kind: 'CONSTITUENT', key: 'dense-constituent', title: 'Dense Composition', purpose: 'Show supported composition',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], boundaryLabel: 'Technical Composition',
-      constituents: components.slice(0, 17).map(component => ({ componentId: component.id, technicalRole: 'supported role' })),
-      relationships: Array.from({ length: 16 }, (_, index) => ({ fromId: `c${index + 1}`, toId: `c${index + 2}`, label: 'combined with', category: 'ASSOCIATION' })),
-    })
-    const constituentSplit = decomposePatentDiagram(constituent)
-    expect(constituentSplit.flatMap(item => item.kind === 'CONSTITUENT' ? item.relationships : [])).toHaveLength(16)
-  })
-
-  test('requires structured disclosure evidence when an evidence catalog exists', () => {
-    const diagram = patentDiagramSchema.parse({
-      schemaVersion: 1, kind: 'COMPONENT', key: 'evidence', title: 'Evidence Figure', purpose: 'Show disclosed structure',
-      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c1'], evidenceIds: [], systemBoundaryLabel: 'System',
-      groups: [{ id: 'g1', label: 'Subsystem', rows: [{ componentIds: ['c1', 'c2'] }] }],
-      components: [{ componentId: 'c1' }, { componentId: 'c2' }], relationships: [],
-    })
-    expect(validatePatentDiagram(diagram, components, new Set(['SF-componentsAndSubcomponents-1'])).issues.map(issue => issue.code)).toContain('MISSING_DISCLOSURE_EVIDENCE')
-    const unknown = validatePatentDiagram({ ...diagram, evidenceIds: ['invented-evidence'] }, components, new Set(['SF-componentsAndSubcomponents-1']))
-    expect(unknown.issues.map(issue => issue.code)).toContain('UNKNOWN_DISCLOSURE_EVIDENCE')
+    // Density never fails a figure: the attorney gets the drawing plus a note.
+    const built = buildPatentDiagram(diagram, components)
+    expect(built.validation.filingReady).toBe(true)
+    expect(built.validation.issues.filter(issue => issue.severity === 'error')).toEqual([])
+    expect(built.validation.issues.map(issue => issue.code)).toContain('DENSE_FIGURE')
+    if (built.diagram.kind !== 'COMPONENT') throw new Error('expected component diagram')
+    expect(built.diagram.components).toHaveLength(24)
+    expect(built.diagram.relationships).toHaveLength(23)
   })
 
   test('excludes stale translations and stale component-plan diagrams from export', () => {
@@ -621,18 +548,55 @@ describe('complexity and filing validation', () => {
   })
 })
 
-describe('figure-set planning grounding', () => {
+describe('figure-set planning', () => {
   const planningInput = {
     inventionTitle: 'Irrigation controller',
     patentType: 'SYSTEM',
     inventionContext: {},
     claimsContext: {},
     components,
+    figureCount: 4,
   }
 
-  test('shows the planner the disclosed method steps it must plan against', () => {
+  test('asks for one figure of each of the four kinds by default', () => {
+    const prompt = buildFigureSetPlanningPrompt(planningInput)
+    expect(prompt).toContain('plan exactly 4 figure(s)')
+    expect(prompt).toContain('1. COMPONENT')
+    expect(prompt).toContain('2. PROCESS')
+    expect(prompt).toContain('3. SEQUENCE')
+    expect(prompt).toContain('4. CONSTITUENT')
+  })
+
+  test('cycles the four kinds when more figures are requested', () => {
+    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, figureCount: 6 })
+    expect(prompt).toContain('plan exactly 6 figure(s)')
+    expect(prompt).toContain('5. COMPONENT')
+    expect(prompt).toContain('6. PROCESS')
+  })
+
+  test('lists the claim-recited components the plan must cover', () => {
+    const claimed: PatentDiagramComponent[] = [
+      { ...components[0], claimSupport: { matchedClaims: [1, 4], claimRole: 'claim_1' } },
+      components[1],
+    ]
+    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, components: claimed })
+    expect(prompt).toContain('must appear in the componentIds of at least one figure')
+    expect(prompt).toContain('c1 (claims 1,4)')
+  })
+
+  test('says so when claim matching has not run instead of implying coverage', () => {
+    const prompt = buildFigureSetPlanningPrompt(planningInput)
+    expect(prompt).toContain('claim-to-component matching has not run')
+  })
+
+  test('shows the planner the disclosed method steps and the claim-matched components', () => {
+    const claimed: PatentDiagramComponent[] = [
+      { ...components[0], claimSupport: { matchedClaims: [1, 4], claimRole: 'claim_1' } },
+      components[1],
+    ]
     const prompt = buildFigureSetPlanningPrompt({
       ...planningInput,
+      components: claimed,
       evidenceCatalog: [
         { id: 'SF-processSteps-1', value: 'Reading a moisture value from the probe' },
         { id: 'SF-other-1', value: 'Housing is weatherproof' },
@@ -640,59 +604,6 @@ describe('figure-set planning grounding', () => {
     })
     expect(prompt).toContain('DISCLOSED METHOD STEPS')
     expect(prompt).toContain('SF-processSteps-1')
-    expect(prompt).toContain('evidenceIds')
-  })
-
-  test('forbids planning a PROCESS figure when no operation is disclosed', () => {
-    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, evidenceCatalog: [] })
-    // Without disclosed steps a flowchart could only be invented downstream.
-    expect(prompt).toContain('Do NOT plan a PROCESS figure')
-    expect(prompt).toContain('DISCLOSED METHOD STEPS: none recorded')
-  })
-
-  test('tells the planner which components the claims name', () => {
-    const claimed: PatentDiagramComponent[] = [
-      { ...components[0], claimSupport: { matchedClaims: [1, 4], claimRole: 'claim_1' } },
-      components[1],
-    ]
-    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, components: claimed })
-    expect(prompt).toContain('must appear in the componentIds of at least one figure: c1')
     expect(prompt).toContain('claims=1,4')
-  })
-
-  test('reports claim-named components that no planned figure depicts', () => {
-    const claimed: PatentDiagramComponent[] = [
-      { ...components[0], claimSupport: { matchedClaims: [1], claimRole: 'claim_1' } },
-      { ...components[1], claimSupport: { matchedClaims: [2], claimRole: 'dependent_claim' } },
-    ]
-    const plan = {
-      schemaVersion: 1 as const,
-      figures: [{
-        key: 'f1', kind: 'COMPONENT' as const, title: 'Overview', purpose: 'Overview',
-        detailLevel: 'OVERVIEW' as const, direction: 'TB' as const,
-        componentIds: ['c1'], claimCriticalComponentIds: ['c1'],
-        orderedGroups: [], phaseHints: [], evidenceIds: [],
-      }],
-    }
-    const coverage = evaluateFigureSetClaimCoverage(plan, claimed)
-    expect(coverage.evaluated).toBe(true)
-    expect(coverage.missing.map(item => item.id)).toEqual(['c2'])
-    expect(coverage.missing[0].matchedClaims).toEqual([2])
-  })
-
-  test('reports coverage as unknown when claim matching has not run', () => {
-    const plan = {
-      schemaVersion: 1 as const,
-      figures: [{
-        key: 'f1', kind: 'COMPONENT' as const, title: 'Overview', purpose: 'Overview',
-        detailLevel: 'OVERVIEW' as const, direction: 'TB' as const,
-        componentIds: ['c1'], claimCriticalComponentIds: [],
-        orderedGroups: [], phaseHints: [], evidenceIds: [],
-      }],
-    }
-    // Claim matching is optional upstream, so absence must never look like a gap.
-    const coverage = evaluateFigureSetClaimCoverage(plan, components)
-    expect(coverage.evaluated).toBe(false)
-    expect(coverage.missing).toEqual([])
   })
 })

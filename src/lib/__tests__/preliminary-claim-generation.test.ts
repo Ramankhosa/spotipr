@@ -307,28 +307,84 @@ describe('preliminary claim generation helper', () => {
     expect(reset).not.toHaveProperty('claimsRefinementSource')
   })
 
-  test('allows claim reset only before downstream stages or artifacts exist', () => {
+  test('allows claim reset until a downstream artifact exists', () => {
     expect(shouldBlockPreliminaryClaimReset({
-      status: 'PRELIMINARY_CLAIMS',
       normalizedData: { claims: '<p>1. A system...</p>' },
     })).toBe(false)
 
-    expect(shouldBlockPreliminaryClaimReset({
-      status: 'RELATED_ART',
-      normalizedData: { claims: '<p>1. A system...</p>' },
-    })).toBe(true)
+    const artifacts = [
+      'relatedArtRunCount',
+      'relatedArtSelectionCount',
+      'referenceMapCount',
+      'figurePlanCount',
+      'annexureDraftCount',
+    ] as const
+
+    artifacts.forEach((key) => {
+      expect(shouldBlockPreliminaryClaimReset({
+        normalizedData: { claims: '<p>1. A system...</p>' },
+        [key]: 1,
+      })).toBe(true)
+    })
 
     expect(shouldBlockPreliminaryClaimReset({
-      status: 'PRELIMINARY_CLAIMS',
-      normalizedData: { claims: '<p>1. A system...</p>' },
-      relatedArtRunCount: 1,
-    })).toBe(true)
-
-    expect(shouldBlockPreliminaryClaimReset({
-      status: 'PRELIMINARY_CLAIMS',
       normalizedData: {
         claims: '<p>1. A system...</p>',
         claimsRefinementPreview: { refinedClaims: [] },
+      },
+    })).toBe(true)
+  })
+
+  test('reset is judged by artifacts, not by where the user has navigated', () => {
+    // A user may move forward and back through the pipeline freely. Sitting on a later stage
+    // that has produced nothing is not downstream work, and previously blocked the reset with
+    // a message claiming work existed when it did not.
+    expect(shouldBlockPreliminaryClaimReset({
+      normalizedData: { claims: '<p>1. A system...</p>' },
+      relatedArtRunCount: 0,
+      relatedArtSelectionCount: 0,
+      referenceMapCount: 0,
+      figurePlanCount: 0,
+      annexureDraftCount: 0,
+    })).toBe(false)
+  })
+
+  test('skipping prior art or refinement does not block a reset', () => {
+    // Both skip paths stamp claimsRefinementSource and freeze the claims as final without
+    // deriving anything from them, so a reset must still be allowed.
+    const skipped = ['SKIPPED', 'SKIPPED_REFINEMENT']
+    skipped.forEach((mode) => {
+      expect(shouldBlockPreliminaryClaimReset({
+        normalizedData: {
+          claims: '<p>1. A system...</p>',
+          claimsRefinementSource: { mode, skipPriorArt: true, appliedAt: '2026-05-06T00:00:00.000Z' },
+        },
+      })).toBe(false)
+    })
+
+    // Falsy leftovers are not evidence of refinement either.
+    expect(shouldBlockPreliminaryClaimReset({
+      normalizedData: {
+        claims: '<p>1. A system...</p>',
+        claimsRefinementApplied: false,
+        claimsRefinementNotes: '',
+      },
+    })).toBe(false)
+
+    // Applied refinement still blocks, in every mode that rewrites the claims.
+    ;['AUTO', 'MANUAL', 'HYBRID'].forEach((mode) => {
+      expect(shouldBlockPreliminaryClaimReset({
+        normalizedData: {
+          claims: '<p>1. A system...</p>',
+          claimsRefinementSource: { mode, appliedAt: '2026-05-06T00:00:00.000Z' },
+        },
+      })).toBe(true)
+    })
+
+    expect(shouldBlockPreliminaryClaimReset({
+      normalizedData: {
+        claims: '<p>1. A system...</p>',
+        claimsRefinementNotes: 'Claim 1: narrowed to the source-supported combination.',
       },
     })).toBe(true)
   })

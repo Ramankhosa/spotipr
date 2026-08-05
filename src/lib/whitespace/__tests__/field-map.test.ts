@@ -39,10 +39,11 @@ describe('buildConceptQuery', () => {
 describe('emptyFieldAdvice', () => {
   const LANE_DID_NOT_RUN = 'The semantic lane did not run'
 
-  it('names the semantic lane when a binary installation has no calibrated ceiling', () => {
-    // The production state right after deploy: Voyage vectors, env var unset.
-    // An earlier keyword list missed this reason and the advice dropped its
-    // most relevant sentence exactly where it mattered most.
+  it('names the semantic lane when no ceiling could be estimated for the query', () => {
+    // Reached when the background sample is too thin to derive a ceiling from.
+    // The keyword list has now missed this reason TWICE — once when it said
+    // "uncalibrated" and again when the wording moved to "estimated" — so it is
+    // pinned here in both directions.
     const advice = emptyFieldAdvice(emptyWhitespaceScope(), UNCALIBRATED_REASON)
 
     expect(advice).toContain(LANE_DID_NOT_RUN)

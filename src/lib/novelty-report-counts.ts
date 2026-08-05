@@ -1,3 +1,5 @@
+import { normalizeRerankDecision, type PriorArtGateRecord, type RerankDecision } from './novelty-prior-art-visibility';
+
 export interface NoveltyReportCountSummary {
   patentsSearched: number;
   patentsFound: number;
@@ -66,6 +68,38 @@ function boundedCount(value: number, max: number) {
   return Math.min(Math.max(0, value), max);
 }
 
+/**
+ * Count gate decisions from the full `byPn` record map.
+ *
+ * `aiRelevance.borderline` is a UI-sized list capped at `stage15.borderlineQuota`
+ * (5 by default), so counting it under-reports every run that reviewed more than
+ * five borderline candidates. `byPn` holds every reviewed decision, keyed under
+ * several aliases per publication, so dedupe by canonical number.
+ *
+ * Returns null when no gate record map is available, so callers fall back to the
+ * legacy list-derived counts.
+ */
+function decisionCountsFromGateRecords(byPn: unknown): Record<RerankDecision, number> | null {
+  if (!byPn || typeof byPn !== 'object' || Array.isArray(byPn)) return null;
+  const entries = Object.entries(byPn as Record<string, PriorArtGateRecord | undefined>);
+  if (entries.length === 0) return null;
+
+  const decisionByCanonical = new Map<string, RerankDecision>();
+  for (const [key, record] of entries) {
+    if (!record || typeof record !== 'object') continue;
+    const canonical = canonicalPatentNumber(cleanText(record.pn) || key);
+    if (!canonical || decisionByCanonical.has(canonical)) continue;
+    decisionByCanonical.set(canonical, normalizeRerankDecision(record.rerankDecision || record.decision));
+  }
+  if (decisionByCanonical.size === 0) return null;
+
+  const counts: Record<RerankDecision, number> = { accept: 0, component: 0, borderline: 0, reject: 0 };
+  Array.from(decisionByCanonical.values()).forEach((decision: RerankDecision) => {
+    counts[decision] += 1;
+  });
+  return counts;
+}
+
 export function buildNoveltyReportCountSummary(stage1: any, stage35: any): NoveltyReportCountSummary {
   const aiRelevance = stage1?.aiRelevance || {};
   const detailedCitations = Array.isArray(stage35?.feature_map) ? stage35.feature_map.length : 0;
@@ -79,10 +113,19 @@ export function buildNoveltyReportCountSummary(stage1: any, stage35: any): Novel
     stage1?.priorArtResults,
     stage1?.pqaiResults
   );
-  const directMatches = uniquePatentCount(aiRelevance?.accepted);
-  const componentMatches = uniquePatentCount(aiRelevance?.component);
-  const borderlineMatches = uniquePatentCount(aiRelevance?.borderline);
-  const gateMatchUnique = uniquePatentCount(aiRelevance?.accepted, aiRelevance?.component, aiRelevance?.borderline);
+  const gateDecisionCounts = decisionCountsFromGateRecords(aiRelevance?.byPn);
+  const directMatches = gateDecisionCounts
+    ? gateDecisionCounts.accept
+    : uniquePatentCount(aiRelevance?.accepted);
+  const componentMatches = gateDecisionCounts
+    ? gateDecisionCounts.component
+    : uniquePatentCount(aiRelevance?.component);
+  const borderlineMatches = gateDecisionCounts
+    ? gateDecisionCounts.borderline
+    : uniquePatentCount(aiRelevance?.borderline);
+  const gateMatchUnique = gateDecisionCounts
+    ? gateDecisionCounts.accept + gateDecisionCounts.component + gateDecisionCounts.borderline
+    : uniquePatentCount(aiRelevance?.accepted, aiRelevance?.component, aiRelevance?.borderline);
   const patentsSearched = finiteCount(
     stage1?.retrievedCount,
     aiRelevance?.retrievedCount,
@@ -98,7 +141,7 @@ export function buildNoveltyReportCountSummary(stage1: any, stage35: any): Novel
     ),
     patentsSearched
   );
-  const hasComponentCategory = Array.isArray(aiRelevance?.component);
+  const hasComponentCategory = Boolean(gateDecisionCounts) || Array.isArray(aiRelevance?.component);
   const directlyRelevant = boundedCount(
     hasComponentCategory
       ? directMatches

@@ -19,6 +19,7 @@ const KIND_CODE_VARIANTS = ['A', 'A1', 'A2', 'A4', 'B', 'B1', 'B2', 'B4', 'C', '
 const METADATA_SELECT = {
   publicationNumber: true,
   applicationNumberRaw: true,
+  familyId: true,
   title: true,
   abstract: true,
   abstractOriginal: true,
@@ -85,6 +86,9 @@ function localPatentToMetadata(patent: any) {
     pn: patent.publicationNumber,
     applicationNumber: patent.applicationNumberRaw || null,
     applicationNumberRaw: patent.applicationNumberRaw || null,
+    // Carried so a report recomputed at render time can reproduce the pipeline's
+    // family grouping instead of falling back to per-publication behaviour.
+    familyId: patent.familyId || null,
     title: patent.title,
     abstract: patent.abstract || patent.abstractOriginal || null,
     abstractOriginal: patent.abstractOriginal || null,
@@ -168,6 +172,15 @@ function patentNumbersFromSearchRun(searchRun: any): string[] {
     if (text) numbers.add(text);
   };
 
+  // Analysed references first. The lookup below is capped, and the retrieval pool
+  // can hold 300 candidates, so leading with the pool can push the very references
+  // the report renders in detail outside the window.
+  const featureMaps = Array.isArray(stage35?.feature_map) ? stage35.feature_map : [];
+  featureMaps.forEach((item: any) => add(item?.pn || item?.publicationNumber || item?.publication_number));
+
+  const remarks = Array.isArray(stage4?.per_patent_remarks) ? stage4.per_patent_remarks : [];
+  remarks.forEach((item: any) => add(item?.pn || item?.publicationNumber || item?.publication_number || item?.patent_number));
+
   [
     stage1.visiblePriorArtResults,
     stage1.gatedCandidates,
@@ -181,12 +194,6 @@ function patentNumbersFromSearchRun(searchRun: any): string[] {
     if (!Array.isArray(source)) return;
     source.forEach(item => add(getPublicationNumber(item)));
   });
-
-  const featureMaps = Array.isArray(stage35?.feature_map) ? stage35.feature_map : [];
-  featureMaps.forEach((item: any) => add(item?.pn || item?.publicationNumber || item?.publication_number));
-
-  const remarks = Array.isArray(stage4?.per_patent_remarks) ? stage4.per_patent_remarks : [];
-  remarks.forEach((item: any) => add(item?.pn || item?.publicationNumber || item?.publication_number || item?.patent_number));
 
   return Array.from(numbers);
 }

@@ -10,6 +10,20 @@ import type {
 } from './types'
 import { relationshipVisualStyle } from './relationships'
 
+/**
+ * Validation is advisory.
+ *
+ * normalizePatentDiagram runs first and mechanically repairs every defect that
+ * can be repaired — unknown IDs, duplicates, over-wide rows, over-long labels,
+ * dangling connectors. Whatever reaches this function is therefore either
+ * drawable or a note for the attorney, so findings are reported and none of
+ * them fail a figure. Density in particular is a note: a dense drawing is a
+ * dense drawing, not an unfileable one, and splitting it is the attorney's call.
+ *
+ * The only genuine errors left are in validatePatentPlantUmlSource, which
+ * inspects the source this module itself emitted.
+ */
+
 function words(value: string | undefined): number {
   return String(value || '').trim().split(/\s+/).filter(Boolean).length
 }
@@ -32,7 +46,7 @@ export function analyzeDiagramComplexity(diagram: PatentDiagram): DiagramComplex
   let crossLayerConnectorCount = 0
   let nestingDepth = 1
   let branchDepth = 0
-  const splitReasons: string[] = []
+  const densityNotes: string[] = []
 
   if (diagram.kind === 'COMPONENT') {
     visibleNodeCount = diagram.components.length
@@ -48,19 +62,16 @@ export function analyzeDiagramComplexity(diagram: PatentDiagram): DiagramComplex
       const to = groupByComponent.get(link.toId)
       return from && to && from !== to
     }).length
-    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.component.splitComponents) splitReasons.push(`component count ${visibleNodeCount} exceeds ${PATENT_DIAGRAM_COMPLEXITY.component.splitComponents}`)
-    if (connectorCount > PATENT_DIAGRAM_COMPLEXITY.component.splitConnectors) splitReasons.push(`connector count ${connectorCount} exceeds ${PATENT_DIAGRAM_COMPLEXITY.component.splitConnectors}`)
-    if (maximumRowSize > PATENT_DIAGRAM_STYLE.maximumComponentsPerRow) splitReasons.push(`row size ${maximumRowSize} exceeds ${PATENT_DIAGRAM_STYLE.maximumComponentsPerRow}`)
-    if (diagram.detailLevel === 'DETAIL' && groupCount > PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands) splitReasons.push(`detailed figure contains ${groupCount} subsystem bands`)
+    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.component.warningComponents) densityNotes.push(`${visibleNodeCount} components`)
+    if (connectorCount > PATENT_DIAGRAM_COMPLEXITY.component.warningConnectors) densityNotes.push(`${connectorCount} connectors`)
+    if (groupCount > PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands) densityNotes.push(`${groupCount} subsystem bands`)
   } else if (diagram.kind === 'SEQUENCE') {
     visibleNodeCount = diagram.participants.length
     connectorCount = diagram.interactions.length
     maximumRowSize = visibleNodeCount
     maximumLabelWords = Math.max(0, ...diagram.interactions.map(item => words(item.label)))
-    const alternativeConditions = new Set(diagram.interactions.map(item => item.alternative?.condition).filter(Boolean))
-    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.sequence.splitParticipants) splitReasons.push(`participant count ${visibleNodeCount} exceeds ${PATENT_DIAGRAM_COMPLEXITY.sequence.splitParticipants}`)
-    if (connectorCount > PATENT_DIAGRAM_COMPLEXITY.sequence.splitInteractions) splitReasons.push(`interaction count ${connectorCount} exceeds ${PATENT_DIAGRAM_COMPLEXITY.sequence.splitInteractions}`)
-    if (alternativeConditions.size > PATENT_DIAGRAM_COMPLEXITY.sequence.maximumAlternatives) splitReasons.push('sequence contains multiple independent alternatives')
+    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.sequence.warningParticipants) densityNotes.push(`${visibleNodeCount} participants`)
+    if (connectorCount > PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions) densityNotes.push(`${connectorCount} interactions`)
   } else if (diagram.kind === 'PROCESS') {
     visibleNodeCount = diagram.nodes.length
     connectorCount = diagram.transitions.length
@@ -76,14 +87,13 @@ export function analyzeDiagramComplexity(diagram: PatentDiagram): DiagramComplex
       return own + Math.max(0, ...(outgoing.get(key) || []).map(next => measureDecisionDepth(next, nextVisiting)))
     }
     branchDepth = Math.max(0, ...diagram.nodes.map(node => measureDecisionDepth(node.key)))
-    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.process.splitNodes) splitReasons.push(`process node count ${visibleNodeCount} exceeds ${PATENT_DIAGRAM_COMPLEXITY.process.splitNodes}`)
-    if (branchDepth > PATENT_DIAGRAM_COMPLEXITY.process.maximumBranchDepth) splitReasons.push(`process branch depth ${branchDepth} exceeds ${PATENT_DIAGRAM_COMPLEXITY.process.maximumBranchDepth}`)
+    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.process.warningNodes) densityNotes.push(`${visibleNodeCount} steps`)
   } else {
     visibleNodeCount = diagram.constituents.length
     connectorCount = diagram.relationships.length
     maximumRowSize = Math.min(visibleNodeCount, PATENT_DIAGRAM_STYLE.maximumComponentsPerRow)
     maximumLabelWords = Math.max(0, ...diagram.constituents.map(node => words(node.displayLabel)))
-    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.constituent.splitConstituents) splitReasons.push(`constituent count ${visibleNodeCount} exceeds ${PATENT_DIAGRAM_COMPLEXITY.constituent.splitConstituents}`)
+    if (visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents) densityNotes.push(`${visibleNodeCount} constituents`)
   }
 
   return {
@@ -95,8 +105,8 @@ export function analyzeDiagramComplexity(diagram: PatentDiagram): DiagramComplex
     crossLayerConnectorCount,
     nestingDepth,
     branchDepth,
-    requiresSplit: splitReasons.length > 0,
-    splitReasons,
+    dense: densityNotes.length > 0,
+    densityNotes,
   }
 }
 
@@ -105,8 +115,6 @@ function relationshipPairs(diagram: PatentDiagram): Array<{
   toId: string
   label?: string
   category?: RelationshipCategory
-  evidenceIds: string[]
-  coverageRequirementIds: string[]
 }> {
   if (diagram.kind === 'COMPONENT' || diagram.kind === 'CONSTITUENT') return diagram.relationships
   if (diagram.kind === 'SEQUENCE') return diagram.interactions
@@ -116,162 +124,61 @@ function relationshipPairs(diagram: PatentDiagram): Array<{
 export function validatePatentDiagram(
   diagram: PatentDiagram,
   components: PatentDiagramComponent[],
-  supportedEvidenceIds?: Set<string>,
 ): DiagramValidationReport {
   const issues: DiagramValidationIssue[] = []
   const componentById = new Map(components.map(component => [component.id, component]))
   const visibleIds = diagramComponentIds(diagram)
   const visibleSet = new Set(visibleIds)
-  // In COMPONENT, SEQUENCE and CONSTITUENT figures a component is one drawn box
-  // or lifeline, so naming it twice is a real defect. A PROCESS figure draws
-  // STEPS, and one component legitimately performs several of them (a controller
-  // that compares, then suppresses, then derives) — plus relatedComponentIds
-  // repeats participants by design. Counting those as duplicates made an
-  // ordinary flowchart fail with a fatal DUPLICATE_COMPONENT; step identity is
-  // enforced separately through unique node keys.
-  const duplicateIds = diagram.kind === 'PROCESS'
-    ? []
-    : visibleIds.filter((id, index) => visibleIds.indexOf(id) !== index)
-  const validateSemanticEvidence = (label: string, evidenceIds: string[], coverageRequirementIds: string[], alwaysCite = false) => {
-    const citationRequired = coverageRequirementIds.length > 0 || (alwaysCite && !!supportedEvidenceIds?.size)
-    if (citationRequired && !evidenceIds.length) {
-      issues.push({
-        code: 'UNCITED_SEMANTIC_ELEMENT', severity: 'warning',
-        message: coverageRequirementIds.length
-          ? `${label} covers a claim requirement but cites no supporting evidence`
-          : `${label} cites no supporting disclosure evidence`,
-      })
-    }
-    if (supportedEvidenceIds?.size) {
-      evidenceIds.filter(id => !supportedEvidenceIds.has(id)).forEach(id => issues.push({
-        code: 'UNKNOWN_SEMANTIC_EVIDENCE', severity: 'warning', message: `${label} cites unrecognized evidence ID: ${id}`,
-      }))
-    }
-  }
 
-  for (const id of Array.from(new Set(duplicateIds))) {
-    issues.push({ code: 'DUPLICATE_COMPONENT', severity: 'error', message: `Component ${id} appears more than once`, componentId: id })
-  }
   for (const id of Array.from(visibleSet)) {
     if (!componentById.has(id)) {
-      issues.push({ code: 'UNKNOWN_COMPONENT', severity: 'error', message: `Unknown Component Planner ID: ${id}`, componentId: id })
+      issues.push({ code: 'UNKNOWN_COMPONENT', severity: 'warning', message: `Component ${id} is not in the Component Plan`, componentId: id })
     }
   }
 
   const missingCritical = diagram.claimCriticalComponentIds.filter(id => !visibleSet.has(id))
   missingCritical.forEach(id => issues.push({
-    code: 'MISSING_CLAIM_CRITICAL_COMPONENT', severity: 'error',
+    code: 'MISSING_CLAIM_CRITICAL_COMPONENT', severity: 'warning',
     message: `Claim-critical component ${id} is absent from the figure`, componentId: id,
   }))
-  // Evidence IDs are provenance metadata, not drawn content: a figure whose
-  // elements and relationships are all valid is still a correct drawing without
-  // them, so these are review notes rather than filing blockers.
-  if (supportedEvidenceIds?.size) {
-    if (!diagram.evidenceIds.length) {
-      issues.push({ code: 'MISSING_DISCLOSURE_EVIDENCE', severity: 'warning', message: 'Figure has no linked disclosure evidence IDs' })
-    }
-    diagram.evidenceIds.filter(id => !supportedEvidenceIds.has(id)).forEach(id => {
-      issues.push({ code: 'UNKNOWN_DISCLOSURE_EVIDENCE', severity: 'warning', message: `Unrecognized disclosure evidence ID: ${id}` })
-    })
-  }
 
-  const seenRelationships = new Set<string>()
   for (const link of relationshipPairs(diagram)) {
-    if (!visibleSet.has(link.fromId) && diagram.kind !== 'PROCESS') {
-      issues.push({ code: 'UNKNOWN_RELATION_ENDPOINT', severity: 'error', message: `Relationship source ${link.fromId} is not visible` })
-    }
-    if (!visibleSet.has(link.toId) && diagram.kind !== 'PROCESS') {
-      issues.push({ code: 'UNKNOWN_RELATION_ENDPOINT', severity: 'error', message: `Relationship target ${link.toId} is not visible` })
-    }
-    const signature = `${link.fromId}\u0000${link.toId}\u0000${String(link.label || '').toLowerCase()}\u0000${link.category || ''}`
-    if (seenRelationships.has(signature)) {
-      issues.push({ code: 'DUPLICATE_RELATIONSHIP', severity: 'warning', message: `Duplicate relationship ${link.fromId} to ${link.toId}` })
-    }
-    seenRelationships.add(signature)
     if (words(link.label) > PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords) {
-      issues.push({ code: 'LONG_CONNECTOR_LABEL', severity: 'error', message: `Connector label "${link.label}" exceeds ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words` })
+      issues.push({ code: 'LONG_CONNECTOR_LABEL', severity: 'warning', message: `Connector label "${link.label}" exceeds ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words` })
     }
-    validateSemanticEvidence(`Relationship ${link.fromId} to ${link.toId}`, link.evidenceIds || [], link.coverageRequirementIds || [], true)
   }
 
   if (diagram.kind === 'COMPONENT') {
-    const groupedIds = diagram.groups.flatMap(group => group.rows.flatMap(row => row.componentIds))
-    for (const id of Array.from(visibleSet)) {
-      if (!groupedIds.includes(id)) issues.push({ code: 'UNGROUPED_COMPONENT', severity: 'error', message: `Component ${id} is not placed in a subsystem row`, componentId: id })
-    }
     diagram.groups.forEach((group, groupIndex) => {
-      if (!group.rows.length) issues.push({ code: 'EMPTY_SUBSYSTEM', severity: 'error', message: `Subsystem ${group.label} is empty` })
       group.rows.forEach((row, rowIndex) => {
         if (row.componentIds.length > PATENT_DIAGRAM_STYLE.maximumComponentsPerRow) {
-          issues.push({ code: 'ROW_LIMIT', severity: 'error', message: `Subsystem ${group.label}, row ${rowIndex + 1} exceeds four components` })
+          issues.push({
+            code: 'ROW_LIMIT', severity: 'warning',
+            message: `Subsystem ${group.label}, row ${rowIndex + 1} exceeds ${PATENT_DIAGRAM_STYLE.maximumComponentsPerRow} components`,
+            path: `groups.${groupIndex}.rows.${rowIndex}`,
+          })
         }
       })
-      if (diagram.detailLevel === 'DETAIL' && groupIndex >= PATENT_DIAGRAM_COMPLEXITY.component.maximumDetailedBands) {
-        issues.push({ code: 'DETAIL_BAND_LIMIT', severity: 'warning', message: 'Detailed component figure contains more than four subsystem bands' })
-      }
     })
   }
 
   if (diagram.kind === 'PROCESS') {
     const keys = new Set(diagram.nodes.map(node => node.key))
-    const identifiers = diagram.nodes.map(node => node.identifier).filter(Boolean) as string[]
-    const duplicateIdentifiers = identifiers.filter((identifier, index) => identifiers.indexOf(identifier) !== index)
-    Array.from(new Set(duplicateIdentifiers)).forEach(identifier => issues.push({
-      code: 'DUPLICATE_PROCESS_IDENTIFIER', severity: 'error', message: `Process identifier ${identifier} appears more than once`,
-    }))
-    diagram.nodes.forEach(node => {
-      validateSemanticEvidence(`Step "${node.label}"`, node.evidenceIds || [], node.coverageRequirementIds || [])
-      if (node.identifier && !new RegExp(node.kind === 'DECISION' ? '^D\\d+$' : '^S\\d+$', 'i').test(node.identifier)) {
-        issues.push({ code: 'INVALID_PROCESS_IDENTIFIER', severity: 'error', message: `${node.kind} ${node.key} has invalid identifier ${node.identifier}` })
+    diagram.transitions.forEach(link => {
+      if (!keys.has(link.fromId) || !keys.has(link.toId)) {
+        issues.push({ code: 'UNKNOWN_PROCESS_ENDPOINT', severity: 'warning', message: `Transition ${link.fromId} to ${link.toId} references an unknown step` })
       }
-      // A step with no component linkage cannot be traced to the Component
-      // Plan, which is the pattern hallucinated lifecycle steps follow. It is
-      // a warning here so figures persisted before the anchoring rule still
-      // translate and re-render; the generation path (detailManagedFigure)
-      // escalates it to a blocker for newly generated figures.
-      //
-      // A STEP must name the component that performs it. relatedComponentIds
-      // was too weak a gate on its own: stapling any one plausible component
-      // onto an entirely fabricated operation satisfied it. A DECISION keeps
-      // the lenient rule because a decision can legitimately test state that
-      // spans components.
-      const anchored = node.kind === 'STEP' ? !!node.componentId : !!node.componentId || node.relatedComponentIds.length > 0
-      if (!anchored) {
+    })
+    diagram.nodes.forEach(node => {
+      // A step with no component linkage cannot be traced back to the Component
+      // Plan. Worth telling the attorney; not worth refusing to draw.
+      if (node.kind === 'STEP' && !node.componentId) {
         issues.push({
           code: 'UNGROUNDED_STEP', severity: 'warning',
-          message: node.kind === 'STEP'
-            ? `Step "${node.label}" does not name the Component Planner entry that performs it; set componentId or remove the step`
-            : `Decision "${node.label}" is not linked to any Component Planner entry; confirm it is disclosed by the invention`,
-        })
-      }
-      // Citation is checked only when the session actually has a disclosure
-      // catalog. Many normalized ideas carry no source facts, and requiring a
-      // citation against an empty catalog would make PROCESS figures
-      // impossible to generate at all.
-      if (supportedEvidenceIds?.size) {
-        if (!node.evidenceIds.length) {
-          issues.push({ code: 'UNCITED_STEP', severity: 'warning', message: `Step "${node.label}" cites no disclosure evidence; if no catalog entry supports it, the step is not disclosed by this invention` })
-        }
-        node.evidenceIds.filter(id => !supportedEvidenceIds.has(id)).forEach(id => {
-          issues.push({ code: 'UNKNOWN_STEP_EVIDENCE', severity: 'warning', message: `Step "${node.label}" cites unrecognized disclosure evidence ID: ${id}` })
+          message: `Step "${node.label}" does not name the Component Planner entry that performs it`,
         })
       }
     })
-    diagram.transitions.forEach(link => {
-      if (!keys.has(link.fromId)) issues.push({ code: 'UNKNOWN_PROCESS_ENDPOINT', severity: 'error', message: `Transition source ${link.fromId} is unknown` })
-      if (!keys.has(link.toId)) issues.push({ code: 'UNKNOWN_PROCESS_ENDPOINT', severity: 'error', message: `Transition target ${link.toId} is unknown` })
-    })
-  }
-
-  if (diagram.kind === 'COMPONENT') {
-    diagram.components.forEach(node => {
-      if ((node.coverageRequirementIds || []).length && !diagram.evidenceIds.length) {
-        issues.push({ code: 'UNCITED_SEMANTIC_ELEMENT', severity: 'warning', message: `Component ${node.componentId} covers a claim requirement but the figure cites no supporting evidence` })
-      }
-    })
-  }
-  if (diagram.kind === 'CONSTITUENT') {
-    diagram.constituents.forEach(item => validateSemanticEvidence(`Constituent ${item.componentId}`, item.evidenceIds || [], item.coverageRequirementIds || [], true))
   }
 
   const labels: string[] = diagram.kind === 'COMPONENT'
@@ -283,29 +190,16 @@ export function validatePatentDiagram(
         : diagram.constituents.map(node => node.displayLabel || componentById.get(node.componentId)?.name || '')
   labels.forEach(label => {
     if (words(label) > PATENT_DIAGRAM_STYLE.maximumLabelWords) {
-      issues.push({ code: 'LONG_NODE_LABEL', severity: 'error', message: `Node label "${label}" exceeds ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words` })
+      issues.push({ code: 'LONG_NODE_LABEL', severity: 'warning', message: `Node label "${label}" exceeds ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words` })
     }
   })
 
   const complexity = analyzeDiagramComplexity(diagram)
-  complexity.splitReasons.forEach(reason => issues.push({ code: 'SPLIT_REQUIRED', severity: 'error', message: reason }))
-
-  if (diagram.kind === 'COMPONENT') {
-    if (complexity.visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.component.warningComponents) issues.push({ code: 'COMPONENT_DENSITY_WARNING', severity: 'warning', message: `Component count exceeds the review threshold of ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents}` })
-    if (complexity.connectorCount > PATENT_DIAGRAM_COMPLEXITY.component.warningConnectors) issues.push({ code: 'CONNECTOR_DENSITY_WARNING', severity: 'warning', message: `Technical connector count exceeds the review threshold of ${PATENT_DIAGRAM_COMPLEXITY.component.warningConnectors}` })
-    if (complexity.crossLayerConnectorCount > PATENT_DIAGRAM_COMPLEXITY.component.warningCrossLayerLinks) issues.push({ code: 'CROSS_LAYER_WARNING', severity: 'warning', message: `Major cross-layer link count exceeds ${PATENT_DIAGRAM_COMPLEXITY.component.warningCrossLayerLinks}` })
-  } else if (diagram.kind === 'SEQUENCE') {
-    if (complexity.visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.sequence.warningParticipants) issues.push({ code: 'PARTICIPANT_DENSITY_WARNING', severity: 'warning', message: `Sequence participant count exceeds ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningParticipants}` })
-    if (complexity.connectorCount > PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions) issues.push({ code: 'INTERACTION_DENSITY_WARNING', severity: 'warning', message: `Sequence interaction count exceeds ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions}` })
-  } else if (diagram.kind === 'PROCESS' && complexity.visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.process.warningNodes) {
-    issues.push({ code: 'PROCESS_DENSITY_WARNING', severity: 'warning', message: `Process node count exceeds ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes}` })
-  } else if (diagram.kind === 'CONSTITUENT' && complexity.visibleNodeCount > PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents) {
-    issues.push({ code: 'CONSTITUENT_DENSITY_WARNING', severity: 'warning', message: `Constituent count exceeds ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents}` })
-  }
-
-  if (diagram.kind === 'COMPONENT' && diagram.relationships.length) {
-    const primaryCount = diagram.relationships.filter(link => relationshipVisualStyle(link.category) === 'PRIMARY').length
-    if (!primaryCount) issues.push({ code: 'NO_PRIMARY_FLOW', severity: 'warning', message: 'Component diagram has no primary technical flow' })
+  if (complexity.dense) {
+    issues.push({
+      code: 'DENSE_FIGURE', severity: 'warning',
+      message: `Figure is dense (${complexity.densityNotes.join(', ')}); consider dividing it if the drawing reads poorly at filing scale`,
+    })
   }
 
   return {

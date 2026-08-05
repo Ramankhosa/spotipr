@@ -47,6 +47,39 @@ describe('novelty report contract', () => {
     expect(prompt).not.toContain('SEARCH_ID');
   });
 
+  test('keeps the whole instruction template as a prefix shared by every run', () => {
+    const build = (searchId: string, jurisdiction: string, feature: string) =>
+      buildStage4ReportPromptFromRemarksV3({
+        inventionFeatures: [feature],
+        perPatentRemarks: [{ pn: 'US1', novelty_threat: 'high_overlap' }],
+        searchMetadata: { search_id: searchId, jurisdiction },
+        metrics: { decision: 'Not Novel' },
+      });
+
+    const a = build('search-1', 'IN', 'soil moisture sensing');
+    const b = build('search-2', 'US', 'battery thermal management');
+
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+    const shared = a.slice(0, i);
+
+    // Run-specific values used to be substituted ~37 lines into the template, which
+    // cut the cacheable prefix down to almost nothing. The template must now be
+    // emitted verbatim, with per-run data appended after it.
+    expect(shared).toContain('OUTPUT JSON SHAPE:');
+    // The trailing SERVER DETERMINATION RULES block is intentionally left after the
+    // data: it refers to the payload by name, and moving instructions across the
+    // data boundary is a behaviour change, not just a caching one.
+    expect(shared).not.toContain('SERVER DETERMINATION RULES:');
+    expect(shared).not.toContain('search-1');
+    expect(shared).not.toContain('soil moisture sensing');
+    // The entire template (~4.7k chars, ~1.2k tokens) is shared, which clears the
+    // 1,024-token minimum providers require before a prefix is cacheable at all.
+    expect(shared.length).toBeGreaterThan(4500);
+    // Identity is applied server-side after parsing, not asked of the model.
+    expect(a).toContain('"search_id": "server-populated"');
+  });
+
   test('forces degraded analysis to a single low-evidence verdict', () => {
     expect(buildCanonicalNoveltyVerdict(aggregation(), true)).toMatchObject({
       decision: 'Low Evidence',

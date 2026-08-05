@@ -152,10 +152,20 @@ export async function runClusterStage(input: {
   const n = sampleRows.length
 
   if (n < 20) {
+    // Two different failures wear the same number, and conflating them sends
+    // operators after the wrong thing. A 21-family field with 18 vectors is not
+    // an ingestion gap — coverage is 86% — it is simply a small field, and
+    // "wait for embedding coverage" is advice that will never come true. Only
+    // blame coverage when coverage is actually the shortfall.
+    const coverageIsTheProblem = fieldFamilies >= 20 && n < fieldFamilies * 0.7
     throw new Error(
       n === 0
-        ? 'No families in this scope carry embeddings, so the field cannot be clustered. This usually means the embedding pipeline has not covered this corpus slice yet.'
-        : `Only ${n} families in this scope carry embeddings — too few to break into areas. Widen the scope or wait for embedding coverage.`
+        ? fieldFamilies > 0
+          ? `None of the ${fieldFamilies.toLocaleString()} families in this scope carry a comparable embedding vector, so the field cannot be clustered. The embedding pipeline has not covered this corpus slice yet.`
+          : 'This scope matches no families at all, so there is nothing to cluster. Widen the scope.'
+        : coverageIsTheProblem
+        ? `Only ${n} of the ${fieldFamilies.toLocaleString()} families in this scope carry a comparable embedding vector — too few to break into areas. Wait for embedding coverage to catch up on this slice.`
+        : `This field is only ${fieldFamilies.toLocaleString()} families, which is too small to break into areas — an area map needs at least 20. Widen the scope: relax a required concept, add jurisdictions, or broaden the filing years.`
     )
   }
 

@@ -35,12 +35,31 @@ import {
   normalizeRerankDecision,
   type PriorArtGateRecord,
 } from '@/lib/novelty-prior-art-visibility';
+import { canonicalStudioFamilyKey } from '@/lib/prior-art-studio/family-key';
 import {
   canonicalReportPublicationNumber,
   selectNoveltyReportReferences,
   type ReportReferenceCandidate,
+  type ReportReferenceSelectionRule,
   type ReportReferenceSelectionV1,
 } from '@/lib/novelty-report-reference-selection';
+
+/**
+ * The rule new runs are written with. Flipping this to 'materiality_v1' changes
+ * only runs executed afterwards: already-persisted selections carry their own
+ * rule and keep rendering under it.
+ */
+const NOVELTY_REPORT_SELECTION_RULE: ReportReferenceSelectionRule = 'materiality_v1';
+
+/**
+ * Character budget for the Stage 4 report prompt.
+ *
+ * NOVELTY_REPORT_GENERATION is configured with a 100k input-token ceiling and the
+ * gateway estimates JSON-heavy prompts at ~2.5 chars/token. Budget to 70% of that
+ * so a wide report stays clear of the ceiling — exceeding it fails closed and
+ * costs the entire LLM narrative, not just the excess.
+ */
+const STAGE4_PROMPT_CHAR_BUDGET = Math.floor(100_000 * 2.5 * 0.7);
 
 const FEATURE_MAPPING_CACHE_VERSION = 'v1.4-claim-aware-evidence';
 const STAGE15_GATE_CACHE_VERSION = 'stage15-gate-v3';
@@ -1016,9 +1035,9 @@ OUTPUT JSON SHAPE:
 {
   "report_metadata": {
     "title": "Preliminary Novelty Assessment Report",
-    "search_id": "SEARCH_ID",
-    "date": "GENERATION_DATE",
-    "jurisdiction": "SEARCH_JURISDICTION",
+    "search_id": "server-populated",
+    "date": "server-populated",
+    "jurisdiction": "server-populated",
     "analyst": "PatentNest.ai - Stage 4"
   },
   "search_trail": {
@@ -1066,6 +1085,113 @@ function stage4PublicationKey(value: unknown): string {
   return canonicalReportPublicationNumber(value);
 }
 
+export type ScreeningStopReason =
+  | 'pool_exhausted'
+  | 'yield_below_threshold'
+  | 'candidate_ceiling'
+  | 'wall_clock'
+  | 'token_budget'
+  | 'gate_errors'
+  | 'empty_wave';
+
+export interface ScreeningWaveConfig {
+  maxTotalCandidates: number;
+  totalTimeoutMs: number;
+  maxTokens: number;
+  minYieldToContinue: number;
+  yieldDecayFactor: number;
+  yieldConfirmationWaves: number;
+}
+
+export interface ScreeningWaveDecision {
+  shouldContinue: boolean;
+  waveYield: number;
+  reviewed: number;
+  strong: number;
+  gateErrorRate: number;
+  consecutiveLowWaves: number;
+  stopReason?: ScreeningStopReason;
+}
+
+/**
+ * Decide whether screening should keep walking down the relevance-ordered
+ * candidate list.
+ *
+ * Deliberately reads only gate output, never a retrieval or rerank score. Ordering
+ * decides which candidates are seen first; whether they were worth seeing is a
+ * question only the gate can answer. A score-based rule would be hostage to
+ * reranker calibration and would misbehave on degenerate distributions where every
+ * score is equal, zero, or missing.
+ *
+ * `borderline` is excluded from the yield on purpose: it is both the gate's
+ * "I don't know" bucket and the decision written for every row of a failed batch,
+ * so counting it would let errors read as relevance and prevent the loop stopping.
+ */
+export function evaluateScreeningWave(input: {
+  records: Array<PriorArtGateRecord | undefined>;
+  waveIndex: number;
+  firstWaveYield: number | null;
+  elapsedMs: number;
+  tokensUsed: number;
+  cursor: number;
+  poolSize: number;
+  orderTrusted: boolean;
+  consecutiveLowWaves: number;
+  config: ScreeningWaveConfig;
+}): ScreeningWaveDecision {
+  const { config } = input;
+  const present = input.records.filter((record): record is PriorArtGateRecord => Boolean(record));
+  const reviewed = present.filter(record => record.reviewStatus !== 'gate_error');
+  const strong = reviewed.filter(record => {
+    const decision = normalizeRerankDecision(record.rerankDecision || record.decision);
+    if (decision === 'accept') return true;
+    if (decision !== 'component') return false;
+    const quality = String(record.evidence_quality || '').trim().toLowerCase();
+    return quality === 'high' || quality === 'medium';
+  });
+  const waveYield = reviewed.length === 0 ? 0 : strong.length / reviewed.length;
+  const gateErrorRate = present.length === 0 ? 0 : (present.length - reviewed.length) / present.length;
+
+  const base = {
+    waveYield,
+    reviewed: reviewed.length,
+    strong: strong.length,
+    gateErrorRate,
+    consecutiveLowWaves: input.consecutiveLowWaves,
+  };
+  const stop = (stopReason: ScreeningStopReason, consecutiveLowWaves = input.consecutiveLowWaves) =>
+    ({ ...base, consecutiveLowWaves, shouldContinue: false, stopReason });
+
+  if (input.cursor >= input.poolSize) return stop('pool_exhausted');
+  if (input.cursor >= config.maxTotalCandidates) return stop('candidate_ceiling');
+  if (input.elapsedMs >= config.totalTimeoutMs) return stop('wall_clock');
+  if (input.tokensUsed >= config.maxTokens) return stop('token_budget');
+  // Widespread gate failure is not evidence that the tail is irrelevant.
+  if (gateErrorRate >= 0.5) return stop('gate_errors');
+  if (reviewed.length === 0) return stop('empty_wave');
+
+  // The first wave is always processed in full: there is no baseline to compare
+  // against yet. Untrusted ordering means "stop early" would drop recall for no
+  // reason, so the yield rule is skipped and only the hard bounds apply.
+  if (input.waveIndex <= 1 || !input.orderTrusted) {
+    return { ...base, consecutiveLowWaves: 0, shouldContinue: true };
+  }
+
+  const relativeFloor = input.firstWaveYield === null
+    ? 0
+    : input.firstWaveYield * config.yieldDecayFactor;
+  const threshold = Math.max(config.minYieldToContinue, relativeFloor);
+  if (waveYield >= threshold) {
+    return { ...base, consecutiveLowWaves: 0, shouldContinue: true };
+  }
+
+  const consecutiveLowWaves = input.consecutiveLowWaves + 1;
+  if (consecutiveLowWaves >= Math.max(1, config.yieldConfirmationWaves)) {
+    return stop('yield_below_threshold', consecutiveLowWaves);
+  }
+  return { ...base, consecutiveLowWaves, shouldContinue: true };
+}
+
 export function buildStage4ReportPromptFromRemarksV3(input: {
   inventionFeatures: string[];
   perPatentRemarks: any[];
@@ -1078,10 +1204,12 @@ export function buildStage4ReportPromptFromRemarksV3(input: {
 }): string {
   const metadata = input.searchMetadata || {};
   const mappedSupplementaryReferences = input.mappedSupplementaryReferences || input.additionalPatentsStudied || [];
+  // The template is emitted verbatim so it stays a byte-stable prefix that every
+  // run of this stage can share in the provider's prompt cache. Run-specific values
+  // (search id, date, jurisdiction) used to be substituted into the template body
+  // ~37 lines in, which truncated the cacheable prefix to almost nothing; they now
+  // travel in the appended data below and are re-applied server-side after parsing.
   return STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
-    .replace(/SEARCH_ID/g, String(metadata.search_id || ''))
-    .replace(/GENERATION_DATE/g, new Date().toISOString().split('T')[0])
-    .replace(/SEARCH_JURISDICTION/g, String(metadata.jurisdiction || ''))
     + `\ninvention_features=${JSON.stringify(input.inventionFeatures || [])}`
     + `\nper_patent_remarks=${JSON.stringify(input.perPatentRemarks || [])}`
     + `\nsearch_metadata=${JSON.stringify(metadata)}`
@@ -1127,12 +1255,21 @@ export interface NoveltySearchConfig {
   stage15: {
     thresholds: { high: number; medium: number };
     borderlineQuota: number; // number of borderline items to keep for diversity/recall
-    maxCandidates: number;   // upper bound of PQAI items to gate
+    maxCandidates: number;   // candidates gated per wave
     batchSize: number;       // batch size for LLM calls
     concurrency: number;     // number of Stage 1.5 batches to run at once
-    timeoutMs: number;       // total Stage 1.5 budget for one gate pass
+    timeoutMs: number;       // budget for one wave
     visibleLimit: number;    // number of high-confidence patents shown by default
     minimumVisibleConfidence: number;
+    // Relevance-driven continuation. Screening walks the relevance-ordered pool in
+    // waves and stops when a wave stops yielding relevant hits, bounded by hard
+    // ceilings. Setting maxTotalCandidates to maxCandidates makes it a single pass.
+    maxTotalCandidates?: number;
+    totalTimeoutMs?: number;
+    maxTokens?: number;
+    minYieldToContinue?: number;
+    yieldDecayFactor?: number;
+    yieldConfirmationWaves?: number;
   };
   stage0: {
     customPrompt?: string;
@@ -1763,7 +1900,13 @@ export class NoveltySearchService extends BasePatentService {
       concurrency: NOVELTY_LLM_CONCURRENCY,
       timeoutMs: 90000,
       visibleLimit: DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
-      minimumVisibleConfidence: DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
+      minimumVisibleConfidence: DEFAULT_MINIMUM_VISIBLE_CONFIDENCE,
+      maxTotalCandidates: 180,
+      totalTimeoutMs: 300000,
+      maxTokens: 250000,
+      minYieldToContinue: 0.1,
+      yieldDecayFactor: 0.25,
+      yieldConfirmationWaves: 1
     },
     stage0: {},
     stage1: {
@@ -2377,8 +2520,14 @@ export class NoveltySearchService extends BasePatentService {
 
       if (!options?.appendNextBatch && stage1Data.aiRelevance?.byPn) {
         const pqai = candidatePool;
-        const maxCandidates = config.stage15.maxCandidates;
-        const candidates = pqai.slice(0, Math.min(maxCandidates, pqai.length));
+        // Key over exactly what the previous run gated. Screening walks the pool in
+        // waves, so the cursor — not the per-wave size — defines that prefix; using
+        // the wave size here would miss on every multi-wave run and re-gate from zero.
+        const gatedThrough = Math.max(
+          0,
+          Math.min(pqai.length, Number(stage1Data.aiRelevance.nextBatchCursor ?? config.stage15.maxCandidates))
+        );
+        const candidates = pqai.slice(0, gatedThrough);
         const cacheKey = this.createStage15CacheKey(stage0Data, candidates);
         if (this.canReuseStage15Gate(stage1Data, cacheKey)) {
           const merged = this.mergeStage15Visibility(stage1Data, stage1Data.aiRelevance, config);
@@ -4669,7 +4818,10 @@ RESPONSE:`;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
     const safeMaxCandidates = Math.max(0, Math.trunc(maxCandidates || 0));
     const BORDERLINE_FILL_RATIO = 0.35;
-    const MIN_DEEP_ANALYSIS_TARGET = 15;
+    // A sanity minimum so a report is never built on one or two references — not a
+    // depth target. A higher floor pulls weak borderline candidates into the
+    // expensive mapping stage purely to reach a number.
+    const MIN_DEEP_ANALYSIS_TARGET = 8;
     const MAX_DEEP_ANALYSIS_TARGET = 40;
     const MAX_BORDERLINE_FILL = 10;
     const deepAnalysisTarget = (acceptedCount: number, componentCount: number, borderlineCount: number) => {
@@ -5895,6 +6047,8 @@ RESPONSE:`;
           parameters: {
             temperature: 0,
             reasoning_effort: 'low',
+            // Batches of one run share the invention context prefix.
+            prompt_cache_key: `NOVELTY_CONSOLIDATED_ANALYSIS:${searchId}`,
           },
         }
       );
@@ -6552,28 +6706,27 @@ RESPONSE:`;
         DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
         Number(stage1Data?.visibleResultLimit || existingGate.visibleResultLimit || visibleLimit || DEFAULT_VISIBLE_PRIOR_ART_LIMIT)
       );
+      // Only an explicit user append widens the visible list. Automatic waves must
+      // not, or a four-wave run would advertise 250 "visible" prior-art records.
       const targetVisibleLimit = options?.appendNextBatch
         ? previousVisibleLimit + Math.max(1, visibleLimit || DEFAULT_VISIBLE_PRIOR_ART_LIMIT)
         : previousVisibleLimit;
-      const highConfidenceAlreadyGated = buildVisiblePriorArtResults({
-        candidates: candidatePool,
-        byPn: existingByPn,
-        minimumVisibleConfidence,
-        visibleLimit: Number.MAX_SAFE_INTEGER,
-      }).highConfidenceCount;
 
       let startIndex = options?.appendNextBatch
         ? Math.max(0, Math.min(candidatePool.length, Number(existingGate.nextBatchCursor ?? existingGate.consideredCount ?? 0)))
         : 0;
 
-      if (options?.appendNextBatch && config.adaptiveAnalysis?.mode !== 'enforce' && highConfidenceAlreadyGated > previousVisibleLimit) {
-        startIndex = candidatePool.length;
-      }
+      // A previous guard short-circuited explicit appends once more than
+      // `visibleLimit` non-rejected records existed. Because isVisiblePriorArtGate
+      // counts every non-reject, that condition held on essentially every real run,
+      // so "Review more candidates" gated nothing. Continuation is now governed by
+      // the wave stop rule below, and an explicit append is always honoured.
 
-      const candidates = startIndex >= candidatePool.length
+      const waveSize = Math.max(1, Math.trunc(maxCandidates));
+      const firstWave = startIndex >= candidatePool.length
         ? []
-        : candidatePool.slice(startIndex, Math.min(candidatePool.length, startIndex + Math.max(1, maxCandidates)));
-      const cacheKey = this.createStage15CacheKey(stage0Data, candidates);
+        : candidatePool.slice(startIndex, Math.min(candidatePool.length, startIndex + waveSize));
+      const cacheKey = this.createStage15CacheKey(stage0Data, candidatePool.slice(0, startIndex + firstWave.length));
       if (!options?.appendNextBatch && this.canReuseStage15Gate(stage1Data, cacheKey)) {
         return { success: true, data: stage1Data.aiRelevance };
       }
@@ -6597,10 +6750,12 @@ RESPONSE:`;
           return `Item ${idx + 1}\nReference ID: ${pn}\nType: ${referenceType}\nTitle: ${title}\nAbstract: ${abstract}${paperMetadata}\nRetrieval hints: ${retrievalHints || 'none'}`;
         }).join("\n---\n");
 
+        // Ordered instructions-first so the static policy block is a byte-stable
+        // prefix. Every provider's prompt cache is a prefix cache, so putting the
+        // run-specific features ahead of the policy (as this once did) leaves
+        // nothing cacheable and the whole block is re-billed on every batch.
         return [
           'You are a novelty relevance gate for patent and scholarly-paper prior art. Return ONLY a valid JSON array.',
-          `Invention features: ${feats}`,
-          ...(primaryRelationships.length ? [`Primary claim relationships: ${JSON.stringify(primaryRelationships)}`] : []),
           '',
           'The invention features should be atomic, preferably with feature IDs and importance labels such as core, major, or peripheral.',
           'Example structure:',
@@ -6686,12 +6841,21 @@ RESPONSE:`;
           '- In reason, do not name the source-field limitation or use early-stage-review wording. Use reviewed citation record if scope must be mentioned.',
           '- matched_features must contain only feature IDs or exact feature labels from the provided invention feature list.',
           '- Do not invent new feature names in matched_features.',
-          ...(primaryRelationships.length ? ['- Set primary_claim_relationship true only when the supplied reference explicitly teaches the linked relationship, not merely the individual features.'] : []),
+          // Unconditional: primary_claim_relationship is always part of the output
+          // schema above, and a conditional line here would split the cacheable
+          // prefix into two variants for no benefit.
+          '- Set primary_claim_relationship true only when the supplied reference explicitly teaches the linked relationship, not merely the individual features. Report false when no primary claim relationships are supplied.',
           '- Use reasonable technical synonyms when matching features.',
           '- Prefer rejecting remote keyword hits, but do not reject concrete component disclosures merely because they lack the full invention combination.',
           '- Keep JSON compact.',
           '- Do not include prose outside the JSON array.',
           '- Follow input order.',
+          '',
+          // Everything below varies per run or per batch and must stay after the
+          // static block. Features are constant within a run, so they form a second
+          // cache tier shared by that run's batches; only the items differ per call.
+          `Invention features: ${feats}`,
+          ...(primaryRelationships.length ? [`Primary claim relationships: ${JSON.stringify(primaryRelationships)}`] : []),
           '',
           items
         ].join('\n');
@@ -6701,11 +6865,31 @@ RESPONSE:`;
       const safeBatchSize = Math.max(1, Math.trunc(batchSize || 12));
       const safeConcurrency = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(concurrency || NOVELTY_LLM_CONCURRENCY)));
       const budgetMs = Math.max(10000, Math.trunc(timeoutMs || 90000));
-      const startedAt = Date.now();
-      const batches = this.createBatches(candidates, safeBatchSize);
+      const runStartedAt = Date.now();
+      let startedAt = runStartedAt;
+      let candidates: any[] = firstWave;
+      let batches: any[][] = [];
       let failedBatches = 0;
       let processedBatches = 0;
       let timedOut = false;
+      let gateTokensUsed = 0;
+
+      const waveConfig: ScreeningWaveConfig = {
+        maxTotalCandidates: Math.max(waveSize, Math.trunc(Number(config.stage15.maxTotalCandidates ?? waveSize))),
+        totalTimeoutMs: Math.max(budgetMs, Math.trunc(Number(config.stage15.totalTimeoutMs ?? budgetMs))),
+        maxTokens: Math.max(1, Math.trunc(Number(config.stage15.maxTokens ?? 250000))),
+        minYieldToContinue: Number(config.stage15.minYieldToContinue ?? 0.1),
+        yieldDecayFactor: Number(config.stage15.yieldDecayFactor ?? 0.25),
+        yieldConfirmationWaves: Math.max(1, Math.trunc(Number(config.stage15.yieldConfirmationWaves ?? 1))),
+      };
+      // Ordering only matters for the early-stop rule. If retrieval did not produce
+      // usable scores the list is not meaningfully ranked, so a yield drop carries
+      // no information and the run continues to the hard ceiling instead.
+      const scoredCandidates = candidatePool.filter(candidate => {
+        const score = Number(candidate?.relevanceScore ?? candidate?.retrievalScore ?? NaN);
+        return Number.isFinite(score) && score > 0;
+      }).length;
+      const orderTrusted = candidatePool.length > 0 && scoredCandidates / candidatePool.length >= 0.5;
 
       await this.persistStage15Progress(searchId, stage1Data, candidatePool, candidates, byPn, config, {
         processedBatches,
@@ -6765,6 +6949,10 @@ RESPONSE:`;
                 parameters: {
                   reasoning_effort: 'low',
                   temperature: 0,
+                  // Route a run's gate batches to the same cache shard. They share
+                  // both the static policy block and this run's feature list, and
+                  // a run now issues up to a dozen of these calls.
+                  prompt_cache_key: `NOVELTY_COMPARISON:${searchId}`,
                 },
               }
             ),
@@ -6772,6 +6960,11 @@ RESPONSE:`;
               setTimeout(() => reject(new Error('LLM call timeout')), perCallTimeoutMs)
             )
           ]) as { success: boolean; response?: any; error?: any };
+          // Accumulated so the wave loop can stop on a token budget rather than
+          // discovering the cost only after the fact.
+          gateTokensUsed += Number(res.response?.inputTokens ?? res.response?.metadata?.inputTokens ?? 0)
+            + Number(res.response?.outputTokens ?? 0)
+            + Number(res.response?.metadata?.thoughtTokens ?? 0);
           if (res.success && res.response?.output) {
             parsed = this.parseStage15GateResponse(res.response.output);
           }
@@ -6847,25 +7040,95 @@ RESPONSE:`;
         processedBatches += 1;
       };
 
-      for (let index = 0; index < batches.length; index += safeConcurrency) {
-        const elapsed = Date.now() - startedAt;
-        if (elapsed >= budgetMs) {
-          timedOut = true;
-          for (const batch of batches.slice(index)) {
-            failedBatches += 1;
-            markBatchGateError(batch, 'timeout', 'AI relevance gate timed out before this batch could be reviewed.');
+      const gatedCandidates: any[] = [];
+      const runWave = async (wave: any[]) => {
+        // Each wave gets its own timeout budget; the total run is bounded separately
+        // by totalTimeoutMs. Raising the per-call budget instead would let a single
+        // hung provider call block for minutes before the timeout path fires.
+        startedAt = Date.now();
+        const waveBatches = this.createBatches(wave, safeBatchSize);
+        batches = [...batches, ...waveBatches];
+        for (let index = 0; index < waveBatches.length; index += safeConcurrency) {
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= budgetMs) {
+            timedOut = true;
+            for (const batch of waveBatches.slice(index)) {
+              failedBatches += 1;
+              markBatchGateError(batch, 'timeout', 'AI relevance gate timed out before this batch could be reviewed.');
+            }
+            break;
           }
+          await Promise.all(waveBatches.slice(index, index + safeConcurrency).map(processBatch));
+          await this.persistStage15Progress(searchId, stage1Data, candidatePool, gatedCandidates, byPn, config, {
+            processedBatches,
+            batchCount: batches.length,
+            failedBatches,
+          });
+        }
+      };
+
+      let cursor = startIndex;
+      let waveIndex = 0;
+      let firstWaveYield: number | null = null;
+      let consecutiveLowWaves = 0;
+      let screeningStopReason: ScreeningStopReason | undefined;
+      let wave = firstWave;
+
+      while (wave.length > 0) {
+        waveIndex += 1;
+        gatedCandidates.push(...wave);
+        candidates = gatedCandidates;
+        await runWave(wave);
+        cursor = Math.min(candidatePool.length, cursor + wave.length);
+
+        const decision = evaluateScreeningWave({
+          records: wave.map(item => this.getGateRecordForPublication(byPn, getPriorArtPublicationNumber(item))),
+          waveIndex,
+          firstWaveYield,
+          elapsedMs: Date.now() - runStartedAt,
+          tokensUsed: gateTokensUsed,
+          cursor,
+          poolSize: candidatePool.length,
+          orderTrusted,
+          consecutiveLowWaves,
+          config: waveConfig,
+        });
+        if (waveIndex === 1) firstWaveYield = decision.waveYield;
+        consecutiveLowWaves = decision.consecutiveLowWaves;
+        console.info('[NoveltyScreening]', JSON.stringify({
+          event: 'wave_evaluated',
+          searchId,
+          waveIndex,
+          cursor,
+          poolSize: candidatePool.length,
+          reviewed: decision.reviewed,
+          strong: decision.strong,
+          waveYield: Number(decision.waveYield.toFixed(3)),
+          gateErrorRate: Number(decision.gateErrorRate.toFixed(3)),
+          orderTrusted,
+          shouldContinue: decision.shouldContinue,
+          stopReason: decision.stopReason,
+        }));
+
+        if (!decision.shouldContinue) {
+          screeningStopReason = decision.stopReason;
           break;
         }
-        await Promise.all(batches.slice(index, index + safeConcurrency).map(processBatch));
-        await this.persistStage15Progress(searchId, stage1Data, candidatePool, candidates, byPn, config, {
-          processedBatches,
-          batchCount: batches.length,
-          failedBatches,
-        });
+        // A long screening run must remain cancellable; the surrounding stage only
+        // checks once, after everything has already been paid for.
+        const cancellation = await this.ensureSearchNotCancelled(searchId);
+        if (!cancellation.success) return { success: false, error: cancellation.error };
+
+        wave = candidatePool.slice(
+          cursor,
+          Math.min(candidatePool.length, waveConfig.maxTotalCandidates, cursor + waveSize)
+        );
+        if (wave.length === 0) {
+          screeningStopReason = cursor >= candidatePool.length ? 'pool_exhausted' : 'candidate_ceiling';
+        }
       }
 
-      const nextBatchCursor = Math.min(candidatePool.length, startIndex + candidates.length);
+      const nextBatchCursor = cursor;
       const decisionLists = this.buildStage15DecisionLists(candidatePool, byPn, borderlineQuota);
       const visibility = buildVisiblePriorArtResults({
         candidates: candidatePool,
@@ -6899,7 +7162,11 @@ RESPONSE:`;
           unreviewedCount: gateCounts.unreviewedCount,
           totalCandidates: gateCounts.retrievedCount,
           boundedToTopCandidates: nextBatchCursor < candidatePool.length,
-          cacheKey,
+          cacheKey: this.createStage15CacheKey(stage0Data, candidatePool.slice(0, nextBatchCursor)),
+          screeningStopReason,
+          screeningWaves: waveIndex,
+          screeningOrderTrusted: orderTrusted,
+          screeningTokensUsed: gateTokensUsed,
           gateStatus,
           failedBatches,
           processedBatches,
@@ -8079,213 +8346,6 @@ RESPONSE:`;
     });
   }
 
-  private selectTopPatentsForDetailedAnalysis(
-    perPatentCoverage: PerPatentCoverage[],
-    featureMapCells: any[],
-    inventionFeatures: string[],
-    stage1PQAI?: any[]
-  ): any[] {
-    // Compute global feature scarcity to prioritize patents covering rarer features
-    const featureStats = new Map<string, { present: number; partial: number }>();
-    for (const cell of featureMapCells || []) {
-      const f = (cell.feature_text || cell.feature || '').toLowerCase();
-      if (!f) continue;
-      const s = (cell.status || '').toString();
-      const entry = featureStats.get(f) || { present: 0, partial: 0 };
-      if (s === 'Present') entry.present += 1;
-      else if (s === 'Partial') entry.partial += 1;
-      featureStats.set(f, entry);
-    }
-    const scarcityWeight = (feat: string): number => {
-      const key = (feat || '').toLowerCase();
-      const st = featureStats.get(key) || { present: 0, partial: 0 };
-      // Rarer features get higher weight; clamp to [0.2, 1.0]
-      const raw = 1 / (1 + st.present + 0.5 * st.partial);
-      return Math.max(0.2, Math.min(1.0, raw));
-    };
-    // Pre-index PQAI results by publication number for relevance/abstract lookup
-    const pqaiByPn = new Map<string, any>();
-    if (Array.isArray(stage1PQAI)) {
-      for (const r of stage1PQAI) {
-        const pn = r.publicationNumber || r.pn || r.patent_number || r.publication_number;
-        if (pn) pqaiByPn.set(pn, r);
-      }
-    }
-
-    // Calculate relevance score for each patent based on coverage ratio and feature overlap
-    const featureCount = inventionFeatures.length || 0;
-
-    const scored = perPatentCoverage
-      // Filter to only patents with at least one Present or Partial feature
-      .filter(p => (p.present_count || 0) + (p.partial_count || 0) > 0)
-      .map(patent => {
-      // Find feature mappings for this patent
-      const patentMappings = featureMapCells.filter(cell =>
-        (cell.patent_publication_number || cell.publicationNumber) === patent.pn
-      );
-
-      // Calculate average feature overlap percentage
-      const featureOverlaps = inventionFeatures.map(feature => {
-        const mapping = patentMappings.find((m: any) =>
-          m.feature_text?.toLowerCase() === feature.toLowerCase()
-        );
-        return mapping ? (mapping.overlap_percentage || 0) : 0;
-      });
-
-      const avgFeatureOverlap = featureOverlaps.reduce((sum, overlap) => sum + overlap, 0) / featureOverlaps.length;
-
-      // Combine coverage ratio and feature overlap for final score
-      const relevanceScore = (patent.coverage_ratio * 0.6) + (avgFeatureOverlap * 0.4);
-
-      const pq = pqaiByPn.get(patent.pn) || {};
-      const pqaiRelevance = pq.relevanceScore || pq.score || pq.relevance || 0;
-      const abstract = pq.abstract || pq.snippet || pq.description || '';
-
-      const presentPartial = (patent.present_count || 0) + (patent.partial_count || 0);
-      const allFeaturesCovered = featureCount > 0 && presentPartial >= featureCount;
-
-      return {
-        patentNumber: patent.pn,
-        coverageRatio: patent.coverage_ratio,
-        avgFeatureOverlap: avgFeatureOverlap,
-        relevanceScore: relevanceScore,
-        pqaiRelevance,
-        abstract,
-        allFeaturesCovered,
-        mappings: patentMappings
-      };
-    });
-
-    // If multiple patents cover all features, keep only top 2 by PQAI relevance to save tokens
-    const fullCover = scored.filter(s => s.allFeaturesCovered);
-    if (fullCover.length >= 2) {
-      const topByPQAI = [...fullCover].sort((a, b) => (b.pqaiRelevance || 0) - (a.pqaiRelevance || 0)).slice(0, 2);
-      console.log(`🎯 All-feature coverage detected. Limiting to top ${topByPQAI.length} by PQAI relevance.`);
-      return topByPQAI;
-    }
-
-    // Otherwise, if we have > 2 intersecting patents, select up to 2 that maximize unique feature coverage (Present>Partial)
-    if (scored.length > 2) {
-      const featureSet = new Set(inventionFeatures.map(f => f.toLowerCase()));
-      const covered = new Set<string>();
-
-      // Helper to compute marginal gain for a patent given currently covered features
-      const marginalGain = (pat: any): number => {
-        let gain = 0;
-        for (const m of pat.mappings as any[]) {
-          const feat = (m.feature_text || '').toLowerCase();
-          if (!feat || !featureSet.has(feat) || covered.has(feat)) continue;
-          const status = (m.status || '').toString();
-          const w = scarcityWeight(feat);
-          if (status === 'Present') gain += 1.0 * w;
-          else if (status === 'Partial') gain += 0.5 * w;
-        }
-        // Lightly include PQAI relevance as tie-breaker signal
-        gain += (pat.pqaiRelevance || 0) * 0.05;
-        return gain;
-      };
-
-      const pool = [...scored].sort((a, b) => b.relevanceScore - a.relevanceScore);
-      const chosen: any[] = [];
-      for (let i = 0; i < 2 && pool.length > 0; i++) {
-        // Pick patent with highest marginal coverage gain; tie-break by relevance
-        pool.sort((a, b) => {
-          const ga = marginalGain(a), gb = marginalGain(b);
-          if (gb !== ga) return gb - ga;
-          return (b.relevanceScore || 0) - (a.relevanceScore || 0);
-        });
-        const pick = pool.shift();
-        if (!pick) break;
-        chosen.push(pick);
-        // Update covered features with this pick
-        for (const m of pick.mappings as any[]) {
-          const feat = (m.feature_text || '').toLowerCase();
-          if (!feat) continue;
-          const status = (m.status || '').toString();
-          if (status === 'Present' || status === 'Partial') covered.add(feat);
-        }
-      }
-      console.log(`ðŸ§  Greedy selection picked ${chosen.length} patents to maximize evidence coverage.`);
-      return chosen;
-    }
-
-    // If 1â€“2 intersecting patents, return them as-is
-    const patentScores = scored.sort((a, b) => b.relevanceScore - a.relevanceScore);
-    console.log(`ðŸ“Š Passing ${patentScores.length} intersecting patents to Stage 4 (out of filtered set).`);
-    return patentScores;
-  }
-
-  private buildFeaturePatentMatrix(
-    inventionFeatures: string[],
-    featureMapCells: any[],
-    maxRefs: number
-  ): any {
-    // Group cells by publication number and sort by coverage
-    const patentGroups: { [pn: string]: any } = {};
-
-    for (const cell of featureMapCells) {
-      if (!patentGroups[cell.publicationNumber]) {
-        patentGroups[cell.publicationNumber] = {
-          pn: cell.publicationNumber,
-          cells: [],
-          presentCount: 0,
-          totalCount: inventionFeatures.length
-        };
-      }
-
-      patentGroups[cell.publicationNumber].cells.push({
-        feature: cell.feature,
-        status: cell.status,
-        evidence: cell.evidence
-      });
-
-      if (cell.status === 'Present') {
-        patentGroups[cell.publicationNumber].presentCount++;
-      }
-    }
-
-    // Sort patents by coverage ratio and take top N
-    const sortedPatents = Object.values(patentGroups)
-      .map((p: any) => ({
-        ...p,
-        coverageRatio: p.presentCount / p.totalCount
-      }))
-      .sort((a: any, b: any) => b.coverageRatio - a.coverageRatio)
-      .slice(0, maxRefs);
-
-    return {
-      rows: inventionFeatures,
-      cols: sortedPatents.map((p: any) => p.pn),
-      cells: sortedPatents.map((p: any) =>
-        inventionFeatures.map(feature => {
-          const cell = p.cells.find((c: any) => c.feature === feature);
-          return cell ? cell.status : 'Unknown';
-        })
-      ),
-      coverageRatios: sortedPatents.map((p: any) => p.coverageRatio)
-    };
-  }
-
-  private getTopReferences(perPatentCoverage: PerPatentCoverage[], maxRefs: number): any[] {
-    return perPatentCoverage
-      .sort((a, b) => b.coverage_ratio - a.coverage_ratio)
-      .slice(0, maxRefs)
-      .map(coverage => ({
-        pn: coverage.pn,
-        coverage_ratio: coverage.coverage_ratio,
-        year: '2023', // Would need to get from PQAI data
-        country: 'US', // Would need to get from PQAI data
-        assignee: 'Unknown' // Would need to get from PQAI data
-      }));
-  }
-
-  /**
-   * Select patents for Stage 4 using a costâ€‘effective greedy coverage heuristic:
-   * - Treat all features equally; prefer Present over Partial.
-   * - Cover each feature with Present if any Present exists in the dataset; otherwise allow Partial.
-   * - Rank pool by coverage+overlap; then iteratively add the patent with highest marginal gain.
-   * - Add one extra precision patent if only Partial is possible for remaining features.
-   */
   /** Build the report-presentation candidates without changing deep-analysis scope. */
   private getStage1ReportCandidatePool(stage1Data: any): any[] {
     const sources = [
@@ -8308,10 +8368,155 @@ RESPONSE:`;
     return Array.from(byPn.values());
   }
 
+  /**
+   * Pipeline-side equivalent of the report renderer's priority tier.
+   *
+   * The renderer derives this from `postMappingPriorityMetrics` over comparison
+   * rows; here only the raw feature-map cells are available, so the same
+   * thresholds are applied to them directly. The two can differ slightly — the
+   * renderer additionally downgrades Present cells backed by weak evidence — which
+   * is why the selection is persisted by the pipeline and preferred on render.
+   */
+  private stage4ReferenceTier(
+    map: PatentFeatureMap,
+    stage0Data: NormalizedIdea | undefined,
+    featureTypes: Map<string, InventionFeatureDetail['feature_type']>
+  ): { desiredPriority: 'Critical' | 'High' | 'Medium' | 'Low'; strongImportantFeatures: string[]; hasMappedEvidence: boolean } {
+    const cells = Array.isArray(map.feature_analysis) ? map.feature_analysis : [];
+    const hasMappedEvidence = cells.some(cell => cell.status === 'Present' || cell.status === 'Partial');
+    const importantCells = cells.filter(cell => this.isImportantFeature(cell.feature, featureTypes));
+    const strongImportant = importantCells.filter(cell => this.isStrongMappedCell(cell));
+    const strongImportantFeatures = strongImportant.map(cell => cell.feature);
+    const strongNoveltyCount = strongImportant.filter(
+      cell => featureTypes.get(cell.feature) === 'novelty_candidate'
+    ).length;
+
+    // Mirror the renderer's evidenceFactor (Present 1, strong Partial 0.6, weak
+    // Partial 0.4) rather than mappedFactor, so both writers grade the same cell
+    // the same way.
+    const evidenceFactor = (cell: FeatureMapCell) => {
+      if (cell.status === 'Present') return 1;
+      if (cell.status !== 'Partial') return 0;
+      return this.isStrongPartial(cell) ? 0.6 : 0.4;
+    };
+    const importantCoverage = importantCells.length > 0
+      ? importantCells.reduce((sum, cell) => sum + evidenceFactor(cell), 0) / importantCells.length
+      : Number(map.importantFeatureCoverage || 0);
+
+    const primaryRelationshipMapped = (stage0Data?.claimConcepts || []).some(concept =>
+      concept.importance === 'primary' && this.relationshipMappedByEvidence(concept, map).mapped
+    );
+
+    const desiredPriority = primaryRelationshipMapped || (importantCoverage >= 0.75 && strongImportant.length >= 2)
+      ? 'Critical'
+      : strongImportant.length >= 2 || strongNoveltyCount >= 1 || importantCoverage >= 0.5
+        ? 'High'
+        : hasMappedEvidence ? 'Medium' : 'Low';
+
+    return { desiredPriority, strongImportantFeatures, hasMappedEvidence };
+  }
+
+  /**
+   * Keep the Stage 4 prompt inside the stage's input ceiling.
+   *
+   * The gateway preflight fails closed: an oversized prompt does not truncate, it
+   * returns an error, and Stage 4 then falls back to a deterministic report with no
+   * LLM narrative at all. Detailed references carry one comparison row per
+   * invention feature, so a wide report can approach the ceiling. Shed the least
+   * useful payload first and only drop whole references as a last resort.
+   */
+  private fitStage4PromptToBudget(
+    remarks: any[],
+    build: (remarks: any[]) => string
+  ): { prompt: string; trim: { applied: boolean; stage: string; remarksUsed: number; remarksDropped: number; promptChars: number } } {
+    const result = (prompt: string, stage: string, remarksUsed: number) => ({
+      prompt,
+      trim: {
+        applied: stage !== 'none',
+        stage,
+        remarksUsed,
+        remarksDropped: Math.max(0, remarks.length - remarksUsed),
+        promptChars: prompt.length,
+      },
+    });
+
+    let prompt = build(remarks);
+    if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'none', remarks.length);
+
+    // 1. Evidence quotes duplicate patent_disclosure for prompting purposes.
+    const withoutQuotes = remarks.map(remark => ({
+      ...remark,
+      comparison_rows: Array.isArray(remark?.comparison_rows)
+        ? remark.comparison_rows.map(({ evidence_quote, ...row }: any) => row)
+        : remark?.comparison_rows,
+    }));
+    prompt = build(withoutQuotes);
+    if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'evidence_quote', remarks.length);
+
+    // 2. Polished per-row prose is the largest remaining field.
+    const withShortRemarks = withoutQuotes.map(remark => ({
+      ...remark,
+      comparison_rows: Array.isArray(remark?.comparison_rows)
+        ? remark.comparison_rows.map((row: any) => ({
+          ...row,
+          professional_remark: String(row?.professional_remark || '').slice(0, 200),
+        }))
+        : remark?.comparison_rows,
+    }));
+    prompt = build(withShortRemarks);
+    if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'professional_remark', remarks.length);
+
+    // 3. Last resort: drop the lowest-ranked references. `remarks` follows the
+    // ranked main order, so the tail is shed first.
+    for (let count = withShortRemarks.length - 1; count >= 1; count -= 1) {
+      prompt = build(withShortRemarks.slice(0, count));
+      if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'reference_count', count);
+    }
+    return result(prompt, 'reference_count', 1);
+  }
+
+  /**
+   * Resolve patent families for the references that will be shown, so the report
+   * does not spend detail slots on the same invention filed in several countries.
+   *
+   * Bounded to the mapped set and deliberately non-fatal: without family ids the
+   * selection simply behaves as it did before, which is better than failing a
+   * report over an optional grouping signal. Scholarly papers are skipped — they
+   * have no family and a key derived from a DOI could collapse unrelated works.
+   */
+  private async resolveReferenceFamilyKeys(publicationNumbers: string[]): Promise<Map<string, string>> {
+    const byKey = new Map<string, string>();
+    const lookups = Array.from(new Set(
+      publicationNumbers
+        .map(pn => String(pn || '').trim())
+        .filter(pn => pn && !canonicalReportPublicationNumber(pn).startsWith('PAPER'))
+    )).slice(0, 200);
+    if (lookups.length === 0) return byKey;
+
+    try {
+      const rows = await (prisma as any).localPatent.findMany({
+        where: { publicationNumber: { in: lookups } },
+        select: { publicationNumber: true, familyId: true, applicationNumberRaw: true },
+      });
+      for (const row of rows) {
+        const familyKey = canonicalStudioFamilyKey(row.familyId, row.publicationNumber, row.applicationNumberRaw);
+        if (familyKey) byKey.set(stage4PublicationKey(row.publicationNumber), familyKey);
+      }
+    } catch (error) {
+      console.warn('[NoveltyReportReferenceSelection] family_lookup_failed', JSON.stringify({
+        message: error instanceof Error ? error.message : String(error),
+        requested: lookups.length,
+      }));
+    }
+    return byKey;
+  }
+
   private buildStage4ReportReferenceCandidates(
     stage1Data: any,
     featureMapData: FeatureMapBatchResult | null,
-    aggregationResult: AggregationResult
+    aggregationResult: AggregationResult,
+    stage0Data?: NormalizedIdea,
+    familyKeysByPn?: Map<string, string>
   ): ReportReferenceCandidate[] {
     const candidatePool = this.getStage1ReportCandidatePool(stage1Data);
     const metadataByPn = new Map<string, any>();
@@ -8348,6 +8553,10 @@ RESPONSE:`;
           title: metadataByPn.get(stage4PublicationKey(coverage.pn))?.candidate?.title || '',
           feature_analysis: [],
         } as PatentFeatureMap));
+    const featureTypes = this.buildFeatureTypeMap(
+      stage0Data || ({} as NormalizedIdea),
+      stage0Data?.inventionFeatures || []
+    );
     const mappedKeys = new Set<string>();
     const mappedCandidates: ReportReferenceCandidate[] = [];
     maps.forEach((map, index) => {
@@ -8372,11 +8581,16 @@ RESPONSE:`;
           ? 'High'
           : present + partial > 0 ? 'Medium' : 'Low';
       const gateScore = Number(gate?.rerankScore ?? gate?.score ?? metadata?.rerankScore ?? metadata?.relevanceScore ?? 0);
+      const tier = this.stage4ReferenceTier(map, stage0Data, featureTypes);
       mappedCandidates.push({
         publicationNumber: map.pn,
         mapped: true,
         sourceOrder: index,
         priority,
+        desiredPriority: highOverlap ? 'Critical' : tier.desiredPriority,
+        mappedImportantFeatures: tier.strongImportantFeatures,
+        hasMappedEvidence: tier.hasMappedEvidence,
+        familyKey: familyKeysByPn?.get(key),
         priorityScore: featureCoverage * 100 + present * 2 + partial + gateScore,
         featureCoverage,
         gateScore,
@@ -8446,125 +8660,6 @@ RESPONSE:`;
         selectionReason: selected.reason,
       };
     });
-  }
-
-  private selectPatentsByGreedyCoverage(
-    perPatentCoverage: PerPatentCoverage[],
-    featureMapCells: any[],
-    inventionFeatures: string[],
-    stage1PQAI?: any[]
-  ): any[] {
-    const pqaiByPn = new Map<string, any>();
-    if (Array.isArray(stage1PQAI)) {
-      for (const r of stage1PQAI) {
-        const pn = r.publicationNumber || r.pn || r.patent_number || r.publication_number || r.id;
-        if (pn) pqaiByPn.set(pn, r);
-      }
-    }
-
-    // Index mappings per PN
-    const mappingsByPn: Record<string, any[]> = {};
-    for (const cell of featureMapCells || []) {
-      const pn = cell.patent_publication_number || cell.publicationNumber;
-      if (!pn) continue;
-      (mappingsByPn[pn] ||= []).push(cell);
-    }
-
-    // Determine which features have any Present evidence at all
-    const presentPossible: Record<string, boolean> = {};
-    for (const f of inventionFeatures) presentPossible[f.toLowerCase()] = false;
-    for (const cell of featureMapCells || []) {
-      const f = (cell.feature_text || cell.feature || '').toLowerCase();
-      if (!f) continue;
-      if ((cell.status || '').toString() === 'Present') presentPossible[f] = true;
-    }
-
-    // Score pool for ordering
-    const scored = perPatentCoverage
-      .filter(p => (p.present_count || 0) + (p.partial_count || 0) > 0)
-      .map(p => {
-        const maps = mappingsByPn[p.pn] || [];
-        const pq = pqaiByPn.get(p.pn) || {};
-        const pqaiRelevance = pq.relevanceScore || pq.score || pq.relevance || 0;
-        const abstract = pq.abstract || pq.snippet || pq.description || '';
-        const title = pq.title || pq.invention_title || 'Untitled Patent';
-        const link = pq.link || `https://patents.google.com/patent/${p.pn}`;
-        const overlaps = inventionFeatures.map(feat => {
-          const m = maps.find(mm => ((mm.feature_text || mm.feature || '') as string).toLowerCase() === feat.toLowerCase());
-          return m ? (m.overlap_percentage || 0) : 0;
-        });
-        const avgFeatureOverlap = overlaps.length ? overlaps.reduce((a,b)=>a+b,0)/overlaps.length : 0;
-        const relevanceScore = (p.coverage_ratio * 0.6) + (avgFeatureOverlap * 0.4);
-        return {
-          patentNumber: p.pn,
-          coverageRatio: p.coverage_ratio,
-          avgFeatureOverlap,
-          relevanceScore,
-          pqaiRelevance,
-          abstract,
-          title,
-          mappings: maps,
-          link
-        };
-      })
-      .sort((a,b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-
-    const uncovered = new Set(inventionFeatures.map(f => f.toLowerCase()));
-    const selected: any[] = [];
-
-    const marginalGain = (pat: any): {gain: number; details: {feat: string; kind: 'P'|'Pt'}[]} => {
-      let gain = 0; const details: any[] = [];
-      for (const m of pat.mappings as any[]) {
-        const feat = ((m.feature_text || m.feature || '') as string).toLowerCase();
-        if (!uncovered.has(feat)) continue;
-        const status = (m.status || '').toString();
-        if (status === 'Present') { gain += 1; details.push({feat, kind: 'P'}); }
-        else if (status === 'Partial' && !presentPossible[feat]) { gain += 0.5; details.push({feat, kind: 'Pt'}); }
-      }
-      gain += (pat.pqaiRelevance || 0) * 0.01; // tiny tieâ€‘break
-      return { gain, details };
-    };
-
-    while (uncovered.size > 0) {
-      let best: any = null; let bestGain = -1; let bestDetails: any[] = [];
-      for (const cand of scored) {
-        if (selected.find(s => s.patentNumber === cand.patentNumber)) continue;
-        const { gain, details } = marginalGain(cand);
-        if (gain > bestGain || (gain === bestGain && (cand.relevanceScore||0) > (best?.relevanceScore||0))) {
-          best = cand; bestGain = gain; bestDetails = details;
-        }
-      }
-      if (!best || bestGain <= 0) break; // no more gains
-      selected.push(best);
-      for (const d of bestDetails) uncovered.delete(d.feat);
-      // Reasonable stop: if selected reaches 5 and majority covered, let Stage 4 narrate residuals
-      if (selected.length >= 5 && uncovered.size <= Math.ceil(inventionFeatures.length * 0.1)) break;
-    }
-
-    // One extra precision pick for Partialâ€‘only residuals
-    if (uncovered.size > 0) {
-      let best: any = null; let bestPt = -1;
-      for (const cand of scored) {
-        if (selected.find(s => s.patentNumber === cand.patentNumber)) continue;
-        let count = 0;
-      for (const m of cand.mappings as any[]) {
-          const feat = ((m.feature_text || m.feature || '') as string).toLowerCase();
-          if (!uncovered.has(feat)) continue;
-          if ((m.status || '').toString() === 'Partial' && !presentPossible[feat]) count++;
-      }
-        if (count > bestPt) { bestPt = count; best = cand; }
-      }
-      if (best && bestPt > 0) selected.push(best);
-    }
-
-    if (selected.length === 0 && scored.length > 0) {
-      // Safety net: ensure at least top 2 are passed if greedy found no gains due to schema mismatches
-      console.warn(' Greedy selector produced empty set; falling back to top-2 by relevance.');
-      return scored.slice(0, Math.min(2, scored.length));
-    }
-
-    console.log(` Selected ${selected.length} patents for Stage 4 by greedy feature coverage.`);
-    return selected;
   }
 
   private async generateReportContent(
@@ -9832,15 +9927,20 @@ OUTPUT JSON:
       // Select top patents for detailed analysis, filtered to those with â‰¥1 matching feature
       // This partitions already-mapped/reportable references; it does not initiate
       // or limit feature-wise deep analysis.
+      const mappedPublicationNumbers = (featureMapData?.feature_map || []).map(map => map.pn).filter(Boolean);
+      const familyKeysByPn = await this.resolveReferenceFamilyKeys(mappedPublicationNumbers);
       const reportReferenceCandidates = this.buildStage4ReportReferenceCandidates(
         stage1Data,
         featureMapData,
-        aggRes
+        aggRes,
+        stage0Data,
+        familyKeysByPn
       );
       const reportReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
         mainReferenceTarget: config.stage4.mainReferenceTarget ?? config.stage4.maxRefsForReportMain ?? 10,
         minMainReferences: config.stage4.minMainReferences ?? 3,
         maxUnmappedSupplementaryReferences: config.stage4.maxUnmappedSupplementaryReferences ?? 20,
+        rule: NOVELTY_REPORT_SELECTION_RULE,
       });
       const selectedPatents = this.buildStage4SelectedPatentDetails(
         reportReferenceSelection,
@@ -9918,104 +10018,6 @@ OUTPUT JSON:
         structured_narrative: aggRes.structured_narrative || {}
       };
 
-      // Execute LLM call for enhanced analytical report generation using attorney-style V3 prompt
-      let basePrompt = STAGE4_REPORT_PROMPT_V3
-        .replace('{invention_features}', JSON.stringify(enhancedReportInputs.invention_features))
-        .replace('{selected_patents}', JSON.stringify(enhancedReportInputs.selected_patents))
-        .replace('{search_metadata}', JSON.stringify(enhancedReportInputs.search_metadata))
-        .replace('{feature_analysis_matrix}', JSON.stringify(enhancedReportInputs.feature_analysis_matrix))
-        .replace('{structured_narrative}', JSON.stringify(enhancedReportInputs.structured_narrative))
-        .replace(/SEARCH_ID/g, enhancedReportInputs.search_metadata.search_id)
-        .replace(/GENERATION_DATE/g, new Date().toISOString().split('T')[0])
-        .replace(/TOTAL_COUNT/g, enhancedReportInputs.search_metadata.total_patents_found.toString())
-        .replace(/SELECTED_COUNT/g, enhancedReportInputs.search_metadata.selected_patents_count.toString())
-        .replace(/SEARCH_DATE/g, enhancedReportInputs.search_metadata.search_date)
-        .replace(/SEARCH_JURISDICTION/g, enhancedReportInputs.search_metadata.jurisdiction);
-
-      // Provide abstracts/evidence for selected patents as additional context (do not echo back)
-      basePrompt += "\n\nSupporting context (do not restate): PATENT_DETAILS_JSON=" + JSON.stringify(enhancedReportInputs.patent_details);
-
-      // Expand summary to describe the full pipeline and selection logic for user confidence
-      basePrompt += "\n\nOUTPUT CONTENT REQUIREMENTS:";
-      basePrompt += "\n- In executive_summary.summary, state: initial PQAI results (search_metadata.pqai_initial_count); direct accepted, component/feature-level, and borderline counts from AI Relevance (if present); final selected_patents_count; and the selection logic (greedy feature coverage).";
-      basePrompt += "\n- Under concluding_remarks, keep key_strengths/risks/recommendations and also include:";
-      basePrompt += "\n  â€¢ 'advisory' field: Do NOT give legal conclusions; advise deep analysis of selected patents and next steps.";
-      basePrompt += "\n  â€¢ 'patent_numbers' array listing the selected patent_number values for user review.";
-      basePrompt += "\n- Add 'per_patent_analysis' array with detailed entries per selected/relevant patent using this format:";
-      basePrompt += "\n  {";
-      basePrompt += "\n    pn: patent_number,";
-      basePrompt += "\n    title: patent_title,";
-      basePrompt += "\n    relevance: 0.0-1.0 score (how relevant to our invention),";
-      basePrompt += "\n    novelty_threat: 'high_overlap' | 'moderate_overlap' | 'related' | 'low_overlap',";
-      basePrompt += "\n    summary: 1-2 sentence explanation of the reviewed citation record relationship to our invention,";
-      basePrompt += "\n    detailedAnalysis: {";
-      basePrompt += "\n      summary: brief overview,";
-      basePrompt += "\n      relevant_parts: [specific overlapping elements from reviewed citation records],";
-      basePrompt += "\n      irrelevant_parts: [elements not mapped in the reviewed citation record],";
-      basePrompt += "\n      novelty_comparison: evidence-based comparison without legal conclusions";
-      basePrompt += "\n    }";
-      basePrompt += "\n  }";
-      basePrompt += "\n  Only include patents with relevance >= 0.3 (filter out remote/irrelevant ones).";
-
-      // Enforce a critical, examiner-style stance and explicit decision policy
-      basePrompt += "\n\nCRITICAL STANCE AND DECISION RULES:";
-      basePrompt += "\n- You are an objective, skeptical examiner. Do not justify the idea; challenge it.";
-      basePrompt += "\n- Be evidence-driven; avoid advocacy language and generic fluff.";
-      basePrompt += "\n- Treat unknown/insufficient-evidence cells as weaknesses that lower confidence.";
-      basePrompt += "\n- Decision policy: If any single patent maps to >= 60% of features AND all critical features in the reviewed citation record, classify it as high mapped overlap unless a concrete, technical differentiator is clearly evidenced.";
-      basePrompt += "\n- Do not repeat source-scope limitations in the body. Full patent document review will be stated in the report disclaimer.";
-      basePrompt += "\n- If features are scattered across multiple patents without integration, state this plainly as distributed component coverage; do not describe scattered component coverage as one-reference anticipation of the full invention.";
-
-      if (isIdeaBankGenerationEnabled()) {
-      // Request new patent ideas for the Idea Bank using the same creative brief used in drafting's AI relevance review
-      const __ideaGenRefs = (enhancedReportInputs.patent_details || [])
-        .map((p: any) => `PN: ${p.patent_number}\nTitle: ${p.title}\nAbstract: ${String(p.abstract||'').slice(0,400)}`)
-        .join('\n\n');
-
-      basePrompt += `\n\nIDEA GENERATION (for idea_bank_suggestions):\n`;
-      basePrompt += `You are a dual-headed entity:\n`;
-      basePrompt += `- Left brain: ruthless patent examiner who kills any idea that is obvious under 35 U.S.C. §103 or abstract under §101.\n`;
-      basePrompt += `- Right brain: visionary CTO who invents only “white-space” solutions that make the cited references obsolete.\n`;
-      basePrompt += `Both brains must co-sign every concept or it is rejected.\n`;
-
-      basePrompt += `\nINVENTION CONTEXT:\nTitle: ${String(searchRun.title || '')}\nSearch Query: ${String((stage0Data as any)?.searchQuery || '')}\n`;
-      
-      basePrompt += `\nCORE OBJECTIVE:\n`;
-      basePrompt += `The user is looking for "White Space" inventions—areas where no patent currently exists.\n`;
-      basePrompt += `Do not just improve the references. Make them obsolete.\n`;
-      basePrompt += `Think from First Principles: What is the fundamental physics/logic limit here, and how do we bypass it?\n`;
-
-      basePrompt += `\nINVENTION BRIEFING:\n`;
-      basePrompt += `Generate exactly 5 patent-grade concepts that:\n`;
-      basePrompt += `1. Are **orthogonal** to every mechanism disclosed in REFERENCES.\n`;
-      basePrompt += `2. Contain at least one **physical structure** or **chemical composition** (no pure algorithms, no “AI to optimize”).\n`;
-      basePrompt += `3. Can be **enabled** by a PHOSITA with only routine experimentation (no perpetual motion, no room-temperature superconductors unless you supply the formula).\n`;
-      basePrompt += `4. Pass the **“cold shower” test**: if you woke up tomorrow and read the claim on the front page of TechCrunch, you would think “wow, that’s clever—and nobody did that before.”\n`;
-
-      basePrompt += `\nCREATIVITY FILTERS (apply ≥1 per idea):\n`;
-      basePrompt += `A. **Anti-Solution**: Invert the primary physical state (e.g., if it's rigid, make it fluid; if it's centralized, make it swarm-based).\n`;
-      basePrompt += `B. **Resource Starvation**: Design for zero electricity, zero RF bandwidth, or zero rare-earth materials.\n`;
-      basePrompt += `C. **Biomimicry**: Copy a biological mechanism that has **no** existing engineering analog in the field.\n`;
-      basePrompt += `D. **Dimensional Shift**: Replace spatial hardware with temporal encoding, or vice-versa.\n`;
-      basePrompt += `E. **Cross-Pollination**: Import a physical phenomenon from an unrelated domain (e.g., high-frequency trading latency-arbitrage → ultrasonic acoustic arbitrage in concrete sensing).\n`;
-
-      basePrompt += `\nOUTPUT SCHEMA (embed inside the overall JSON under key 'idea_bank_suggestions'):\n`;
-      basePrompt += `Array of 3-5 objects with fields:\n`;
-      basePrompt += `{\n`;
-      basePrompt += `  "title": "≤12 words, technical, no fluff",\n`;
-      basePrompt += `  "core_principle": "One sentence problem statement anchored in white space, followed by: Unlike standard approaches that use X, this embodiment uses Y (2-3 sentences, physical detail)",\n`;
-      basePrompt += `  "expected_advantage": "Concrete commercial scenario with $-size if possible",\n`;
-      basePrompt += `  "tags": ["technical-domain", "application", "disruption-type", "cross-discipline"],\n`;
-      basePrompt += `  "non_obvious_extension": "Exact sentence from REFERENCES that this idea avoids (Cross-ref Killshot)"\n`;
-      basePrompt += `}\n`;
-
-      basePrompt += `\nREFERENCE SNAPSHOTS (Analyze these to find what to AVOID or DISRUPT):\n${__ideaGenRefs}`;
-      }
-
-      // If no intersecting patents, add explicit instruction for the report
-      if (!selectedPatents || selectedPatents.length === 0) {
-        basePrompt += `\n\nNOTE_TO_MODEL: No prior art with intersecting features (Present/Partial) was found in Stage 3.5. Generate the report focusing on Stage 0 features, mapped-differentiation rationale, and explain that no overlapping evidence was identified.`;
-      }
 
       // Stage 4 prompt is built below using filtered + trimmed remarks (Tier 1 optimization)
 
@@ -10090,26 +10092,35 @@ OUTPUT JSON:
         shortlisted_unmapped_displayed: reportReferenceSelection.counts.unmappedDisplayed,
         shortlisted_unmapped_omitted: reportReferenceSelection.counts.unmappedOmitted,
       };
-      basePrompt = buildStage4ReportPromptFromRemarksV3({
+      const buildStage4Prompt = (remarks: any[]) => buildStage4ReportPromptFromRemarksV3({
         inventionFeatures: stage0Data.inventionFeatures || [],
-        perPatentRemarks: trimmedRemarks,
+        perPatentRemarks: remarks,
         searchMetadata: enhancedReportInputs.search_metadata,
         metrics: reportMetrics,
         mappedSupplementaryReferences: mappedSupplementarySummary,
         shortlistedUnmappedReferences: shortlistedUnmappedSummary,
       });
+      const budgeted = this.fitStage4PromptToBudget(trimmedRemarks, buildStage4Prompt);
+      if (budgeted.trim.applied) {
+        console.warn('[Stage4] prompt_trimmed', JSON.stringify({ searchId: searchRun.id, ...budgeted.trim }));
+      }
+      let basePrompt = budgeted.prompt;
       if (stage4RemarksForPrompt.length === 0) {
         basePrompt += "\nNOTE_TO_MODEL: No per-patent remarks were available. Produce a Requires Full-Text Review report and explain that novelty cannot be inferred from unmapped analysis.";
       }
-      basePrompt = basePrompt
-        .replace(/- Left brain: ruthless patent examiner[^\n]+/g, '- Left brain: skeptical technical reviewer who rejects ideas directly mapped by the references or unsupported by concrete technical detail.')
-        .replace(/"non_obvious_extension": "Exact sentence from REFERENCES[^"]+"/g, '"non_obvious_extension": "Concrete technical distinction from REFERENCES"');
 
       // Use admin-configured model via NOVELTY_REPORT_GENERATION stage
       console.log(` [Stage4] Attempting report generation with admin-configured model`);
       let llmResult = await llmGateway.executeLLMOperation(
         { headers: requestHeaders || {} },
-        { taskCode: TaskCode.LLM6_REPORT_GENERATION, stageCode: 'NOVELTY_REPORT_GENERATION', prompt: basePrompt }
+        {
+          taskCode: TaskCode.LLM6_REPORT_GENERATION,
+          stageCode: 'NOVELTY_REPORT_GENERATION',
+          prompt: basePrompt,
+          // One call per run, so there is no intra-run reuse; the stable key groups
+          // every run of this stage behind the same shared template prefix.
+          parameters: { prompt_cache_key: 'NOVELTY_REPORT_GENERATION' },
+        }
       );
 
       // The gateway handles fallbacks via admin configuration, but log if first attempt fails
@@ -10149,6 +10160,19 @@ OUTPUT JSON:
       if (!this.validateReportDomain(stage0Data, reportData)) {
         console.warn('âš ï¸ LLM report appears off-topic. Using deterministic report content.');
         reportData = {};
+      }
+
+      // Identity fields are server-known, so they are applied here rather than
+      // round-tripped through the model. That keeps them authoritative and keeps the
+      // prompt template free of per-run values, which would otherwise break the
+      // provider prompt cache for every run of this stage.
+      if (reportData && typeof reportData === 'object') {
+        reportData.report_metadata = {
+          ...(reportData.report_metadata && typeof reportData.report_metadata === 'object' ? reportData.report_metadata : {}),
+          search_id: searchRun.id,
+          date: new Date().toISOString().split('T')[0],
+          jurisdiction: config.jurisdiction,
+        };
       }
 
       // Enhance with deterministic data

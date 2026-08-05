@@ -19,10 +19,18 @@ function scopeWithConcept(): WhitespaceScope {
 }
 
 /** Queues semanticNeighbors results; the last entry repeats once drained. */
-function mockEmbedding(results: Array<{ available: true; neighbors: Array<{ id: number }> } | { available: false; reason: string }>) {
+function mockEmbedding(
+  results: Array<
+    | { available: true; neighbors: Array<{ id: number }>; appliedMaxDistance: number | null }
+    | { available: false; reason: string }
+  >
+) {
   const neighborCalls: number[] = []
   vi.doMock('../embedding', () => ({
     semanticLaneConfigured: () => true,
+    corpusVectorRowEstimate: async () => 0,
+    backgroundCeiling: () => 0,
+    semanticBackground: async () => [],
     semanticNeighbors: async () => {
       neighborCalls.push(1)
       return results[Math.min(neighborCalls.length - 1, results.length - 1)]
@@ -45,7 +53,7 @@ describe('resolveFieldCandidates memo', () => {
   it('retries after a transient failure instead of serving it from the cache', async () => {
     const calls = mockEmbedding([
       { available: false, reason: 'Semantic retrieval failed: connection reset' },
-      { available: true, neighbors: [{ id: 7 }] },
+      { available: true, neighbors: [{ id: 7 }], appliedMaxDistance: 0.3 },
     ])
     const { resolveFieldCandidates } = await import('../candidates')
 
@@ -59,7 +67,7 @@ describe('resolveFieldCandidates memo', () => {
   })
 
   it('memoises a successful resolution so consecutive stages pay for one retrieval', async () => {
-    const calls = mockEmbedding([{ available: true, neighbors: [{ id: 7 }] }])
+    const calls = mockEmbedding([{ available: true, neighbors: [{ id: 7 }], appliedMaxDistance: 0.3 }])
     const { resolveFieldCandidates } = await import('../candidates')
 
     const first = await resolveFieldCandidates(scopeWithConcept())

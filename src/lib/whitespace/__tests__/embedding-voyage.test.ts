@@ -13,9 +13,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-/** Captures the ANN statement without touching a database. */
-function mockPrisma() {
+/**
+ * Captures the ANN statement without touching a database. `queryResults` are
+ * handed to $queryRaw operations inside $transaction, in order, so a test can
+ * drive the two-step adaptive path (background query, then retrieval).
+ */
+function mockPrisma(queryResults: unknown[][] = []) {
   const calls: Array<{ sql: string; values: unknown[] }> = []
+  let cursor = 0
   vi.doMock('@/lib/prisma', () => ({
     prisma: {
       $executeRaw: (..._args: unknown[]) => ({ __tag: 'exec' }),
@@ -23,7 +28,8 @@ function mockPrisma() {
         calls.push({ sql: query.strings.join('?'), values: query.values })
         return { __tag: 'query' }
       },
-      $transaction: async (ops: unknown[]) => ops.map(() => []),
+      $transaction: async (ops: Array<{ __tag?: string }>) =>
+        ops.map(op => (op?.__tag === 'query' ? queryResults[cursor++] ?? [] : [])),
     },
   }))
   return calls
@@ -208,37 +214,145 @@ describe('semanticMatchSql', () => {
   })
 })
 
-describe('uncalibrated installations', () => {
-  it('refuses to run the semantic arm on binary vectors with no measured ceiling', async () => {
+describe('adaptive ceiling', () => {
+  /** 512-bit Hamming: the module normalises by the bit width, so raw = x * 512. */
+  const RAW = 512
+
+  it('derives the ceiling from the query background and applies it in raw units', async () => {
+    const calls = mockPrisma([
+      // Background query: mean 0.35, sd 0.02, both in raw Hamming bits.
+      [{ idx: 1, sampled: 5000, mean: 0.35 * RAW, sd: 0.02 * RAW }],
+      [],
+    ])
+    mockCorpusService({})
+    const { semanticNeighbors } = await import('../embedding')
+
+    const result = await semanticNeighbors({ queryText: 'x', limit: 10, adaptive: { z: 3 } })
+
+    // mean - 3sd = 0.35 - 0.06 = 0.29, reaching SQL as 148.48 raw bits.
+    expect(result.available && result.appliedMaxDistance).toBeCloseTo(0.29, 6)
+    const retrieval = calls[calls.length - 1]
+    expect((retrieval.values as number[]).some(v => typeof v === 'number' && Math.abs(v - 0.29 * RAW) < 1e-6)).toBe(true)
+  })
+
+  it('samples the corpus at large, not the caller scope, so a narrow study can still be sized', async () => {
+    const calls = mockPrisma([[{ idx: 1, sampled: 5000, mean: 0.35 * RAW, sd: 0.02 * RAW }], []])
+    mockCorpusService({})
+    const { Prisma } = await import('@prisma/client')
+    const { semanticNeighbors } = await import('../embedding')
+
+    await semanticNeighbors({
+      queryText: 'x',
+      limit: 10,
+      adaptive: { z: 3 },
+      scopeFilter: Prisma.sql`lp."country" = 'IN'`,
+    })
+
+    const background = calls[0].sql
+    expect(background).toContain('TABLESAMPLE SYSTEM')
+    // The study that exposed the bug matched 66 publications — far too few to
+    // estimate a spread from, which is why the scope must not reach this query.
+    expect(background).not.toContain('lp."country"')
+  })
+
+  it('falls back to an uncapped ranking, and says so, when the background is too thin', async () => {
+    // sampled < 100 is rejected: a handful of rows cannot support a cut.
+    mockPrisma([[{ idx: 1, sampled: 12, mean: 0.35 * RAW, sd: 0.02 * RAW }], []])
+    mockCorpusService({})
+    const { semanticNeighbors } = await import('../embedding')
+
+    const result = await semanticNeighbors({ queryText: 'x', limit: 10, adaptive: { z: 3 } })
+
+    // Null is the signal candidates.ts uses to refuse the result rather than
+    // treat a bare top-K as a field definition.
+    expect(result.available && result.appliedMaxDistance).toBeNull()
+  })
+
+  it('lets an explicit maxDistance win over the adaptive rule', async () => {
+    const calls = mockPrisma([[{ idx: 1, sampled: 5000, mean: 0.35 * RAW, sd: 0.02 * RAW }], []])
+    mockCorpusService({})
+    const { semanticNeighbors } = await import('../embedding')
+
+    await semanticNeighbors({ queryText: 'x', limit: 10, maxDistance: 0.25, adaptive: { z: 3 } })
+
+    // No background query at all: the first statement is the retrieval.
+    expect(calls).toHaveLength(1)
+    expect(calls[0].values).toContain(0.25 * RAW)
+  })
+
+  it('carries a per-row ceiling into semanticMatchSql for set-valued callers', async () => {
+    mockPrisma()
+    mockCorpusService({})
+    const { semanticMatchSql } = await import('../embedding')
+    const { Prisma } = await import('@prisma/client')
+
+    // The dimension census unnests one literal AND one ceiling per value, so the
+    // ceiling has to survive as SQL rather than being folded into a constant.
+    const fragment = semanticMatchSql(Prisma.sql`q.lit`, Prisma.sql`q.ceil`)
+    const sql = fragment.strings.join('?')
+
+    expect(sql).toContain('q.ceil')
+    expect(sql).toContain('*')
+    expect(fragment.values).toContain(RAW)
+  })
+})
+
+describe('ceiling policy', () => {
+  /**
+   * The regression this whole file's newest section exists for: a binary
+   * installation with nothing configured used to resolve to NO ceiling, which
+   * switched the semantic arm off and left every study lexical-only. No constant
+   * could be supplied to fix it, because measurement showed none exists — five
+   * unrelated probes needed ceilings ~0.04 apart. The default is now adaptive.
+   */
+  it('defaults to an adaptive ceiling on binary vectors instead of refusing to run', async () => {
     mockPrisma()
     mockCorpusService({})
     delete process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE
-    const { resolveMaxDistance, UNCALIBRATED_REASON } = await import('../candidates')
+    delete process.env.WHITESPACE_SEMANTIC_SELECTIVITY
+    const { resolveSemanticCeiling } = await import('../candidates')
 
-    expect(resolveMaxDistance()).toBeNull()
-    expect(UNCALIBRATED_REASON).toContain('whitespace-semantic-calibrate')
+    const ceiling = await resolveSemanticCeiling()
+
+    expect(ceiling?.mode).toBe('adaptive')
+    expect(ceiling && ceiling.mode === 'adaptive' && ceiling.z).toBeGreaterThan(0)
   })
 
-  it('honours an operator-set ceiling once the corpus has been measured', async () => {
+  it('honours an operator-set absolute ceiling', async () => {
     mockPrisma()
     mockCorpusService({})
     process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE = '0.28'
-    const { resolveMaxDistance } = await import('../candidates')
+    const { resolveSemanticCeiling } = await import('../candidates')
 
-    expect(resolveMaxDistance()).toBe(0.28)
+    expect(await resolveSemanticCeiling()).toEqual({ mode: 'absolute', maxDistance: 0.28 })
     delete process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE
   })
 
-  it('keeps the measured cosine default for float installations', async () => {
+  it('turns a configured selectivity into the z the background rule applies', async () => {
     mockPrisma()
-    mockCorpusService({
-      PATENT_CORPUS_EMBEDDING_DTYPE: 'float',
-      PATENT_CORPUS_EMBEDDING_MODEL: 'text-embedding-3-small',
-    })
+    mockCorpusService({})
     delete process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE
-    const { resolveMaxDistance } = await import('../candidates')
+    process.env.WHITESPACE_SEMANTIC_SELECTIVITY = '0.0001'
+    const { resolveSelectivity } = await import('../candidates')
 
-    expect(resolveMaxDistance()).toBe(0.35)
+    // Phi^-1(1e-4) = -3.719; the ceiling sits that many sd below the mean.
+    const { selectivity, z } = await resolveSelectivity()
+    expect(selectivity).toBeCloseTo(1e-4, 10)
+    expect(z).toBeCloseTo(3.719, 2)
+    delete process.env.WHITESPACE_SEMANTIC_SELECTIVITY
+  })
+
+  it('clamps selectivity so a small corpus is never asked for more subject than it holds', async () => {
+    mockPrisma()
+    mockCorpusService({})
+    delete process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE
+    // A 5,000-document target against a 38k-row corpus would demand 13% of it —
+    // the failure the old bare candidate cap produced.
+    process.env.WHITESPACE_SEMANTIC_SELECTIVITY = '0.13'
+    const { resolveSelectivity } = await import('../candidates')
+
+    expect((await resolveSelectivity()).selectivity).toBeLessThanOrEqual(0.01)
+    delete process.env.WHITESPACE_SEMANTIC_SELECTIVITY
   })
 
   it('honours the operator kill switch even on a float installation', async () => {
@@ -248,11 +362,9 @@ describe('uncalibrated installations', () => {
       PATENT_CORPUS_EMBEDDING_MODEL: 'text-embedding-3-small',
     })
     process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE = 'off'
-    const { resolveMaxDistance, semanticArmUnavailableReason, DISABLED_REASON } = await import('../candidates')
+    const { resolveSemanticCeiling, semanticArmUnavailableReason, DISABLED_REASON } = await import('../candidates')
 
-    expect(resolveMaxDistance()).toBeNull()
-    // "Go calibrate" would be wrong advice for a deliberate off — the reasons
-    // must never be conflated.
+    expect(await resolveSemanticCeiling()).toBeNull()
     expect(semanticArmUnavailableReason()).toBe(DISABLED_REASON)
     delete process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE
   })
@@ -263,14 +375,15 @@ describe('uncalibrated installations', () => {
       PATENT_CORPUS_EMBEDDING_DTYPE: 'float',
       PATENT_CORPUS_EMBEDDING_MODEL: 'text-embedding-3-small',
     })
-    const { resolveMaxDistance, semanticArmUnavailableReason, DISABLED_REASON } = await import('../candidates')
+    const { resolveSemanticCeiling, semanticArmUnavailableReason, DISABLED_REASON } = await import('../candidates')
 
     // '0.0' and '-1' used to slip past the literal-'0' string test and fall
     // through to the measured cosine default — turning the arm back ON for an
-    // operator who had just asked for it off.
+    // operator who had just asked for it off. They must not now fall through to
+    // the ADAPTIVE default either.
     for (const raw of ['0', '0.0', '-1', '-0.5']) {
       process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE = raw
-      expect(resolveMaxDistance(), `raw=${raw}`).toBeNull()
+      expect(await resolveSemanticCeiling(), `raw=${raw}`).toBeNull()
       expect(semanticArmUnavailableReason(), `raw=${raw}`).toBe(DISABLED_REASON)
     }
     delete process.env.WHITESPACE_SEMANTIC_MAX_DISTANCE

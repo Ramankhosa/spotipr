@@ -75,7 +75,14 @@ export interface SemanticNeighbor {
 }
 
 export type SemanticLaneResult =
-  | { available: true; neighbors: SemanticNeighbor[] }
+  | {
+      available: true
+      neighbors: SemanticNeighbor[]
+      /** The normalised ceiling actually applied, or null when none was. */
+      appliedMaxDistance: number | null
+      /** Present only when the ceiling was resolved adaptively. */
+      background?: SemanticBackground
+    }
   | { available: false; reason: string }
 
 export function semanticLaneConfigured(): boolean {
@@ -131,15 +138,203 @@ export async function embedQueryTexts(texts: string[]): Promise<Array<string | n
  * converted to the raw metric here, so every caller compares on the scale the
  * index orders by. Assumes the embeddings table is aliased `e`.
  */
-export function semanticMatchSql(literalExpr: Prisma.Sql, maxDistance: number): Prisma.Sql {
-  return Prisma.sql`(${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} (${literalExpr})${EMBEDDING_CAST_SQL}) <= ${
-    maxDistance * DISTANCE_DENOMINATOR
-  }`
+export function semanticMatchSql(literalExpr: Prisma.Sql, maxDistance: number | Prisma.Sql): Prisma.Sql {
+  // A SQL-valued ceiling is for set-valued callers (the dimension census unnests
+  // one literal AND one ceiling per value), where the ceiling varies per ROW and
+  // so cannot be folded into a JS constant. Both forms are on the normalised
+  // [0,1] scale and both convert to the raw metric here, so no call site has to
+  // remember which scale it is holding.
+  const rawCeiling =
+    typeof maxDistance === 'number'
+      ? Prisma.sql`${maxDistance * DISTANCE_DENOMINATOR}`
+      : Prisma.sql`((${maxDistance}) * ${DISTANCE_DENOMINATOR})`
+  return Prisma.sql`(${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} (${literalExpr})${EMBEDDING_CAST_SQL}) <= ${rawCeiling}`
 }
 
 /** The rows semanticMatchSql may legally read (alias `e`): current model, COMPLETED, vector present. */
 export function comparableVectorSql(): Prisma.Sql {
   return COMPARABLE_VECTOR
+}
+
+/**
+ * Distances from ONE query vector to the corpus at large — the null distribution
+ * that vector sits in.
+ *
+ * This exists because an absolute distance ceiling is not portable across
+ * queries. Measured on the production corpus, five unrelated probes produced
+ * distance curves offset from each other by 15-25 Hamming bits: at the ceiling
+ * where "moisture sensor, irrigation valve" first reached 100 documents,
+ * "lithium battery electrolyte" was already past 8,000. That offset is a
+ * property of the QUERY VECTOR, not of the subject's density, so no single
+ * constant can serve both — which is exactly how the studio ended up with the
+ * semantic arm switched off on a binary installation.
+ *
+ * Subtracting each query's own background removes the offset and makes one
+ * configured selectivity mean the same thing for every query.
+ */
+export interface SemanticBackground {
+  /** Rows the estimate was drawn from. */
+  sampled: number
+  /** Mean NORMALISED distance from the query to an arbitrary corpus document. */
+  mean: number
+  /** Standard deviation, same scale. */
+  sd: number
+}
+
+/**
+ * Rows the background sample aims to draw. At 20k the standard error of the mean
+ * is sd/141 — far finer than the effect being measured — while staying a bounded
+ * scan on a 45M-row corpus.
+ */
+const BACKGROUND_TARGET_ROWS = Math.max(
+  1_000,
+  Number(process.env.WHITESPACE_BACKGROUND_SAMPLE_ROWS) || 20_000
+)
+
+/** reltuples for the embeddings table; -1/0 means never analysed. Cached per process. */
+let rowEstimate: number | null = null
+export async function corpusVectorRowEstimate(): Promise<number> {
+  if (rowEstimate !== null) return rowEstimate
+  try {
+    const rows = await prisma.$queryRaw<Array<{ rows: number }>>`
+      SELECT GREATEST(c.reltuples, 0)::float8 AS rows
+      FROM pg_class c
+      WHERE c.oid = 'local_patent_embeddings'::regclass`
+    rowEstimate = Number(rows[0]?.rows ?? 0) || 0
+  } catch {
+    rowEstimate = 0
+  }
+  return rowEstimate
+}
+
+/**
+ * TABLESAMPLE percentage that yields roughly BACKGROUND_TARGET_ROWS.
+ *
+ * Over-sampled 4x because SYSTEM samples BLOCKS and the comparability filter
+ * (current model, COMPLETED) then discards a share of what those blocks hold;
+ * the LIMIT trims the excess. An unanalysed or small table falls back to 100,
+ * which is a full scan — correct, and cheap precisely because such a table is
+ * small. Formatted, not bound: TABLESAMPLE's argument is evaluated once and the
+ * value is derived from reltuples, never from user input.
+ */
+async function backgroundSamplePercent(): Promise<number> {
+  const total = await corpusVectorRowEstimate()
+  if (total <= 0) return 100
+  const percent = (100 * BACKGROUND_TARGET_ROWS * 4) / total
+  return Math.min(100, Math.max(0.01, percent))
+}
+
+/**
+ * Background stats for each literal, INDEX-ALIGNED with the input; null where the
+ * literal was absent or the sample was too thin to estimate a spread from.
+ *
+ * Deliberately sampled from the WHOLE corpus rather than the study's scope. The
+ * quantity being measured is where this query vector sits relative to the corpus
+ * geometry, which the scope does not change — and a narrow scope (the study that
+ * exposed this bug matched 66 publications) cannot supply enough rows to
+ * estimate anything at all.
+ */
+export async function semanticBackground(input: {
+  literals: Array<string | null>
+  timeoutMs?: number
+}): Promise<Array<SemanticBackground | null>> {
+  const results: Array<SemanticBackground | null> = input.literals.map(() => null)
+  // Nulls travel as '' so WITH ORDINALITY keeps every row aligned with its
+  // caller-side index; the WHERE drops them after the index is assigned.
+  const padded = input.literals.map(literal => literal ?? '')
+  if (!padded.some(Boolean)) return results
+
+  const percent = (await backgroundSamplePercent()).toFixed(4)
+  const SAMPLE_CLAUSE = Prisma.raw(`TABLESAMPLE SYSTEM (${percent})`)
+  const DISTANCE = Prisma.sql`(bg.v ${EMBEDDING_DISTANCE_OP_SQL} q.lit${EMBEDDING_CAST_SQL})::float8`
+
+  const [, rows] = await prisma.$transaction([
+    prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(input.timeoutMs ?? 20_000)}, true)`,
+    prisma.$queryRaw<Array<{ idx: number; sampled: number; mean: number; sd: number }>>(Prisma.sql`
+      WITH bg AS MATERIALIZED (
+        SELECT ${EMBEDDING_COLUMN_SQL} AS v
+        FROM "local_patent_embeddings" e ${SAMPLE_CLAUSE}
+        WHERE ${COMPARABLE_VECTOR}
+        LIMIT ${BACKGROUND_TARGET_ROWS}
+      )
+      SELECT q.idx::int                                     AS idx,
+             count(*)::int                                  AS sampled,
+             avg(${DISTANCE})::float8                       AS mean,
+             COALESCE(stddev_samp(${DISTANCE}), 0)::float8  AS sd
+      FROM unnest(${padded}::text[]) WITH ORDINALITY AS q(lit, idx)
+      CROSS JOIN bg
+      WHERE q.lit <> ''
+      GROUP BY q.idx`),
+  ])
+
+  for (const row of rows) {
+    const index = Number(row.idx) - 1
+    const sampled = Number(row.sampled)
+    const sd = Number(row.sd) / DISTANCE_DENOMINATOR
+    // A degenerate spread means the sample cannot support a cut; saying so lets
+    // the caller fall back honestly instead of emitting a ceiling of `mean`.
+    if (index < 0 || index >= results.length || sampled < 100 || !(sd > 0)) continue
+    results[index] = { sampled, mean: Number(row.mean) / DISTANCE_DENOMINATOR, sd }
+  }
+  return results
+}
+
+/**
+ * The ceiling `z` standard deviations below the query's background mean, clamped
+ * to [0,1]. The background is a sum of many near-independent per-dimension
+ * contributions (512 bits for Hamming, 1536 terms for cosine), so it is Gaussian
+ * by the CLT and z maps to a share of the corpus through the normal CDF.
+ */
+export function backgroundCeiling(background: SemanticBackground, z: number): number {
+  return Math.min(1, Math.max(0, background.mean - z * background.sd))
+}
+
+/**
+ * Exact distance profile for one query vector: how many comparable documents lie
+ * within each ceiling, plus the true mean and sd.
+ *
+ * OFFLINE CALIBRATION ONLY. This is a FULL SCAN of the embedding table and must
+ * never be reached from a request path — it is deliberately not wired to
+ * anything but scripts/whitespace-semantic-calibrate.ts.
+ *
+ * It exists because the calibration script used to COUNT by taking the top 8,000
+ * neighbours and filtering them in JS. Every ceiling that admitted more than
+ * 8,000 documents therefore reported exactly 8,000, and the script read that as
+ * "unknown, raise the sample" rather than as "at least 8,000" — which was
+ * already a definitive answer. It sent operators into an unbounded re-run loop
+ * over a question its own data had settled. One scan answers the whole grid at
+ * once, exactly, with no ceiling and no sample depth to censor it.
+ */
+export async function calibrationDistanceProfile(input: {
+  literal: string
+  /** Normalised [0,1] ceilings to count under. */
+  ceilings: number[]
+  timeoutMs?: number
+}): Promise<{ scanned: number; mean: number; sd: number; counts: number[] }> {
+  const buckets = Prisma.join(
+    input.ceilings.map(ceiling => Prisma.sql`count(*) FILTER (WHERE s.d <= ${ceiling * DISTANCE_DENOMINATOR})::bigint`),
+    ', '
+  )
+  const [, rows] = await prisma.$transaction([
+    prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(input.timeoutMs ?? 600_000)}, true)`,
+    prisma.$queryRaw<Array<{ scanned: bigint; mean: number; sd: number; counts: bigint[] }>>(Prisma.sql`
+        SELECT count(*)::bigint                                AS scanned,
+               COALESCE(avg(s.d), 0)::float8                   AS mean,
+               COALESCE(stddev_samp(s.d), 0)::float8           AS sd,
+               ARRAY[${buckets}]                               AS counts
+        FROM (
+          SELECT (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${input.literal}${EMBEDDING_CAST_SQL})::float8 AS d
+          FROM "local_patent_embeddings" e
+          WHERE ${COMPARABLE_VECTOR}
+        ) s`),
+  ])
+  const row = rows[0]
+  return {
+    scanned: Number(row?.scanned ?? 0),
+    mean: Number(row?.mean ?? 0) / DISTANCE_DENOMINATOR,
+    sd: Number(row?.sd ?? 0) / DISTANCE_DENOMINATOR,
+    counts: (row?.counts ?? []).map(Number),
+  }
 }
 
 /**
@@ -160,6 +355,13 @@ export async function semanticNeighbors(input: {
    * Callers that use this to DEFINE a set (rather than to rank one) must pass it.
    */
   maxDistance?: number
+  /**
+   * Resolve the ceiling from this query's own background instead of a constant:
+   * `mean - z * sd`. Ignored when `maxDistance` is given. Falls back to no
+   * ceiling (pure top-K) when the background cannot be estimated, which is
+   * reported through `appliedMaxDistance: null` rather than silently.
+   */
+  adaptive?: { z: number }
   timeoutMs?: number
 }): Promise<SemanticLaneResult> {
   if (!semanticLaneConfigured()) {
@@ -177,14 +379,34 @@ export async function semanticNeighbors(input: {
   }
   if (!literal) return { available: false, reason: 'Query embedding returned no vector.' }
 
+  let appliedMaxDistance = input.maxDistance ?? null
+  let background: SemanticBackground | undefined
+  if (input.maxDistance === undefined && input.adaptive) {
+    try {
+      const [stats] = await semanticBackground({ literals: [literal], timeoutMs: input.timeoutMs })
+      if (stats) {
+        background = stats
+        appliedMaxDistance = backgroundCeiling(stats, input.adaptive.z)
+      }
+    } catch (error) {
+      // A failed background estimate must not fail retrieval: the caller still
+      // gets the nearest N, and appliedMaxDistance stays null so it knows the
+      // result is a ranking rather than a set.
+      console.error(
+        '[Whitespace] Background estimate failed; falling back to uncapped top-K:',
+        error instanceof Error ? error.message : error
+      )
+    }
+  }
+
   const where = input.scopeFilter ? Prisma.sql`AND ${input.scopeFilter}` : Prisma.empty
   // Applied in the raw metric the operator returns, so the comparison stays on
   // the same scale the index orders by.
   const distanceCeiling =
-    input.maxDistance === undefined
+    appliedMaxDistance === null
       ? Prisma.empty
       : Prisma.sql`AND (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${literal}${EMBEDDING_CAST_SQL}) <= ${
-          input.maxDistance * DISTANCE_DENOMINATOR
+          appliedMaxDistance * DISTANCE_DENOMINATOR
         }`
 
   // pgvector's HNSW scan returns AT MOST hnsw.ef_search rows (default 40).
@@ -229,6 +451,8 @@ export async function semanticNeighbors(input: {
     return {
       available: true,
       neighbors: rows.map(row => ({ ...row, distance: Number(row.distance) / DISTANCE_DENOMINATOR })),
+      appliedMaxDistance,
+      background,
     }
   } catch (error) {
     return {

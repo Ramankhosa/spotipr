@@ -1,10 +1,10 @@
-import { COVERAGE_REQUIREMENT_TYPES, DIAGRAM_KINDS, relationshipCategorySchema, type DiagramKind } from './types'
+import { DIAGRAM_KINDS, relationshipCategorySchema, type DiagramKind } from './types'
 
-// OpenAI strict structured-output schemas for the diagram pipeline's three LLM
-// payloads. These mirror the Zod contracts in types.ts/coverage.ts, which stay
-// authoritative: the provider schema constrains token-level decoding so shape
-// retries disappear, while Zod still enforces the semantic rules (exact claim
-// excerpts, known IDs, density) a decoder cannot check.
+// OpenAI strict structured-output schemas for the pipeline's two LLM payloads:
+// the figure-set plan and a pair of detailed diagrams. These mirror the Zod
+// contracts in types.ts, which stay authoritative — the provider schema
+// constrains token-level decoding so shape retries disappear, while Zod still
+// enforces what a decoder cannot check. Providers other than OpenAI ignore it.
 //
 // Strict-mode conventions:
 // - Every object closes with additionalProperties:false and requires every key,
@@ -30,23 +30,8 @@ const objectOf = (properties: Record<string, JsonSchema>): JsonSchema => ({
 
 const RELATIONSHIP_CATEGORY = enumOf(relationshipCategorySchema.options)
 
-export const COVERAGE_EXTRACTION_RESPONSE_SCHEMA = objectOf({
-  requirements: arrayOf(objectOf({
-    claimNumber: { type: 'integer' },
-    type: enumOf(COVERAGE_REQUIREMENT_TYPES),
-    label: text,
-    sourceText: text,
-    componentIds: textArray,
-    componentCandidate: nullable(objectOf({
-      name: text,
-      type: text,
-      parentId: nullable(text),
-    })),
-  })),
-})
-
 export const FIGURE_SET_PLAN_RESPONSE_SCHEMA = objectOf({
-  schemaVersion: { type: 'integer', enum: [2] },
+  schemaVersion: { type: 'integer', enum: [3] },
   figures: arrayOf(objectOf({
     key: text,
     kind: enumOf(DIAGRAM_KINDS),
@@ -59,12 +44,11 @@ export const FIGURE_SET_PLAN_RESPONSE_SCHEMA = objectOf({
     orderedGroups: arrayOf(objectOf({ id: text, label: text, componentIds: textArray })),
     phaseHints: textArray,
     evidenceIds: textArray,
-    coverageRequirementIds: textArray,
   })),
 })
 
 const DIAGRAM_COMMON_FIELDS: Record<string, JsonSchema> = {
-  schemaVersion: { type: 'integer', enum: [2] },
+  schemaVersion: { type: 'integer', enum: [3] },
   key: text,
   title: text,
   purpose: text,
@@ -72,7 +56,6 @@ const DIAGRAM_COMMON_FIELDS: Record<string, JsonSchema> = {
   direction: enumOf(['TB', 'LR']),
   claimCriticalComponentIds: textArray,
   evidenceIds: textArray,
-  coverageRequirementIds: textArray,
 }
 
 // No label: COMPONENT and CONSTITUENT connectors are unlabelled by rule, and
@@ -82,7 +65,6 @@ const UNLABELLED_RELATIONSHIP = objectOf({
   toId: text,
   category: RELATIONSHIP_CATEGORY,
   evidenceIds: textArray,
-  coverageRequirementIds: textArray,
 })
 
 export function diagramDetailResponseSchema(kind: DiagramKind): JsonSchema {
@@ -101,7 +83,6 @@ export function diagramDetailResponseSchema(kind: DiagramKind): JsonSchema {
         displayLabel: nullable(text),
         optional: { type: 'boolean' },
         external: { type: 'boolean' },
-        coverageRequirementIds: textArray,
       })),
       relationships: arrayOf(UNLABELLED_RELATIONSHIP),
     })
@@ -120,7 +101,6 @@ export function diagramDetailResponseSchema(kind: DiagramKind): JsonSchema {
         phase: nullable(text),
         alternative: nullable(objectOf({ condition: text, branch: enumOf(['IF', 'ELSE']) })),
         evidenceIds: textArray,
-        coverageRequirementIds: textArray,
       })),
     })
   }
@@ -131,12 +111,15 @@ export function diagramDetailResponseSchema(kind: DiagramKind): JsonSchema {
       nodes: arrayOf(objectOf({
         key: text,
         kind: enumOf(['STEP', 'DECISION']),
-        componentId: nullable(text),
+        // Required, not nullable: the drawn box carries the numeral of the
+        // component that performs the operation, so a strict decoder must not
+        // be able to omit the anchor. The Zod contract stays optional so
+        // previously persisted figures still parse.
+        componentId: text,
         relatedComponentIds: textArray,
         label: text,
         phase: nullable(text),
         evidenceIds: textArray,
-        coverageRequirementIds: textArray,
       })),
       transitions: arrayOf(objectOf({
         fromId: text,
@@ -144,7 +127,6 @@ export function diagramDetailResponseSchema(kind: DiagramKind): JsonSchema {
         label: text,
         category: RELATIONSHIP_CATEGORY,
         evidenceIds: textArray,
-        coverageRequirementIds: textArray,
       })),
     })
   }
@@ -158,8 +140,21 @@ export function diagramDetailResponseSchema(kind: DiagramKind): JsonSchema {
       technicalRole: nullable(text),
       quantityOrRange: nullable(text),
       evidenceIds: textArray,
-      coverageRequirementIds: textArray,
     })),
     relationships: arrayOf(UNLABELLED_RELATIONSHIP),
   })
+}
+
+/**
+ * One generation call details two planned figures, which may be of different
+ * kinds, so the batch item is an anyOf over exactly the kinds in this pair.
+ * Narrowing it to the planned kinds (rather than all four) keeps the decoder
+ * from producing a valid diagram of the wrong type.
+ */
+export function diagramBatchResponseSchema(kinds: DiagramKind[]): JsonSchema {
+  const distinct = Array.from(new Set(kinds.length ? kinds : DIAGRAM_KINDS))
+  const items = distinct.length === 1
+    ? diagramDetailResponseSchema(distinct[0])
+    : { anyOf: distinct.map(diagramDetailResponseSchema) }
+  return objectOf({ diagrams: arrayOf(items) })
 }

@@ -17,11 +17,162 @@ afterEach(() => {
 });
 
 describe('NoveltySearchService Stage 1.5 helpers', () => {
-  test('keeps the retrieval funnel at 300 candidates and an 80-record gate', () => {
+  test('keeps the retrieval funnel at 300 candidates and an 80-record gate wave', () => {
     const config = service().mergeConfig();
 
     expect(config.stage1.candidateLimit).toBe(300);
+    // maxCandidates keeps its meaning: candidates gated per wave.
     expect(config.stage15.maxCandidates).toBe(80);
+    expect(config.stage15.maxTotalCandidates).toBe(180);
+    expect(config.stage15.totalTimeoutMs).toBe(300000);
+    expect(config.stage15.maxTokens).toBe(250000);
+    expect(config.stage15.minYieldToContinue).toBe(0.1);
+    expect(config.stage15.yieldDecayFactor).toBe(0.25);
+    expect(config.stage15.yieldConfirmationWaves).toBe(1);
+  });
+
+  test('walks the ranked pool in waves and stops when the yield drops', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = service();
+    vi.spyOn(svc as any, 'persistStage15Progress').mockResolvedValue(undefined);
+    vi.spyOn(svc as any, 'ensureSearchNotCancelled').mockResolvedValue({ success: true });
+
+    const pool = Array.from({ length: 300 }, (_, index) => ({
+      publicationNumber: `US${String(index).padStart(7, '0')}A1`,
+      title: `Candidate ${index}`,
+      abstract: `Abstract ${index}`,
+      relevanceScore: 1 - index * 0.001,
+    }));
+
+    // Wave 1 (candidates 0-79) is dense with accepts; everything after is borderline.
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      const ids = Array.from(String(request.prompt).matchAll(/Reference ID: (\S+)/g)).map(m => (m as any)[1]);
+      const rows = ids.map(pn => {
+        const index = Number(String(pn).replace(/\D/g, ''));
+        return index < 80
+          ? { pn, score: 0.9, decision: 'accept', matched_features: [], missing_features: [], evidence_quality: 'high' }
+          : { pn, score: 0.3, decision: 'borderline', matched_features: [], missing_features: [], evidence_quality: 'low' };
+      });
+      return { success: true, response: { output: JSON.stringify(rows), inputTokens: 100, outputTokens: 50 } };
+    });
+
+    const result = await (svc as any).performStage15(
+      'wave-run',
+      { inventionFeatures: ['adaptive control'], searchQuery: 'adaptive control' },
+      { retrievalCandidates: pool },
+      svc.mergeConfig(),
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    // Wave 1 is always processed in full; wave 2 is all borderline, so it stops.
+    expect(result.data.nextBatchCursor).toBe(160);
+    expect(result.data.screeningWaves).toBe(2);
+    expect(result.data.screeningStopReason).toBe('yield_below_threshold');
+    expect(result.data.screeningOrderTrusted).toBe(true);
+    expect(result.data.screeningTokensUsed).toBeGreaterThan(0);
+    // More of the pool remains, so the user can still ask for more.
+    expect(result.data.hasMoreCandidates).toBe(true);
+    // An automatic wave must not widen the visible list.
+    expect(result.data.visibleResultLimit).toBe(50);
+  });
+
+  test('keeps gating past the first wave while relevance holds up', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = service();
+    vi.spyOn(svc as any, 'persistStage15Progress').mockResolvedValue(undefined);
+    vi.spyOn(svc as any, 'ensureSearchNotCancelled').mockResolvedValue({ success: true });
+
+    const pool = Array.from({ length: 300 }, (_, index) => ({
+      publicationNumber: `US${String(index).padStart(7, '0')}A1`,
+      title: `Candidate ${index}`,
+      abstract: `Abstract ${index}`,
+      relevanceScore: 1 - index * 0.001,
+    }));
+
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      const ids = Array.from(String(request.prompt).matchAll(/Reference ID: (\S+)/g)).map(m => (m as any)[1]);
+      const rows = ids.map(pn => ({ pn, score: 0.9, decision: 'accept', matched_features: [], missing_features: [], evidence_quality: 'high' }));
+      return { success: true, response: { output: JSON.stringify(rows), inputTokens: 100, outputTokens: 50 } };
+    });
+
+    const result = await (svc as any).performStage15(
+      'wave-run-dense',
+      { inventionFeatures: ['adaptive control'], searchQuery: 'adaptive control' },
+      { retrievalCandidates: pool },
+      svc.mergeConfig(),
+      {}
+    );
+
+    // Runs to the configured ceiling rather than the single 80-record pass.
+    expect(result.data.nextBatchCursor).toBe(180);
+    expect(result.data.screeningStopReason).toBe('candidate_ceiling');
+    expect(result.data.reviewedCount).toBe(180);
+  });
+
+  test('keeps the static policy block as a stable prompt prefix across runs and batches', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = service();
+    vi.spyOn(svc as any, 'persistStage15Progress').mockResolvedValue(undefined);
+    vi.spyOn(svc as any, 'ensureSearchNotCancelled').mockResolvedValue({ success: true });
+
+    const prompts: string[] = [];
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      prompts.push(String(request.prompt));
+      const ids = Array.from(String(request.prompt).matchAll(/Reference ID: (\S+)/g)).map(m => (m as any)[1]);
+      return {
+        success: true,
+        response: {
+          output: JSON.stringify(ids.map(pn => ({ pn, score: 0.2, decision: 'reject', matched_features: [], missing_features: [], evidence_quality: 'low' }))),
+          inputTokens: 10,
+          outputTokens: 5,
+        },
+      };
+    });
+
+    const poolFor = (prefix: string) => Array.from({ length: 40 }, (_, index) => ({
+      publicationNumber: `${prefix}${String(index).padStart(6, '0')}A1`,
+      title: `${prefix} candidate ${index}`,
+      abstract: `Abstract for ${prefix} ${index}`,
+      relevanceScore: 1 - index * 0.01,
+    }));
+
+    const runGate = (searchId: string, features: string[], prefix: string) => (svc as any).performStage15(
+      searchId,
+      { inventionFeatures: features, searchQuery: features[0] },
+      { retrievalCandidates: poolFor(prefix) },
+      svc.mergeConfig(),
+      {}
+    );
+
+    await runGate('run-a', ['soil moisture sensing', 'valve actuation'], 'US');
+    const runAPrompts = [...prompts];
+    prompts.length = 0;
+    await runGate('run-b', ['battery thermal management', 'coolant routing'], 'EP');
+    const runBPrompts = [...prompts];
+
+    const commonPrefix = (a: string, b: string) => {
+      let i = 0;
+      while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+      return a.slice(0, i);
+    };
+
+    expect(runAPrompts.length).toBeGreaterThan(1);
+    expect(runBPrompts.length).toBeGreaterThan(1);
+
+    // Across two unrelated inventions the whole policy block is still shared, which
+    // is what a provider prompt cache can reuse. Before the reorder this was a
+    // single sentence.
+    const crossRun = commonPrefix(runAPrompts[0], runBPrompts[0]);
+    expect(crossRun.length).toBeGreaterThan(8000);
+    expect(crossRun).toContain('Decision policy:');
+    expect(crossRun).toContain('Output requirements:');
+    expect(crossRun).not.toContain('soil moisture sensing');
+
+    // Within one run the feature list is shared too, so batch 2 onward reuses more.
+    const withinRun = commonPrefix(runAPrompts[0], runAPrompts[1]);
+    expect(withinRun.length).toBeGreaterThan(crossRun.length);
+    expect(withinRun).toContain('soil moisture sensing');
   });
 
   test('uses corpus-only search without generated exclusion filters', async () => {
@@ -550,8 +701,10 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
 
     const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 60);
 
-    expect(selected).toHaveLength(12);
-    expect(selected.filter((item: any) => item.rerankDecision === 'borderline')).toHaveLength(10);
+    // 2 accepts + 20 borderline available. The deep-analysis floor (8) bounds the
+    // filler, so only 6 of the 20 borderline candidates are pulled in.
+    expect(selected).toHaveLength(8);
+    expect(selected.filter((item: any) => item.rerankDecision === 'borderline')).toHaveLength(6);
     expect(selected.slice(0, 2).map((item: any) => item.rerankDecision)).toEqual(['accept', 'accept']);
   });
 
@@ -612,7 +765,10 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
 
     const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 60);
 
-    expect(selected).toHaveLength(10);
+    // The gate's borderline list is a five-item UI slice; deep analysis reads every
+    // reviewed borderline decision in byPn, so it must exceed five.
+    expect(selected.length).toBeGreaterThan(5);
+    expect(selected).toHaveLength(8);
     expect(selected.every((item: any) => item.rerankDecision === 'borderline')).toBe(true);
   });
 

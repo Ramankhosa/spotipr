@@ -181,7 +181,6 @@ type PlanFigure = {
   detailLevel?: string
   componentIds?: string[]
   claimCriticalComponentIds?: string[]
-  coverageRequirementIds?: string[]
 }
 
 type DiagramFailurePayload = {
@@ -371,44 +370,19 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
   const formatDiagramGenerationWarnings = (response: any): string | null => {
     const messages: string[] = []
-    const additions = Array.isArray(response?.repairSummary?.addedComponents) ? response.repairSummary.addedComponents : []
-    const addedFigures = Array.isArray(response?.repairSummary?.addedFigureKeys) ? response.repairSummary.addedFigureKeys : []
-    const figureChanges = Array.isArray(response?.repairSummary?.figureChanges) ? response.repairSummary.figureChanges : []
-    if (additions.length || addedFigures.length || figureChanges.length) {
-      const componentText = additions.length
-        ? `Added ${additions.map((item: any) => `${item.name}${item.referenceLabel ? ` (${item.referenceLabel})` : ''}`).join(', ')} to the Component Plan.`
-        : ''
-      const addedChanges = figureChanges.filter((change: any) => change.action === 'ADDED')
-      const addedFigureText = addedFigures.length
-        ? addedChanges.map((change: any) => {
-          const figureNumbers = Array.isArray(change.generatedFigureNumbers) && change.generatedFigureNumbers.length
-            ? change.generatedFigureNumbers.map((value: any) => `FIG. ${value}`).join(', ')
-            : 'an additional figure'
-          const claims = Array.isArray(change.claimNumbers) && change.claimNumbers.length
-            ? ` for claim${change.claimNumbers.length === 1 ? '' : 's'} ${change.claimNumbers.join(', ')}`
-            : ''
-          return `Created ${figureNumbers}${claims}.`
-        }).join(' ') || `Created ${addedFigures.length} additional figure${addedFigures.length === 1 ? '' : 's'} for complete coverage.`
-        : ''
-      const modifiedFigureText = figureChanges.filter((change: any) => change.action === 'MODIFIED').map((change: any) => {
-        const figureNumbers = Array.isArray(change.generatedFigureNumbers) && change.generatedFigureNumbers.length
-          ? change.generatedFigureNumbers.map((value: any) => `FIG. ${value}`).join(', ')
-          : change.figureKey
-        const claims = Array.isArray(change.claimNumbers) && change.claimNumbers.length
-          ? ` for claim${change.claimNumbers.length === 1 ? '' : 's'} ${change.claimNumbers.join(', ')}`
+    if (Array.isArray(response?.filingReadiness?.reviewNotes) && response.filingReadiness.reviewNotes.length) {
+      messages.push(...response.filingReadiness.reviewNotes.map((note: any) => `FIG. ${note.figureNo}: ${note.message}`))
+    }
+    // A claim-recited component that appears in no drawn figure. Informational:
+    // the figures already saved; the attorney decides whether to regenerate.
+    if (response?.claimCoverage?.evaluated && Array.isArray(response.claimCoverage.missing) && response.claimCoverage.missing.length) {
+      const missing = response.claimCoverage.missing.map((item: any) => {
+        const claims = Array.isArray(item.matchedClaims) && item.matchedClaims.length
+          ? ` — claim${item.matchedClaims.length === 1 ? '' : 's'} ${item.matchedClaims.join(', ')}`
           : ''
-        return `Updated ${figureNumbers}${claims}.`
-      }).join(' ')
-      messages.push([componentText, addedFigureText, modifiedFigureText].filter(Boolean).join(' '))
-    }
-    if (response?.coverage && Number.isFinite(Number(response.coverage.required))) {
-      const basis = response.coverage.basis === 'DISCLOSURE' ? 'disclosure requirements' : 'claim requirements'
-      messages.push(`Verified ${Number(response.coverage.covered || 0)}/${Number(response.coverage.required || 0)} ${basis}.`)
-      if (response.coverage.note) messages.push(String(response.coverage.note))
-    }
-    if (response?.countAdjusted?.adjusted && response.countAdjusted.reason) messages.push(response.countAdjusted.reason)
-    if (response?.filingReadiness?.status === 'REVIEW_REQUIRED') {
-      messages.push('The figures were rendered, but at least one remains review-only and is blocked from export until its filing issue is corrected.')
+        return `${item.name} (${item.referenceLabel})${claims}`
+      })
+      messages.push(`Recited in the claims but not shown in any figure: ${missing.join('; ')}.`)
     }
     if (Array.isArray(response?.warnings)) {
       messages.push(...response.warnings.filter((warning: any) => typeof warning === 'string' && warning.trim()))
@@ -428,16 +402,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       )) as string[]
       if (corrections.length) {
         messages.push(`Automatic corrections applied: ${corrections.slice(0, 4).join('; ')}${corrections.length > 4 ? `; and ${corrections.length - 4} more` : ''}.`)
-      }
-      // Name any persisted review-only density/page-fit result so the user can
-      // correct the exact figure before export.
-      const dense = response.figures.filter((figure: any) =>
-        Array.isArray(figure?.validation?.issues)
-        && figure.validation.issues.some((issue: any) =>
-          issue?.severity === 'error' && ['SPLIT_REQUIRED', 'PAGE_FIT_MINIMUM_TEXT'].includes(issue?.code)))
-      if (dense.length) {
-        const labels = dense.map((figure: any) => figure?.figureNo ? `FIG. ${figure.figureNo}` : 'A figure')
-        messages.push(`${labels.join(', ')} ${dense.length === 1 ? 'is' : 'are'} denser than the filing guideline. Use Modify on ${dense.length === 1 ? 'it' : 'them'} and approve the proposed split if you want ${dense.length === 1 ? 'it' : 'them'} divided.`)
       }
     }
     return messages.length > 0 ? messages.join(' ') : null
@@ -540,19 +504,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [isPlanning, setIsPlanning] = useState(false)
   const [planError, setPlanError] = useState<string | null>(null)
   const [planDirty, setPlanDirty] = useState(false)
-  // Any claim/disclosure requirements automatic repair could not assign.
-  // Generation blocks rather than silently omitting these in AI mode.
-  const [planCoverageGaps, setPlanCoverageGaps] = useState<
-    Array<{ id: string; label: string; type: string; claimNumber: number | null; sourceText?: string }>
-  >([])
-  const [planCoverageSummary, setPlanCoverageSummary] = useState<{
-    status: string
-    basis: string | null
-    required: number
-    covered: number
-    note?: string | null
-  } | null>(null)
-  const [planRepairSummary, setPlanRepairSummary] = useState<any | null>(null)
 
   
   // === ARRANGE TAB STATE ===
@@ -1941,17 +1892,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         detailLevel: figure.detailLevel,
         componentIds: figure.componentIds,
         claimCriticalComponentIds: figure.claimCriticalComponentIds,
-        coverageRequirementIds: figure.coverageRequirementIds,
       })))
-      setPlanCoverageGaps(Array.isArray(res.coverage?.missing) ? res.coverage.missing : [])
-      setPlanCoverageSummary(res.coverage ? {
-        status: String(res.coverage.status || 'NOT_EVALUATED'),
-        basis: res.coverage.basis || null,
-        required: Number(res.coverage.required || 0),
-        covered: Number(res.coverage.covered || 0),
-        note: res.coverage.note || null,
-      } : null)
-      setPlanRepairSummary(res.repairSummary || res.plan?.repairSummary || null)
       setPlanDirty(false)
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Planning failed'
@@ -2038,9 +1979,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       // the figures themselves become the subject of the page.
       setPlanFigures(null)
       setPlanDirty(false)
-      setPlanCoverageGaps([])
-      setPlanCoverageSummary(null)
-      setPlanRepairSummary(null)
       setFigures([])
       await onRefresh()
     } catch (e) {
@@ -2989,53 +2927,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 </div>
               )}
 
-              {/* An actionable gap the attorney can fix before drawing, not a
-                  quality warning about the AI's own output. */}
-              {planCoverageSummary && planCoverageGaps.length === 0 && (
-                <div className="px-5 pt-4">
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                    <p className="flex items-center gap-2 text-sm font-medium text-emerald-900">
-                      <Check className="h-4 w-4" />
-                      {planCoverageSummary.covered}/{planCoverageSummary.required} {planCoverageSummary.basis === 'DISCLOSURE' ? 'disclosure' : 'claim'} requirements covered
-                    </p>
-                    <p className="mt-1 text-xs text-emerald-700">
-                      {planCoverageSummary.note || 'Coverage is checked again after your edits. Missing concepts are restored automatically before drawing.'}
-                    </p>
-                    {Array.isArray(planRepairSummary?.addedComponents) && planRepairSummary.addedComponents.length > 0 && (
-                      <div className="mt-3 border-t border-emerald-200 pt-3 text-xs text-emerald-800">
-                        <span className="font-semibold">Component Plan additions:</span>{' '}
-                        {planRepairSummary.addedComponents.map((item: any) => `${item.name} (${item.referenceLabel})`).join(', ')}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {planCoverageGaps.length > 0 && (
-                <div className="px-5 pt-4">
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                    <p className="text-sm font-medium text-amber-900">
-                      Automatic repair could not assign {planCoverageGaps.length === 1 ? 'one requirement' : `${planCoverageGaps.length} requirements`} to a planned figure
-                    </p>
-                    <ul className="mt-2 space-y-1 text-sm text-amber-800">
-                      {planCoverageGaps.slice(0, 6).map(gap => (
-                        <li key={gap.id}>
-                          <span className="font-medium">{gap.label}</span>
-                          {gap.claimNumber ? ` — claim ${gap.claimNumber}` : ''}
-                          {gap.type ? ` · ${gap.type.toLowerCase().replace(/_/g, ' ')}` : ''}
-                        </li>
-                      ))}
-                      {planCoverageGaps.length > 6 && (
-                        <li className="text-amber-700">…and {planCoverageGaps.length - 6} more</li>
-                      )}
-                    </ul>
-                    <p className="mt-2 text-xs text-amber-700">
-                      Plan again or review the Component Plan. Generation will not silently omit these requirements.
-                    </p>
-                  </div>
-                </div>
-              )}
-
               <ul className="divide-y divide-paper-200">
                 {planFigures.map((figure, index) => (
                   <li key={figure.key} className="p-4 sm:p-5">
@@ -3137,7 +3028,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 </Button>
                 <Button
                   variant="ghost"
-                  onClick={() => { setPlanFigures(null); setPlanDirty(false); setPlanCoverageGaps([]) }}
+                  onClick={() => { setPlanFigures(null); setPlanDirty(false) }}
                   disabled={isGenerating}
                   className="w-full sm:w-auto"
                 >
@@ -3155,7 +3046,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   <FigureWorkProgress
                     phase="drawing"
                     figureCount={planFigures.length}
-                    requirementCount={planCoverageSummary?.required}
                   />
                 </div>
               )}
