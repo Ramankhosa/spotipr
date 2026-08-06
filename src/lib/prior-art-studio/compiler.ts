@@ -126,10 +126,22 @@ function buildRetrievalQueries(plan: StudioPlan): PatentRetrievalQuery[] {
   return queries
 }
 
+/** Jurisdiction codes that actually restrict the search. `*` means worldwide. */
+export function selectedJurisdictions(plan: StudioPlan): string[] {
+  return (plan.filters.jurisdictions || []).filter(code => code && code !== '*')
+}
+
 function buildFilters(plan: StudioPlan): PatentSearchFilters {
   const cpc = activeCpcCodes(plan)
   const filters: PatentSearchFilters = {}
   if (cpc.length) filters.classifications = cpc
+  // The jurisdiction selection has to become `filters.countries` to have any
+  // effect on the SQL. Passing it as `jurisdictions` on the search request only
+  // routes providers — and Studio pins its provider list explicitly, so that
+  // path is a no-op here. The Filters gate meanwhile counted `country IN (…)`,
+  // so the attorney was shown a jurisdiction narrowing that never happened.
+  const jurisdictions = selectedJurisdictions(plan)
+  if (jurisdictions.length) filters.countries = jurisdictions
   if (plan.filters.publicationDateFrom) filters.publicationDateFrom = plan.filters.publicationDateFrom
   if (plan.filters.publicationDateTo) filters.publicationDateTo = plan.filters.publicationDateTo
   if (plan.filters.applicants?.length) filters.applicants = plan.filters.applicants
@@ -216,7 +228,14 @@ export function compileStudioPlan(plan: StudioPlan): CompiledStudioPlan {
     technicalKeywords: plan.blocks.flatMap(b => activeTerms(b.terms)).slice(0, 24),
     synonyms: [],
     mustHaveTerms: [],
-    excludedTerms: activeTerms(plan.notTerms),
+    // NOT emitted, for the same reason `excludeTerms` is left out of
+    // `fieldFilters` above — and this line is why leaving it out of the filters
+    // alone was not enough. The provider re-merges the two
+    // (`withExcludedTerms(queryPlan.fieldFilters, queryPlan.excludedTerms)`), so
+    // any attorney NOT-term put the unindexable full-detoast ILIKE back on every
+    // lane. The fix was made in one place and undone in the other. Exclusions
+    // are applied post-retrieval in service.ts, over text we fetch ourselves.
+    excludedTerms: [],
     cpcCodes: activeCpcCodes(plan),
     retrievalQueries: retrievalQueries.length ? retrievalQueries : undefined,
     literalMatchGroups: literalMatchGroups.length ? literalMatchGroups : undefined,

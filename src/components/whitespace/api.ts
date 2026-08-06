@@ -42,18 +42,55 @@ export interface RunPayload {
   error: string | null
 }
 
-/** Polls a run until it leaves QUEUED/PROCESSING. Resolves with the final payload. */
+/** Thrown when a caller aborts a poll; callers treat it as "no longer interested". */
+export class PollAbortedError extends Error {
+  constructor() {
+    super('Polling was cancelled.')
+    this.name = 'PollAbortedError'
+  }
+}
+
+export function isPollAborted(error: unknown): boolean {
+  return error instanceof PollAbortedError || (error as { name?: string })?.name === 'PollAbortedError'
+}
+
+/**
+ * Polls a run until it leaves QUEUED/PROCESSING. Resolves with the final payload.
+ *
+ * `signal` is not optional in practice: a whitespace stage runs for minutes, so
+ * a user who navigates away mid-run left this loop hitting the API every three
+ * seconds for up to twenty minutes and then calling setState on a component
+ * that no longer exists. Every caller should pass an AbortSignal tied to its
+ * effect cleanup and swallow PollAbortedError.
+ */
 export async function pollRun(
   studyId: string,
   runId: string,
-  onTick?: (status: string, progress: RunProgress | null) => void
+  onTick?: (status: string, progress: RunProgress | null) => void,
+  signal?: AbortSignal
 ): Promise<RunPayload> {
   // 3s cadence, capped at 20 minutes — the server fails stale runs on read anyway.
   for (let attempt = 0; attempt < 400; attempt++) {
-    const payload = await wsApi<RunPayload>(`/api/whitespace/studies/${studyId}/runs/${runId}`)
+    if (signal?.aborted) throw new PollAbortedError()
+    const payload = await wsApi<RunPayload>(`/api/whitespace/studies/${studyId}/runs/${runId}`, { signal })
     if (payload.status !== 'QUEUED' && payload.status !== 'PROCESSING') return payload
     onTick?.(payload.status, payload.progress ?? null)
-    await new Promise(resolve => setTimeout(resolve, 3000))
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, 3000)
+      const onAbort = () => {
+        clearTimeout(timer)
+        reject(new PollAbortedError())
+      }
+      if (signal?.aborted) {
+        clearTimeout(timer)
+        reject(new PollAbortedError())
+        return
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
   }
   return {
     status: 'FAILED',

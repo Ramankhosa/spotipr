@@ -8,8 +8,9 @@ import { coerceSupportDataSources } from '@/lib/support-data-sources'
 import { EXTREME_ASPECT_RATIO_MAXIMUM, EXTREME_ASPECT_RATIO_MINIMUM } from '@/lib/plantuml-renderer'
 import { renderAndWriteDiagramArtifacts, resolveDiagramPagePolicy } from './artifacts'
 import { buildPatentDiagram } from './builders'
-import { buildDiagramBatchPrompt, buildFigureSetPlanningPrompt, extractJsonObject } from './prompts'
+import { buildDiagramBatchPrompt, buildFigureSetPlanningPrompt, buildFigureSplitPrompt, extractJsonObject } from './prompts'
 import { FIGURE_SET_PLAN_RESPONSE_SCHEMA, diagramBatchResponseSchema } from './response-schemas'
+import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
 import {
   DEFAULT_FIGURE_KINDS,
   figureSetPlanSchema,
@@ -305,11 +306,27 @@ export interface PatentDiagramPipelineInput {
   includeExistingFigures?: boolean
 }
 
-function requestedFigureCount(figureCount?: number | null): number {
-  if (figureCount && Number.isInteger(figureCount) && figureCount > 0) {
-    return Math.min(figureCount, MAXIMUM_FIGURES_PER_RUN)
-  }
-  return DEFAULT_FIGURE_KINDS.length
+function exactFigureCount(figureCount?: number | null): number | null {
+  return figureCount && Number.isInteger(figureCount) && figureCount > 0
+    ? Math.min(figureCount, MAXIMUM_FIGURES_PER_RUN)
+    : null
+}
+
+/**
+ * Auto-mode anchor for the planner: one figure per kind, plus one extra figure
+ * for each planning-target's worth of components or disclosed steps beyond the
+ * first. This is a SUGGESTION in the prompt, not a bound — the planner may
+ * exceed it, and the repair floor only guarantees kind coverage and the cap.
+ * It exists because a fixed default of four squeezed complex inventions into
+ * dense figures readable only at high zoom.
+ */
+function suggestedFigureCount(context: PipelineContext): number {
+  const targets = PATENT_DIAGRAM_COMPLEXITY.planningTargets
+  const componentCount = context.components.length
+  const stepCount = context.evidenceCatalog.filter(entry => entry.id.startsWith('SF-processSteps-')).length
+  const extra = Math.ceil(Math.max(0, componentCount - targets.components) / targets.components)
+    + Math.ceil(Math.max(0, stepCount - targets.steps) / targets.steps)
+  return Math.min(MAXIMUM_FIGURES_PER_RUN, DEFAULT_FIGURE_KINDS.length + extra)
 }
 
 function planningContextChecksum(context: PipelineContext, input?: Pick<PatentDiagramPipelineInput, 'instructions' | 'figureCount'>): string {
@@ -319,7 +336,7 @@ function planningContextChecksum(context: PipelineContext, input?: Pick<PatentDi
     components: context.components,
     jurisdiction: context.countryCode,
     instructions: input?.instructions || null,
-    figureCount: requestedFigureCount(input?.figureCount),
+    figureCount: exactFigureCount(input?.figureCount) ?? 'auto',
   })
 }
 
@@ -354,19 +371,23 @@ function fallbackPlanItem(kind: DiagramKind, index: number, components: PatentDi
 /**
  * Makes a model-authored plan usable instead of rejecting it.
  *
- * Unknown component IDs are dropped, duplicate keys are made unique, a figure
- * left with no components inherits the registry, and the set is trimmed or
- * padded to the requested count using the default kinds. Nothing here can fail.
+ * Unknown component IDs are dropped, duplicate keys are made unique, and a
+ * figure left with no components inherits the registry. In manual mode the set
+ * is trimmed or padded to the exact requested count (cycling the default
+ * kinds); in auto mode the planner's chosen count is kept, capped at the
+ * per-run maximum, with missing kinds padded in so the four-kind floor always
+ * holds. Nothing here can fail.
  */
 function repairPlanFigures(
   figures: FigureSetPlanItem[],
   components: PatentDiagramComponent[],
-  desiredCount: number,
+  options: { exactCount: number | null },
 ): FigureSetPlanItem[] {
   const known = new Set(components.map(component => component.id))
   const allIds = components.map(component => component.id)
   const usedKeys = new Set<string>()
-  const repaired = figures.slice(0, desiredCount).map((figure, index) => {
+  const limit = options.exactCount ?? MAXIMUM_FIGURES_PER_RUN
+  const repaired = figures.slice(0, limit).map(figure => {
     let key = figure.key
     while (usedKeys.has(key)) key = `${figure.key}-${usedKeys.size + 1}`
     usedKeys.add(key)
@@ -381,9 +402,17 @@ function repairPlanFigures(
         .filter(group => group.componentIds.length),
     }
   })
-  for (let index = repaired.length; index < desiredCount; index++) {
-    const kind = DEFAULT_FIGURE_KINDS[index % DEFAULT_FIGURE_KINDS.length]
-    repaired.push(fallbackPlanItem(kind, index, components))
+  if (options.exactCount != null) {
+    for (let index = repaired.length; index < options.exactCount; index++) {
+      repaired.push(fallbackPlanItem(DEFAULT_FIGURE_KINDS[index % DEFAULT_FIGURE_KINDS.length], index, components))
+    }
+    return repaired
+  }
+  for (const kind of DEFAULT_FIGURE_KINDS) {
+    if (repaired.length >= MAXIMUM_FIGURES_PER_RUN) break
+    if (!repaired.some(figure => figure.kind === kind)) {
+      repaired.push(fallbackPlanItem(kind, repaired.length, components))
+    }
   }
   return repaired
 }
@@ -391,7 +420,7 @@ function repairPlanFigures(
 /** The single planning LLM call for a figure set. */
 export async function planManagedFigureSet(input: PatentDiagramPipelineInput): Promise<FigureSetPlan> {
   const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
-  const figureCount = requestedFigureCount(input.figureCount)
+  const exactCount = exactFigureCount(input.figureCount)
   const contextChecksum = planningContextChecksum(context, input)
   const prompt = buildFigureSetPlanningPrompt({
     inventionTitle: context.session.ideaRecord?.title || context.idea?.title || 'Untitled invention',
@@ -401,7 +430,8 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
     components: context.components,
     evidenceCatalog: context.evidenceCatalog,
     existingFigures: input.includeExistingFigures ? context.existingFigures : [],
-    figureCount,
+    figureCount: exactCount ?? suggestedFigureCount(context),
+    exactFigureCount: exactCount != null,
     instructions: input.instructions,
   })
   const llmPlan = await executeStructured({
@@ -416,7 +446,7 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
   const plan = figureSetPlanSchema.parse({
     schemaVersion: 3,
     contextChecksum,
-    figures: repairPlanFigures(llmPlan.figures, context.components, figureCount),
+    figures: repairPlanFigures(llmPlan.figures, context.components, { exactCount }),
   })
   const previousAnalysis = context.session.aiAnalysisData && typeof context.session.aiAnalysisData === 'object'
     ? context.session.aiAnalysisData as Record<string, unknown>
@@ -1053,5 +1083,160 @@ export async function regenerateManagedFigure(input: PatentDiagramPipelineInput 
       validation: rendered.built.validation,
       renderArtifacts,
     },
+  }
+}
+
+function diagramComponentIdsOf(diagram: PatentDiagram): string[] {
+  return diagram.kind === 'COMPONENT' ? diagram.components.map(node => node.componentId)
+    : diagram.kind === 'SEQUENCE' ? diagram.participants.map(node => node.componentId)
+      : diagram.kind === 'PROCESS' ? diagram.nodes.flatMap(node => [node.componentId, ...node.relatedComponentIds].filter(Boolean) as string[])
+        : diagram.constituents.map(node => node.componentId)
+}
+
+/**
+ * User-directed split: one managed figure becomes `parts` figures of the same
+ * kind, re-detailed semantically by the model rather than partitioned
+ * mechanically. The first part keeps the original figure number; the rest take
+ * the next free generated slots. Content completeness is checked afterwards and
+ * reported as a review note — the split itself is never blocked on it.
+ */
+export async function splitManagedFigure(input: PatentDiagramPipelineInput & { figureNo: number; parts: number }) {
+  const parts = Number(input.parts)
+  if (!Number.isInteger(parts) || parts < 2 || parts > 6) {
+    throw new PatentDiagramPipelineError('A figure can be split into 2 to 6 parts.', 400, undefined, {
+      code: 'INVALID_SPLIT_PARTS', stage: 'PLAN', retryable: false,
+      actions: ['Choose between 2 and 6 parts.'],
+    })
+  }
+  const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
+  const existingPlan = context.session.figurePlans.find(figure => figure.figureNo === input.figureNo)
+  if (!existingPlan) throw new PatentDiagramPipelineError('Figure plan not found', 404)
+  const source = context.session.diagramSources.find(item => item.figureNo === input.figureNo && item.language === 'en')
+  if (source && source.sourceMode !== 'MANAGED') {
+    throw new PatentDiagramPipelineError('Only managed figures can be split. Return this figure to managed mode first.', 409, undefined, {
+      code: 'RAW_REPAIR_REQUIRED', stage: 'PLAN', retryable: false,
+      actions: ['Use Modify to regenerate the figure as a managed figure, then split it.'],
+    })
+  }
+  const parsed = patentDiagramSchema.safeParse(existingPlan.semanticModel)
+  if (!parsed.success) {
+    throw new PatentDiagramPipelineError('Only a managed figure with a saved semantic model can be split.', 409, parsed.error.issues, {
+      code: 'STALE_MANAGED_SEMANTICS', stage: 'PLAN', retryable: false,
+      actions: ['Regenerate the figure first, then split it.'],
+    })
+  }
+  const original = parsed.data
+  const prompt = buildFigureSplitPrompt({
+    original,
+    parts,
+    otherFigures: context.existingFigures.filter(figure => figure.figureNo !== input.figureNo),
+    inventionContext: context.idea,
+    claimsContext: context.claims,
+    components: context.components,
+    evidenceCatalog: context.evidenceCatalog,
+    instructions: input.instructions,
+  })
+  const splitSchema = patentDiagramBatchSchema.superRefine((value, ctx) => {
+    if (value.diagrams.length !== parts) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Return exactly ${parts} diagrams` })
+    }
+    value.diagrams.forEach((diagram, index) => {
+      if (diagram.kind !== original.kind) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Diagram ${index + 1} must be kind ${original.kind}` })
+      }
+    })
+  })
+  const batch = await executeStructured({
+    userHeaders: input.requestHeaders,
+    stageCode: 'DRAFT_DIAGRAM_GENERATION',
+    prompt,
+    schema: splitSchema,
+    responseSchema: { name: 'patent_diagram_split', schema: diagramBatchResponseSchema([original.kind]) },
+    promptCacheKey: `patent-diagrams:${input.sessionId}`,
+    metadata: { patentId: input.patentId, sessionId: input.sessionId, figureNo: input.figureNo, parts, purpose: 'split_figure_structured' },
+  })
+  // Part identity is server-owned; titles and purposes are the model's split
+  // decisions and are kept.
+  const diagrams = batch.diagrams.map((diagram, index) => ({
+    ...diagram,
+    schemaVersion: 3,
+    key: `${original.key}-part-${index + 1}`,
+    detailLevel: 'DETAIL',
+    direction: original.direction,
+  } as PatentDiagram))
+
+  const occupied = new Set(context.session.figurePlans.map(figure => figure.figureNo))
+  const figureNumbers = [input.figureNo]
+  let candidate = Math.max(0, ...Array.from(occupied).filter(value => value < GENERATED_FIGURE_LIMIT)) + 1
+  for (let index = 1; index < diagrams.length; index++) {
+    while (occupied.has(candidate)) candidate++
+    if (candidate >= GENERATED_FIGURE_LIMIT) throw new PatentDiagramPipelineError('No generated figure slots remain before the imported-figure range', 409)
+    figureNumbers.push(candidate)
+    occupied.add(candidate++)
+  }
+
+  const rendered = await buildAndRender({
+    patentId: input.patentId,
+    diagrams,
+    components: context.components,
+    pagePolicy: context.pagePolicy,
+    figureNumbers,
+  })
+  for (let index = 0; index < rendered.length; index++) {
+    const item = rendered[index]
+    await replaceFigureRecords({
+      sessionId: input.sessionId,
+      figureNo: item.figureNo,
+      built: item.built,
+      rendered: item,
+      artifacts: { svg: { filename: item.svgFilename, path: item.svgPath }, png: { filename: item.pngFilename, path: item.pngPath } },
+      referenceMapChecksum: context.referenceMapChecksum,
+      figurePlanId: index === 0 ? existingPlan.id : undefined,
+      previousSourceChecksum: index === 0 ? source?.checksum : undefined,
+    })
+  }
+  await prisma.draftingSession.update({
+    where: { id: input.sessionId },
+    data: { figureSequence: null as any, figureSequenceFinalized: false },
+  })
+  const keptPaths = new Set(rendered.flatMap(item => [item.svgPath, item.pngPath]))
+  const previousPaths = [
+    source?.imagePath,
+    (source?.renderArtifacts as any)?.svg?.path,
+    (source?.renderArtifacts as any)?.png?.path,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0)
+  await Promise.allSettled(previousPaths.filter(path => !keptPaths.has(path)).map(path => fs.unlink(path)))
+  // Parts beyond the first are net-new figures and count against quota; the
+  // first reuses the original's slot and is not double-charged.
+  await recordFigureCompletions(input, rendered.slice(1))
+
+  // Deterministic completeness check: every element of the original must land
+  // in some part. A gap is a review note, never a failure.
+  const partIds = new Set(rendered.flatMap(item => diagramComponentIdsOf(item.built.diagram)))
+  const missingFromSplit = Array.from(new Set(diagramComponentIdsOf(original))).filter(id => !partIds.has(id))
+  const reviewNotes = [
+    ...summarizeReview(rendered).reviewNotes,
+    ...(missingFromSplit.length ? [{
+      figureNo: input.figureNo, code: 'SPLIT_CONTENT_MISSING',
+      message: `Elements of the original figure are missing from every part: ${missingFromSplit.join(', ')}`,
+    }] : []),
+  ]
+  // Coverage is evaluated across the WHOLE updated drawing set, not just the
+  // parts — a split must never make set-level coverage look worse than it is.
+  const remainingSemantics = context.session.figurePlans
+    .filter(figure => figure.figureNo !== input.figureNo && figure.figureNo < GENERATED_FIGURE_LIMIT)
+    .flatMap(figure => {
+      const semantic = patentDiagramSchema.safeParse(figure.semanticModel)
+      return semantic.success ? [semantic.data] : []
+    })
+  const claimCoverage = claimComponentCoverage(
+    [...remainingSemantics, ...rendered.map(item => item.built.diagram)],
+    context.components,
+  )
+  return {
+    status: 'SUCCESS' as const,
+    filingReadiness: { status: 'READY' as const, ready: true, reviewNotes },
+    claimCoverage,
+    figures: rendered.map(figureResponse),
   }
 }

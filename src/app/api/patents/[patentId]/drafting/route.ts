@@ -152,6 +152,7 @@ import {
   planManagedFigureSet,
   rebuildManagedFigureSource,
   regenerateManagedFigure,
+  splitManagedFigure,
   semanticChecksum,
 } from '@/lib/patent-diagrams/pipeline'
 import { DIAGRAM_KINDS, figureSetPlanSchema } from '@/lib/patent-diagrams/types'
@@ -1126,6 +1127,9 @@ export async function POST(
 
       case 'regenerate_diagram_llm':
         return await handleRegenerateDiagramManaged(authResult.user, patentId, data, requestHeaders);
+
+      case 'split_figure_llm':
+        return await handleSplitDiagramManaged(authResult.user, patentId, data, requestHeaders);
 
       case 'fix_plantuml_render':
         return await handleFixPlantUMLRenderManaged(authResult.user, patentId, data, requestHeaders);
@@ -8306,6 +8310,35 @@ async function handleRegenerateDiagramManaged(user: any, patentId: string, data:
       where: { sessionId_figureNo_language: { sessionId: data.sessionId, figureNo: Number(data.figureNo), language: 'en' } },
     })
     return NextResponse.json({ success: true, ...result, diagramSource })
+  } catch (error) {
+    return patentDiagramPipelineError(error)
+  }
+}
+
+async function handleSplitDiagramManaged(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  if (!data.sessionId || !Number(data.figureNo)) return NextResponse.json({ error: 'Session ID and figure number are required' }, { status: 400 })
+  const parts = Number(data.parts)
+  if (!Number.isInteger(parts) || parts < 2 || parts > 6) {
+    return NextResponse.json({ error: 'Number of parts must be a whole number from 2 to 6.', code: 'INVALID_SPLIT_PARTS' }, { status: 400 })
+  }
+  try {
+    const source = await prisma.diagramSource.findUnique({
+      where: { sessionId_figureNo_language: { sessionId: data.sessionId, figureNo: Number(data.figureNo), language: 'en' } },
+      select: { sourceMode: true },
+    })
+    if (source?.sourceMode === 'RAW_OVERRIDE' && data.confirmRawReplacement !== true) {
+      return NextResponse.json({
+        error: 'This figure has expert PlantUML customizations. Splitting will replace them with managed figures.',
+        code: 'RAW_OVERRIDE_CONFIRMATION_REQUIRED',
+        confirmationRequired: true,
+      }, { status: 409 })
+    }
+    const result = await splitManagedFigure({
+      ...managedPipelineInput(user, patentId, data, requestHeaders),
+      figureNo: Number(data.figureNo),
+      parts,
+    })
+    return NextResponse.json({ success: true, ...result, message: `Split FIG. ${Number(data.figureNo)} into ${result.figures.length} figures` })
   } catch (error) {
     return patentDiagramPipelineError(error)
   }

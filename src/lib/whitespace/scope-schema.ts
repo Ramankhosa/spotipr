@@ -45,19 +45,51 @@ const assumptionSchema = z
   })
   .strict()
 
-const currentYear = new Date().getFullYear()
+/**
+ * Read per validation, never captured at module load.
+ *
+ * A Next.js server process runs for weeks, so a module-level
+ * `new Date().getFullYear()` freezes on the year the process started. Baked
+ * into a `.max()` bound it meant that on the first of January every scope
+ * carrying the new year was rejected with "Number must be less than or equal
+ * to <last year>" until someone restarted the server. The upper bounds are
+ * checked in a refinement, which zod evaluates per parse.
+ */
+const thisYear = () => new Date().getFullYear()
 
 const filtersSchema = z
   .object({
-    yearFrom: z.number().int().min(CORPUS_FIRST_YEAR).max(currentYear),
-    yearTo: z.number().int().min(CORPUS_FIRST_YEAR).max(currentYear + 1),
+    yearFrom: z.number().int().min(CORPUS_FIRST_YEAR),
+    yearTo: z.number().int().min(CORPUS_FIRST_YEAR),
     jurisdictions: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/, 'Use two-letter country codes.')).max(60),
     assignees: z.array(nonEmptyText(200)).max(50),
   })
   .strict()
-  .refine(f => f.yearTo >= f.yearFrom, {
-    message: 'End year must be on or after the start year.',
-    path: ['yearTo'],
+  .superRefine((f, ctx) => {
+    const ceiling = thisYear()
+    if (f.yearFrom > ceiling) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['yearFrom'],
+        message: `Start year cannot be after ${ceiling}.`,
+      })
+    }
+    // One year of headroom: applications filed this year publish next year, and
+    // a user setting the window forward is describing intent, not an error.
+    if (f.yearTo > ceiling + 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['yearTo'],
+        message: `End year cannot be after ${ceiling + 1}.`,
+      })
+    }
+    if (f.yearTo < f.yearFrom) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['yearTo'],
+        message: 'End year must be on or after the start year.',
+      })
+    }
   })
 
 const scopeSchema = z
@@ -158,8 +190,9 @@ export function normalizeScope(scope: WhitespaceScope): WhitespaceScope {
     return true
   })
 
-  const yearFrom = Math.max(CORPUS_FIRST_YEAR, Math.min(scope.filters.yearFrom, currentYear))
-  const yearTo = Math.max(yearFrom, Math.min(scope.filters.yearTo, currentYear + 1))
+  const ceiling = thisYear()
+  const yearFrom = Math.max(CORPUS_FIRST_YEAR, Math.min(scope.filters.yearFrom, ceiling))
+  const yearTo = Math.max(yearFrom, Math.min(scope.filters.yearTo, ceiling + 1))
 
   return {
     ...scope,

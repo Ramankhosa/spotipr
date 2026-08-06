@@ -5,6 +5,7 @@ import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { appendTrail, getOwnedStudy, readScope, startWhitespaceRun } from '@/lib/whitespace/service'
 import { scopeIsRunnable } from '@/lib/whitespace/scope-schema'
 import type { WhitespaceRunStage } from '@/lib/whitespace/types'
+import type { Prisma } from '@prisma/client'
 
 export const runtime = 'nodejs'
 
@@ -26,6 +27,62 @@ function headersToRecord(request: NextRequest) {
   return headers
 }
 
+/** Caps mirroring dimension-stage's own registry caps, applied before storage. */
+const MAX_SUPPLIED_DIMENSIONS = 8
+const MAX_SUPPLIED_VALUES = 8
+const MAX_SUPPLIED_SYNONYMS = 10
+
+/**
+ * The params a stage may be started with, rebuilt field by field.
+ *
+ * `body.params` used to be handed to startWhitespaceRun verbatim, which meant
+ * arbitrary client JSON was persisted on the run row, became part of the run
+ * dedupe key, and — for DIMENSION_MAP — was read back as the viewpoint registry
+ * that the census compiles into tsqueries and embeds. Nothing bounded its size
+ * or shape. Rebuilding it here means a run carries only what its stage actually
+ * reads, at a size the stage is budgeted for.
+ */
+function sanitiseParams(stage: WhitespaceRunStage, raw: unknown): Record<string, unknown> | undefined {
+  const source = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>
+  const text = (value: unknown, max: number): string =>
+    typeof value === 'string' ? value.trim().slice(0, max) : ''
+
+  if (stage === 'DEEP_DIVE') {
+    const clusterId = text(source.clusterId, 64)
+    return clusterId ? { clusterId } : undefined
+  }
+  if (stage === 'VALIDATE') {
+    const hypothesisId = text(source.hypothesisId, 64)
+    return hypothesisId ? { hypothesisId } : undefined
+  }
+  if (stage === 'DIMENSION_MAP') {
+    const registry = source.registry as { dimensions?: unknown } | undefined
+    if (!registry || typeof registry !== 'object' || !Array.isArray(registry.dimensions)) return undefined
+    const dimensions = registry.dimensions
+      .slice(0, MAX_SUPPLIED_DIMENSIONS)
+      .map(entry => {
+        const dimension = (entry ?? {}) as Record<string, unknown>
+        const values = (Array.isArray(dimension.values) ? dimension.values : [])
+          .slice(0, MAX_SUPPLIED_VALUES)
+          .map(rawValue => {
+            const value = (rawValue ?? {}) as Record<string, unknown>
+            return {
+              label: text(value.label, 80),
+              synonyms: (Array.isArray(value.synonyms) ? value.synonyms : [])
+                .map(synonym => text(synonym, 80))
+                .filter(Boolean)
+                .slice(0, MAX_SUPPLIED_SYNONYMS),
+            }
+          })
+          .filter(value => value.label)
+        return { label: text(dimension.label, 80), description: text(dimension.description, 300), values }
+      })
+      .filter(dimension => dimension.label && dimension.values.length >= 2)
+    return dimensions.length ? { registry: { dimensions } } : undefined
+  }
+  return undefined
+}
+
 export async function POST(request: NextRequest, { params }: { params: { studyId: string } }) {
   try {
     const auth = await authenticateUser(request)
@@ -36,7 +93,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
-    const study = await getOwnedStudy(params.studyId, auth.user.id)
+    const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
     if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
     const body = await request.json().catch(() => ({}))
@@ -48,7 +105,22 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
-    if (METERED_STAGES.has(stage) && auth.user.tenantId) {
+    // Entitlement is checked for every metered stage, tenant or not. Guarding
+    // the check on `auth.user.tenantId` meant an account with no tenant — a
+    // solo signup, an invited user before assignment — ran deep dives,
+    // validation and dimension maps with no quota check at all, which is the
+    // one path in this module that spends real model budget.
+    if (METERED_STAGES.has(stage)) {
+      if (!auth.user.tenantId) {
+        return NextResponse.json(
+          {
+            error:
+              'This stage runs on your organisation’s analysis quota, and your account is not attached to an organisation yet. Ask an admin to add you, or contact support.',
+            code: 'NO_TENANT',
+          },
+          { status: 403 }
+        )
+      }
       const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'WHITESPACE_ANALYSIS')
       if (!check.allowed) return check.response
     }
@@ -80,7 +152,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       scope,
       scopeVersion: study.scopeVersion,
       requestHeaders: headersToRecord(request),
-      params: body?.params ?? undefined,
+      params: sanitiseParams(stage, body?.params) as Prisma.InputJsonValue | undefined,
     })
 
     if (!existing) {

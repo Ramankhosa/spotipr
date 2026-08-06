@@ -30,6 +30,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import type { FieldMapResult, LabelledCount, TextCoverage, WhitespaceScope, YearCount } from './types'
 import { CORPUS_FIRST_YEAR } from './types'
+import { WhitespacePermanentError } from './run-lease'
 
 /**
  * Ceiling for the staging pass — the only statement that touches the corpus.
@@ -275,7 +276,7 @@ export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<
   const dead = checks.filter(check => check.nodes === 0)
   if (dead.length) {
     const labels = dead.flatMap(check => plan.groupLabels[check.idx - 1] ?? [])
-    throw new Error(
+    throw new WhitespacePermanentError(
       `The concept${labels.length === 1 ? '' : 's'} ${labels.map(label => `"${label}"`).join(', ')} contain${
         labels.length === 1 ? 's' : ''
       } no searchable words after common-word removal. Reword ${labels.length === 1 ? 'it' : 'them'} or remove ${
@@ -563,7 +564,7 @@ export async function runFieldMap(
   try {
     await tx.$executeRaw(stageCensus(where, rowCap))
   } catch (error) {
-    if (isStatementTimeout(error)) throw new Error(tooBroadMessage(scope, censusTimeoutMs))
+    if (isStatementTimeout(error)) throw new WhitespacePermanentError(tooBroadMessage(scope, censusTimeoutMs))
     throw error
   }
   await setStatementTimeout(tx, FACET_TIMEOUT_MS)
@@ -581,7 +582,7 @@ export async function runFieldMap(
     )
   } catch (error) {
     if (isStatementTimeout(error)) {
-      throw new Error(
+      throw new WhitespacePermanentError(
         `The field staged but could not be counted within ${Math.round(FACET_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
       )
     }
@@ -594,7 +595,7 @@ export async function runFieldMap(
   // facets over an arbitrary subset would be quietly biased. Refuse with the
   // real number rather than publish proportions of an unknown population.
   if (publicationCount > rowCap) {
-    throw new Error(overCapMessage(scope, rowCap))
+    throw new WhitespacePermanentError(overCapMessage(scope, rowCap))
   }
 
   // An empty census is not an error — the map renders, with zeros — but shipping
@@ -685,9 +686,19 @@ export async function runFieldMap(
   // ON_DEMAND_BIGQUERY counts as NOT readable: it means the text exists only in
   // BigQuery, and this module is local-only by design. Reporting it as available
   // would overstate what claim-element analysis can actually see.
+  //
+  // GROUPING SETS, not GROUP BY country, because the study-wide totals CANNOT be
+  // derived by summing the per-country rows. A family is a family across
+  // jurisdictions by definition, so a US/EP/JP family with readable claims is
+  // counted once in each of its three country rows — summing them counted it
+  // three times, and "claims readable" routinely printed above 100%. The extra
+  // grouping set counts DISTINCT families over the whole staged set, once. The
+  // 40-country LIMIT compounded it in the other direction, truncating the sum
+  // for wide fields; ordering the total row first keeps it out of the cap.
   const coverageRows =
     (await facet<{
       country: string | null
+      is_total: number
       families: bigint
       with_claims: bigint
       with_description: bigint
@@ -695,7 +706,8 @@ export async function runFieldMap(
       tx,
       'textCoverage',
       Prisma.sql`
-        SELECT ws.country AS country,
+        SELECT ws.country                    AS country,
+               GROUPING(ws.country)::int     AS is_total,
                COUNT(DISTINCT ws.family_key)::bigint AS families,
                COUNT(DISTINCT ws.family_key) FILTER (
                  WHERE v."claimsAvailability" IN ('FULL_EPO', 'FULL', 'FIRST_CLAIM_ONLY')
@@ -705,18 +717,19 @@ export async function runFieldMap(
                )::bigint AS with_description
         FROM ws_census ws
         JOIN "patent_text_availability" v ON v."id" = ws.id
-        GROUP BY 1
-        ORDER BY 2 DESC
-        LIMIT 40`,
+        GROUP BY GROUPING SETS ((ws.country), ())
+        ORDER BY is_total DESC, families DESC
+        LIMIT 41`,
       gaps
     )) ?? []
 
+  const coverageTotal = coverageRows.find(r => Number(r.is_total) === 1) ?? null
   const textCoverage: TextCoverage = {
     familiesTotal: familyCount,
-    withClaims: coverageRows.reduce((sum, r) => sum + Number(r.with_claims), 0),
-    withDescription: coverageRows.reduce((sum, r) => sum + Number(r.with_description), 0),
+    withClaims: Number(coverageTotal?.with_claims ?? 0),
+    withDescription: Number(coverageTotal?.with_description ?? 0),
     byJurisdiction: coverageRows
-      .filter(r => r.country)
+      .filter(r => Number(r.is_total) === 0 && r.country)
       .map(r => ({
         country: String(r.country),
         families: Number(r.families),
@@ -729,6 +742,14 @@ export async function runFieldMap(
   // canonicalised in TypeScript over a capped sample rather than parsed in SQL
   // against a shape we do not control. The sample is picked from the staged set
   // and only then joined back for the JSON itself.
+  //
+  // The pick is HASH-ORDERED, not family-key ordered. `ORDER BY family_key LIMIT
+  // 25000` is not a sample, it is a prefix: family keys carry their office and
+  // series ("EP1234567", "US2019..."), so the first 25k of a large field are
+  // systematically one jurisdiction and one era — and the resulting "who is
+  // filing" ranking described that slice while claiming to describe the field.
+  // md5 of the family key is uniform and deterministic, so the same scope always
+  // draws the same unbiased sample.
   let assignees: LabelledCount[] = []
   let assigneesSampled = false
   const applicantRows =
@@ -736,11 +757,16 @@ export async function runFieldMap(
       tx,
       'assignees',
       Prisma.sql`
-        WITH picked AS (
+        WITH one_per_family AS (
           SELECT DISTINCT ON (family_key) id, family_key
           FROM ws_census
           WHERE has_applicants
           ORDER BY family_key, publication_date DESC NULLS LAST
+        ),
+        picked AS (
+          SELECT id, family_key
+          FROM one_per_family
+          ORDER BY md5(family_key)
           LIMIT ${sampleCap}
         )
         SELECT p.family_key AS "familyKey", lp."applicants" AS applicants
@@ -833,8 +859,12 @@ export async function runFieldMap(
     statusProxy,
     textCoverage,
     gateCounts: {
-      corpus: publicationCount,
-      afterFilters: publicationCount,
+      // Not measured — see the FieldMapResult.gateCounts note. The staging pass
+      // applies filters and concepts together, so only the post-gate figures
+      // exist; inventing the earlier two by repeating this one made the funnel
+      // assert narrowing that was never counted.
+      corpus: null,
+      afterFilters: null,
       afterConcepts: publicationCount,
       families: familyCount,
     },

@@ -7,11 +7,14 @@ import { Prisma, TaskCode } from '@prisma/client'
 import { patentSearchOrchestrator } from '@/lib/patent-search'
 import type { NormalizedPatentResult, PatentSearchProviderStats, SearchLaneDiagnostic } from '@/lib/patent-search/types'
 import { hasSearchEmbeddingApiKey } from '@/lib/patent-corpus-service'
-import { compileStudioPlan } from './compiler'
+import { classificationPrefixKeys, uniqueStrings } from '@/lib/patent-search/utils'
+import { expandCountrySelection, normalizeCountryCode } from '@/lib/patent-search/patent-countries'
+import { compileStudioPlan, selectedJurisdictions } from './compiler'
 import { scoreElements } from './element-scoring'
 import { canonicalStudioFamilyKey } from './family-key'
 import { trackServiceUsage } from '@/lib/service-usage-tracker'
 import {
+  activeCpcCodes,
   activeTerms,
   emptyStudioPlan,
   type StudioGateConstraint,
@@ -296,16 +299,34 @@ function filterConditions(plan: StudioPlan): Array<{ label: string; sql: Prisma.
       sql: Prisma.sql`"publicationDate" <= ${new Date(plan.filters.publicationDateTo)}`,
     })
   }
-  const jurisdictions = plan.filters.jurisdictions?.filter(j => j && j !== '*') || []
+  // Every predicate below must match what the provider actually executes, or
+  // the funnel counts one document set while the search retrieves another.
+  const jurisdictions = selectedJurisdictions(plan)
   if (jurisdictions.length) {
-    out.push({
-      label: `Jurisdiction in ${jurisdictions.join(', ')}`,
-      sql: Prisma.sql`"country" IN (${Prisma.join(jurisdictions)})`,
-    })
+    // The provider expands legacy spellings (selecting IN also catches the
+    // IPIndia corpus's 'INDIA' rows) and falls back to the publication-number
+    // prefix for rows imported before `country` was populated. Counting a plain
+    // `country IN (…)` under-reports exactly those rows.
+    const storedValues = expandCountrySelection(
+      uniqueStrings(jurisdictions.map(code => normalizeCountryCode(code)).filter(Boolean))
+    )
+    if (storedValues.length) {
+      const prefixClauses = jurisdictions.map(code => Prisma.sql`upper("publicationNumber") LIKE ${`${code.toUpperCase()}%`}`)
+      out.push({
+        label: `Jurisdiction in ${jurisdictions.join(', ')}`,
+        sql: Prisma.sql`(
+          upper(coalesce("country", '')) IN (${Prisma.join(storedValues.map(value => Prisma.sql`${value}`), ', ')})
+          OR ("country" IS NULL AND (${Prisma.join(prefixClauses, ' OR ')}))
+        )`,
+      })
+    }
   }
-  const cpc = plan.cpc.filter(c => c.accepted).map(c => c.code.replace(/\s+/g, ''))
-  if (cpc.length) {
-    const likeClauses = cpc.map(code => Prisma.sql`c LIKE ${code + '%'}`)
+  const cpc = activeCpcCodes(plan)
+  const cpcKeys = classificationPrefixKeys(cpc)
+  if (cpcKeys.length) {
+    const likeClauses = cpcKeys.map(
+      key => Prisma.sql`upper(regexp_replace(c, '[^A-Za-z0-9]', '', 'g')) LIKE ${`${key}%`}`
+    )
     out.push({
       label: `Classification in ${cpc.join(', ')}`,
       sql: Prisma.sql`EXISTS (SELECT 1 FROM unnest("classifications") AS c WHERE ${Prisma.join(likeClauses, ' OR ')})`,
@@ -356,7 +377,8 @@ async function buildGateDetail(plan: StudioPlan, corpusEstimate: number | null):
       'Coverage is worldwide patent publications from 2000 onward (Google Patents public dataset). Art published before 2000 is NOT in this corpus.',
       'Patent documents only — no non-patent literature (journals, standards, datasheets, product manuals) is searched.',
       'No legal-status data: nothing is filtered by whether a patent is granted, lapsed or in force. Do not treat this as a clearance search.',
-      'Only titles and abstracts are semantically indexed. Claims and descriptions are stored for US documents only, and are not searched — element evidence from other jurisdictions is abstract-tier.',
+      'Keyword search reads titles, abstracts and — where the corpus stores them — claims and descriptions. Semantic (meaning-based) matching reads titles and abstracts only, so element evidence for a document with no stored specification is abstract-tier and is labelled as such.',
+      'Stored specification text is not complete for every document: much of it is a partial capture (first independent claim plus a description extract for US rows, and nothing at all for many others). A term not found in the stored text may still appear in the full document — the reader states which documents are partial.',
       'The dataset refreshes quarterly, so publications from the last 0–3 months may be missing.',
     ],
   }
@@ -744,10 +766,75 @@ export async function runStudioPlan(input: {
   // filters by those classifications in the UI. A document that misses your
   // exact words may still be the closest art; hiding it was a design failure
   // (a production run once showed 1 of 120 retrieved documents because of it).
+  // Known art the attorney supplied is ALWAYS in the reviewable set.
+  //
+  // These are references they already hold — client-supplied, examiner-cited, a
+  // competitor's filing — and a search that quietly fails to show them back is
+  // worse than useless: it reads as "your reference did not come up", which is a
+  // finding about the art rather than about the retrieval budget. They are
+  // pulled in explicitly and scored against the elements like everything else.
+  const knownArtWarnings: string[] = []
+  const seededResults: NormalizedPatentResult[] = []
+  const requestedKnownArt = input.plan.steer?.publicationNumbers || []
+  if (requestedKnownArt.length) {
+    const alreadyPresent = new Set(rankedRaw.map(r => r.publicationNumber))
+    const missing = requestedKnownArt.filter(pub => !alreadyPresent.has(pub))
+    if (missing.length) {
+      try {
+        const seedRows = await prisma.localPatent.findMany({
+          where: {
+            OR: [
+              { publicationNumber: { in: missing } },
+              { publicationNumberKey: { in: missing.map(p => p.toUpperCase().replace(/[^A-Z0-9]/g, '')) } },
+            ],
+          },
+          select: {
+            publicationNumber: true,
+            title: true,
+            abstract: true,
+            applicants: true,
+            classifications: true,
+            filingDate: true,
+            publicationDate: true,
+            country: true,
+          },
+          take: 50,
+        })
+        for (const row of seedRows) {
+          seededResults.push({
+            publicationNumber: row.publicationNumber,
+            title: row.title || row.publicationNumber,
+            abstract: row.abstract,
+            applicants: row.applicants as unknown,
+            classifications: row.classifications || [],
+            filingDate: row.filingDate,
+            publicationDate: row.publicationDate,
+            jurisdiction: row.country || undefined,
+            sourceProvider: STUDIO_PROVIDER_IDS[0],
+            matchReasons: ['Known art you supplied — included regardless of ranking'],
+          } as unknown as NormalizedPatentResult)
+        }
+        const found = new Set(seedRows.map(r => r.publicationNumber))
+        const notInCorpus = missing.filter(pub => !found.has(pub))
+        if (notInCorpus.length) {
+          knownArtWarnings.push(
+            `${notInCorpus.length} of the documents you supplied are not in the stored corpus (${notInCorpus.slice(0, 5).join(', ')}${notInCorpus.length > 5 ? '…' : ''}). They cannot be scored or compared here — that is a gap in our corpus, not a finding about those documents.`
+          )
+        }
+      } catch (error) {
+        console.warn('[PriorArtStudio] Known-art seeding failed:', error)
+        knownArtWarnings.push(
+          'The documents you supplied as known art could not be loaded for this run, so they may be missing from the results below.'
+        )
+      }
+    }
+  }
+
   const matchFlags = new Map<string, { meetsMatch: boolean; hitsNotTerm: boolean }>()
   let matchSatisfied = 0
   let notHits = 0
-  const ranked = rankedRaw
+  // Seeded documents lead: they are the ones the attorney already cares about.
+  const ranked = seededResults.length ? [...seededResults, ...rankedRaw] : rankedRaw
   for (const result of ranked) {
     const text = searchTextFor(result)
     const meetsMatch = groups.length ? satisfiesMatch(text, groups) : true
@@ -838,9 +925,22 @@ export async function runStudioPlan(input: {
         : typeof result.applicants === 'string'
           ? result.applicants
           : undefined,
+      // The display strings above are truncated for the card, but the results
+      // filter bar filters on applicant and CPC — filtering on a truncated value
+      // hides documents that genuinely carry the code the attorney asked for
+      // (just not in the first six). Carry the complete lists for filtering.
+      allApplicants: Array.isArray(result.applicants)
+        ? (result.applicants as unknown[]).map(applicantDisplayName).filter(Boolean)
+        : typeof result.applicants === 'string' && result.applicants
+          ? [result.applicants]
+          : undefined,
       publicationDate: toDateString(result.publicationDate),
+      filingDate: toDateString(result.filingDate),
       jurisdiction: result.jurisdiction,
       classifications: (result.classifications || result.cpcCodes || []).slice(0, 6),
+      allClassifications: (result.classifications || result.cpcCodes || []).length > 6
+        ? (result.classifications || result.cpcCodes || [])
+        : undefined,
       link: externalLinkOrNull(result.link || result.sourceUrl),
       members: [
         {
@@ -981,14 +1081,19 @@ export async function runStudioPlan(input: {
     corpusIsEstimate: true,
     filters: filterEstimate,
     filtersIsEstimate: true,
-    recall: searchResponse.diagnostics?.providerCandidateCount ?? pool.length,
+    // Distinct documents in the recall pool. NOT diagnostics.providerCandidateCount,
+    // which is the pre-dedup SUM of per-provider counts — a document present in
+    // both the Indian and the Google corpus was counted twice, so the headline
+    // "Retrieved" figure could exceed the number of documents that exist.
+    recall: pool.length,
+    // The ranking cut that Recall -> Families used to hide.
+    ranked: ranked.length,
     matchRemoved,
     matchSatisfied,
     notHits,
     matchMode: groups.length ? 'filter' : 'none',
     // Families of the reviewable (ranked) set, so the funnel tells one story:
-    // Retrieved -> Families -> For review. The full recall pool's family count
-    // belongs to diagnostics, not the headline funnel.
+    // Retrieved -> Ranked -> Families -> For review.
     families: familyOrder.length,
     shown: families.length,
     lanes,
@@ -1053,7 +1158,7 @@ export async function runStudioPlan(input: {
   )
 
   const storedFamilies = families.slice(0, STORED_FAMILY_LIMIT)
-  const allWarnings = [...compiled.warnings, ...laneWarnings, ...corpusFetchWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])]
+  const allWarnings = [...compiled.warnings, ...laneWarnings, ...corpusFetchWarnings, ...guardWarnings, ...knownArtWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])]
   const runData = {
     planVersion: input.planVersion,
     planSnapshot: input.plan as unknown as Prisma.InputJsonValue,

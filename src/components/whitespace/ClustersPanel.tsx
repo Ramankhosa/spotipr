@@ -11,11 +11,11 @@
  *    anything — gaps are claimed only by tested hypotheses, one panel down.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BookOpen, Grid2x2, Loader2, SignalHigh } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/toast'
-import { pollRun, wsApi } from './api'
+import { isPollAborted, pollRun, wsApi } from './api'
 
 interface ClusterRow {
   id: string
@@ -93,6 +93,17 @@ export function ClustersPanel({
     void load()
   }, [load])
 
+  // One abort controller for every poll this panel owns. Without it a stage that
+  // takes minutes kept polling — and kept calling setState — long after the user
+  // navigated away from the study.
+  const pollAbort = useRef<AbortController | null>(null)
+  useEffect(
+    () => () => {
+      pollAbort.current?.abort()
+    },
+    []
+  )
+
   const startStage = useCallback(
     async (
       stage: 'CLUSTER' | 'SIGNALS' | 'DEEP_DIVE',
@@ -101,24 +112,30 @@ export function ClustersPanel({
       failTitle: string
     ) => {
       setBusy(true)
+      pollAbort.current?.abort()
+      const controller = new AbortController()
+      pollAbort.current = controller
       try {
         const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
           method: 'POST',
           body: JSON.stringify({ stage, params }),
         })
-        const final = await pollRun(studyId, started.runId)
+        const final = await pollRun(studyId, started.runId, undefined, controller.signal)
         if (final.status === 'FAILED') {
           toast({ variant: 'error', title: failTitle, description: final.error || 'The stage did not complete.' })
         }
         await load()
         onChanged?.()
       } catch (error) {
+        // An aborted poll is the user leaving, not a failure to report.
+        if (isPollAborted(error)) return
         toast({
           variant: 'error',
           title: failTitle,
           description: error instanceof Error ? error.message : 'Try again.',
         })
       } finally {
+        if (pollAbort.current === controller) pollAbort.current = null
         setBusy(false)
       }
     },

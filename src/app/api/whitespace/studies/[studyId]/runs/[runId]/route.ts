@@ -18,7 +18,7 @@ export async function GET(
     )
   }
 
-  const study = await getOwnedStudy(params.studyId, auth.user.id)
+  const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
   if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
   const run = await prisma.whitespaceRun.findUnique({ where: { id: params.runId } })

@@ -215,9 +215,16 @@ export interface ClusterStageResult {
 
 export interface TermDivergence {
   concept: string
+  /** Families the concept's wording reaches, capped — a floor at the cap, never a denominator. */
   lexicalCount: number
+  /** Families the semantic lane retrieved for this concept. */
   semanticCount: number | null
-  /** Jaccard overlap % of top-N family sets; null when the semantic lane was unavailable. */
+  /**
+   * Share of the RETRIEVED families that the concept's own wording also matches.
+   * Directional on purpose: a symmetric set overlap between a ranked top-N and
+   * an arbitrary LIMIT-N is near zero whatever the vocabulary looks like. Null
+   * when the semantic lane or the agreement test could not run.
+   */
   overlapPct: number | null
   /** Titles from semantic-only hits, summarising the vocabulary the scope misses. */
   semanticOnlyVocabulary: string | null
@@ -253,10 +260,21 @@ export interface RarePair {
   supportB: number
   observed: number
   expected: number
-  /** Standardised residual z; negative means rarer than chance. */
+  /**
+   * Adjusted standardised residual; negative means rarer than chance. Divides by
+   * sqrt(E·(1−pₐ)(1−p_b)), the margins-fixed variance — not sqrt(E), which is
+   * only the right denominator when both margins are a small share of the set.
+   */
   z: number
-  /** clamp(−z / 3, 0, 1) — valid only above the support floor. */
+  /** clamp(−z / 3, 0, 1) — valid only above the support floor. SATURATES at 1; never rank on it. */
   rarity: number
+  /**
+   * −log10 P(observed or fewer) under Poisson(expected), in decibans. Unlike
+   * `rarity` this does not saturate, so it is what ranking must use: an empty
+   * cell expecting 500 families scores 217, one expecting 6 scores 2.6, and
+   * both would score exactly 1.0 on `rarity`.
+   */
+  surprisal: number
 }
 
 export interface DeepDiveResult {
@@ -392,7 +410,10 @@ export interface DimensionGap {
   marginB: number
   expected: number
   z: number
+  /** Saturates at 1 for expected >= 9 — kept for display, never for ranking. */
   rarity: number
+  /** −log10 P(observed or fewer) in decibans. The non-saturating ranking signal. */
+  surprisal: number
 
   /** Largest co-occupancy of A with any OTHER value of B — proof the cell was reachable. */
   nearMissB: DimensionGapNearMiss | null
@@ -493,6 +514,14 @@ export interface GateOutcome {
   gate: 'G1_DATA' | 'G2_TERMINOLOGY' | 'G3_ADJACENT_CLAIMS' | 'G4_FEASIBILITY' | 'G5_COMMERCIAL' | 'G6_REGULATORY'
   outcome: 'PASSED' | 'PASSED_WITH_WEAKENING' | 'FAILED' | 'ADVISORY' | 'UNASSESSED'
   basis: string
+  /**
+   * The number the gate decided on, when it decided on one (G1: claims-readable
+   * share in [0,1]). Carried structurally because scoring needs it: it used to
+   * be recovered by regex-scraping a percentage back out of `basis`, so any
+   * rewording of that human sentence silently swapped the measured coverage for
+   * a hardcoded 0.5 and moved every confidence score with it.
+   */
+  measured?: number | null
 }
 
 export interface ValidationRecord {
@@ -520,10 +549,20 @@ export interface FieldMapResult {
   /** Kind-code + age heuristic. Labelled a proxy in the UI, never "legal status". */
   statusProxy: { granted: number; pending: number; unknown: number }
   textCoverage: TextCoverage
-  /** Corpus -> filters -> concepts -> families. Studio-style funnel transparency. */
+  /**
+   * Corpus -> filters -> concepts -> families, Studio-style funnel transparency.
+   *
+   * `corpus` and `afterFilters` are NULL because this census does not measure
+   * them: it evaluates the whole scope predicate in one pass, so the population
+   * before the filters and before the concept gate is never counted. They were
+   * previously filled with the post-concept publication count, which made the
+   * funnel read 66 -> 66 -> 66 and claimed the scope had narrowed twice when it
+   * had only ever been measured once. A funnel step that was not measured is
+   * null, and the UI renders only measured steps.
+   */
   gateCounts: {
-    corpus: number
-    afterFilters: number
+    corpus: number | null
+    afterFilters: number | null
     afterConcepts: number
     families: number
   }

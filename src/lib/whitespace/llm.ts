@@ -10,11 +10,25 @@
 
 import { TaskCode } from '@prisma/client'
 
+/**
+ * Who a model call is billed to.
+ *
+ * Two shapes because there are two kinds of caller. An interactive route has the
+ * user's request and passes `headers`, from which the gateway resolves the
+ * tenant. A queued run has no request at all — it may be executed minutes later
+ * by a worker in another process — so it passes the resolved `tenantContext`
+ * directly. Carrying headers was the reason whitespace work could not leave the
+ * request that started it.
+ */
+export type WhitespaceLLMContext =
+  | { headers: Record<string, string> }
+  | { tenantContext: { tenantId: string; planId: string; userId?: string } }
+
 export interface WhitespaceLLMCall {
   taskCode: TaskCode
   stageCode: string
   prompt: string
-  requestHeaders: Record<string, string>
+  context: WhitespaceLLMContext
 }
 
 export interface WhitespaceLLMResult {
@@ -26,7 +40,7 @@ export async function runWhitespaceLLM(call: WhitespaceLLMCall): Promise<Whitesp
   const { llmGateway } = await import('@/lib/metering/gateway')
 
   const stageAttempt = await llmGateway.executeLLMOperation(
-    { headers: call.requestHeaders },
+    call.context,
     { taskCode: call.taskCode, stageCode: call.stageCode, prompt: call.prompt }
   )
   if (stageAttempt.success && stageAttempt.response?.output) {
@@ -55,7 +69,7 @@ export async function runWhitespaceLLM(call: WhitespaceLLMCall): Promise<Whitesp
   }
 
   const taskAttempt = await llmGateway.executeLLMOperation(
-    { headers: call.requestHeaders },
+    call.context,
     { taskCode: call.taskCode, prompt: call.prompt }
   )
   if (!taskAttempt.success || !taskAttempt.response?.output) {

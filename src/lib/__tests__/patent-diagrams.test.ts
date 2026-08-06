@@ -556,9 +556,23 @@ describe('figure-set planning', () => {
     claimsContext: {},
     components,
     figureCount: 4,
+    exactFigureCount: true,
   }
 
-  test('asks for one figure of each of the four kinds by default', () => {
+  test('lets the planner size the set in auto mode instead of pinning four', () => {
+    const prompt = buildFigureSetPlanningPrompt({ ...planningInput, exactFigureCount: false, figureCount: 7 })
+    expect(prompt).toContain('at least 4 and at most 20 figures')
+    expect(prompt).toContain('about 7 figure(s)')
+    expect(prompt).toContain('one COMPONENT overview')
+    expect(prompt).toContain('MORE, SMALLER figures')
+  })
+
+  test('states per-figure readability targets below the warning thresholds', () => {
+    const prompt = buildFigureSetPlanningPrompt(planningInput)
+    expect(prompt).toContain('target at most 10 components, 8 steps, 10 interactions, or 8 constituents')
+  })
+
+  test('asks for one figure of each of the four kinds in exact mode', () => {
     const prompt = buildFigureSetPlanningPrompt(planningInput)
     expect(prompt).toContain('plan exactly 4 figure(s)')
     expect(prompt).toContain('1. COMPONENT')

@@ -110,6 +110,8 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [compiling, setCompiling] = useState(false)
+  /** Set after the server refuses to overwrite user edits; the next click confirms. */
+  const [rebuildArmed, setRebuildArmed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [run, setRun] = useState<RunPayload | null>(null)
   const [running, setRunning] = useState(false)
@@ -119,23 +121,41 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
 
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoCompiled = useRef(false)
+  // Identifies the poll chain allowed to write state. Every entry point into
+  // loadRun (initial load, "Map the field", a 409 re-attach) used to start its
+  // own chain while only the newest timer id was retained, so the older chains
+  // polled forever and raced each other's setState calls.
+  const activePoll = useRef<string | null>(null)
 
   const patchScope = useCallback((updater: (draft: WhitespaceScope) => WhitespaceScope) => {
     setScope(current => updater(structuredClone(current)))
     setDirty(true)
   }, [])
 
+  /**
+   * Polls one field-map run. `announceFailure` is false when re-attaching to a
+   * run the user did not just start: reading a study whose last map failed a
+   * week ago is not news, and the error toast fired on every single page load.
+   * The failure stays visible in the panel either way.
+   */
   const loadRun = useCallback(
-    async (runId: string) => {
+    async (runId: string, options: { announceFailure?: boolean } = {}) => {
+      const announceFailure = options.announceFailure ?? true
+      if (pollTimer.current) clearTimeout(pollTimer.current)
+      activePoll.current = runId
       try {
         const payload = await api<RunPayload>(`/api/whitespace/studies/${studyId}/runs/${runId}`)
+        if (activePoll.current !== runId) return
         setRun(payload)
         if (payload.status === 'QUEUED' || payload.status === 'PROCESSING') {
           setRunning(true)
-          pollTimer.current = setTimeout(() => void loadRun(runId), 3000)
+          pollTimer.current = setTimeout(() => {
+            if (activePoll.current === runId) void loadRun(runId, options)
+          }, 3000)
         } else {
           setRunning(false)
-          if (payload.status === 'FAILED') {
+          activePoll.current = null
+          if (payload.status === 'FAILED' && announceFailure) {
             toast({
               variant: 'error',
               title: 'Field map failed',
@@ -144,7 +164,9 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
           }
         }
       } catch (error) {
+        if (activePoll.current !== runId) return
         setRunning(false)
+        activePoll.current = null
         toast({
           variant: 'error',
           title: 'Lost track of the run',
@@ -165,7 +187,7 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
       setDirty(false)
       setRuns(data.runs || [])
       const latestFieldMap = (data.runs || []).find(r => r.stage === 'FIELD_MAP')
-      if (latestFieldMap) void loadRun(latestFieldMap.id)
+      if (latestFieldMap) void loadRun(latestFieldMap.id, { announceFailure: false })
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not load this study.')
     } finally {
@@ -182,7 +204,13 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
     void load()
   }, [authLoading, user, load])
 
-  useEffect(() => () => { if (pollTimer.current) clearTimeout(pollTimer.current) }, [])
+  useEffect(
+    () => () => {
+      activePoll.current = null
+      if (pollTimer.current) clearTimeout(pollTimer.current)
+    },
+    []
+  )
 
   const compile = useCallback(
     async (force: boolean) => {
@@ -198,13 +226,20 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
         setStudy(current =>
           current ? { ...current, scope: data.scope, scopeVersion: data.scopeVersion, title: data.scope.title || current.title } : current
         )
+        setRebuildArmed(false)
       } catch (error) {
         const code = (error as { code?: string })?.code
         if (code === 'SCOPE_HAS_USER_EDITS') {
+          // Arm the second click. The button used to send force=true whenever
+          // the scope was non-empty, so this 409 could never be reached and a
+          // single click silently replaced the user's own concepts and
+          // classifications — while the toast promised a confirmation step that
+          // did not exist.
+          setRebuildArmed(true)
           toast({
             variant: 'warning',
             title: 'This scope has your edits',
-            description: 'Use “Rebuild scope” again to confirm — your edits will be replaced.',
+            description: 'Press “Replace my scope” to confirm — your edits will be overwritten.',
           })
         } else {
           toast({
@@ -362,9 +397,19 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void compile(dirty || !scopeIsEmpty(scope))} disabled={compiling}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void compile(rebuildArmed)}
+              disabled={compiling}
+              title={
+                rebuildArmed
+                  ? 'This replaces the concepts and classifications you edited.'
+                  : 'Re-reads your brief and drafts the scope again.'
+              }
+            >
               {compiling ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Wand2 className="mr-2 h-3.5 w-3.5" />}
-              Rebuild scope
+              {rebuildArmed ? 'Replace my scope' : 'Rebuild scope'}
             </Button>
             <Button size="sm" onClick={() => void saveScope()} disabled={!dirty || saving}>
               {saving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
@@ -727,37 +772,35 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                 ))}
               </div>
 
-              {/* The stage does not yet compute distinct gate counts — showing
-                  identical numbers under a funnel heading would imply it does.
-                  Only the three NARROWING gates decide that: `families` is a
-                  different unit (families, not publications) and practically
-                  always differs, so including it in the test made this guard
-                  pass every time and rendered 66/66/66 as though the scope had
-                  been narrowed twice. */}
-              {new Set([
-                results.gateCounts.corpus,
-                results.gateCounts.afterFilters,
-                results.gateCounts.afterConcepts,
-              ]).size > 1 && (
-                <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    How the count narrows
-                  </h3>
-                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {[
-                      { label: 'Corpus', value: results.gateCounts.corpus },
-                      { label: 'After filters', value: results.gateCounts.afterFilters },
-                      { label: 'After concepts', value: results.gateCounts.afterConcepts },
-                      { label: 'Families', value: results.gateCounts.families },
-                    ].map(gate => (
-                      <li key={gate.label} className="rounded-md bg-muted/50 p-3">
-                        <p className="text-xs text-muted-foreground">{gate.label}</p>
-                        <p className="mt-0.5 text-sm tabular-nums text-foreground">{num(gate.value)}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {/* Only measured steps are rendered. `corpus` and `afterFilters`
+                  are null because the census evaluates the whole scope predicate
+                  in one pass and never counts those populations — they used to
+                  be filled with the post-concept count, which drew 66/66/66 as
+                  though the scope had narrowed twice. A funnel of one step is
+                  not a funnel, so it stays hidden until there are two. */}
+              {(() => {
+                const measured = [
+                  { label: 'Corpus', value: results.gateCounts.corpus },
+                  { label: 'After filters', value: results.gateCounts.afterFilters },
+                  { label: 'After concepts', value: results.gateCounts.afterConcepts },
+                ].filter((gate): gate is { label: string; value: number } => typeof gate.value === 'number')
+                if (measured.length < 2) return null
+                return (
+                  <div>
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      How the count narrows
+                    </h3>
+                    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {[...measured, { label: 'Families', value: results.gateCounts.families }].map(gate => (
+                        <li key={gate.label} className="rounded-md bg-muted/50 p-3">
+                          <p className="text-xs text-muted-foreground">{gate.label}</p>
+                          <p className="mt-0.5 text-sm tabular-nums text-foreground">{num(gate.value)}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              })()}
 
               <div>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

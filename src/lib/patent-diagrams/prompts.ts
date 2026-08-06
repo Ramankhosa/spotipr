@@ -113,19 +113,34 @@ export function buildFigureSetPlanningPrompt(input: {
   components: PatentDiagramComponent[]
   evidenceCatalog?: Array<{ id: string; value: string }>
   existingFigures?: Array<{ figureNo: number; title: string; kind?: string | null; componentIds: string[] }>
+  /** Exact count in manual mode; the computed suggestion in auto mode. */
   figureCount: number
+  exactFigureCount?: boolean
   instructions?: string
 }): string {
   const catalog = input.evidenceCatalog || []
   const kindPlan = Array.from({ length: input.figureCount }, (_, index) => DEFAULT_FIGURE_KINDS[index % DEFAULT_FIGURE_KINDS.length])
   const claimedComponents = input.components.filter(component => (component.claimSupport?.matchedClaims?.length || 0) > 0)
+  const targets = PATENT_DIAGRAM_COMPLEXITY.planningTargets
+  // Manual mode pins the count and cycles the four kinds; auto mode lets the
+  // planner size the set to the disclosure so complex inventions get more,
+  // smaller figures instead of four dense ones.
+  const figureSetBlock = input.exactFigureCount
+    ? `FIGURE SLOTS — plan exactly ${input.figureCount} figure(s), in this order and of these kinds:
+${kindPlan.map((kind, index) => `${index + 1}. ${kind}`).join('\n')}`
+    : `FIGURE SET — choose the figure count yourself: at least 4 and at most 20 figures.
+- Include at least one figure of each kind: COMPONENT, PROCESS, SEQUENCE, CONSTITUENT.
+- Suggested for this disclosure: about ${input.figureCount} figure(s). Exceed the suggestion whenever it keeps figures readable.
+- When the architecture is larger than one readable figure, plan one COMPONENT overview (subsystem level, using the registry's parent components) plus one COMPONENT detail figure per subsystem showing its children.
+- When the method is longer than one readable flowchart, plan one PROCESS figure per phase, in disclosed order.
+- Prefer MORE, SMALLER figures over one dense figure — a figure that must be zoomed to be read is a defective patent drawing.`
+
   return `You are the PatentNest patent figure-set planner. Your plan drives formal patent drawings, so precision beats creativity.
 
 OUTPUT
 Return JSON only. No PlantUML, no styling, no reference numerals, no prose outside JSON, no markdown fences.
 
-FIGURE SLOTS — plan exactly ${input.figureCount} figure(s), in this order and of these kinds:
-${kindPlan.map((kind, index) => `${index + 1}. ${kind}`).join('\n')}
+${figureSetBlock}
 
 WHAT EACH KIND DEPICTS
 - COMPONENT: the system/product architecture — subsystems and the registry elements inside them.
@@ -142,7 +157,7 @@ ${claimedComponents.length
   : `4. CLAIM COVERAGE — claim-to-component matching has not run for this invention; use the claims context below to judge which components must be depicted.`}
 5. For COMPONENT figures, state the subsystem grouping and its order in orderedGroups.
 6. For PROCESS and SEQUENCE figures, set evidenceIds to the disclosed-step IDs the figure depicts and phaseHints to the phase order.
-7. Keep each figure at filing scale: about ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents} components, ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes} steps, ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions} interactions, or ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents} constituents. Split subject matter across the planned figures rather than overloading one.
+7. READABILITY — target at most ${targets.components} components, ${targets.steps} steps, ${targets.interactions} interactions, or ${targets.constituents} constituents per figure so every label prints legibly on A4 without zooming. Split subject matter into further figures rather than exceeding a target; a figure that comes out denser is flagged for attorney review.
 8. Give every figure a distinct stable key, a short filing title, and a one-sentence technical purpose.
 
 QUALITY BAR
@@ -209,7 +224,7 @@ function kindShape(kind: DiagramKind): string {
   }
   return `{
   "kind":"CONSTITUENT", "boundaryLabel":"short composition name",
-  "constituents":[{"componentId":"id","displayLabel":"maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","technicalRole":"short supported role","quantityOrRange":"only when disclosed","evidenceIds":["id"]}],
+  "constituents":[{"componentId":"id","displayLabel":"maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","technicalRole":"maximum 4 words — long role text widens the box and shrinks the printed figure","quantityOrRange":"only when disclosed","evidenceIds":["id"]}],
   "relationships":[{"fromId":"id","toId":"id","category":"ASSOCIATION|PRIMARY|OPTIONAL","evidenceIds":["id"]}]
 }`
 }
@@ -285,6 +300,63 @@ FIGURE PLAN:
 ${JSON.stringify(plan)}`).join('\n\n')}
 
 ${input.existingDiagrams?.length ? `\nEXISTING MANAGED SEMANTIC MODELS (retain stable keys unless instructed otherwise):\n${JSON.stringify(input.existingDiagrams)}` : ''}`
+}
+
+/**
+ * User-directed split: re-details ONE managed figure as `parts` figures of the
+ * same kind. Unlike the deleted mechanical decomposer, the model partitions
+ * semantically — each part must stand alone as a fileable figure — and it sees
+ * the rest of the drawing set so the parts do not duplicate other figures.
+ */
+export function buildFigureSplitPrompt(input: {
+  original: PatentDiagram
+  parts: number
+  otherFigures: Array<{ figureNo: number; title: string; kind?: string | null; componentIds: string[] }>
+  inventionContext: unknown
+  claimsContext: unknown
+  components: PatentDiagramComponent[]
+  evidenceCatalog?: Array<{ id: string; value: string }>
+  instructions?: string
+}): string {
+  const kind = input.original.kind
+  return `You are the PatentNest figure splitter. Your JSON becomes formal patent drawings, so precision beats creativity.
+
+OUTPUT
+Return JSON only: {"diagrams":[ exactly ${input.parts} ${kind} diagram(s) ]}. Never return PlantUML, reference numerals, styles, markdown, or commentary.
+
+TASK
+Split the ORIGINAL FIGURE below into exactly ${input.parts} self-contained ${kind} sub-figures.
+
+RULES
+1. COMPLETENESS — every element of the original (every ${kind === 'COMPONENT' ? 'component' : kind === 'SEQUENCE' ? 'participant and interaction' : kind === 'PROCESS' ? 'step and decision' : 'constituent'} and every relationship) must appear in exactly one part. Never drop content; an endpoint shared by two parts may repeat in both.
+2. COHERENCE — divide along technical seams (subsystems, phases, groups), not by count. Each part must read as one complete idea with its own short filing title and one-sentence purpose. Balance the parts roughly; no part may hold almost everything.
+3. NO DUPLICATION — the drawing set already contains the OTHER FIGURES listed below. Do not re-depict their subject matter; the parts replace only the original figure.
+4. IDENTITY — use only Component Planner IDs from the registry below. Never invent components, operations, or quantities. Reference signs (ref=) are identification only; the server prints every numeral itself.${kind === 'PROCESS' ? '\n5. NUMBERING — every STEP and DECISION MUST set componentId to the registry component that performs it; a node without one is drawn unnumbered and flagged for attorney review.' : ''}
+${kind === 'PROCESS' ? '6' : '5'}. LABELS — functional names of at most ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words; connector rules are unchanged from the original figure's kind.
+
+USER INSTRUCTIONS:
+${input.instructions || 'None'}
+
+ORIGINAL FIGURE (semantic model to split):
+${JSON.stringify(input.original)}
+
+OTHER FIGURES IN THIS DRAWING SET (do not duplicate their subject matter):
+${input.otherFigures.length ? JSON.stringify(input.otherFigures) : 'none'}
+
+INVENTION CONTEXT:
+${compactInventionContext(input.inventionContext)}
+
+CLAIMS CONTEXT:
+${compactClaimsContext(input.claimsContext)}
+
+SUPPORTED EVIDENCE CATALOG:
+${evidenceCatalogBlock(input.evidenceCatalog || [])}
+
+COMPONENT PLANNER REGISTRY (listed in disclosed order; preserve it):
+${componentLines(input.components)}
+
+Each returned diagram must carry: {"schemaVersion":3,"kind":"${kind}","key":"part-key","title":"short distinct filing title","purpose":"one-sentence technical purpose","detailLevel":"DETAIL","direction":"${input.original.direction}","claimCriticalComponentIds":[...subset relevant to that part...],"evidenceIds":[...catalog IDs that part depicts...]} merged with this ${kind} shape:
+${kindShape(kind)}`
 }
 
 export function extractJsonObject(text: string): unknown {

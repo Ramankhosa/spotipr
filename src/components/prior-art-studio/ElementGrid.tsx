@@ -11,10 +11,12 @@
 //   2. Coverage is arithmetic; combining references is a legal judgment. A
 //      theory cannot be pinned without an attorney-authored motivation.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, Check, Link2, Loader2, Sparkles, Trash2 } from 'lucide-react'
 import { Hint } from '@/components/ui/hint'
 import {
+  anticipationOnly,
   coveredElements,
   findAnticipationCandidates,
   findCombinations,
@@ -66,8 +68,39 @@ export function ElementGrid({
   onOpenDocument,
   pinning,
 }: ElementGridProps) {
-  const [openCell, setOpenCell] = useState<string | null>(null)
+  const [openCell, setOpenCell] = useState<{ key: string; rect: DOMRect } | null>(null)
   const [motivation, setMotivation] = useState<Record<string, string>>({})
+
+  // Escape, an outside click, or scrolling the grid closes the evidence
+  // popover. It previously had no dismissal at all — clicking the same cell
+  // again was the only way out.
+  useEffect(() => {
+    if (!openCell) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenCell(null)
+        event.stopPropagation()
+      }
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-pas-evidence-popover]')) return
+      setOpenCell(null)
+    }
+    // The popover is positioned from a rect captured at click time, so any
+    // scroll invalidates it.
+    const onScroll = () => setOpenCell(null)
+    // Capture phase so Escape closes this before any ancestor handler (the
+    // document reader binds Escape on the window too).
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [openCell])
 
   const rows = useMemo(
     () =>
@@ -86,7 +119,10 @@ export function ElementGrid({
   )
   const anticipation = useMemo(() => findAnticipationCandidates({ elements, rows: assessedRows }), [elements, assessedRows])
   const combinations = useMemo(() => findCombinations({ elements, rows: assessedRows }), [elements, assessedRows])
-  const anticipationKeys = new Set(anticipation.map(a => a.familyKey))
+  // Only a row that teaches EVERY element strongly gets the anticipation
+  // highlight. Rows that merely touch every element are surfaced separately —
+  // see the candidate cards below.
+  const anticipationKeys = new Set(anticipationOnly(anticipation).map(a => a.familyKey))
 
   if (!elements.length) {
     return (
@@ -116,19 +152,25 @@ export function ElementGrid({
     elementCoverage?: unknown
   ) => {
     const text = (motivation[key] || '').trim()
-    await onPinTheory({ kind, publicationNumbers, familyKeys, motivation: text, elementCoverage })
+    try {
+      await onPinTheory({ kind, publicationNumbers, familyKeys, motivation: text, elementCoverage })
+    } catch {
+      // The caller has already told the attorney what went wrong. Keep what they
+      // typed — clearing the box on a failed save means retyping the rationale.
+      return
+    }
     setMotivation(current => ({ ...current, [key]: '' }))
   }
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Element grid</span>
+        <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Element grid</span>
         <Hint
           title="Scored the way claims are argued"
           text="Each column is one element of your invention. A row that covers every element is a single-reference (§102) candidate; two rows that complete each other are a possible §103 combination. Click any cell to see the evidence behind it."
         />
-        <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
+        <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
           {(['STRONG', 'PART', 'WEAK', 'NONE'] as StudioElementVerdict[]).map(v => (
             <span key={v} className={`rounded px-1.5 py-0.5 font-mono font-bold ${VERDICT_STYLE[v]}`}>
               {VERDICT_LABEL[v]}
@@ -141,13 +183,13 @@ export function ElementGrid({
         <table className="w-full border-collapse text-xs">
           <thead>
             <tr>
-              <th className="border-b border-border px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <th className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Document
               </th>
               {elements.map((element, i) => (
                 <th
                   key={element.id}
-                  className="border-b border-border px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                  className="border-b border-border px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
                   title={element.text}
                 >
                   E{i + 1}
@@ -156,10 +198,10 @@ export function ElementGrid({
                   </span>
                 </th>
               ))}
-              <th className="border-b border-border px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <th className="border-b border-border px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Evidence tier
               </th>
-              <th className="border-b border-border px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <th className="border-b border-border px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Reading
               </th>
             </tr>
@@ -172,15 +214,17 @@ export function ElementGrid({
               const covered = assessmentStatus === 'ASSESSED' ? coveredElements(row.cells, elements).length : 0
               return (
                 <tr key={row.familyKey} className={isAnticipation ? 'bg-emerald-500/[0.07]' : undefined}>
-                  <td className="border-b border-border px-3 py-2 align-middle">
+                  {/* Sticky, so scrolling right to element E6 does not lose the
+                      publication number the row is about. */}
+                  <td className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-2 align-middle">
                     <button
                       type="button"
                       onClick={() => onOpenDocument(row.family)}
-                      className="font-mono text-[11px] font-semibold text-lamp-700 hover:underline dark:text-lamp-400"
+                      className="font-mono text-xs font-semibold text-lamp-700 hover:underline dark:text-lamp-400"
                     >
                       {row.publicationNumber}
                     </button>
-                    <div className="max-w-[220px] truncate text-[10px] text-muted-foreground">{row.family.title}</div>
+                    <div className="max-w-[220px] truncate text-[11px] text-muted-foreground">{row.family.title}</div>
                   </td>
                   {elements.map(element => {
                     const cell = assessmentStatus === 'ASSESSED' ? row.cells?.[element.id] : undefined
@@ -190,16 +234,41 @@ export function ElementGrid({
                       <td key={element.id} className="relative border-b border-border px-2 py-2">
                         <button
                           type="button"
-                          onClick={() => setOpenCell(openCell === cellKey ? null : cellKey)}
-                          className={`w-full rounded px-1.5 py-1 text-center font-mono text-[9px] font-bold ${
+                          onClick={event =>
+                            setOpenCell(current =>
+                              current?.key === cellKey
+                                ? null
+                                : { key: cellKey, rect: event.currentTarget.getBoundingClientRect() }
+                            )
+                          }
+                          className={`w-full rounded px-1.5 py-1 text-center font-mono text-[11px] font-bold ${
                             verdict ? VERDICT_STYLE[verdict] : 'bg-muted text-muted-foreground'
                           }`}
-                          aria-expanded={openCell === cellKey}
+                          aria-expanded={openCell?.key === cellKey}
                         >
                           {verdict ? VERDICT_LABEL[verdict] : assessmentStatus === 'UNAVAILABLE' ? 'UNAVAILABLE' : 'NOT ASSESSED'}
                         </button>
-                        {openCell === cellKey && (
-                          <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-border bg-popover p-2.5 text-[11px] shadow-lg">
+                        {openCell?.key === cellKey && createPortal(
+                          /*
+                            Rendered into <body>, not into the cell.
+                            The grid lives in an `overflow-x-auto` container, and
+                            per spec `overflow-x: auto` forces overflow-y to a
+                            scrolling value — so an absolutely positioned popover
+                            was clipped for every row below the fold and spawned
+                            a spurious vertical scrollbar. z-index cannot escape
+                            a scroll container; a portal can.
+                          */
+                          <div
+                            data-pas-evidence-popover
+                            style={{
+                              position: 'fixed',
+                              top: Math.min(openCell.rect.bottom + 4, window.innerHeight - 180),
+                              left: Math.min(openCell.rect.left, window.innerWidth - 272),
+                            }}
+                            role="dialog"
+                            aria-label={`Evidence for ${element.text}`}
+                            className="z-50 w-64 rounded-lg border border-border bg-popover p-2.5 text-xs shadow-lg"
+                          >
                             <p className="mb-1 font-semibold text-foreground">{element.text}</p>
                             {cell ? (
                               <>
@@ -218,7 +287,7 @@ export function ElementGrid({
                                 <button
                                   type="button"
                                   onClick={() => onOpenDocument(row.family)}
-                                  className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-lamp-700 hover:underline dark:text-lamp-400"
+                                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-lamp-700 hover:underline dark:text-lamp-400"
                                 >
                                   <Link2 className="h-3 w-3" /> Open the document
                                 </button>
@@ -230,16 +299,17 @@ export function ElementGrid({
                                   : 'Not assessed — this document was outside the automatic assessment window.'}
                               </p>
                             )}
-                          </div>
+                          </div>,
+                          document.body
                         )}
                       </td>
                     )
                   })}
                   <td className="border-b border-border px-2 py-2">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
                         tier === 'claims'
-                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                          ? 'bg-muted text-muted-foreground ring-1 ring-inset ring-border'
                           : 'bg-muted text-muted-foreground'
                       }`}
                     >
@@ -248,7 +318,7 @@ export function ElementGrid({
                         : assessmentStatus === 'UNAVAILABLE' ? 'unavailable' : 'not assessed'}
                     </span>
                   </td>
-                  <td className="border-b border-border px-2 py-2 text-[10px]">
+                  <td className="border-b border-border px-2 py-2 text-[11px]">
                     {isAnticipation ? (
                       <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
                         §102 candidate
@@ -266,20 +336,49 @@ export function ElementGrid({
         </table>
       </div>
 
-      {/* §102 candidates — pin with a rationale */}
+      {/* §102 candidates — pin with a rationale.
+          A NEAR row (every element covered, but not every one STRONG) is shown
+          in the same place because it is often the closest art in the set, but
+          it is never called a single-reference candidate and cannot be pinned
+          as §102 — anticipation requires each and every element. */}
       {anticipation.map(candidate => {
         const key = `ant:${candidate.familyKey}`
         const existing = theoryFor([candidate.publicationNumber])
+        const isAnticipation = candidate.tier === 'ANTICIPATION'
         return (
-          <div key={key} className="rounded-lg border border-emerald-500/40 bg-emerald-500/[0.06] p-3 text-xs">
+          <div
+            key={key}
+            className={`rounded-lg border p-3 text-xs ${
+              isAnticipation
+                ? 'border-emerald-500/40 bg-emerald-500/[0.06]'
+                : 'border-amber-500/40 bg-amber-500/[0.06]'
+            }`}
+          >
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-emerald-800 dark:text-emerald-300">Single-reference candidate:</span>
-              <span className="font-mono">{candidate.publicationNumber}</span>
-              <span className="text-muted-foreground">
-                covers all {elements.length} elements ({candidate.strongCount} strongly)
-              </span>
+              {isAnticipation ? (
+                <>
+                  <span className="font-semibold text-emerald-800 dark:text-emerald-300">Single-reference candidate:</span>
+                  <span className="font-mono">{candidate.publicationNumber}</span>
+                  <span className="text-muted-foreground">
+                    teaches all {elements.length} elements strongly
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-amber-800 dark:text-amber-300">Close reference:</span>
+                  <span className="font-mono">{candidate.publicationNumber}</span>
+                  <span className="text-muted-foreground">
+                    touches all {elements.length} elements, but only {candidate.strongCount} strongly — read it before
+                    treating any element as disclosed
+                  </span>
+                  <Hint
+                    title="Why this is not a §102 candidate"
+                    text="Anticipation requires each and every element to be disclosed. A row of PART verdicts means the evidence is arguable on at least one element, which is an obviousness argument to develop — not a single-reference rejection."
+                  />
+                </>
+              )}
             </div>
-            {existing ? (
+            {!isAnticipation ? null : existing ? (
               <div className="mt-2 flex items-start gap-2 rounded-md border border-border bg-card p-2">
                 <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
                 <p className="flex-1 text-muted-foreground">{existing.motivation}</p>
@@ -324,7 +423,7 @@ export function ElementGrid({
               </span>
             </div>
             <p className="mt-1.5 flex items-start gap-1.5 text-muted-foreground">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
               Coverage is arithmetic. Whether these references may properly be combined is your judgment — and the
               motivation you write here goes into the search report.
             </p>

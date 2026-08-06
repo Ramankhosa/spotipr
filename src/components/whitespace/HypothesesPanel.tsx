@@ -14,11 +14,11 @@
  *    of the corpus, stated plainly.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowUpRight, FlaskConical, Loader2, Sparkles, Swords } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/toast'
-import { pollRun, wsApi } from './api'
+import { isPollAborted, pollRun, wsApi } from './api'
 
 interface HypothesisRow {
   id: string
@@ -149,27 +149,42 @@ export function HypothesesPanel({
     }
   }, [studyId, toast, load, onChanged])
 
+  // Validation is the longest stage in the studio; without an abort tied to
+  // unmount its poll outlived the panel by up to twenty minutes.
+  const pollAbort = useRef<AbortController | null>(null)
+  useEffect(
+    () => () => {
+      pollAbort.current?.abort()
+    },
+    []
+  )
+
   const validate = useCallback(
     async (hypothesisId: string) => {
       setValidatingId(hypothesisId)
+      pollAbort.current?.abort()
+      const controller = new AbortController()
+      pollAbort.current = controller
       try {
         const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
           method: 'POST',
           body: JSON.stringify({ stage: 'VALIDATE', params: { hypothesisId } }),
         })
-        const final = await pollRun(studyId, started.runId)
+        const final = await pollRun(studyId, started.runId, undefined, controller.signal)
         if (final.status === 'FAILED') {
           toast({ variant: 'error', title: 'Validation did not finish', description: final.error || 'Run it again.' })
         }
         await load()
         onChanged?.()
       } catch (error) {
+        if (isPollAborted(error)) return
         toast({
           variant: 'error',
           title: 'Could not start validation',
           description: error instanceof Error ? error.message : 'Try again.',
         })
       } finally {
+        if (pollAbort.current === controller) pollAbort.current = null
         setValidatingId(null)
       }
     },

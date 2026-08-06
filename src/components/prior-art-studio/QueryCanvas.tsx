@@ -19,6 +19,13 @@ const MODE_HELP: Record<StudioBlockMode, string> = {
 
 const MODE_ORDER: StudioBlockMode[] = ['MATCH', 'EXPAND', 'BOTH']
 
+/**
+ * Offices worth one click. Deliberately short: the corpus is dominated by these,
+ * and a long list invites over-narrowing, which is how a prior-art search misses
+ * the reference that matters.
+ */
+const JURISDICTION_OPTIONS = ['*', 'US', 'EP', 'WO', 'IN', 'CN', 'JP', 'KR', 'GB', 'DE']
+
 interface QueryCanvasProps {
   plan: StudioPlan
   disabled?: boolean
@@ -50,11 +57,43 @@ const MODE_EFFECT: Record<StudioBlockMode, { label: string; classes: string }> =
 export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
   const [newTermFor, setNewTermFor] = useState<string | null>(null)
   const [newTermText, setNewTermText] = useState('')
+  const [knownArtText, setKnownArtText] = useState('')
 
   const update = (mutate: (draft: StudioPlan) => string) => {
     const draft: StudioPlan = JSON.parse(JSON.stringify(plan))
     const summary = mutate(draft)
     onChange(draft, summary)
+  }
+
+  /**
+   * Accepts anything an attorney would actually paste: a comma, space or
+   * newline separated list, with or without the usual punctuation
+   * ("US 1,234,567 B2", "EP-1234567-A1"). Normalised to the compact form the
+   * corpus keys on.
+   */
+  const addKnownArt = () => {
+    const entered = knownArtText
+      .split(/[\s,;]+/)
+      .map(value => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''))
+      .filter(value => /^[A-Z]{2}\d{4,}/.test(value))
+    if (!entered.length) {
+      setKnownArtText('')
+      return
+    }
+    update(draft => {
+      const existing = draft.steer?.publicationNumbers || []
+      const merged = Array.from(new Set([...existing, ...entered]))
+      const added = merged.length - existing.length
+      draft.steer = {
+        enabled: true,
+        publicationNumbers: merged,
+        weight: draft.steer?.weight ?? 0.3,
+      }
+      return added
+        ? `Known art: added ${entered.slice(0, 4).join(', ')}${entered.length > 4 ? ` +${entered.length - 4} more` : ''}`
+        : 'Known art: nothing new to add'
+    })
+    setKnownArtText('')
   }
 
   const addTerm = (blockId: string) => {
@@ -123,13 +162,13 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
     <div key={block.id}>
       {index > 0 && <div className="my-2 flex items-center gap-2" aria-hidden>
           <span className="h-px flex-1 bg-border" />
-          <span className="font-mono text-[9px] font-bold tracking-[0.3em] text-muted-foreground">AND</span>
+          <span className="font-mono text-[11px] font-bold tracking-[0.3em] text-muted-foreground">AND</span>
           <span className="h-px flex-1 bg-border" />
         </div>}
       <div className={`rounded-lg border border-border bg-card p-3 shadow-sm transition-shadow hover:shadow ${blockAccent(block.mode)}`}>
         <div className="mb-1.5 flex items-center gap-2">
-          <span className="text-[13px] font-semibold text-foreground">{block.label}</span>
-          <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${MODE_EFFECT[block.mode].classes}`}>
+          <span className="text-sm font-semibold text-foreground">{block.label}</span>
+          <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ${MODE_EFFECT[block.mode].classes}`}>
             {MODE_EFFECT[block.mode].label}
           </span>
           <Hint title={`${block.mode} block`} text={MODE_HELP[block.mode]} />
@@ -139,7 +178,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
                 key={mode}
                 type="button"
                 disabled={disabled}
-                className={`px-2.5 py-1 text-[10px] font-bold tracking-wide transition-colors ${modeClasses(mode, block.mode === mode)}`}
+                className={`px-2.5 py-1 text-[11px] font-bold tracking-wide transition-colors ${modeClasses(mode, block.mode === mode)}`}
                 onClick={() =>
                   update(draft => {
                     const b = draft.blocks.find(x => x.id === block.id)
@@ -214,7 +253,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Query canvas</span>
+        <span className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">Query canvas</span>
         <Hint
           title="How the canvas works"
           text="Each box is one concept of the invention; the boxes are AND-ed together. Words inside a box are alternatives (OR). Dashed blue chips are AI suggestions — they do nothing until you accept them, so you stay in full control of the query."
@@ -222,7 +261,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
         {suggestionCount > 0 && (
           <button
             type="button"
-            className="ml-auto inline-flex items-center gap-1 rounded-full bg-lamp-50 px-2.5 py-0.5 text-[11px] font-semibold text-lamp-700 hover:bg-lamp-100 dark:bg-lamp-950/40 dark:text-lamp-300"
+            className="ml-auto inline-flex items-center gap-1 rounded-full bg-lamp-50 px-2.5 py-0.5 text-xs font-semibold text-lamp-700 hover:bg-lamp-100 dark:bg-lamp-950/40 dark:text-lamp-300"
             onClick={acceptAll}
             disabled={disabled}
           >
@@ -249,7 +288,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
       </button>
 
       {/* CPC classifications */}
-      <div className="rounded-lg border border-border bg-card p-2.5 border-l-4 border-l-amber-600/70">
+      <div className="rounded-lg border border-border bg-card p-2.5 border-l-4 border-l-brass-500">
         <div className="mb-1.5 flex items-center gap-2">
           <span className="text-xs font-semibold">Classifications (CPC)</span>
           <Hint
@@ -287,7 +326,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
         <div className="space-y-1.5">
           {plan.elements.map((element, i) => (
             <div key={element.id} className="flex items-center gap-1.5">
-              <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[9px] font-bold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+              <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
                 E{i + 1}
               </span>
               <input
@@ -368,6 +407,170 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
             )
           )}
           {!plan.notTerms.length && <span className="text-xs text-muted-foreground">Nothing excluded.</span>}
+        </div>
+      </div>
+
+      {/*
+        Known art.
+
+        Every real search starts from something: art the client supplied, art an
+        examiner cited, a competitor's patent. There was no way to enter any of
+        it — the canvas only accepted words — so the attorney could not tell the
+        Studio what they already knew, and their own references never appeared in
+        the result set they were reviewing.
+
+        Entered numbers join the steer block, which is deliberate: steering is
+        already the visible, removable, reportable mechanism for ranking
+        influence, so known art inherits that guarantee rather than becoming a
+        second hidden signal.
+      */}
+      {/* Cobalt, not a new hue: known art feeds the steer block, which is the
+          same "influences ranking" family as everything else cobalt marks. */}
+      <div className="rounded-lg border border-border bg-card p-2.5 border-l-4 border-l-lamp-600/70">
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-xs font-semibold">Known art</span>
+          <Hint
+            title="Start from what you already have"
+            text="Paste publication numbers you already know are relevant — client-supplied art, examiner citations, a competitor's filing. They are pulled into the result set, scored against your elements like everything else, and they steer the ranking toward documents like them. They appear in the steer block, so the influence is visible and removable."
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <input
+            value={knownArtText}
+            disabled={disabled}
+            onChange={e => setKnownArtText(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addKnownArt()
+              }
+            }}
+            placeholder="US1234567B2, EP1234567A1, WO2019123456…"
+            aria-label="Publication numbers you already have"
+            className="min-w-[220px] flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <button
+            type="button"
+            disabled={disabled || !knownArtText.trim()}
+            onClick={addKnownArt}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs font-semibold text-foreground hover:border-primary/60 disabled:opacity-50"
+          >
+            <Plus className="h-3 w-3" /> Add
+          </button>
+        </div>
+        {plan.steer?.publicationNumbers?.length ? (
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {plan.steer.publicationNumbers.length} document
+            {plan.steer.publicationNumbers.length === 1 ? '' : 's'} in the steer block — shown and removable below the
+            canvas.
+          </p>
+        ) : null}
+      </div>
+
+      {/*
+        Search filters — applied BEFORE retrieval.
+        These fields have always existed on the plan and always compiled into
+        SQL, but nothing rendered them: only the AI drafter could ever set a
+        date, and jurisdiction could not be set at all. That left an attorney
+        unable to state a critical date — the single most important control in a
+        prior-art search — and unable to scope by office.
+
+        Distinct from the filters above the results, which only hide rows that
+        were already retrieved. Narrowing here frees retrieval budget to find
+        more art inside the scope you care about.
+      */}
+      {/* Structural, not semantic — cool gray. Under "Cobalt & Oxford" a new
+          saturated hue has to earn its place, and "scope of the search" is
+          architecture, not a verdict. */}
+      <div className="rounded-lg border border-border bg-card p-2.5 border-l-4 border-l-brass-500">
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-xs font-semibold">Search filters</span>
+          <Hint
+            title="Applied before retrieval"
+            text="These narrow what the search looks at in the first place, which is different from the filters above the results — those only hide rows already retrieved. Setting a publication cut-off here is how you keep a search to art that predates your priority date, and it frees retrieval budget for the scope you actually care about."
+          />
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Published from
+            <input
+              type="date"
+              disabled={disabled}
+              value={plan.filters.publicationDateFrom || ''}
+              onChange={e =>
+                update(draft => {
+                  const value = e.target.value || undefined
+                  draft.filters.publicationDateFrom = value
+                  return value ? `Set published-from to ${value}` : 'Cleared the published-from filter'
+                })
+              }
+              className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs font-normal tracking-normal text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </label>
+
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Published up to
+            <input
+              type="date"
+              disabled={disabled}
+              value={plan.filters.publicationDateTo || ''}
+              onChange={e =>
+                update(draft => {
+                  const value = e.target.value || undefined
+                  draft.filters.publicationDateTo = value
+                  return value ? `Set published-to to ${value}` : 'Cleared the published-to filter'
+                })
+              }
+              className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs font-normal tracking-normal text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </label>
+        </div>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          A publication cut-off is a blunt instrument for a critical date: a document filed before your priority date but
+          published after it is still prior art under some provisions. Screen on <b>filing date</b> in the results filter
+          once the art is in front of you.
+        </p>
+
+        <div className="mt-2">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Jurisdictions
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {JURISDICTION_OPTIONS.map(code => {
+              const selected = (plan.filters.jurisdictions || []).includes(code)
+              const worldwide = code === '*'
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  disabled={disabled}
+                  aria-pressed={selected}
+                  onClick={() =>
+                    update(draft => {
+                      const current = (draft.filters.jurisdictions || []).filter(value => value !== '*')
+                      if (worldwide) {
+                        draft.filters.jurisdictions = ['*']
+                        return 'Searching worldwide'
+                      }
+                      const next = current.includes(code)
+                        ? current.filter(value => value !== code)
+                        : [...current, code]
+                      draft.filters.jurisdictions = next.length ? next : ['*']
+                      return next.length ? `Jurisdictions: ${next.join(', ')}` : 'Searching worldwide'
+                    })
+                  }
+                  className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    selected
+                      ? 'border-lamp-500 bg-lamp-50 text-lamp-700 dark:bg-lamp-950/50 dark:text-lamp-300'
+                      : 'border-border text-muted-foreground hover:border-muted-foreground/40 hover:text-foreground'
+                  }`}
+                >
+                  {worldwide ? 'Worldwide' : code}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>

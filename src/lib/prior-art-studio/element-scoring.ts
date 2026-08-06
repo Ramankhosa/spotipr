@@ -24,29 +24,11 @@ import {
   hasSearchEmbeddingApiKey,
   requestSearchQueryEmbeddings,
 } from '@/lib/patent-corpus-service'
+// Stemming lives in its own import-free module so the reader (a client
+// component) can highlight the same way this scores. Do NOT move it back here.
+import { elementTerms, stemSet, stemTerm } from './stemming'
 import type { StudioElement, StudioElementCell, StudioElementVerdict } from './types'
 import type { ExternalAiUsageContext } from '@/lib/external-ai-usage'
-
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'onto', 'upon', 'said', 'which', 'wherein',
-  'having', 'have', 'has', 'are', 'was', 'were', 'being', 'been', 'configured', 'adapted', 'least', 'one',
-  'comprising', 'including', 'includes', 'include', 'plurality', 'first', 'second', 'third', 'each', 'such',
-  'when', 'while', 'thereof', 'therein', 'whereby', 'about', 'between', 'within', 'through', 'other',
-])
-
-/** Significant words of an element — what "literal coverage" is measured over. */
-export function elementTerms(text: string): string[] {
-  return Array.from(
-    new Set(
-      text
-        .toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, ' ')
-        .split(/\s+/)
-        .map(w => w.trim())
-        .filter(w => w.length >= 4 && !STOPWORDS.has(w))
-    )
-  ).slice(0, 12)
-}
 
 interface DocText {
   publicationNumber: string
@@ -65,11 +47,28 @@ interface DocText {
  * full STRONG..NONE spread — and the grid would then nominate §102 anticipation
  * candidates from noise. A document must clear a real similarity bar too.
  *
- * Binary Hamming similarity over 512 bits centres near 0.5 for unrelated text,
- * so these are calibrated well above that floor. Tunable via env after eval.
+ * The bar depends on the metric, and there is no single pair of numbers that is
+ * right for both. Binary Hamming similarity over 512 bits centres near 0.5 for
+ * unrelated text, so 0.62/0.56 sit meaningfully above the noise floor there. On
+ * float/cosine the noise floor is much lower and unrelated technical text
+ * routinely scores above 0.62 — the same constants are permanently satisfied,
+ * which silently disables the only guard against the normalisation artifact
+ * described above. Switching on the configured dtype is what makes the guard
+ * mean the same thing on both deployments. Tunable via env after eval.
  */
-const ABS_SIM_STRONG = Number(process.env.PAS_ELEMENT_ABS_STRONG || '0.62') || 0.62
-const ABS_SIM_PART = Number(process.env.PAS_ELEMENT_ABS_PART || '0.56') || 0.56
+const DTYPE_IS_BINARY = PATENT_CORPUS_EMBEDDING_DTYPE === 'binary'
+function envFloor(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : fallback
+}
+const ABS_SIM_STRONG = DTYPE_IS_BINARY
+  ? envFloor('PAS_ELEMENT_ABS_STRONG', 0.62)
+  : envFloor('PAS_ELEMENT_ABS_STRONG_COSINE', 0.42)
+const ABS_SIM_PART = DTYPE_IS_BINARY
+  ? envFloor('PAS_ELEMENT_ABS_PART', 0.56)
+  : envFloor('PAS_ELEMENT_ABS_PART_COSINE', 0.34)
 
 function verdictFor(
   combined: number,
@@ -90,9 +89,15 @@ function verdictFor(
   const clearsStrong = absoluteSimilarity === undefined || absoluteSimilarity >= ABS_SIM_STRONG
   const clearsPart = absoluteSimilarity === undefined || absoluteSimilarity >= ABS_SIM_PART
 
-  // Strong literal coverage stands on its own even if the abstract embedding is
-  // a poor match — the words are right there and the attorney can check them.
-  if (termCoverage >= 0.6) return 'STRONG'
+  // Strong literal coverage is powerful evidence — the words are right there and
+  // the attorney can check them — but it cannot stand entirely alone. An element
+  // reduces to a handful of significant words ("a housing configured to receive
+  // a rotating shaft" -> housing / receive / rotating / shaft), and most
+  // mechanical patents contain three of those four while teaching something
+  // completely different. Unchecked, that produced STRONG, which produced a §102
+  // nomination. Require the document to also be about the same thing.
+  if (termCoverage >= 0.6 && clearsPart) return 'STRONG'
+  if (termCoverage >= 0.6) return 'PART'
   if (combined >= 0.66 && termCoverage > 0 && clearsStrong) return 'STRONG'
   if (combined >= 0.66 && clearsPart) return 'PART' // strong semantic, no literal support
   if (combined >= 0.42 && clearsPart) return 'PART'
@@ -155,20 +160,31 @@ export async function scoreElements(input: {
           : PATENT_CORPUS_EMBEDDING_SQL_TYPE
       )
 
-      for (let i = 0; i < elements.length; i++) {
-        const vector = vectors[i]
-        if (!vector?.length) continue
-        const literal = corpusEmbeddingToLiteral(vector)
-        // Vectors are deduplicated to ONE per DOCDB family (29.8M vectors for
-        // 45.4M patents), so a specific publication often has no row of its
-        // own. Resolve by family as well, then fall back to the family's
-        // representative vector.
-        const scored = await prisma.$queryRaw<
-          Array<{ publicationNumber: string; familyId: string | null; distance: number }>
-        >(Prisma.sql`
+      // ONE query for every element, not one per element.
+      //
+      // The WHERE clause is identical across elements — only the probe vector
+      // changes — so issuing it per element meant a 15-element claim set ran 15
+      // sequential scans over the same rows, on the request path, with no
+      // statement timeout. Each element becomes a distance column instead.
+      //
+      // Vectors are deduplicated to ONE per DOCDB family (29.8M vectors for
+      // 45.4M patents), so a specific publication often has no row of its own.
+      // Resolve by family as well, then fall back to the family's
+      // representative vector.
+      const usableElements = elements
+        .map((element, index) => ({ element, vector: vectors[index] }))
+        .filter((entry): entry is { element: StudioElement; vector: number[] } => Boolean(entry.vector?.length))
+
+      if (usableElements.length) {
+        const distanceColumns = usableElements.map((entry, index) => {
+          const literal = corpusEmbeddingToLiteral(entry.vector)
+          return Prisma.sql`(e.${column} ${op} ${literal}::${castType})::float8 AS ${Prisma.raw(`"d${index}"`)}`
+        })
+
+        const scored = await prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
           SELECT p."publicationNumber" AS "publicationNumber",
                  p."familyId" AS "familyId",
-                 (e.${column} ${op} ${literal}::${castType})::float8 AS distance
+                 ${Prisma.join(distanceColumns, ', ')}
           FROM local_patent_embeddings e
           JOIN local_patents p ON p.id = e."localPatentId"
           WHERE (
@@ -180,36 +196,40 @@ export async function scoreElements(input: {
             AND e.${column} IS NOT NULL
         `)
 
-        const byPub = new Map<string, number>()
-        const byFamily = new Map<string, number>()
-        for (const row of scored) {
-          const distance = Number(row.distance)
-          if (!Number.isFinite(distance)) continue
-          const similarity = Math.max(
-            0,
-            Math.min(
-              1,
-              PATENT_CORPUS_EMBEDDING_DTYPE === 'binary'
-                ? 1 - distance / PATENT_CORPUS_EMBEDDING_DIMENSIONS
-                : 1 - distance
+        usableElements.forEach((entry, index) => {
+          const byPub = new Map<string, number>()
+          const byFamily = new Map<string, number>()
+          for (const row of scored) {
+            const distance = Number(row[`d${index}`])
+            if (!Number.isFinite(distance)) continue
+            const similarity = Math.max(
+              0,
+              Math.min(
+                1,
+                PATENT_CORPUS_EMBEDDING_DTYPE === 'binary'
+                  ? 1 - distance / PATENT_CORPUS_EMBEDDING_DIMENSIONS
+                  : 1 - distance
+              )
             )
-          )
-          byPub.set(row.publicationNumber, similarity)
-          if (row.familyId && !byFamily.has(row.familyId)) byFamily.set(row.familyId, similarity)
-        }
-
-        const perElement = new Map<string, number>()
-        for (const pub of pubs) {
-          const direct = byPub.get(pub)
-          if (direct !== undefined) {
-            perElement.set(pub, direct)
-            continue
+            const publicationNumber = String(row.publicationNumber)
+            const familyId = row.familyId == null ? null : String(row.familyId)
+            byPub.set(publicationNumber, similarity)
+            if (familyId && !byFamily.has(familyId)) byFamily.set(familyId, similarity)
           }
-          const family = familyOf.get(pub)
-          const viaFamily = family ? byFamily.get(family) : undefined
-          if (viaFamily !== undefined) perElement.set(pub, viaFamily)
-        }
-        semantic.set(elements[i].id, perElement)
+
+          const perElement = new Map<string, number>()
+          for (const pub of pubs) {
+            const direct = byPub.get(pub)
+            if (direct !== undefined) {
+              perElement.set(pub, direct)
+              continue
+            }
+            const family = familyOf.get(pub)
+            const viaFamily = family ? byFamily.get(family) : undefined
+            if (viaFamily !== undefined) perElement.set(pub, viaFamily)
+          }
+          semantic.set(entry.element.id, perElement)
+        })
       }
     } catch (error) {
       // The run continues, but callers mark these cells UNAVAILABLE. Literal
@@ -230,9 +250,20 @@ export async function scoreElements(input: {
     )
   )
 
+  // Stem each document once, not once per element — the text is title +
+  // abstract + claims, so tokenising it per element would be the same work
+  // repeated for every column of the grid.
+  const stemsByPub = new Map<string, Set<string>>()
+  for (const pub of pubs) {
+    const doc = docs.get(pub)
+    if (!doc) continue
+    stemsByPub.set(pub, stemSet(`${doc.title}\n${doc.abstract}\n${doc.hasClaims ? doc.claims : ''}`))
+  }
+
   // ---- 3. blend, normalising semantic signal within this candidate set ------
   for (const element of elements) {
     const terms = elementTerms(element.text)
+    const termStems = terms.map(term => ({ term, stem: stemTerm(term) }))
     const perElement = semantic.get(element.id)
     let min = Infinity
     let max = -Infinity
@@ -249,10 +280,11 @@ export async function scoreElements(input: {
       // A missing corpus document or vector is missing evidence, not a NONE
       // finding. Leave this publication out so the caller marks it UNAVAILABLE.
       if (!semanticAvailable || !assessablePubs.has(pub) || !doc) continue
-      const searchText = doc
-        ? `${doc.title}\n${doc.abstract}\n${doc.hasClaims ? doc.claims : ''}`.toLowerCase()
-        : ''
-      const matchedTerms = terms.filter(term => searchText.includes(term))
+      // Stem-for-stem, on whole tokens. The old test was `text.includes(term)`,
+      // which both missed morphological variants ("rotating" vs "rotates") and
+      // matched inside unrelated words.
+      const docStems = stemsByPub.get(pub) || new Set<string>()
+      const matchedTerms = termStems.filter(entry => docStems.has(entry.stem)).map(entry => entry.term)
       const termCoverage = terms.length ? matchedTerms.length / terms.length : 0
 
       const rawSimilarity = perElement?.get(pub)

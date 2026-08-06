@@ -417,7 +417,20 @@ export async function semanticNeighbors(input: {
   // by pgvector, so retrievals past that may still be truncated on HNSW; the
   // planner's exact scan takes over on small corpora, and IVFFlat (production)
   // has no such row cap.
-  const efSearch = String(Math.max(40, Math.min(1000, input.limit)))
+  //
+  // A scopeFilter makes the row cap far more dangerous, because the filter is
+  // applied AFTER the index has already chosen its rows. Sizing ef_search off
+  // `limit` alone meant hypothesize's nearest-neighbour probe (limit 1) asked
+  // the index for 40 candidates corpus-wide and then required them to fall
+  // inside one study's field: for any field that is a small share of the
+  // corpus, the answer was reliably zero rows. That reads as "no neighbour
+  // found", so semanticNovelty came back null for every hypothesis — and
+  // `strength` is a product that any null pillar collapses, so the studio's
+  // headline ranking score was null across the board. When a filter is present
+  // the pool has to be big enough that some of it survives the filter.
+  const SCOPED_CANDIDATE_POOL = 1_000
+  const wanted = input.scopeFilter ? Math.max(input.limit, SCOPED_CANDIDATE_POOL) : input.limit
+  const efSearch = String(Math.max(40, Math.min(1000, wanted)))
   try {
     const [, , , rows] = await prisma.$transaction([
       prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(input.timeoutMs ?? 20_000)}, true)`,

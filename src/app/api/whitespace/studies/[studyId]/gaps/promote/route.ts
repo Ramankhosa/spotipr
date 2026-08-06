@@ -34,7 +34,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
-    const study = await getOwnedStudy(params.studyId, auth.user.id)
+    const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
     if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
     const body = await request.json().catch(() => ({}))
@@ -203,7 +203,12 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
           data: { results: results as unknown as Prisma.InputJsonValue },
         })
       }
-    })
+    },
+    // Five promotions are four writes each plus the run update — twenty-one
+    // round trips, which does not reliably fit Prisma's 5s default. Exceeding it
+    // rolls the whole batch back and reports a bare "Transaction already closed"
+    // to a user who has just chosen five gaps to pursue.
+    { timeout: 60_000, maxWait: 15_000 })
 
     const created = promoted.filter(entry => !entry.existing)
     if (created.length) {

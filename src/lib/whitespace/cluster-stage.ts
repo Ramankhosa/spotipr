@@ -34,7 +34,8 @@ import {
 import { buildScopeFilter, canonicaliseAssignee, extractApplicantNames } from './field-map'
 import { candidateCoverageNote, resolveFieldCandidates } from './candidates'
 import { comparableVectorSql } from './embedding'
-import { runWhitespaceLLM, parseModelJson } from './llm'
+import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
+import { heartbeatRun, WhitespacePermanentError } from './run-lease'
 import { buildClusterLabelPrompt, WS_CLUSTER_LABEL_STAGE_CODE } from './prompts'
 import { stableJson, type ClusterStageResult, type WhitespaceScope } from './types'
 
@@ -63,7 +64,7 @@ export async function runClusterStage(input: {
   runId: string
   studyId: string
   scope: WhitespaceScope
-  requestHeaders: Record<string, string>
+  llmContext: WhitespaceLLMContext
 }): Promise<ClusterStageResult> {
   // binary-kmeans is a Hamming clusterer over fixed-width bit vectors; it
   // cannot read a float corpus. Refuse up front with the real reason — the
@@ -72,14 +73,14 @@ export async function runClusterStage(input: {
   // pipeline covered it, in float), and sent operators chasing a phantom
   // ingestion gap.
   if (PATENT_CORPUS_EMBEDDING_DTYPE !== 'binary') {
-    throw new Error(
+    throw new WhitespacePermanentError(
       `The area map clusters binary (Hamming) vectors, but this installation stores ${PATENT_CORPUS_EMBEDDING_DTYPE} ` +
         `vectors (${PATENT_CORPUS_EMBEDDING_MODEL}). The rest of the study — census, signals, validation — works ` +
         `without it; area clustering needs a binary-embedded corpus.`
     )
   }
   if (PATENT_CORPUS_EMBEDDING_DIMENSIONS !== BITS) {
-    throw new Error(
+    throw new WhitespacePermanentError(
       `The area map clusters ${BITS}-bit vectors, but this installation is configured for ` +
         `${PATENT_CORPUS_EMBEDDING_DIMENSIONS}-bit vectors — the sample would fail to pack mid-stage.`
     )
@@ -158,7 +159,7 @@ export async function runClusterStage(input: {
     // "wait for embedding coverage" is advice that will never come true. Only
     // blame coverage when coverage is actually the shortfall.
     const coverageIsTheProblem = fieldFamilies >= 20 && n < fieldFamilies * 0.7
-    throw new Error(
+    throw new WhitespacePermanentError(
       n === 0
         ? fieldFamilies > 0
           ? `None of the ${fieldFamilies.toLocaleString()} families in this scope carry a comparable embedding vector, so the field cannot be clustered. The embedding pipeline has not covered this corpus slice yet.`
@@ -180,7 +181,7 @@ export async function runClusterStage(input: {
   const geometry = clusterGeometry(data, n, result)
   const layout = layoutCentroids(result.centroidMeans, result.k)
 
-  await heartbeat(input.runId)
+  await heartbeatRun(input.runId)
 
   // --- per-cluster aggregates from the sample -------------------------------
   const memberIndex: number[][] = Array.from({ length: result.k }, () => [])
@@ -235,7 +236,7 @@ export async function runClusterStage(input: {
       taskCode: TaskCode.WS_CLUSTER_LABEL,
       stageCode: WS_CLUSTER_LABEL_STAGE_CODE,
       prompt,
-      requestHeaders: input.requestHeaders,
+      context: input.llmContext,
     })
     const parsed = parseModelJson<{ clusters: Array<{ index: number; label: string; description: string; keywords: string[] }> }>(
       response.output,
@@ -257,14 +258,25 @@ export async function runClusterStage(input: {
     console.error('[Whitespace] Cluster labelling failed:', error instanceof Error ? error.message : error)
   }
 
-  await heartbeat(input.runId)
+  await heartbeatRun(input.runId)
 
   // --- persist: replace the study's cluster set atomically ------------------
   // Scoped to depth 0: promoted dimension gaps live at depth 1 with their own
   // area analyses, and WhitespaceHypothesis.clusterId has NO relation — a wider
   // wipe would leave those hypotheses dangling and silently fail gate G1.
   await prisma.$transaction(async tx => {
-    await tx.whitespaceClusterMember.deleteMany({ where: { studyId: input.studyId } })
+    // Scoped to depth 0 on BOTH sides. The cluster wipe always was; the member
+    // wipe was not, so re-mapping the field deleted the members of every
+    // promoted-gap cluster at depth 1 while leaving those clusters standing —
+    // their deep dives then read an area with no members, and gate G1 failed on
+    // hypotheses the user had already promoted. Members with no cluster are the
+    // stage-1/stage-2 gap and belong to depth 0's lifecycle, so they go too.
+    await tx.whitespaceClusterMember.deleteMany({
+      where: {
+        studyId: input.studyId,
+        OR: [{ clusterId: null }, { cluster: { is: { depth: 0 } } }],
+      },
+    })
     await tx.whitespaceCluster.deleteMany({ where: { studyId: input.studyId, depth: 0 } })
 
     for (let c = 0; c < result.k; c++) {
@@ -377,12 +389,4 @@ async function familyCountFromCensus(studyId: string, scope: WhitespaceScope): P
   if (!run || stableJson(run.scopeSnapshot ?? null) !== stableJson(scope)) return null
   const familyCount = (run.results as { familyCount?: unknown } | null)?.familyCount
   return typeof familyCount === 'number' && familyCount > 0 ? familyCount : null
-}
-
-async function heartbeat(runId: string): Promise<void> {
-  try {
-    await prisma.whitespaceRun.update({ where: { id: runId }, data: { heartbeatAt: new Date() } })
-  } catch {
-    // A missed heartbeat only affects staleness detection; never fail the stage for it.
-  }
 }

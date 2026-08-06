@@ -4,7 +4,7 @@
 // user touches anything. Dismissable, never comes back unless asked (the "?"
 // button in the header reopens it).
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Layers, ListChecks, ScrollText, Sparkles } from 'lucide-react'
 
 const STEPS = [
@@ -39,16 +39,62 @@ export function OnboardingCoach({ onClose }: OnboardingCoachProps) {
   const current = STEPS[step]
   const Icon = current.icon
   const isLast = step === STEPS.length - 1
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * Modal behaviour that `aria-modal="true"` only claims, and does not provide:
+   * initial focus, Escape to dismiss, a focus trap, and focus restored to
+   * whatever opened it. Without these the dialog covers the whole app while Tab
+   * walks invisibly through the page behind it.
+   */
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    const focusables = () =>
+      Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        ) || []
+      ).filter(element => !element.hasAttribute('disabled'))
+
+    focusables()[0]?.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      const activeElement = document.activeElement
+      if (event.shiftKey && (activeElement === first || !dialogRef.current?.contains(activeElement))) {
+        last.focus()
+        event.preventDefault()
+      } else if (!event.shiftKey && activeElement === last) {
+        first.focus()
+        event.preventDefault()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previouslyFocused?.focus?.()
+    }
+  }, [onClose])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Advanced Search Studio introduction">
-      <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
+      <div ref={dialogRef} className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
         <div className="mb-4 flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Icon className="h-5 w-5" />
           </span>
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            <div className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
               Advanced Search Studio · {step + 1} of {STEPS.length}
             </div>
             <h2 className="text-base font-bold text-foreground">{current.title}</h2>

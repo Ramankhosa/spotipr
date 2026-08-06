@@ -94,6 +94,9 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
         Title: family?.title || "(not in the latest run's results)",
         Tag: TAG_LABEL[state.tag || ''] || state.tag || '',
         'Publication Date': family?.publicationDate || '',
+        // The date that decides whether a document is prior art at all. It was
+        // absent from the client-shareable workbook entirely.
+        'Filing Date': family?.filingDate || '',
         Jurisdiction: family?.jurisdiction || '',
         Applicants: family?.applicants || '',
         'Family Size': family ? family.members.length : '',
@@ -106,7 +109,7 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
     })
     const summarySheet = XLSX.utils.json_to_sheet(summaryRows)
     summarySheet['!cols'] = [
-      { wch: 20 }, { wch: 60 }, { wch: 10 }, { wch: 14 }, { wch: 11 },
+      { wch: 20 }, { wch: 60 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 11 },
       { wch: 32 }, { wch: 11 }, { wch: 16 }, { wch: 12 }, { wch: 32 },
       { wch: 90 }, { wch: 48 },
     ]

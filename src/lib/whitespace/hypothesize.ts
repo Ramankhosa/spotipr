@@ -18,10 +18,11 @@
 import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { hamming, hexToWords, WORDS, mulberry32 } from './binary-kmeans'
+import { normalizeElement } from './deep-dive-stage'
 import { buildScopeFilter } from './field-map'
 import { resolveFieldCandidates } from './candidates'
 import { semanticNeighbors, semanticNoveltyScore } from './embedding'
-import { runWhitespaceLLM, parseModelJson } from './llm'
+import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
 import { buildHypothesizePrompt, WS_HYPOTHESIZE_STAGE_CODE } from './prompts'
 import type {
   DeepDiveResult,
@@ -48,7 +49,7 @@ export async function generateHypotheses(input: {
   studyId: string
   userId: string
   scope: WhitespaceScope
-  requestHeaders: Record<string, string>
+  llmContext: WhitespaceLLMContext
 }): Promise<{ hypotheses: GeneratedHypothesis[]; modelCode?: string }> {
   const clusters = await prisma.whitespaceCluster.findMany({
     where: { studyId: input.studyId, depth: 0 },
@@ -119,7 +120,7 @@ export async function generateHypotheses(input: {
     taskCode: TaskCode.WS_HYPOTHESIZE,
     stageCode: WS_HYPOTHESIZE_STAGE_CODE,
     prompt,
-    requestHeaders: input.requestHeaders,
+    context: input.llmContext,
   })
   const parsed = parseModelJson<{
     hypotheses: Array<{
@@ -167,8 +168,13 @@ export async function generateHypotheses(input: {
       : []
 
     // Rarity: the best matching measured pair among this hypothesis's elements.
+    // Compared on NORMALISED labels — the pairs were measured over strings the
+    // deep dive normalised, and the generator writes them back in whatever case
+    // and punctuation it likes, so strict equality practically never matched
+    // and every hypothesis lost the rarity signal it was generated from.
+    const elementKeys = new Set(elements.map(normalizeElement))
     const matchedPair = rarePairs.find(
-      pair => elements.includes(pair.a) && elements.includes(pair.b)
+      pair => elementKeys.has(normalizeElement(pair.a)) && elementKeys.has(normalizeElement(pair.b))
     )
 
     // Semantic novelty: distance from the statement to the nearest family in

@@ -37,6 +37,26 @@ export function compactPatentKey(value: unknown) {
   return normalizeWhitespace(value).toUpperCase().replace(/[^A-Z0-9]/g, '')
 }
 
+/**
+ * The single definition of "this classification filter matches this code".
+ *
+ * A CPC/IPC selection is a PREFIX: choosing `A61B` means everything under
+ * A61B, and choosing `A61B 17/88` means that group and its subgroups. Separator
+ * placement varies between sources ("A61B 17/88", "A61B17/88", "A61B-17/88"),
+ * so both sides are compacted to alphanumerics before comparing.
+ *
+ * Everything that filters or COUNTS a classification must use this, because two
+ * places doing it differently means the funnel counts one document set and the
+ * search retrieves another. The Prior-Art Studio's gate used a raw prefix
+ * (`cls LIKE 'A61B 17/88%'`) while the provider used a compacted SUBSTRING
+ * (`LIKE '%A61B1788%'`, which also matched codes that merely contained it).
+ *
+ * Returns the compacted keys; callers append `%` to build the LIKE pattern.
+ */
+export function classificationPrefixKeys(values: unknown): string[] {
+  return uniqueStrings(asStringArray(values).map(value => compactPatentKey(value)).filter(Boolean))
+}
+
 export function canonicalPublicationNumber(value: unknown) {
   const compact = compactPatentKey(value)
   if (!compact) return ''

@@ -29,19 +29,29 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
-    const study = await getOwnedStudy(params.studyId, auth.user.id)
+    const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
     if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
-    if (auth.user.tenantId) {
-      const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'WHITESPACE_ANALYSIS')
-      if (!check.allowed) return check.response
+    // Checked unconditionally: guarding on tenantId let any account without a
+    // tenant spend the premium generation call with no quota check at all.
+    if (!auth.user.tenantId) {
+      return NextResponse.json(
+        {
+          error:
+            'Hypothesis generation runs on your organisation’s analysis quota, and your account is not attached to an organisation yet. Ask an admin to add you, or contact support.',
+          code: 'NO_TENANT',
+        },
+        { status: 403 }
+      )
     }
+    const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'WHITESPACE_ANALYSIS')
+    if (!check.allowed) return check.response
 
     const result = await generateHypotheses({
       studyId: study.id,
       userId: auth.user.id,
       scope: readScope(study.scope),
-      requestHeaders: headersToRecord(request),
+      llmContext: { headers: headersToRecord(request) },
     })
 
     await appendTrail(

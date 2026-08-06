@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { llmGateway } from '@/lib/metering/gateway'
-import { addManagedFigures, generateManagedFigureSet, planManagedFigureSet } from '@/lib/patent-diagrams/pipeline'
+import { addManagedFigures, generateManagedFigureSet, planManagedFigureSet, splitManagedFigure } from '@/lib/patent-diagrams/pipeline'
 
 // ---------------------------------------------------------------- dummy idea
 const COMPONENTS = [
@@ -475,6 +475,101 @@ describe('post-generation claim coverage warnings', () => {
     // Absence of matching data must never read as "coverage complete".
     expect(result.claimCoverage.evaluated).toBe(false)
     expect(result.claimCoverage.missing).toEqual([])
+  })
+})
+
+describe('auto mode sizes the figure set to the disclosure', () => {
+  test('keeps a planner-chosen 9-figure set instead of trimming to four', async () => {
+    planResponder = () => defaultPlan(9)
+    const result = await generateManagedFigureSet({ ...INPUT })
+
+    expect(result.figures).toHaveLength(9)
+    // 9 figures = 5 paired generation calls (4 pairs + 1 single).
+    expect(stageCounts()).toEqual({ plan: 1, detail: 5 })
+  })
+
+  test('auto prompt offers a range and a suggestion, not fixed slots', async () => {
+    await planManagedFigureSet({ ...INPUT })
+    const planCall = llmCalls.find(call => call.stageCode === 'DRAFT_FIGURE_PLANNER')!
+    expect(planCall.prompt).toContain('at least 4 and at most 20 figures')
+    expect(planCall.prompt).not.toContain('plan exactly')
+  })
+
+  test('an explicit count still pins the set exactly', async () => {
+    planResponder = () => defaultPlan(9)
+    const plan = await planManagedFigureSet({ ...INPUT, figureCount: 3 })
+    expect(plan.figures).toHaveLength(3)
+    const planCall = llmCalls.find(call => call.stageCode === 'DRAFT_FIGURE_PLANNER')!
+    expect(planCall.prompt).toContain('plan exactly 3 figure(s)')
+  })
+
+  test('auto mode pads only the missing kinds, keeping the model count otherwise', async () => {
+    // Model plans 5 COMPONENT figures and nothing else.
+    planResponder = () => JSON.stringify({
+      schemaVersion: 3,
+      figures: Array.from({ length: 5 }, (_, index) => planFigure(index, 'COMPONENT')),
+    })
+    const plan = await planManagedFigureSet({ ...INPUT })
+    expect(plan.figures).toHaveLength(8)
+    expect(plan.figures.slice(0, 5).every(figure => figure.kind === 'COMPONENT')).toBe(true)
+    expect(plan.figures.slice(5).map(figure => figure.kind)).toEqual(['PROCESS', 'SEQUENCE', 'CONSTITUENT'])
+  })
+})
+
+describe('user-directed figure split', () => {
+  const originalSemantic = () => diagramOfKind('COMPONENT', 'arch')
+  const partOf = (key: string, componentIds: string[]) => ({
+    schemaVersion: 3, kind: 'COMPONENT', key,
+    title: `Architecture — ${componentIds.join('/')}`, purpose: `Depicts ${componentIds.join(', ')}`,
+    detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], evidenceIds: [],
+    systemBoundaryLabel: 'Irrigation Control System',
+    groups: [{ id: `g-${key}`, label: 'Subsystem', rows: [{ componentIds }] }],
+    components: componentIds.map(componentId => ({ componentId })),
+    relationships: [],
+  })
+
+  beforeEach(() => {
+    existingFigurePlans = [
+      { id: 'plan-1', figureNo: 1, title: 'Architecture', diagramType: 'COMPONENT', semanticModel: originalSemantic(), description: 'Architecture overview' },
+      { id: 'plan-2', figureNo: 2, title: 'Method', diagramType: 'PROCESS', semanticModel: diagramOfKind('PROCESS', 'method') },
+    ]
+    existingDiagramSources = [
+      { id: 'src-1', figureNo: 1, language: 'en', sourceMode: 'MANAGED', checksum: 'old-sum', imagePath: '/tmp/old_1.png', renderArtifacts: { svg: { path: '/tmp/old_1.svg' }, png: { path: '/tmp/old_1.png' } } },
+    ]
+    detailResponder = () => JSON.stringify({ diagrams: [partOf('a', ['c1', 'c2']), partOf('b', ['c3', 'c4'])] })
+  })
+
+  test('splits into the user-set number of parts, aware of the other figures', async () => {
+    const result = await splitManagedFigure({ ...INPUT, figureNo: 1, parts: 2 })
+
+    expect(result.status).toBe('SUCCESS')
+    expect(result.figures).toHaveLength(2)
+    // Part 1 keeps the original number; part 2 takes the next free slot (2 is occupied).
+    expect(result.figures.map(figure => figure.figureNo)).toEqual([1, 3])
+    expect(result.figures.every(figure => figure.kind === 'COMPONENT')).toBe(true)
+    // No content lost, so no completeness note.
+    expect(result.filingReadiness.reviewNotes.some(note => note.code === 'SPLIT_CONTENT_MISSING')).toBe(false)
+
+    const splitCall = llmCalls.find(call => call.metadata?.purpose === 'split_figure_structured')!
+    expect(splitCall.prompt).toContain('exactly 2')
+    expect(splitCall.prompt).toContain('OTHER FIGURES IN THIS DRAWING SET')
+    expect(splitCall.prompt).toContain('Method')
+    // The original's files are superseded and removed.
+    expect(unlinkedPaths).toContain('/tmp/old_1.png')
+  })
+
+  test('reports dropped content as a review note, never a failure', async () => {
+    detailResponder = () => JSON.stringify({ diagrams: [partOf('a', ['c1', 'c2']), partOf('b', ['c3'])] })
+    const result = await splitManagedFigure({ ...INPUT, figureNo: 1, parts: 2 })
+
+    expect(result.status).toBe('SUCCESS')
+    const note = result.filingReadiness.reviewNotes.find(item => item.code === 'SPLIT_CONTENT_MISSING')
+    expect(note?.message).toContain('c4')
+  })
+
+  test('rejects an out-of-range part count without an LLM call', async () => {
+    await expect(splitManagedFigure({ ...INPUT, figureNo: 1, parts: 9 })).rejects.toMatchObject({ code: 'INVALID_SPLIT_PARTS' })
+    expect(llmCalls).toHaveLength(0)
   })
 })
 

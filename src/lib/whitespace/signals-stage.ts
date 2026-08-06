@@ -19,10 +19,54 @@ import { prisma } from '@/lib/prisma'
 import { buildScopeFilter, corpusMembershipPredicate, textMatchPredicate } from './field-map'
 import { PUBLICATION_LAG_MONTHS } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
+import { heartbeatRun, WhitespacePermanentError } from './run-lease'
 import type { SignalsStageResult, TermDivergence, WhitespaceScope } from './types'
 
 const PROBE_TOP_N = 300
 const PROBE_TIMEOUT_MS = 20_000
+/** Ceiling on the lexical reach count; past it the figure is a floor, not a total. */
+const LEXICAL_COUNT_CAP = 5_000
+/** Below this many retrieved neighbours a share is noise, so no divergence is claimed. */
+const MIN_NEIGHBOURS_FOR_DIVERGENCE = 40
+
+/** Filing years averaged at each end of the CAGR window. */
+const VELOCITY_WINDOW_YEARS = 3
+/** Span between the two window midpoints, in years. */
+const VELOCITY_SPAN_YEARS = 5
+/** Below this many filings in the earlier window the ratio is noise, not a trend. */
+const VELOCITY_MIN_BASE = 5
+
+/**
+ * Compound annual growth in filings, between two THREE-YEAR MEANS five years
+ * apart, in percent. Null when the earlier window is too thin to divide by.
+ *
+ * Three-year means rather than the two single years the stage used before.
+ * Cluster members are a sample of a sample — a mid-sized area contributes a
+ * handful of filings per year — so one year at each end made velocity a ratio
+ * of two small integers. Two members in the base year and five in the final one
+ * printed "+20% a year" for an area that had not measurably moved, and one
+ * member either side flipped the sign. Averaging three years at each end damps
+ * that without hiding a real trend, and the span between the window midpoints
+ * stays exactly five years so the figure keeps meaning what it says.
+ *
+ * Both windows sit at or before `lastCompleteYear`, so nothing inside the
+ * publication-lag horizon — where filings are structurally undercounted and
+ * every trend reads as a collapse — enters the computation.
+ */
+export function filingCagrPct(byYear: Map<number, number>, lastCompleteYear: number): number | null {
+  const meanOver = (endYear: number): number => {
+    let total = 0
+    for (let year = endYear - (VELOCITY_WINDOW_YEARS - 1); year <= endYear; year++) {
+      total += byYear.get(year) ?? 0
+    }
+    return total / VELOCITY_WINDOW_YEARS
+  }
+  const recent = meanOver(lastCompleteYear)
+  const base = meanOver(lastCompleteYear - VELOCITY_SPAN_YEARS)
+  if (base * VELOCITY_WINDOW_YEARS < VELOCITY_MIN_BASE) return null
+  if (recent <= 0) return -100
+  return Math.round((Math.pow(recent / base, 1 / VELOCITY_SPAN_YEARS) - 1) * 100)
+}
 
 export async function runSignalsStage(input: {
   runId: string
@@ -36,7 +80,7 @@ export async function runSignalsStage(input: {
     orderBy: { fieldEstimate: 'desc' },
   })
   if (!clusters.length) {
-    throw new Error('No areas exist yet — run the area map (CLUSTER) first.')
+    throw new WhitespacePermanentError('No areas exist yet — run the area map (CLUSTER) first.')
   }
 
   const members = await prisma.whitespaceClusterMember.findMany({
@@ -67,11 +111,7 @@ export async function runSignalsStage(input: {
     for (const member of clusterMembers) {
       if (member.year) byYear.set(member.year, (byYear.get(member.year) ?? 0) + 1)
     }
-    const startYear = lastCompleteYear - 5
-    const startCount = byYear.get(startYear) ?? 0
-    const endCount = byYear.get(lastCompleteYear) ?? 0
-    const velocityPct =
-      startCount >= 3 ? Math.round((Math.pow(endCount / startCount, 1 / 5) - 1) * 100) : null
+    const velocityPct = filingCagrPct(byYear, lastCompleteYear)
 
     // Assignee HHI over the sample.
     const assigneeCounts = new Map<string, number>()
@@ -144,17 +184,20 @@ export async function runSignalsStage(input: {
     })
   }
 
-  await heartbeat(input.runId)
+  await heartbeatRun(input.runId)
 
   // --- terminology-divergence probe ----------------------------------------
   const divergence = await terminologyProbe(input.scope, coverageNotes)
 
-  const sampledYears = raw.filter(entry => entry.velocityPct === null).length
-  if (sampledYears > 0) {
+  const withoutTrend = raw.filter(entry => entry.velocityPct === null).length
+  if (withoutTrend > 0) {
     coverageNotes.push(
-      `${sampledYears} of ${raw.length} areas were too small for a filing-trend estimate; their velocity is shown as unavailable, not zero.`
+      `${withoutTrend} of ${raw.length} areas were too small for a filing-trend estimate; their velocity is shown as unavailable, not zero.`
     )
   }
+  coverageNotes.push(
+    `Filing trend is compound annual growth between two ${VELOCITY_WINDOW_YEARS}-year averages ${VELOCITY_SPAN_YEARS} years apart, both ending on or before ${lastCompleteYear} — years inside the ~${PUBLICATION_LAG_MONTHS}-month publication lag are excluded from the computation.`
+  )
   coverageNotes.push('Every number in this stage is computed from the corpus; no model produced any of them.')
 
   return {
@@ -166,10 +209,20 @@ export async function runSignalsStage(input: {
 }
 
 /**
- * For each scope concept, run the lexical lane and the semantic lane separately
- * and compare their top family sets. Low overlap with a productive semantic
- * lane means the field uses vocabulary the scope does not — the difference
+ * For each scope concept: retrieve the semantically nearest families, then ask
+ * how many of them the concept's OWN WORDING would also have found. Low
+ * agreement means the field uses vocabulary the scope does not — the difference
  * between "nobody has done this" and "everybody calls it something else".
+ *
+ * The measurement is deliberately directional, and that is the fix. It used to
+ * Jaccard the semantic top-300 against a lexical `SELECT DISTINCT … LIMIT 300`
+ * with NO ORDER BY — an arbitrary 300 of however many thousands matched. Two
+ * sets drawn from different populations by different rules barely intersect
+ * whatever the vocabulary looks like, so overlap was near zero for healthy
+ * scopes too and the studio warned "the field uses vocabulary your scope does
+ * not" on almost every concept. Testing the RETRIEVED families against the
+ * lexical predicate has no such freedom: every neighbour is checked, the answer
+ * is exact, and it is the question the banner actually claims to answer.
  */
 async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[]): Promise<TermDivergence[]> {
   const results: TermDivergence[] = []
@@ -199,30 +252,41 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
     const tsquery = terms.map(term => `"${term.replace(/["\\]/g, ' ').trim()}"`).join(' OR ')
     const textPredicate = textMatchPredicate({ groups: [tsquery], groupLabels: [[concept.label]], exclusions: null })
 
-    let lexical: string[] = []
+    // How much of the field this concept's wording reaches at all. Bounded by a
+    // subquery LIMIT so a broad concept cannot turn a diagnostic into a full
+    // corpus count; past the cap the number is a floor and is only ever
+    // displayed as context, never as a denominator.
+    let lexicalCount = 0
     try {
-      const rows = await withTimeout<{ familyKey: string }>(
+      const rows = await withTimeout<{ families: bigint }>(
         Prisma.sql`
-          SELECT DISTINCT COALESCE(lp."familyId", lp."publicationNumber") AS "familyKey"
-          FROM "local_patents" lp
-          WHERE ${baseFilter}
-            AND ${textPredicate}
-          LIMIT ${PROBE_TOP_N}`
+          SELECT COUNT(*)::bigint AS families
+          FROM (
+            SELECT DISTINCT COALESCE(lp."familyId", lp."publicationNumber") AS family_key
+            FROM "local_patents" lp
+            WHERE ${baseFilter}
+              AND ${textPredicate}
+            LIMIT ${LEXICAL_COUNT_CAP}
+          ) t`
       )
-      lexical = rows.map(row => row.familyKey)
+      lexicalCount = Number(rows[0]?.families ?? 0)
     } catch (error) {
       console.error('[Whitespace] Lexical probe failed:', error instanceof Error ? error.message : error)
     }
 
-    if (!semanticAvailable) {
+    const unmeasured = (): void => {
       results.push({
         concept: concept.label,
-        lexicalCount: lexical.length,
+        lexicalCount,
         semanticCount: null,
         overlapPct: null,
         semanticOnlyVocabulary: null,
         divergent: false,
       })
+    }
+
+    if (!semanticAvailable) {
+      unmeasured()
       continue
     }
 
@@ -232,25 +296,38 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
       scopeFilter: semanticFilter,
       timeoutMs: PROBE_TIMEOUT_MS,
     })
-    if (!semantic.available) {
-      results.push({
-        concept: concept.label,
-        lexicalCount: lexical.length,
-        semanticCount: null,
-        overlapPct: null,
-        semanticOnlyVocabulary: null,
-        divergent: false,
-      })
+    if (!semantic.available || !semantic.neighbors.length) {
+      unmeasured()
       continue
     }
 
-    const lexicalSet = new Set(lexical)
+    // The exact test: which of the retrieved neighbours the concept's own
+    // wording also matches. One statement, every neighbour checked.
+    const neighborIds = semantic.neighbors.map(neighbor => neighbor.id)
+    let lexicalSet: Set<string>
+    try {
+      const matchedRows = await withTimeout<{ familyKey: string }>(
+        Prisma.sql`
+          SELECT DISTINCT COALESCE(lp."familyId", lp."publicationNumber") AS "familyKey"
+          FROM "local_patents" lp
+          WHERE lp."id" = ANY(${neighborIds}::int[])
+            AND ${textPredicate}`
+      )
+      lexicalSet = new Set(matchedRows.map(row => row.familyKey))
+    } catch (error) {
+      // The agreement test is the measurement. Without it there is no
+      // divergence figure — reporting one from the half that did run would be
+      // exactly the fabricated number this stage exists to avoid.
+      console.error('[Whitespace] Agreement probe failed:', error instanceof Error ? error.message : error)
+      unmeasured()
+      continue
+    }
+
     const semanticKeys = semantic.neighbors.map(neighbor => neighbor.familyKey)
     const semanticSet = new Set(semanticKeys)
     let intersection = 0
     for (const key of Array.from(semanticSet)) if (lexicalSet.has(key)) intersection++
-    const union = new Set([...Array.from(lexicalSet), ...Array.from(semanticSet)]).size
-    const overlapPct = union > 0 ? Math.round((intersection / union) * 100) : null
+    const overlapPct = semanticSet.size > 0 ? Math.round((intersection / semanticSet.size) * 100) : null
 
     // Vocabulary of the semantic-only hits, extracted deterministically: the
     // most frequent title words that appear in none of the scope's own terms.
@@ -273,14 +350,17 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
       .map(([word]) => word)
       .join(', ')
 
-    const semanticOnlyDense = semanticSet.size - intersection >= PROBE_TOP_N * 0.3
+    // Enough retrieved material for the share to mean anything, and enough of it
+    // unreachable by wording to be worth telling the user about.
+    const semanticOnly = semanticSet.size - intersection
+    const measurable = semanticSet.size >= MIN_NEIGHBOURS_FOR_DIVERGENCE
     results.push({
       concept: concept.label,
-      lexicalCount: lexical.length,
-      semanticCount: semanticKeys.length,
+      lexicalCount,
+      semanticCount: semanticSet.size,
       overlapPct,
       semanticOnlyVocabulary: vocabulary || null,
-      divergent: overlapPct !== null && overlapPct < 30 && semanticOnlyDense,
+      divergent: measurable && overlapPct !== null && overlapPct < 30 && semanticOnly >= 30,
     })
   }
 
@@ -298,12 +378,4 @@ async function withTimeout<T>(query: Prisma.Sql): Promise<T[]> {
     prisma.$queryRaw<T[]>(query),
   ])
   return rows
-}
-
-async function heartbeat(runId: string): Promise<void> {
-  try {
-    await prisma.whitespaceRun.update({ where: { id: runId }, data: { heartbeatAt: new Date() } })
-  } catch {
-    // Staleness detection only; never fail the stage for a missed heartbeat.
-  }
 }

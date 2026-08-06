@@ -113,9 +113,22 @@ export async function POST(request: NextRequest, { params }: { params: { session
       const family = { ...families[familyIndex] }
       if (family.elementAssessmentStatus !== 'ASSESSED') {
         try {
+          // Score this document ALONGSIDE the run's already-assessed population,
+          // not on its own.
+          //
+          // scoreElements min-max normalises the semantic signal across the set
+          // it is given. Passing one publication makes min === max, so the
+          // relative term collapses to the 0.5 fallback and the verdicts land on
+          // a completely different scale from the batch-scored top 40 — while
+          // the Element Grid renders both in one table and derives §102/§103
+          // nominations from the mixture. Including the graded population
+          // reproduces the run's own scale exactly.
+          const scaleCohort = families
+            .filter(f => f.elementAssessmentStatus === 'ASSESSED')
+            .map(f => f.publicationNumber)
           const assessment = await scoreElements({
             elements: planValidation.plan.elements,
-            publicationNumbers: [family.publicationNumber],
+            publicationNumbers: [family.publicationNumber, ...scaleCohort],
             externalAiUsage: auth.user.tenantId ? {
               tenantId: auth.user.tenantId,
               userId: auth.user.id,
@@ -131,11 +144,28 @@ export async function POST(request: NextRequest, { params }: { params: { session
           family.elementAssessmentStatus = 'UNAVAILABLE'
           family.elementCells = undefined
         }
-        families[familyIndex] = family
-        await prisma.priorArtStudioRun.update({
-          where: { id: latestRun.id },
-          data: { results: families as unknown as Prisma.InputJsonValue },
+        // Read-modify-write of the whole results payload, so re-read inside a
+        // transaction: two tabs (or a fast double-tag) would otherwise each
+        // write the copy they loaded and silently drop the other's assessment.
+        await prisma.$transaction(async tx => {
+          const current = await tx.priorArtStudioRun.findUnique({
+            where: { id: latestRun.id },
+            select: { results: true },
+          })
+          const currentFamilies = Array.isArray(current?.results)
+            ? current.results as unknown as StudioResultFamily[]
+            : families
+          const index = currentFamilies.findIndex(
+            f => canonicalStudioFamilyKey(f.familyKey, f.publicationNumber) === familyKey
+          )
+          if (index < 0) return
+          currentFamilies[index] = family
+          await tx.priorArtStudioRun.update({
+            where: { id: latestRun.id },
+            data: { results: currentFamilies as unknown as Prisma.InputJsonValue },
+          })
         })
+        families[familyIndex] = family
       }
       familyAssessment = families[familyIndex]
     }

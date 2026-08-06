@@ -55,7 +55,8 @@ import {
   semanticMatchSql,
 } from './embedding'
 import { rarePairFromCounts } from './rarity'
-import { parseModelJson, runWhitespaceLLM } from './llm'
+import { parseModelJson, runWhitespaceLLM, type WhitespaceLLMContext } from './llm'
+import { heartbeatRun, WhitespacePermanentError } from './run-lease'
 import {
   buildDimensionGrowPrompt,
   buildDimensionSeedPrompt,
@@ -204,19 +205,15 @@ async function withTimeout<T>(query: Prisma.Sql, ms: number): Promise<T[]> {
 /**
  * Heartbeat + live narration in one write. Runs on its own pooled connection,
  * so it is safe to call while the census transaction is open elsewhere.
+ *
+ * Delegates to the shared heartbeat so the run's LEASE is extended as well as
+ * its timestamp. This stage is by far the longest in the studio — the census
+ * alone can hold a transaction for ten minutes — so a heartbeat that only
+ * touched `heartbeatAt` would let the lease lapse mid-run and invite a second
+ * worker to start the same dimension map over.
  */
 async function progress(runId: string, phase: string, detail: string, round?: number): Promise<void> {
-  try {
-    await prisma.whitespaceRun.update({
-      where: { id: runId },
-      data: {
-        heartbeatAt: new Date(),
-        progress: { phase, detail, ...(round !== undefined ? { round } : {}) } as unknown as Prisma.InputJsonValue,
-      },
-    })
-  } catch {
-    // Narration and staleness only; never fail the stage for it.
-  }
+  await heartbeatRun(runId, { phase, detail, ...(round !== undefined ? { round } : {}) })
 }
 
 function normaliseLabel(value: string): string {
@@ -537,7 +534,7 @@ export async function runDimensionMapStage(input: {
   runId: string
   studyId: string
   scope: WhitespaceScope
-  requestHeaders: Record<string, string>
+  llmContext: WhitespaceLLMContext
   suppliedRegistry?: SuppliedDimensionRegistry | null
 }): Promise<DimensionMapResult> {
   const { runId, studyId, scope } = input
@@ -569,21 +566,21 @@ export async function runDimensionMapStage(input: {
     publicationCount = Number(totals[0]?.publications ?? 0)
   } catch (error) {
     if (isStatementTimeout(error)) {
-      throw new Error(
+      throw new WhitespacePermanentError(
         `This field is too broad to size within ${Math.round(PRECHECK_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
       )
     }
     throw error
   }
   if (publicationCount > DIMENSION_ROW_CAP) {
-    throw new Error(
+    throw new WhitespacePermanentError(
       `This field matches ${publicationCount.toLocaleString()} publications — more than the dimension census will read exactly ` +
         `(${DIMENSION_ROW_CAP.toLocaleString()}). A dimension map matches every viewpoint value against every document, so it ` +
         `reads a smaller field than the landscape census does. ${narrowingAdvice(scope)}`
     )
   }
   if (familyCount < MIN_FIELD_FAMILIES) {
-    throw new Error(tooNarrowMessage(familyCount, scope, candidates.reason))
+    throw new WhitespacePermanentError(tooNarrowMessage(familyCount, scope, candidates.reason))
   }
 
   // --- Deterministic sample --------------------------------------------------
@@ -632,7 +629,7 @@ export async function runDimensionMapStage(input: {
       runId,
       studyId,
       scope,
-      requestHeaders: input.requestHeaders,
+      llmContext: input.llmContext,
       sampleRows,
       sampleIds,
       idToFamily,
@@ -644,7 +641,7 @@ export async function runDimensionMapStage(input: {
   }
 
   if (!registry.length || totalValues(registry) < 4) {
-    throw new Error(
+    throw new WhitespacePermanentError(
       'The field sample did not organise into measurable viewpoints — too few proposals survived counting. ' +
         'Sharpen the invention description (what problem, what mechanism) and re-run, or use the landscape pipeline for this field.'
     )
@@ -692,7 +689,7 @@ export async function runDimensionMapStage(input: {
           LIMIT ${DIMENSION_ROW_CAP + 1}`)
       } catch (error) {
         if (isStatementTimeout(error)) {
-          throw new Error(
+          throw new WhitespacePermanentError(
             `This field is too broad to stage within ${Math.round(CENSUS_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
           )
         }
@@ -707,7 +704,7 @@ export async function runDimensionMapStage(input: {
       const censusFamilies = Number(totals[0]?.families ?? 0)
       const censusPublications = Number(totals[0]?.publications ?? 0)
       if (censusPublications > DIMENSION_ROW_CAP) {
-        throw new Error(
+        throw new WhitespacePermanentError(
           `This field matches more than ${DIMENSION_ROW_CAP.toLocaleString()} publications — bigger than the dimension census will count exactly. ${narrowingAdvice(scope)}`
         )
       }
@@ -1034,7 +1031,7 @@ async function discoverRegistry(input: {
   runId: string
   studyId: string
   scope: WhitespaceScope
-  requestHeaders: Record<string, string>
+  llmContext: WhitespaceLLMContext
   sampleRows: SampleRow[]
   sampleIds: number[]
   idToFamily: Map<number, string>
@@ -1137,7 +1134,7 @@ async function discoverRegistry(input: {
       taskCode: TaskCode.WS_DIMENSIONS,
       stageCode: round === 1 ? WS_DIMENSION_SEED_STAGE_CODE : WS_DIMENSION_GROW_STAGE_CODE,
       prompt,
-      requestHeaders: input.requestHeaders,
+      context: input.llmContext,
     })
     record.modelCode = response.modelCode ?? null
     const parsed = parseModelJson<DimensionProposalRaw>(response.output, 'Viewpoint discovery')
@@ -1399,7 +1396,7 @@ async function discoverRegistry(input: {
   }
 
   if (!registry.length) {
-    throw new Error(
+    throw new WhitespacePermanentError(
       'No proposed viewpoint survived measurement against the sample. The field may be too heterogeneous for its size — ' +
         'sharpen the invention description or narrow the scope, then re-run.'
     )
@@ -1594,6 +1591,7 @@ export function detectGaps(input: {
             expected: pair.expected,
             z: pair.z,
             rarity: pair.rarity,
+            surprisal: pair.surprisal,
             nearMissB,
             nearMissA,
             unassignedOnB: Math.max(0, marginA - coAcrossB),
@@ -1622,6 +1620,17 @@ function finaliseGaps(gaps: DimensionGap[], marginFloor: number): void {
   const marginHealth = (gap: DimensionGap) =>
     Math.min(1, Math.log1p(Math.min(gap.marginA, gap.marginB)) / Math.log1p(marginFloor * 10))
 
+  /**
+   * Surprisal on [0,1], log-scaled. `rarity` cannot do this job: it clamps at 1
+   * for expected >= 9, and the gap detector's own floors (expected >= 5, margins
+   * >= 2% of the field) put nearly every published gap far past that — so rarity
+   * was a constant 1.0 across the whole list and contributed nothing to the
+   * order. 100 dB is the reference point: an empty cell that expected ~230
+   * families scores a full 1.
+   */
+  const surprise = (gap: DimensionGap) =>
+    Math.min(1, Math.log10(1 + Math.max(0, gap.surprisal)) / Math.log10(101))
+
   for (const gap of gaps) {
     gap.coverageSuspect = false
     gap.suspectReason = null
@@ -1643,7 +1652,7 @@ function finaliseGaps(gaps: DimensionGap[], marginFloor: number): void {
       )}% of the surrounding families — below the 40% floor the validation gate applies.`
     }
     gap.rank =
-      gap.rarity *
+      surprise(gap) *
       marginHealth(gap) *
       (gap.nearMissA || gap.nearMissB ? 1 : 0.6) *
       (gap.coverageSuspect ? 0.5 : 1) *

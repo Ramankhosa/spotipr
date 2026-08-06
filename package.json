@@ -21,6 +21,8 @@
     "oa:sync-profile": "tsx scripts/sync-oa-profile.ts",
     "oa:seed-feature": "node scripts/add-office-action-feature.js",
     "ws:seed-stages": "node scripts/add-whitespace-stages.js",
+    "ws:worker": "tsx scripts/whitespace-worker.ts",
+    "ws:worker:once": "tsx scripts/whitespace-worker.ts --once",
     "seed:llm-models:prod": "node Seed/seed-llm-models-modified.js",
     "create-admin": "node scripts/create-super-admin.js",
     "superadminbirth": "node scripts/create-super-admin.js ramankhosa@gmail.com",

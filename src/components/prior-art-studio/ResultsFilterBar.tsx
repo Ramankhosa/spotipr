@@ -6,6 +6,7 @@
 // current run. Essentials stay visible; the rest hides behind "More filters" so
 // the default view stays calm.
 
+import { useEffect, useState } from 'react'
 import { ChevronDown, RotateCcw, Search, SlidersHorizontal } from 'lucide-react'
 import { Hint } from '@/components/ui/hint'
 import type { StudioDocTag, StudioResultFamily } from '@/lib/prior-art-studio/types'
@@ -13,7 +14,18 @@ import type { DocStateLite } from './ResultsList'
 
 export type TagFilterValue = StudioDocTag | 'UNTAGGED'
 export type LaneFilterValue = 'match' | 'cast' | 'both' | 'other'
-export type ResultSort = 'rank' | 'dateDesc' | 'dateAsc' | 'title'
+export type ResultSort = 'rank' | 'dateDesc' | 'dateAsc' | 'title' | 'filingDesc' | 'filingAsc'
+
+/**
+ * Which date the range filter screens on.
+ *
+ * Publication date answers "when did this become public". The §102 question is
+ * almost always about the FILING (priority) date relative to the invention's own
+ * critical date, and screening on publication answers a different question — a
+ * 2019 filing published in 2021 is prior art against a 2020 invention, and a
+ * publication-date filter hides it.
+ */
+export type DateField = 'publication' | 'filing'
 
 export type MatchFilterValue = 'all' | 'meets' | 'misses'
 
@@ -26,6 +38,7 @@ export interface ResultFilters {
   /** NOT-term hits are hidden by default but always one click away — never deleted. */
   showNotHits: boolean
   jurisdictions: string[]
+  dateField: DateField
   dateFrom: string
   dateTo: string
   applicant: string
@@ -42,6 +55,7 @@ export const DEFAULT_RESULT_FILTERS: ResultFilters = {
   match: 'all',
   showNotHits: false,
   jurisdictions: [],
+  dateField: 'publication',
   dateFrom: '',
   dateTo: '',
   applicant: '',
@@ -102,14 +116,31 @@ export function applyResultFilters(
 
     if (filters.jurisdictions.length && !filters.jurisdictions.includes(jurisdictionOf(family))) return false
 
-    if (filters.dateFrom && (!family.publicationDate || family.publicationDate < filters.dateFrom)) return false
-    if (filters.dateTo && (!family.publicationDate || family.publicationDate > filters.dateTo)) return false
+    if (filters.dateFrom || filters.dateTo) {
+      const value = filters.dateField === 'filing' ? family.filingDate : family.publicationDate
+      // A document whose date the corpus never recorded is a document we cannot
+      // place in time — not a document outside the range. Hiding it would turn
+      // missing metadata into a silent exclusion from a novelty search.
+      if (value) {
+        if (filters.dateFrom && value < filters.dateFrom) return false
+        if (filters.dateTo && value > filters.dateTo) return false
+      }
+    }
 
-    if (applicant && !(family.applicants || '').toLowerCase().includes(applicant)) return false
+    if (applicant) {
+      // Match against the complete applicant list, not the truncated display
+      // string — the card shows at most three.
+      const haystack = (family.allApplicants?.length ? family.allApplicants.join('; ') : family.applicants || '').toLowerCase()
+      if (!haystack.includes(applicant)) return false
+    }
 
     if (cpc) {
-      const codes = (family.classifications || []).map(c => c.toUpperCase().replace(/\s+/g, ''))
-      if (!codes.some(c => c.startsWith(cpc))) return false
+      // Likewise the complete classification list: the card shows at most six,
+      // so filtering on the display slice hid documents that carry the code.
+      const source = family.allClassifications?.length ? family.allClassifications : family.classifications || []
+      const codes = source.map(c => c.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+      const needle = cpc.replace(/[^A-Z0-9]/g, '')
+      if (!codes.some(c => c.startsWith(needle))) return false
     }
 
     if (text) {
@@ -124,13 +155,28 @@ export function applyResultFilters(
   })
 
   const sorted = [...filtered]
-  if (filters.sort === 'dateDesc') {
-    sorted.sort((a, b) => (b.publicationDate || '').localeCompare(a.publicationDate || ''))
-  } else if (filters.sort === 'dateAsc') {
-    sorted.sort((a, b) => (a.publicationDate || '').localeCompare(b.publicationDate || ''))
-  } else if (filters.sort === 'title') {
-    sorted.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-  }
+  // Every comparator falls back to publicationNumber so the order is total.
+  // Without a tiebreaker, equal keys leave rows in an order that depends on the
+  // incoming array, which makes the list jump between otherwise identical views.
+  const byKey = (key: (family: StudioResultFamily) => string, descending: boolean) =>
+    (a: StudioResultFamily, b: StudioResultFamily) => {
+      const left = key(a)
+      const right = key(b)
+      if (left !== right) {
+        // Undated documents sort last in both directions rather than pretending
+        // to be the oldest thing in the corpus.
+        if (!left) return 1
+        if (!right) return -1
+        return descending ? right.localeCompare(left) : left.localeCompare(right)
+      }
+      return (a.publicationNumber || '').localeCompare(b.publicationNumber || '')
+    }
+
+  if (filters.sort === 'dateDesc') sorted.sort(byKey(f => f.publicationDate || '', true))
+  else if (filters.sort === 'dateAsc') sorted.sort(byKey(f => f.publicationDate || '', false))
+  else if (filters.sort === 'filingDesc') sorted.sort(byKey(f => f.filingDate || '', true))
+  else if (filters.sort === 'filingAsc') sorted.sort(byKey(f => f.filingDate || '', false))
+  else if (filters.sort === 'title') sorted.sort(byKey(f => f.title || '', false))
   // 'rank' keeps the reranker's order, which is the array order.
   return sorted
 }
@@ -171,11 +217,26 @@ export function ResultsFilterBar({
   const toggleIn = <T,>(list: T[], value: T): T[] =>
     list.includes(value) ? list.filter(v => v !== value) : [...list, value]
 
+  // The text box is uncontrolled between keystrokes and commits on a short
+  // pause. Every committed change re-filters, re-sorts and re-renders up to 200
+  // result cards, so applying it per keystroke made typing visibly stutter.
+  const [textDraft, setTextDraft] = useState(filters.text)
+  useEffect(() => {
+    setTextDraft(filters.text)
+  }, [filters.text])
+  useEffect(() => {
+    if (textDraft === filters.text) return
+    const timer = setTimeout(() => onChange({ ...filters, text: textDraft }), 180)
+    return () => clearTimeout(timer)
+    // `filters` is intentionally read fresh inside the timeout via closure; the
+    // effect re-arms whenever the draft or the committed value diverges.
+  }, [textDraft, filters, onChange])
+
   const activeCount = countActiveFilters(filters)
   const jurisdictions = Array.from(new Set(families.map(jurisdictionOf))).sort()
 
   const chip = (active: boolean) =>
-    `rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+    `rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
       active
         ? 'border-lamp-500 bg-lamp-50 text-lamp-700 dark:bg-lamp-950/50 dark:text-lamp-300'
         : 'border-border text-muted-foreground hover:border-muted-foreground/40 hover:text-foreground'
@@ -187,8 +248,8 @@ export function ResultsFilterBar({
         <div className="relative min-w-[190px] flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
-            value={filters.text}
-            onChange={e => set({ text: e.target.value })}
+            value={textDraft}
+            onChange={e => setTextDraft(e.target.value)}
             placeholder="Search within these results…"
             aria-label="Search within results"
             className="w-full rounded-md border border-border bg-background py-1.5 pl-8 pr-2 text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring"
@@ -242,17 +303,19 @@ export function ResultsFilterBar({
           )
         })()}
 
-        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           Sort
           <select
             value={filters.sort}
             onChange={e => set({ sort: e.target.value as ResultSort })}
-            className="rounded-md border border-border bg-background px-1.5 py-1 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            className="rounded-md border border-border bg-background px-1.5 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             aria-label="Sort results"
           >
             <option value="rank">Best match</option>
-            <option value="dateDesc">Newest first</option>
-            <option value="dateAsc">Oldest first</option>
+            <option value="dateDesc">Published — newest first</option>
+            <option value="dateAsc">Published — oldest first</option>
+            <option value="filingDesc">Filed — newest first</option>
+            <option value="filingAsc">Filed — oldest first</option>
             <option value="title">Title A–Z</option>
           </select>
         </label>
@@ -261,17 +324,17 @@ export function ResultsFilterBar({
           type="button"
           onClick={() => onToggleExpanded(!expanded)}
           aria-expanded={expanded}
-          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
         >
           <SlidersHorizontal className="h-3 w-3" />
           More filters
           {activeCount > 0 && (
-            <span className="ml-0.5 rounded-full bg-primary/15 px-1.5 text-[9px] font-bold text-primary">{activeCount}</span>
+            <span className="ml-0.5 rounded-full bg-primary/15 px-1.5 text-[11px] font-bold text-primary">{activeCount}</span>
           )}
           <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
         </button>
 
-        <span className="ml-auto whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground">
+        <span className="ml-auto whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">
           {shownCount === families.length
             ? `${families.length} results`
             : `${shownCount} of ${families.length}`}
@@ -281,7 +344,7 @@ export function ResultsFilterBar({
           <button
             type="button"
             onClick={() => onChange({ ...DEFAULT_RESULT_FILTERS, sort: filters.sort })}
-            className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
             <RotateCcw className="h-3 w-3" /> Clear
           </button>
@@ -291,7 +354,7 @@ export function ResultsFilterBar({
       {expanded && (
         <div className="grid gap-3 border-t border-border p-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               How it was found
             </span>
             <div className="flex flex-wrap gap-1">
@@ -309,7 +372,7 @@ export function ResultsFilterBar({
           </div>
 
           <div>
-            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Jurisdiction
             </span>
             <div className="flex flex-wrap gap-1">
@@ -326,7 +389,7 @@ export function ResultsFilterBar({
             </div>
           </div>
 
-          <label className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Applicant contains
             <input
               value={filters.applicant}
@@ -336,7 +399,7 @@ export function ResultsFilterBar({
             />
           </label>
 
-          <label className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             CPC / IPC starts with
             <input
               value={filters.cpc}
@@ -346,8 +409,34 @@ export function ResultsFilterBar({
             />
           </label>
 
-          <label className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Published from
+          <div>
+            <span className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Date range screens on
+              <Hint
+                title="Which date matters"
+                text="Publication date answers “when did this become public”. The §102 question is usually about the FILING date relative to your invention's critical date — a 2019 filing published in 2021 is still prior art against a 2020 invention, and a publication-date filter would hide it. Documents whose date the corpus never recorded are never hidden by this filter."
+              />
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {([
+                { value: 'publication', label: 'Publication date' },
+                { value: 'filing', label: 'Filing date' },
+              ] as Array<{ value: DateField; label: string }>).map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={filters.dateField === option.value}
+                  className={chip(filters.dateField === option.value)}
+                  onClick={() => set({ dateField: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {filters.dateField === 'filing' ? 'Filed from' : 'Published from'}
             <input
               type="date"
               value={filters.dateFrom}
@@ -356,8 +445,8 @@ export function ResultsFilterBar({
             />
           </label>
 
-          <label className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Published to
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {filters.dateField === 'filing' ? 'Filed to' : 'Published to'}
             <input
               type="date"
               value={filters.dateTo}
@@ -366,7 +455,7 @@ export function ResultsFilterBar({
             />
           </label>
 
-          <label className="inline-flex items-center gap-2 self-end text-[11px] text-muted-foreground">
+          <label className="inline-flex items-center gap-2 self-end text-xs text-muted-foreground">
             <input
               type="checkbox"
               checked={filters.hideExcluded}
@@ -377,7 +466,7 @@ export function ResultsFilterBar({
           </label>
 
           {newFamilyCount > 0 && (
-            <label className="inline-flex items-center gap-2 self-end text-[11px] text-muted-foreground">
+            <label className="inline-flex items-center gap-2 self-end text-xs text-muted-foreground">
               <input
                 type="checkbox"
                 checked={filters.onlyNew}
@@ -388,7 +477,7 @@ export function ResultsFilterBar({
             </label>
           )}
 
-          <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-4">
+          <p className="text-xs text-muted-foreground sm:col-span-2 lg:col-span-4">
             These filters narrow what came back — they don’t re-run the search or change your canvas, so nothing is
             re-charged and your marks are preserved.
           </p>

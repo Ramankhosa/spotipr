@@ -13,7 +13,8 @@
 
 import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { runWhitespaceLLM, parseModelJson } from './llm'
+import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
+import { heartbeatRun, WhitespacePermanentError } from './run-lease'
 import { buildClaimElementsPrompt, WS_CLAIM_ELEMENTS_STAGE_CODE } from './prompts'
 import { computeRarePairs, supportFloor } from './rarity'
 import type { ClaimElementFamily, DeepDiveResult } from './types'
@@ -29,13 +30,13 @@ export async function runDeepDiveStage(input: {
   runId: string
   studyId: string
   clusterId: string
-  requestHeaders: Record<string, string>
+  llmContext: WhitespaceLLMContext
 }): Promise<DeepDiveResult> {
   const coverageNotes: string[] = []
 
   const cluster = await prisma.whitespaceCluster.findUnique({ where: { id: input.clusterId } })
   if (!cluster || cluster.studyId !== input.studyId) {
-    throw new Error('That area no longer exists — the field may have been re-clustered since.')
+    throw new WhitespacePermanentError('That area no longer exists — the field may have been re-clustered since.')
   }
 
   // Medoids first — they are the area's most representative documents — then
@@ -47,7 +48,7 @@ export async function runDeepDiveStage(input: {
     select: { familyKey: true, publicationNumber: true, title: true },
   })
   if (!members.length) {
-    throw new Error('This area has no sampled members to read.')
+    throw new WhitespacePermanentError('This area has no sampled members to read.')
   }
 
   // --- claims assembly, entirely from local storage -------------------------
@@ -131,7 +132,7 @@ export async function runDeepDiveStage(input: {
         taskCode: TaskCode.WS_CLAIM_ELEMENTS,
         stageCode: WS_CLAIM_ELEMENTS_STAGE_CODE,
         prompt: buildClaimElementsPrompt(batch, vocabulary.slice(0, 80)),
-        requestHeaders: input.requestHeaders,
+        context: input.llmContext,
       })
       const parsed = parseModelJson<{
         families: Array<{
@@ -175,7 +176,7 @@ export async function runDeepDiveStage(input: {
       console.error('[Whitespace] Element extraction batch failed:', error instanceof Error ? error.message : error)
       coverageNotes.push(`One extraction batch of ${batch.length} families failed and is missing from the analysis.`)
     }
-    await heartbeat(input.runId)
+    await heartbeatRun(input.runId)
   }
 
   if (!extracted.length) {
@@ -249,8 +250,18 @@ export async function runDeepDiveStage(input: {
   return result
 }
 
-/** Aggressive normalisation — co-occurrence statistics run over these strings. */
-function normalizeElement(raw: string): string {
+/**
+ * Aggressive normalisation — co-occurrence statistics run over these strings.
+ *
+ * Exported because every consumer of an element label has to normalise the SAME
+ * way to compare against one. The hypothesis generator did not, and so matched
+ * the model's freely-written elements ("Capacitive sensing.") against these
+ * normalised ones ("capacitive sensing") by strict equality: it essentially
+ * never matched, and every hypothesis was written with `rarity: null` plus a
+ * limitation saying no measured rarity backed it — while the measurement it
+ * needed was sitting in the same array.
+ */
+export function normalizeElement(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9\- ]/g, ' ')
@@ -303,12 +314,4 @@ async function withTimeout<T>(query: Prisma.Sql): Promise<T[]> {
     prisma.$queryRaw<T[]>(query),
   ])
   return rows
-}
-
-async function heartbeat(runId: string): Promise<void> {
-  try {
-    await prisma.whitespaceRun.update({ where: { id: runId }, data: { heartbeatAt: new Date() } })
-  } catch {
-    // Staleness detection only.
-  }
 }

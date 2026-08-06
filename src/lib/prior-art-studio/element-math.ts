@@ -95,19 +95,52 @@ export function findCombinations(input: {
   return results.slice(0, limit)
 }
 
-/** Documents that alone teach every element — §102-style anticipation candidates. */
+export interface AnticipationCandidate {
+  familyKey: string
+  publicationNumber: string
+  strongCount: number
+  /**
+   * ANTICIPATION — every element read as STRONG. This is the only tier that may
+   * be presented as a single-reference §102 candidate.
+   *
+   * NEAR — every element is covered, but at least one only as PART. This used to
+   * be lumped in with the tier above (coveredElements defaults to
+   * includePartial: true), so a document where NOTHING scored better than PART
+   * was highlighted and labelled as anticipating the claim. Anticipation
+   * requires each and every element; "arguably present" across the board is a
+   * different finding and has to be labelled as one.
+   */
+  tier: 'ANTICIPATION' | 'NEAR'
+}
+
+/**
+ * Documents that alone teach every element.
+ *
+ * Returns both tiers, strongest first, because hiding the NEAR ones would be the
+ * opposite failure — they are often the closest art in the set. The caller must
+ * render the distinction; it must never present NEAR as §102.
+ */
 export function findAnticipationCandidates(input: {
   elements: StudioElement[]
   rows: Array<{ familyKey: string; publicationNumber: string; cells?: Record<string, StudioElementCell> }>
-}): Array<{ familyKey: string; publicationNumber: string; strongCount: number }> {
+}): AnticipationCandidate[] {
   const { elements, rows } = input
   if (!elements.length) return []
   return rows
     .filter(row => coveredElements(row.cells, elements).length === elements.length)
-    .map(row => ({
-      familyKey: row.familyKey,
-      publicationNumber: row.publicationNumber,
-      strongCount: elements.filter(e => row.cells?.[e.id]?.verdict === 'STRONG').length,
-    }))
+    .map(row => {
+      const strongCount = elements.filter(e => row.cells?.[e.id]?.verdict === 'STRONG').length
+      return {
+        familyKey: row.familyKey,
+        publicationNumber: row.publicationNumber,
+        strongCount,
+        tier: strongCount === elements.length ? ('ANTICIPATION' as const) : ('NEAR' as const),
+      }
+    })
     .sort((a, b) => b.strongCount - a.strongCount)
+}
+
+/** Only the rows that may be called single-reference §102 candidates. */
+export function anticipationOnly(candidates: AnticipationCandidate[]): AnticipationCandidate[] {
+  return candidates.filter(candidate => candidate.tier === 'ANTICIPATION')
 }

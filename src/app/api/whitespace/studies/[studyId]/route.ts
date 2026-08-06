@@ -16,7 +16,7 @@ export async function GET(request: NextRequest, { params }: { params: { studyId:
     )
   }
 
-  const study = await getOwnedStudy(params.studyId, auth.user.id)
+  const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
   if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
   const runs = await prisma.whitespaceRun.findMany({
@@ -53,7 +53,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { studyI
     )
   }
 
-  const study = await getOwnedStudy(params.studyId, auth.user.id)
+  const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
   if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
   const body = await request.json().catch(() => ({}))
@@ -110,7 +110,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { study
     )
   }
 
-  const study = await getOwnedStudy(params.studyId, auth.user.id)
+  const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
   if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
   // Archive rather than delete: a study is evidence for decisions already taken,

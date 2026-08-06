@@ -5,10 +5,11 @@
 // evidence is shown alongside the text, with the text tier stated plainly so
 // abstract-level similarity is never mistaken for a claim mapping.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ExternalLink, Loader2, Sparkles, X } from 'lucide-react'
 import { Hint } from '@/components/ui/hint'
 import { googlePatentsUrl, resolvePatentLink } from '@/lib/prior-art-studio/patent-links'
+import { elementTerms, stemTerm } from '@/lib/prior-art-studio/stemming'
 import type { StudioElement, StudioResultFamily } from '@/lib/prior-art-studio/types'
 
 interface PatentDetail {
@@ -31,6 +32,12 @@ interface PatentDetail {
   numberOfClaims?: number | null
   numberOfPages?: number | null
   textTier?: 'claims' | 'description-snippet' | 'abstract'
+  /** Text provenance — whether what is shown here is the whole document. */
+  claimsComplete?: boolean
+  descriptionComplete?: boolean
+  textProvenanceKnown?: boolean
+  claimsSource?: string | null
+  descriptionSource?: string | null
 }
 
 interface DocumentReaderProps {
@@ -39,6 +46,35 @@ interface DocumentReaderProps {
   onClose: () => void
   onSteerFrom: (family: StudioResultFamily) => void
   authHeaders: () => Record<string, string>
+}
+
+/**
+ * Highlight the attorney's own vocabulary inside the document text.
+ *
+ * The reader listed which words matched but rendered the abstract and claims as
+ * flat text, so finding them meant reading the whole document — the one job the
+ * reader exists to make quick. Terms are matched on whole words and on their
+ * stem, so "rotating" lights up "rotates" the same way the coverage score does.
+ */
+function highlightTerms(text: string, terms: string[]): ReactNode {
+  const stems = Array.from(new Set(terms.map(term => stemTerm(term.toLowerCase())).filter(s => s.length >= 2)))
+  if (!stems.length || !text) return text
+
+  const parts: ReactNode[] = []
+  // Split on word boundaries so punctuation and whitespace survive intact.
+  const tokens = text.split(/(\b[A-Za-z0-9][A-Za-z0-9-]*\b)/g)
+  tokens.forEach((token, index) => {
+    if (index % 2 === 1 && stems.includes(stemTerm(token.toLowerCase()))) {
+      parts.push(
+        <mark key={index} className="rounded-sm bg-lamp-100 px-0.5 text-foreground dark:bg-lamp-900/70">
+          {token}
+        </mark>
+      )
+    } else if (token) {
+      parts.push(token)
+    }
+  })
+  return parts
 }
 
 function applicantText(value: unknown): string {
@@ -94,15 +130,37 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
   const abstract = detail?.abstract || family.abstract || family.snippet || ''
   const claims = detail?.claimsText || ''
 
+  /**
+   * What to light up: every element word this document was scored as matching,
+   * plus the element vocabulary itself. Using the cells' own matchedTerms keeps
+   * the highlight and the verdict telling the same story.
+   */
+  const highlightVocabulary = useMemo(() => {
+    const fromCells = Object.values(family.elementCells || {}).flatMap(cell => cell.matchedTerms || [])
+    // elementTerms(), not a naive word split — it drops claim boilerplate
+    // ("with", "said", "comprising", "configured"). Highlighting those marks
+    // half the document and teaches the attorney to ignore the highlight.
+    const fromElements = elements.flatMap(element => elementTerms(element.text))
+    return Array.from(new Set([...fromCells, ...fromElements]))
+  }, [family.elementCells, elements])
+
+  const [highlightOn, setHighlightOn] = useState(true)
+  const render = (text: string): ReactNode =>
+    highlightOn && highlightVocabulary.length ? highlightTerms(text, highlightVocabulary) : text
+
+  // "Not found in this text" is only a finding if we hold the whole text.
+  const partialText =
+    detail !== null && (detail.claimsComplete === false || detail.descriptionComplete === false || detail.textProvenanceKnown === false)
+
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
         <span className="font-mono text-xs font-semibold text-lamp-700 dark:text-lamp-400">{family.publicationNumber}</span>
         <span className="text-sm font-bold text-foreground">{family.title}</span>
         <span
-          className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+          className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
             claims
-              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+              ? 'bg-muted text-muted-foreground ring-1 ring-inset ring-border'
               : 'bg-muted text-muted-foreground'
           }`}
         >
@@ -113,10 +171,25 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
           text="The corpus stores title and abstract for every document, and full claims for a subset (mainly US). Anything scored from an abstract is a similarity signal, not a claim mapping — the label tells you which you're looking at."
         />
         <div className="ml-auto flex items-center gap-1.5">
+          {highlightVocabulary.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setHighlightOn(v => !v)}
+              aria-pressed={highlightOn}
+              className={`rounded-md border px-2 py-1 text-xs font-semibold transition-colors ${
+                highlightOn
+                  ? 'border-lamp-400 bg-lamp-50 text-lamp-700 dark:border-lamp-800 dark:bg-lamp-950/50 dark:text-lamp-300'
+                  : 'border-border text-muted-foreground hover:text-foreground'
+              }`}
+              title="Highlight your element vocabulary in the text below"
+            >
+              Highlight terms
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onSteerFrom(family)}
-            className="inline-flex items-center gap-1 rounded-md border border-lamp-300 bg-lamp-50 px-2 py-1 text-[11px] font-semibold text-lamp-700 hover:bg-lamp-100 dark:border-lamp-800 dark:bg-lamp-950/40 dark:text-lamp-300"
+            className="inline-flex items-center gap-1 rounded-md border border-lamp-300 bg-lamp-50 px-2 py-1 text-xs font-semibold text-lamp-700 hover:bg-lamp-100 dark:border-lamp-800 dark:bg-lamp-950/40 dark:text-lamp-300"
             title="Add this document to the steer block on your canvas"
           >
             <Sparkles className="h-3 w-3" /> More like this
@@ -125,7 +198,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
             href={resolvePatentLink(family)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
             Google Patents <ExternalLink className="h-3 w-3" />
           </a>
@@ -143,26 +216,35 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
             </div>
           ) : (
             <>
-              <h4 className="sticky top-0 z-10 mb-1 bg-card py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h4 className="sticky top-0 z-10 mb-1 bg-card py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Abstract
               </h4>
               <p className="mb-4 whitespace-pre-wrap text-xs leading-relaxed text-foreground/90">
-                {abstract || <span className="text-muted-foreground">No abstract stored for this document.</span>}
+                {abstract ? render(abstract) : <span className="text-muted-foreground">No abstract stored for this document.</span>}
               </p>
+
+              {partialText && (
+                <p className="mb-4 rounded-md border border-amber-400/50 bg-amber-50 p-2 text-xs leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  <b>This is not the complete specification.</b>{' '}
+                  The corpus holds a partial capture for this document
+                  {detail?.textProvenanceKnown === false ? ' (legacy import — first independent claim and a description extract for US rows, nothing elsewhere)' : ''}.
+                  A term you cannot find here may still appear in the full document — absence in this text is not evidence of absence in the reference.
+                </p>
+              )}
 
               {claims && (
                 <>
                   <button
                     type="button"
                     onClick={() => setShowClaims(v => !v)}
-                    className="sticky top-0 z-10 mb-1 block w-full bg-card py-1 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                    className="sticky top-0 z-10 mb-1 block w-full bg-card py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
                   >
                     Claims {showClaims ? '▾' : '▸'}
                     {detail?.numberOfClaims ? ` · ${detail.numberOfClaims}` : ''}
                   </button>
                   {showClaims && (
                     <p className="mb-4 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
-                      {claims}
+                      {render(claims)}
                       {detail?.claimsTruncated && <span className="italic"> …truncated — open on Google Patents for the full text.</span>}
                     </p>
                   )}
@@ -171,11 +253,11 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
 
               {detail?.descriptionText && (
                 <>
-                  <h4 className="sticky top-0 z-10 mb-1 bg-card py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <h4 className="sticky top-0 z-10 mb-1 bg-card py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Description (extract)
                   </h4>
                   <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
-                    {detail.descriptionText}
+                    {render(detail.descriptionText)}
                     {detail.descriptionTruncated && <span className="italic"> …truncated.</span>}
                   </p>
                 </>
@@ -193,8 +275,8 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
 
         <div className="max-h-[520px] overflow-y-auto p-4">
           {elements.length > 0 && (
-            <div className="mb-4 rounded-lg border border-amber-200/70 bg-amber-50/40 p-2.5 dark:border-amber-900/60 dark:bg-amber-950/20">
-              <h4 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="mb-4 rounded-lg border border-border bg-muted/40 p-2.5">
+              <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Element evidence
               </h4>
               <div className="space-y-1.5">
@@ -202,8 +284,8 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
                   const assessmentStatus = family.elementAssessmentStatus || (family.elementCells ? 'ASSESSED' : 'UNASSESSED')
                   const cell = assessmentStatus === 'ASSESSED' ? family.elementCells?.[element.id] : undefined
                   return (
-                    <div key={element.id} className="flex items-start gap-2 border-b border-dashed border-border pb-1.5 text-[11px]">
-                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
+                    <div key={element.id} className="flex items-start gap-2 border-b border-dashed border-border pb-1.5 text-xs">
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] font-bold text-muted-foreground">
                         E{i + 1}
                       </span>
                       <div className="min-w-0 flex-1">
@@ -215,7 +297,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
                         )}
                       </div>
                       <span
-                        className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${
+                        className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-bold ${
                           cell?.verdict === 'STRONG'
                             ? 'bg-amber-600 text-white'
                             : cell?.verdict === 'PART'
@@ -234,8 +316,8 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
             </div>
           )}
 
-          <h4 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bibliographic</h4>
-          <dl className="space-y-1 text-[11px]">
+          <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Bibliographic</h4>
+          <dl className="space-y-1 text-xs">
             {[
               ['Applicants', applicantText(detail?.applicants) || family.applicants],
               ['Inventors', detail?.inventors?.join('; ')],
@@ -259,10 +341,10 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
 
           {family.members.length > 1 && (
             <>
-              <h4 className="mb-1.5 mt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h4 className="mb-1.5 mt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Family ({family.members.length})
               </h4>
-              <ul className="space-y-1 text-[11px]">
+              <ul className="space-y-1 text-xs">
                 {family.members.map(member => (
                   <li key={member.publicationNumber} className="flex items-baseline gap-2">
                     <a

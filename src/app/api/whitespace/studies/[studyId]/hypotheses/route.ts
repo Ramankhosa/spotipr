@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: { studyId:
     )
   }
 
-  const study = await getOwnedStudy(params.studyId, auth.user.id)
+  const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
   if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
 
   const [hypotheses, concepts, clusters] = await Promise.all([

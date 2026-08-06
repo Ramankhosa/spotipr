@@ -193,6 +193,8 @@ export interface PatentResultScores {
   semantic?: number
   text?: number
   title?: number
+  /** Lexical hit inside claims or description, as opposed to title + abstract. */
+  specification?: number
   classification?: number
   field?: number
   provider?: number

@@ -99,10 +99,23 @@ export interface StudioResultFamily {
   title: string
   abstract?: string | null
   snippet?: string | null
+  /** Display string for the card — first three applicants, joined. */
   applicants?: string
+  /** Complete applicant list, present only for filtering. */
+  allApplicants?: string[]
   publicationDate?: string | null
+  /**
+   * The date an attorney actually screens on. `publicationDate` answers "when
+   * did this become public"; the §102 critical date question is about filing.
+   * Null where the source never populated it (bulk EPO rows carry publication
+   * only), which the UI must show as unknown rather than as "outside my range".
+   */
+  filingDate?: string | null
   jurisdiction?: string
+  /** Display list for the card — capped. */
   classifications?: string[]
+  /** Complete classification list, present only when longer than the display cap. */
+  allClassifications?: string[]
   link?: string | null
   members: StudioFamilyMember[]
   /** Which recall lanes surfaced this family: exact keyword, semantic vector, or both. */
@@ -163,7 +176,17 @@ export interface StudioGateCounts {
   corpusIsEstimate: boolean
   filters: number | null
   filtersIsEstimate: boolean
+  /** Distinct documents the retrieval lanes returned, de-duplicated across providers. */
   recall: number
+  /**
+   * How many of the recalled documents were carried forward for review.
+   *
+   * Recall is the whole candidate pool; only the top-ranked slice is collapsed
+   * into families. Without this stage the funnel read "Recall 1,000 → Families
+   * 180" as though 1,000 documents had been collapsed, hiding an uncounted
+   * ranking cut in a funnel whose entire purpose is counted honesty.
+   */
+  ranked?: number
   /** Documents that do NOT satisfy every MATCH block (still shown, filterable). */
   matchRemoved?: number
   /** Documents that satisfy every MATCH block. */

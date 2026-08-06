@@ -22,7 +22,8 @@ import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { textMatchPredicate } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
-import { runWhitespaceLLM, parseModelJson } from './llm'
+import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
+import { heartbeatRun, WhitespacePermanentError } from './run-lease'
 import {
   buildDisproofQueriesPrompt,
   buildElementMappingPrompt,
@@ -52,6 +53,15 @@ interface AttackHit {
   strategy: AttackRecord['strategy']
 }
 
+/**
+ * An attack either ran (with however many hits) or it did not, and the reason
+ * matters. A bare `AttackHit[] | null` collapsed "the database timed out" and
+ * "the query contains no searchable words" into one message, and both of them
+ * into the same bucket as "ran cleanly, found nothing" whenever the caller
+ * forgot the distinction. Survival is scored off this type, so it is explicit.
+ */
+type AttackOutcome = { hits: AttackHit[] } | { hits: null; reason: string }
+
 interface MappedCandidate {
   publicationNumber: string
   basis: string
@@ -64,11 +74,11 @@ export async function runValidateStage(input: {
   studyId: string
   hypothesisId: string
   scope: WhitespaceScope
-  requestHeaders: Record<string, string>
+  llmContext: WhitespaceLLMContext
 }): Promise<{ status: string; type: WhitespaceType; confidence: number | null; attacksRun: number }> {
   const hypothesis = await prisma.whitespaceHypothesis.findUnique({ where: { id: input.hypothesisId } })
   if (!hypothesis || hypothesis.studyId !== input.studyId) {
-    throw new Error('That hypothesis no longer exists.')
+    throw new WhitespacePermanentError('That hypothesis no longer exists.')
   }
 
   await prisma.whitespaceHypothesis.update({
@@ -84,7 +94,7 @@ export async function runValidateStage(input: {
     ? (combination.searchTerms as unknown[]).filter((term): term is string => typeof term === 'string')
     : []
   if (!elements.length) {
-    throw new Error('This hypothesis carries no element combination to test.')
+    throw new WhitespacePermanentError('This hypothesis carries no element combination to test.')
   }
 
   const attacks: AttackRecord[] = []
@@ -104,7 +114,7 @@ export async function runValidateStage(input: {
         searchTerms,
         cpcCodes: cpcInScope,
       }),
-      requestHeaders: input.requestHeaders,
+      context: input.llmContext,
     })
     const parsed = parseModelJson<Record<string, unknown>>(response.output, 'Disproof query generation')
     plan = {
@@ -125,12 +135,11 @@ export async function runValidateStage(input: {
     console.error('[Whitespace] Disproof query generation failed; using fallback queries:', error)
   }
 
-  await heartbeat(input.runId)
+  await heartbeatRun(input.runId)
 
   // --- 2. run the four attack strategies ------------------------------------
   for (const query of plan.synonymShifted) {
-    const hits = await lexicalAttack(query)
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'SYNONYM_SHIFTED', query, hits)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'SYNONYM_SHIFTED', query, await lexicalAttack(query))
   }
 
   if (semanticLaneConfigured()) {
@@ -145,7 +154,7 @@ export async function runValidateStage(input: {
           claimsText: null,
           strategy: 'SEMANTIC_PARAPHRASE',
         }))
-        recordAttack(attacks, allHits, hitFamiliesByAttack, 'SEMANTIC_PARAPHRASE', paraphrase, hits)
+        recordAttack(attacks, allHits, hitFamiliesByAttack, 'SEMANTIC_PARAPHRASE', paraphrase, { hits })
       } else {
         attacks.push({ strategy: 'SEMANTIC_PARAPHRASE', query: paraphrase, hits: 0, outcome: 'NOT_RUN', reason: result.reason })
       }
@@ -161,13 +170,18 @@ export async function runValidateStage(input: {
   }
 
   for (const code of plan.cpcAdjacent) {
-    const hits = await cpcAttack(code, elements)
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'CPC_ADJACENT', code, hits)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'CPC_ADJACENT', code, await cpcAttack(code, elements))
   }
 
   for (const assignee of plan.assigneeCandidates) {
-    const hits = await assigneeAttack(assignee, elements)
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'ASSIGNEE_PIVOT', assignee, hits)
+    recordAttack(
+      attacks,
+      allHits,
+      hitFamiliesByAttack,
+      'ASSIGNEE_PIVOT',
+      assignee,
+      await assigneeAttack(assignee, elements)
+    )
   }
 
   // Literature disproof: no NPL provider is wired into this stage yet. Recorded
@@ -180,9 +194,13 @@ export async function runValidateStage(input: {
     reason: 'No non-patent-literature provider is configured for this deployment.',
   })
 
-  await heartbeat(input.runId)
+  await heartbeatRun(input.runId)
 
   // --- 3. element-map the closest hits --------------------------------------
+  // Publication numbers the model invented or garbled, dropped rather than
+  // trusted. Counted so the run can say the mapping was incomplete.
+  let unmatchedMappings = 0
+
   const mapCandidates = async (candidates: AttackHit[]): Promise<MappedCandidate[]> => {
     if (!candidates.length) return []
     const enriched = await enrichWithClaims(candidates)
@@ -195,10 +213,32 @@ export async function runValidateStage(input: {
           elements,
           candidates: enriched,
         }),
-        requestHeaders: input.requestHeaders,
+        context: input.llmContext,
       })
       const parsed = parseModelJson<{ candidates: MappedCandidate[] }>(response.output, 'Element mapping')
-      return (parsed.candidates ?? []).filter(candidate => candidate && typeof candidate.publicationNumber === 'string')
+
+      // Every verdict must name a document that was actually put to the model.
+      // applyMappingOutcomes re-labels attacks by matching these publication
+      // numbers against the retrieved hits, so a number the model reformatted
+      // ("US 9,123,456 B2" for "US9123456B2") or invented outright matched
+      // nothing and left its attack recorded CLEAN — a REFUTING verdict silently
+      // downgraded to survival. Normalised comparison against the candidate set
+      // closes that; anything still unmatched is counted, not guessed at.
+      const byNormalised = new Map(enriched.map(entry => [normalisePublicationNumber(entry.publicationNumber), entry.publicationNumber]))
+      const accepted: MappedCandidate[] = []
+      for (const candidate of parsed.candidates ?? []) {
+        if (!candidate || typeof candidate.publicationNumber !== 'string') continue
+        const resolved = byNormalised.get(normalisePublicationNumber(candidate.publicationNumber))
+        if (!resolved) {
+          unmatchedMappings++
+          console.warn(
+            `[Whitespace] Element mapping named a document that was not in the candidate set: ${candidate.publicationNumber}`
+          )
+          continue
+        }
+        accepted.push({ ...candidate, publicationNumber: resolved })
+      }
+      return accepted
     } catch (error) {
       console.error('[Whitespace] Element mapping failed:', error)
       return []
@@ -238,7 +278,7 @@ export async function runValidateStage(input: {
           verdict: candidate.fullCombination,
         })),
       }),
-      requestHeaders: input.requestHeaders,
+      context: input.llmContext,
     })
     redTeam = parseModelJson(response.output, 'Red team')
   } catch (error) {
@@ -248,13 +288,13 @@ export async function runValidateStage(input: {
   if (redTeam.strongestRemainingAttack?.query) {
     const query = String(redTeam.strongestRemainingAttack.query)
     const previouslySeen = new Set(Array.from(allHits.keys()))
-    const hits = await lexicalAttack(query)
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'RED_TEAM', query, hits)
+    const attempt = await lexicalAttack(query)
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'RED_TEAM', query, attempt)
 
     // The red team's hits get the same element mapping as everyone else's.
     // Without this, the strongest remaining attack could retrieve 25 documents
     // and still be recorded CLEAN because nothing ever read them.
-    const fresh = (hits ?? []).filter(hit => !previouslySeen.has(hit.familyKey)).slice(0, MAPPING_CANDIDATES)
+    const fresh = (attempt.hits ?? []).filter(hit => !previouslySeen.has(hit.familyKey)).slice(0, MAPPING_CANDIDATES)
     if (fresh.length) {
       const alreadyMapped = new Set(mapped.map(candidate => candidate.publicationNumber))
       const redTeamMapped = (await mapCandidates(fresh)).filter(
@@ -267,7 +307,7 @@ export async function runValidateStage(input: {
     }
   }
 
-  await heartbeat(input.runId)
+  await heartbeatRun(input.runId)
 
   // --- 5. persist the evidence trail ----------------------------------------
   for (const attack of attacks) {
@@ -341,6 +381,13 @@ export async function runValidateStage(input: {
     ...existingLimitations,
     ...notRun.map(attack => `${attack.strategy.replace(/_/g, ' ').toLowerCase()} attack not run — ${attack.reason ?? 'unavailable'}.`),
   ]
+  if (unmatchedMappings > 0) {
+    coverageLimitations.push(
+      `${unmatchedMappings} element-mapping verdict${unmatchedMappings === 1 ? '' : 's'} named a document that was not among the retrieved candidates and ${
+        unmatchedMappings === 1 ? 'was' : 'were'
+      } discarded — the closest art may not be fully read.`
+    )
+  }
 
   await prisma.whitespaceHypothesis.update({
     where: { id: hypothesis.id },
@@ -366,15 +413,44 @@ function attackTextPredicate(query: string): Prisma.Sql {
 }
 
 /**
+ * Rejects an attack query that survives no words at all.
+ *
+ * `websearch_to_tsquery` returns an EMPTY tsquery for a string made only of
+ * stopwords or punctuation, and an empty tsquery matches zero rows under `@@`.
+ * So a degenerate model-written query ("a system for the same", "-----") came
+ * back with zero hits and was recorded CLEAN — a search that could not possibly
+ * have found anything, counted as evidence that nothing is there. Every attack
+ * lane runs this first, for the same reason the census runs
+ * assertConceptQueryUsable: a query that cannot match must never be mistaken
+ * for a query that found nothing.
+ */
+async function tsqueryHasTerms(query: string): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ nodes: number }>>(
+      Prisma.sql`SELECT numnode(websearch_to_tsquery('english'::regconfig, ${query}))::int AS nodes`
+    )
+    return Number(rows[0]?.nodes ?? 0) > 0
+  } catch (error) {
+    console.error('[Whitespace] Attack query check failed:', error instanceof Error ? error.message : error)
+    return false
+  }
+}
+
+const NO_SEARCHABLE_WORDS =
+  'The query contained no searchable words after common-word removal, so it could not have matched anything — recorded as not run rather than as a clean attack.'
+
+/**
  * Full-text attack over the whole readable corpus. Deliberately UNSCOPED: the
  * refuting art may live outside the study's years, jurisdictions and CPC codes,
  * and constraining the attack to the scope would be defending the hypothesis.
  *
- * Returns NULL when the search itself failed — a failed search is not an empty
- * result, and recording it as one would count a dead lane as a clean attack.
+ * Reports `hits: null` when the search could not run — a failed or impossible
+ * search is not an empty result, and recording it as one would count a dead
+ * lane as a clean attack.
  */
-async function lexicalAttack(query: string): Promise<AttackHit[] | null> {
-  if (!query.trim()) return null
+async function lexicalAttack(query: string): Promise<AttackOutcome> {
+  if (!query.trim()) return { hits: null, reason: 'The attack query was empty.' }
+  if (!(await tsqueryHasTerms(query))) return { hits: null, reason: NO_SEARCHABLE_WORDS }
   try {
     const rows = await withTimeout<{
       familyKey: string
@@ -391,25 +467,28 @@ async function lexicalAttack(query: string): Promise<AttackHit[] | null> {
       FROM "local_patents" lp
       WHERE ${attackTextPredicate(query)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
-    return rows.map(row => ({
-      familyKey: row.familyKey,
-      publicationNumber: row.publicationNumber,
-      title: row.title || row.publicationNumber,
-      abstract: row.abstract || null,
-      claimsText: row.claimsText || null,
-      strategy: 'SYNONYM_SHIFTED' as const,
-    }))
+    return {
+      hits: rows.map(row => ({
+        familyKey: row.familyKey,
+        publicationNumber: row.publicationNumber,
+        title: row.title || row.publicationNumber,
+        abstract: row.abstract || null,
+        claimsText: row.claimsText || null,
+        strategy: 'SYNONYM_SHIFTED' as const,
+      })),
+    }
   } catch (error) {
     console.error('[Whitespace] Lexical attack failed:', error instanceof Error ? error.message : error)
-    return null
+    return { hits: null, reason: 'The search failed or timed out.' }
   }
 }
 
 /** CPC-adjacent broadening: same combination, classified by a different reader. */
-async function cpcAttack(code: string, elements: string[]): Promise<AttackHit[] | null> {
+async function cpcAttack(code: string, elements: string[]): Promise<AttackOutcome> {
   const normalized = code.replace(/\s+/g, '').toUpperCase()
-  if (!normalized) return null
+  if (!normalized) return { hits: null, reason: 'The CPC code was empty.' }
   const elementQuery = elements.map(element => `"${element.replace(/["\\]/g, ' ')}"`).join(' OR ')
+  if (!(await tsqueryHasTerms(elementQuery))) return { hits: null, reason: NO_SEARCHABLE_WORDS }
   try {
     const rows = await withTimeout<{
       familyKey: string
@@ -427,17 +506,24 @@ async function cpcAttack(code: string, elements: string[]): Promise<AttackHit[] 
       WHERE EXISTS (SELECT 1 FROM unnest(lp."classifications") c WHERE replace(upper(c), ' ', '') LIKE ${normalized + '%'})
         AND ${attackTextPredicate(elementQuery)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
-    return rows.map(row => ({ ...row, title: row.title || row.publicationNumber, strategy: 'CPC_ADJACENT' as const }))
+    return {
+      hits: rows.map(row => ({
+        ...row,
+        title: row.title || row.publicationNumber,
+        strategy: 'CPC_ADJACENT' as const,
+      })),
+    }
   } catch (error) {
     console.error('[Whitespace] CPC attack failed:', error instanceof Error ? error.message : error)
-    return null
+    return { hits: null, reason: 'The search failed or timed out.' }
   }
 }
 
 /** Assignee pivot: follow the people nearest the idea through their portfolios. */
-async function assigneeAttack(assignee: string, elements: string[]): Promise<AttackHit[] | null> {
-  if (!assignee.trim()) return null
+async function assigneeAttack(assignee: string, elements: string[]): Promise<AttackOutcome> {
+  if (!assignee.trim()) return { hits: null, reason: 'The assignee name was empty.' }
   const elementQuery = elements.map(element => `"${element.replace(/["\\]/g, ' ')}"`).join(' OR ')
+  if (!(await tsqueryHasTerms(elementQuery))) return { hits: null, reason: NO_SEARCHABLE_WORDS }
   try {
     const rows = await withTimeout<{
       familyKey: string
@@ -455,10 +541,16 @@ async function assigneeAttack(assignee: string, elements: string[]): Promise<Att
       WHERE lp."applicants"::text ILIKE ${'%' + assignee.trim() + '%'}
         AND ${attackTextPredicate(elementQuery)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
-    return rows.map(row => ({ ...row, title: row.title || row.publicationNumber, strategy: 'ASSIGNEE_PIVOT' as const }))
+    return {
+      hits: rows.map(row => ({
+        ...row,
+        title: row.title || row.publicationNumber,
+        strategy: 'ASSIGNEE_PIVOT' as const,
+      })),
+    }
   } catch (error) {
     console.error('[Whitespace] Assignee attack failed:', error instanceof Error ? error.message : error)
-    return null
+    return { hits: null, reason: 'The search failed or timed out.' }
   }
 }
 
@@ -468,14 +560,15 @@ function recordAttack(
   hitFamiliesByAttack: Map<string, Set<string>>,
   strategy: AttackRecord['strategy'],
   query: string,
-  hits: AttackHit[] | null
+  outcome: AttackOutcome
 ) {
   // A search that could not run is recorded as NOT_RUN — it lowers disproof
   // completeness instead of masquerading as a clean attack.
-  if (hits === null) {
-    attacks.push({ strategy, query, hits: 0, outcome: 'NOT_RUN', reason: 'The search failed or timed out.' })
+  if (outcome.hits === null) {
+    attacks.push({ strategy, query, hits: 0, outcome: 'NOT_RUN', reason: outcome.reason })
     return
   }
+  const hits = outcome.hits
   // Outcome is provisional CLEAN until mapping says otherwise.
   attacks.push({ strategy, query, hits: hits.length, outcome: 'CLEAN' })
   const attackKey = keyForAttack(strategy, query)
@@ -533,6 +626,11 @@ function keyForAttack(strategy: AttackRecord['strategy'], query: string): string
   return `${strategy}\u0000${query}`
 }
 
+/** Publication numbers for comparison only: case, spaces, commas and hyphens dropped. */
+function normalisePublicationNumber(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+}
+
 function allHitTitle(allHits: Map<string, AttackHit>, publicationNumber: string): string {
   for (const hit of Array.from(allHits.values())) {
     if (hit.publicationNumber === publicationNumber) return hit.title
@@ -566,15 +664,26 @@ async function evaluateGates(input: {
     }
   }
   if (claimsCoverage === null) {
-    gates.push({ gate: 'G1_DATA', outcome: 'FAILED', basis: 'No claim-level read of this area exists — run the deep dive first.' })
+    gates.push({
+      gate: 'G1_DATA',
+      outcome: 'FAILED',
+      basis: 'No claim-level read of this area exists — run the deep dive first.',
+      measured: null,
+    })
   } else if (claimsCoverage < 0.4) {
     gates.push({
       gate: 'G1_DATA',
       outcome: 'FAILED',
       basis: `Claims readable for ${Math.round(claimsCoverage * 100)}% of the area — below the 40% floor for claim-level conclusions.`,
+      measured: claimsCoverage,
     })
   } else {
-    gates.push({ gate: 'G1_DATA', outcome: 'PASSED', basis: `${Math.round(claimsCoverage * 100)}% claims readable in the area.` })
+    gates.push({
+      gate: 'G1_DATA',
+      outcome: 'PASSED',
+      basis: `${Math.round(claimsCoverage * 100)}% claims readable in the area.`,
+      measured: claimsCoverage,
+    })
   }
 
   // G2 — terminology: did vocabulary expansion surface dense material?
@@ -663,7 +772,7 @@ function computeScores(input: {
   const disproofCompleteness = planned > 0 ? runnable.length / planned : 0
 
   const g1 = input.gates.find(gate => gate.gate === 'G1_DATA')
-  const textCoverage = g1?.outcome === 'PASSED' ? extractCoverage(g1.basis) : 0
+  const textCoverage = g1?.outcome === 'PASSED' ? (g1.measured ?? 0) : 0
 
   // Source diversity: how many independent kinds of evidence actually exist.
   const kinds = new Set<string>(['SEARCH_TRACE'])
@@ -722,7 +831,8 @@ function computeScores(input: {
   }
 }
 
-function decideTypeAndStatus(input: {
+/** Exported for tests: the gate ladder is the product's central epistemic claim. */
+export function decideTypeAndStatus(input: {
   gates: GateOutcome[]
   fullRefutation: boolean
   confidence: number | null
@@ -735,24 +845,29 @@ function decideTypeAndStatus(input: {
   if (gate('G1_DATA')?.outcome === 'FAILED') return { type: 'DATA_WHITESPACE', status: 'INCONCLUSIVE' }
   if (gate('G2_TERMINOLOGY')?.outcome === 'FAILED') return { type: 'TERMINOLOGY_WHITESPACE', status: 'REFUTED' }
 
+  const g2 = gate('G2_TERMINOLOGY')
   const g3 = gate('G3_ADJACENT_CLAIMS')
   const g4 = gate('G4_FEASIBILITY')
 
+  // A vocabulary attack that could not run is not a vocabulary attack survived.
+  // This module's own contract is that absence of a disproof search lowers
+  // confidence rather than counting as survival, and G2 UNASSESSED means exactly
+  // that: no synonym-shifted or paraphrase search reached the corpus. Every
+  // VALIDATED verdict below therefore requires G2 to have actually run.
+  const terminologyTested = g2?.outcome === 'PASSED' || g2?.outcome === 'PASSED_WITH_WEAKENING'
+
   if (g3?.outcome === 'PASSED_WITH_WEAKENING') {
     // Partially covered: the attorney-relevant kind of candidate.
-    return { type: 'CLAIM_WHITESPACE', status: 'VALIDATED' }
+    return { type: 'CLAIM_WHITESPACE', status: terminologyTested ? 'VALIDATED' : 'INCONCLUSIVE' }
   }
 
   const mandatoryPassed =
-    gate('G1_DATA')?.outcome === 'PASSED' &&
-    (gate('G2_TERMINOLOGY')?.outcome === 'PASSED' || gate('G2_TERMINOLOGY')?.outcome === 'PASSED_WITH_WEAKENING') &&
-    g3?.outcome === 'PASSED' &&
-    g4?.outcome === 'PASSED'
+    gate('G1_DATA')?.outcome === 'PASSED' && terminologyTested && g3?.outcome === 'PASSED' && g4?.outcome === 'PASSED'
 
   if (mandatoryPassed && (input.confidence ?? 0) >= 0.75) {
     return { type: 'GENUINE', status: 'VALIDATED' }
   }
-  if (g4?.outcome === 'UNASSESSED') {
+  if (g4?.outcome === 'UNASSESSED' && terminologyTested) {
     // Survived everything we could run; feasibility unread. A candidate, not a verdict.
     return { type: 'PATENT_WHITESPACE', status: 'VALIDATED' }
   }
@@ -766,11 +881,6 @@ function asStrings(value: unknown, max: number): string[] {
   return value.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())).slice(0, max)
 }
 
-function extractCoverage(basis: string): number {
-  const match = basis.match(/(\d+)%/)
-  return match ? Number(match[1]) / 100 : 0.5
-}
-
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000
 }
@@ -781,12 +891,4 @@ async function withTimeout<T>(query: Prisma.Sql): Promise<T[]> {
     prisma.$queryRaw<T[]>(query),
   ])
   return rows
-}
-
-async function heartbeat(runId: string): Promise<void> {
-  try {
-    await prisma.whitespaceRun.update({ where: { id: runId }, data: { heartbeatAt: new Date() } })
-  } catch {
-    // Staleness detection only.
-  }
 }

@@ -91,7 +91,7 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   )
   children.push(
     para(
-      'Retrieval method: semantic (embedding) retrieval over title and abstract, optionally narrowed by literal keyword requirements and by classification, date and jurisdiction filters, followed by cross-encoder reranking where enabled.'
+      'Retrieval method: semantic (embedding) retrieval over title and abstract, combined with keyword retrieval over title, abstract and — where the corpus stores them — claims and description, optionally narrowed by literal keyword requirements and by classification, date and jurisdiction filters, followed by cross-encoder reranking where enabled.'
     )
   )
   children.push(para('Known coverage limits, applying to every query below:', { italics: true }))
@@ -99,7 +99,8 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
     'Coverage begins at the year 2000. Art published before 2000 is NOT in this corpus.',
     'Patent documents only — no non-patent literature (journals, standards, datasheets, product manuals) was searched.',
     'No legal-status data: nothing is filtered by whether a patent is granted, lapsed or in force. This is not a clearance search.',
-    'Only titles and abstracts are indexed for retrieval. Claims and descriptions are stored for US documents only and are NOT searched, so element evidence for other jurisdictions is abstract-level.',
+    'Semantic (meaning-based) retrieval reads titles and abstracts only, so element evidence for a document with no stored specification is abstract-level and is labelled as such.',
+    'Stored specification text is not complete for every document — much of it is a partial capture (first independent claim plus a description extract for US rows, and none at all for many others). A term not found in the stored text may still appear in the full document.',
     'The dataset refreshes quarterly, so publications from the last 0–3 months may be absent.',
   ]) {
     children.push(para(`• ${line}`))
@@ -198,7 +199,10 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
     for (const state of group) {
       const family = latestFamilies.find(f => f.familyKey === state.familyKey)
       const bits = [
-        family?.publicationDate,
+        family?.publicationDate ? `published ${family.publicationDate}` : null,
+        // The critical-date question is about filing, so the report has to state
+        // it rather than leaving the reader with the publication date alone.
+        family?.filingDate ? `filed ${family.filingDate}` : null,
         family?.applicants,
         family && family.members.length > 1 ? `family of ${family.members.length}` : null,
         family?.lane === 'cast'

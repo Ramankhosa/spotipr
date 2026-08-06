@@ -40,7 +40,8 @@ import {
   Link2,
   Plus,
   ChevronRight,
-  MoreHorizontal
+  MoreHorizontal,
+  Scissors
 } from 'lucide-react'
 import FigureWorkProgress from './FigureWorkProgress'
 
@@ -152,6 +153,17 @@ function normalizeDiagramImageAnalysisStatus(value: unknown): DiagramImageAnalys
 
 // Helper function to normalize page sizes from country profiles
 // IMPORTANT: This must be defined before the component to avoid TDZ (Temporal Dead Zone) errors
+// Readability findings the pipeline attaches to a saved figure. None of them
+// block anything — they mean "this will be hard to read at filing scale", which
+// is exactly when splitting the figure is the useful next action.
+const FIGURE_DENSITY_CODES = ['DENSE_FIGURE', 'PAGE_FIT_MINIMUM_TEXT', 'EXTREME_ASPECT_RATIO']
+
+function figureDensityNote(plan: any): string | null {
+  const issues = Array.isArray(plan?.validationReport?.issues) ? plan.validationReport.issues : []
+  const found = issues.find((issue: any) => FIGURE_DENSITY_CODES.includes(issue?.code))
+  return typeof found?.message === 'string' ? found.message : null
+}
+
 function normalizePageSizes(input: any): string[] {
   if (!input) return []
   if (Array.isArray(input)) return input.flatMap((val) => normalizePageSizes(val))
@@ -440,6 +452,47 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [processingStep, setProcessingStep] = useState<Record<string, number>>({})
   const [modifyFigNo, setModifyFigNo] = useState<number | null>(null)
   const [modifyTextSaved, setModifyTextSaved] = useState('')
+  // Keyed by figure number: a dense-figure prompt can be open on several cards
+  // at once, so the part count cannot be a single shared value.
+  const [splitPartsCount, setSplitPartsCount] = useState<Record<number, number>>({})
+  const splitPartsFor = (figNo: number) => splitPartsCount[figNo] ?? 2
+
+  /** Splits one figure into N parts. Shared by the dense-figure prompt and the
+   *  Request-changes panel so both paths behave identically. */
+  const handleSplitFigure = async (figNo: number, instructions?: string) => {
+    const parts = splitPartsFor(figNo)
+    // Splitting overwrites this figure with part 1 and there is no undo, so the
+    // replacement is confirmed the same way an expert-override replacement is.
+    const confirmed = window.confirm(
+      `Split FIG. ${figNo} into ${parts} figures?\n\n`
+      + `FIG. ${figNo} will be replaced by the first part, and ${parts - 1} new figure${parts === 2 ? '' : 's'} will be added at the end of the set.\n`
+      + 'The current version of this figure cannot be recovered, and figure ordering will reset.',
+    )
+    if (!confirmed) return
+    const request = { action: 'split_figure_llm', sessionId: session?.id, figureNo: figNo, parts, instructions }
+    setRegeneratingFigure(prev => ({ ...prev, [figNo]: true }))
+    setError(null)
+    setGenerationWarning(null)
+    try {
+      let resp = await onComplete(request)
+      if (resp?.code === 'RAW_OVERRIDE_CONFIRMATION_REQUIRED'
+        && window.confirm('This figure contains expert PlantUML customizations. Replace them with managed sub-figures?')) {
+        resp = await onComplete({ ...request, confirmRawReplacement: true })
+      }
+      if (resp?.success) {
+        setGenerationWarning(formatDiagramGenerationWarnings(resp))
+        await onRefresh()
+        setModifyFigNo(null)
+        setModifyTextSaved('')
+      } else if (resp?.error) {
+        setError(`Figure split failed: ${resp.error}`)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? `Failed to split: ${e.message}` : 'Failed to split figure')
+    } finally {
+      setRegeneratingFigure(prev => ({ ...prev, [figNo]: false }))
+    }
+  }
   const [regeneratingFigure, setRegeneratingFigure] = useState<Record<number, boolean>>({})
   const [isViewing, setIsViewing] = useState<Record<number, boolean>>({})
   const [rendering, setRendering] = useState<Record<string, boolean>>({})
@@ -3164,6 +3217,39 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           )}
 
 
+      {/* Generating a figure set clears the filing order (the pipeline resets
+          figureSequence), and nothing on this tab said so — a drawing set could
+          be filed in generation order by default. This is a signpost to Arrange,
+          not a second copy of the ordering action: the AI's per-figure reasoning
+          and the drag-to-adjust list both live there, and ordering spans
+          sketches too, so it would be misleading to run it from this tab. */}
+      {(() => {
+        // Sketches only load on their own tab, so the count here can be short.
+        // The copy therefore states no total — it would be wrong for a session
+        // whose sketches have not been fetched yet.
+        const orderableCount = Object.keys(diagramsByFigure).length + sketches.length
+        if (orderableCount < 2 || (session as any)?.figureSequenceFinalized) return null
+        return (
+          <div className="mt-10 rounded-lg border border-ai-blue-200 bg-ai-blue-50 px-4 py-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-ai-graphite-800">
+                <span className="font-medium">Filing order not set yet.</span>{' '}
+                Figures are numbered in the order they were created until you arrange them. Arranging covers diagrams and sketches together.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0 bg-white"
+                onClick={() => setActiveTab('arrange')}
+              >
+                <Sparkles className="mr-2 h-4 w-4" />
+                Set filing order
+              </Button>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Saved Diagrams Grid */}
       <div className="mt-10">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
@@ -3480,6 +3566,47 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   </div>
                 )}
 
+                {/* A dense figure is the one case where splitting is the obvious
+                    next action, so it is offered right under the drawing instead
+                    of inside Request changes. Advisory: the figure is already
+                    saved and exportable. */}
+                {(() => {
+                  const densityNote = figureDensityNote(plan)
+                  if (!densityNote) return null
+                  return (
+                    <div className="px-4 py-3 border-t border-amber-200 bg-amber-50">
+                      <p className="text-xs text-amber-900">
+                        <span className="font-medium">This figure is dense.</span> {densityNote}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Label className="text-xs text-amber-900">Split into</Label>
+                        <select
+                          className="rounded border border-amber-300 bg-white px-1 py-0.5 text-xs"
+                          value={splitPartsFor(figNo)}
+                          onChange={(e) => setSplitPartsCount(prev => ({ ...prev, [figNo]: Number(e.target.value) }))}
+                          disabled={!!regeneratingFigure[figNo]}
+                          aria-label={`Number of parts to split figure ${figNo} into`}
+                        >
+                          {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                        <Label className="text-xs text-amber-900">parts</Label>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 shrink-0 bg-white text-xs"
+                          disabled={!!regeneratingFigure[figNo]}
+                          onClick={() => handleSplitFigure(figNo)}
+                        >
+                          {regeneratingFigure[figNo]
+                            ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            : <Scissors className="mr-1 h-3 w-3" />}
+                          Split figure
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 {/* One named action the attorney reaches for, with the rest
                     behind an overflow menu so the card reads at a glance. */}
                 <div className="p-3 bg-white border-t grid grid-cols-1 gap-2">
@@ -3607,15 +3734,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               if (resp?.code === 'RAW_OVERRIDE_CONFIRMATION_REQUIRED' && window.confirm('This figure contains expert PlantUML customizations. Replace them and return the figure to managed mode?')) {
                                 resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved, confirmRawReplacement: true })
                               }
-                              if (resp?.code === 'SPLIT_APPROVAL_REQUIRED') {
-                                const proposedTitles = Array.isArray(resp.splitProposal)
-                                  ? resp.splitProposal.map((item: any) => item?.title).filter(Boolean).join('\n• ')
-                                  : ''
-                                const approved = window.confirm(`This change requires an overview/detail split and will reset figure ordering and stale translations.${proposedTitles ? `\n\n• ${proposedTitles}` : ''}\n\nApprove this split?`)
-                                if (approved) {
-                                  resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved, confirmRawReplacement: true, approveSplit: true })
-                                }
-                              }
                               if (resp?.diagramSource?.plantumlCode) {
                                 setGenerationWarning(formatDiagramGenerationWarnings(resp))
                                 await onRefresh()
@@ -3645,6 +3763,35 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           </Button>
                           <Button size="sm" variant="outline" onClick={() => setModifyFigNo(null)}>Cancel</Button>
                       </div>
+                      {/* Dense figures already offer this above the card, so it
+                          is not repeated here. */}
+                      {!figureDensityNote(plan) && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
+                          <Label className="text-xs">Or split this figure into</Label>
+                          <select
+                            className="rounded border border-paper-300 px-1 py-0.5 text-xs"
+                            value={splitPartsFor(figNo)}
+                            onChange={(e) => setSplitPartsCount(prev => ({ ...prev, [figNo]: Number(e.target.value) }))}
+                            disabled={!!regeneratingFigure[figNo]}
+                            aria-label={`Number of parts to split figure ${figNo} into`}
+                          >
+                            {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                          <Label className="text-xs">parts</Label>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            disabled={!!regeneratingFigure[figNo]}
+                            onClick={() => handleSplitFigure(figNo, modifyTextSaved)}
+                          >
+                            {regeneratingFigure[figNo]
+                              ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                              : <Scissors className="mr-1 h-3 w-3" />}
+                            Split figure
+                          </Button>
+                        </div>
+                      )}
                       {regeneratingFigure[figNo] && (
                         <div className="mt-2 flex items-center text-xs text-ai-blue-600">
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />

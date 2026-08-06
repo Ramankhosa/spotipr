@@ -39,6 +39,14 @@ export async function GET(request: NextRequest, { params }: { params: { publicat
       numberOfClaims: true,
       numberOfPages: true,
       corpusSources: true,
+      // Provenance of the stored text (migration 20260721120000). An attorney
+      // reading "this reference does not teach X" from a 5,000-character
+      // Google-US-partial description is drawing a conclusion the document
+      // cannot support, so the reader has to say what it is looking at.
+      claimsSource: true,
+      claimsCompleteness: true,
+      descriptionSource: true,
+      descriptionCompleteness: true,
     },
   })
 
@@ -59,6 +67,18 @@ export async function GET(request: NextRequest, { params }: { params: { publicat
       descriptionTruncated: description.length > DESCRIPTION_LIMIT,
       /** What text tier the corpus holds for this document — shown honestly in the UI. */
       textTier: claims ? 'claims' : description ? 'description-snippet' : 'abstract',
+      /**
+       * Whether the stored text is the whole document.
+       *
+       * NULL provenance means the row was never touched by the EPO service: for
+       * US rows that is the legacy Google-US-partial capture (first independent
+       * claim plus ~5,000 characters of description), and elsewhere it means no
+       * text at all. Either way it is NOT a complete specification, and the
+       * absence of a teaching in it proves nothing.
+       */
+      claimsComplete: patent.claimsCompleteness === 'FULL',
+      descriptionComplete: patent.descriptionCompleteness === 'FULL',
+      textProvenanceKnown: Boolean(patent.claimsSource || patent.descriptionSource),
     },
   })
 }

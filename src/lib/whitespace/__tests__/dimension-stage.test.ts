@@ -123,8 +123,16 @@ describe('detectGaps', () => {
     expect(gap.bValueLabel).toBe('Y')
     expect(gap.observed).toBe(0)
     expect(gap.expected).toBeCloseTo(80, 5)
-    expect(gap.z).toBeCloseTo(-Math.sqrt(80), 5)
+    // Adjusted residual, not the Pearson one: both margins are observed, so the
+    // variance carries their finite-population corrections —
+    // 80·(1 − 400/1000)·(1 − 200/1000) = 38.4, not 80. Dividing by sqrt(80), as
+    // this pinned before, understates the residual by ~1.4x here and by ~2x at
+    // the 40–70% margins a real dimension census produces.
+    expect(gap.z).toBeCloseTo(-80 / Math.sqrt(80 * 0.6 * 0.8), 5)
     expect(gap.rarity).toBe(1)
+    // Which is also why rarity cannot rank: it is pinned at 1 for this gap and
+    // for one twenty times less surprising. Surprisal is the ordering signal.
+    expect(gap.surprisal).toBeCloseTo(80 / Math.LN10, 5)
     // Near-miss: A's families solve the sensing axis with X instead.
     expect(gap.nearMissB?.valueLabel).toBe('X')
     expect(gap.nearMissB?.families).toBe(300)

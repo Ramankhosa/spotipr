@@ -48,6 +48,7 @@ import type {
 } from '../types'
 import {
   clampLimit,
+  classificationPrefixKeys,
   compactPatentKey,
   asStringArray,
   normalizeClassification,
@@ -231,21 +232,55 @@ function corpusSourceCondition(corpusSource: string) {
   return Prisma.sql`p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]`
 }
 
+/**
+ * pgvector's HNSW ceiling. `hnsw.ef_search` is capped at 1000 by the extension.
+ */
+const HNSW_EF_SEARCH_MAX = 1000
+
+/**
+ * How many rows an ANN scan must consider to return `limit` rows AFTER the
+ * WHERE clause is applied.
+ *
+ * Neither index type filters: an HNSW scan returns at most `hnsw.ef_search`
+ * rows and an IVFFlat scan only visits `ivfflat.probes` lists, and Postgres
+ * applies the corpus-source / date / country / CPC predicates to whatever comes
+ * back. So an unfiltered `LIMIT 220` needs ef_search >= 220 just to be honest,
+ * and a filtered one needs a multiple of it or the lane silently returns a
+ * near-empty set while thousands of matching documents exist.
+ */
+function annOverFetch(limit: number, filtered: boolean): number {
+  const target = Math.max(1, Math.floor(limit)) * (filtered ? 6 : 2)
+  return Math.max(100, Math.min(HNSW_EF_SEARCH_MAX, target))
+}
+
 async function queryRawWithStatementTimeout<T = any>(
   query: Prisma.Sql,
   timeoutMs = DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS,
-  ivfflatProbes = 24
+  ivfflatProbes = 24,
+  hnswEfSearch?: number
 ) {
   // Use a sequential transaction instead of an interactive callback transaction.
   // Prisma's interactive transaction default expires after 5 seconds, which is
   // shorter than this provider's PostgreSQL statement timeout (8 seconds).
   // Both operations below still run on the same connection/transaction, so the
   // transaction-local statement_timeout applies to the search query.
-  const [, , rows] = await prisma.$transaction([
+  //
+  // BOTH ANN knobs are set, always. The physical column is chosen at boot from
+  // PATENT_CORPUS_EMBEDDING_DTYPE (binary -> "embeddingBinary", IVFFlat; float
+  // -> "embedding"/"embeddingHalf", HNSW), so tuning only one of them makes the
+  // provider silently correct on one deployment and silently truncated on the
+  // other. `ivfflat.probes` is inert on an HNSW index and `hnsw.ef_search` is
+  // inert on an IVFFlat one, so setting both costs one statement and removes
+  // the dependency on which index the corpus happens to carry.
+  const efSearch = Math.max(1, Math.min(HNSW_EF_SEARCH_MAX, Math.floor(hnswEfSearch ?? 100)))
+  const [, , , rows] = await prisma.$transaction([
     prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`,
     // pgvector defaults to one IVFFlat probe. Set the calibrated value locally
     // so retrieval correctness does not depend on an out-of-band ALTER DATABASE.
     prisma.$executeRaw`SELECT set_config('ivfflat.probes', ${String(Math.max(1, Math.floor(ivfflatProbes)))}, true)`,
+    // ...and pgvector defaults hnsw.ef_search to 40, which is a hard row cap on
+    // every HNSW scan regardless of the query's LIMIT.
+    prisma.$executeRaw`SELECT set_config('hnsw.ef_search', ${String(efSearch)}, true)`,
     prisma.$queryRaw<T[]>(query),
   ])
   return rows
@@ -291,15 +326,41 @@ function commonSelectSql(extra: Prisma.Sql = Prisma.empty) {
   `
 }
 
+/**
+ * Date range predicates, written so the planner can actually use the indexes.
+ *
+ * `filingDate` and `publicationDate` are timestamps with plain btree indexes
+ * (`local_patents_filingDate_idx` / `local_patents_publicationDate_idx`). A
+ * predicate of the form `col::date >= $1::date` wraps the indexed column in a
+ * function, and with no matching expression index Postgres falls back to a
+ * sequential scan of 45M rows — which then burns the lane's statement timeout
+ * and surfaces to the attorney as a dead lane rather than a slow filter.
+ *
+ * Comparing against timestamp bounds keeps the column bare and the index usable.
+ * The upper bound becomes an exclusive `< next day` so the whole of the end date
+ * is still included, exactly as `::date <=` did.
+ */
 function addDateConditions(conditions: Prisma.Sql[], filters: PatentSearchFilters) {
-  const filingFrom = validDateText(filters.filingDateFrom)
-  const filingTo = validDateText(filters.filingDateTo)
-  const publicationFrom = validDateText(filters.publicationDateFrom)
-  const publicationTo = validDateText(filters.publicationDateTo)
-  if (filingFrom) conditions.push(Prisma.sql`p."filingDate"::date >= ${filingFrom}::date`)
-  if (filingTo) conditions.push(Prisma.sql`p."filingDate"::date <= ${filingTo}::date`)
-  if (publicationFrom) conditions.push(Prisma.sql`p."publicationDate"::date >= ${publicationFrom}::date`)
-  if (publicationTo) conditions.push(Prisma.sql`p."publicationDate"::date <= ${publicationTo}::date`)
+  const lowerBound = (value?: string) => {
+    const text = validDateText(value)
+    return text ? new Date(`${text}T00:00:00.000Z`) : null
+  }
+  const upperBoundExclusive = (value?: string) => {
+    const text = validDateText(value)
+    if (!text) return null
+    const next = new Date(`${text}T00:00:00.000Z`)
+    next.setUTCDate(next.getUTCDate() + 1)
+    return next
+  }
+
+  const filingFrom = lowerBound(filters.filingDateFrom)
+  const filingTo = upperBoundExclusive(filters.filingDateTo)
+  const publicationFrom = lowerBound(filters.publicationDateFrom)
+  const publicationTo = upperBoundExclusive(filters.publicationDateTo)
+  if (filingFrom) conditions.push(Prisma.sql`p."filingDate" >= ${filingFrom}`)
+  if (filingTo) conditions.push(Prisma.sql`p."filingDate" < ${filingTo}`)
+  if (publicationFrom) conditions.push(Prisma.sql`p."publicationDate" >= ${publicationFrom}`)
+  if (publicationTo) conditions.push(Prisma.sql`p."publicationDate" < ${publicationTo}`)
 }
 
 function addNumericConditions(conditions: Prisma.Sql[], filters: PatentSearchFilters) {
@@ -341,6 +402,29 @@ function titleExpression() {
 
 function abstractExpression() {
   return Prisma.sql`coalesce(p."abstract", '') || ' ' || coalesce(p."abstractOriginal", '')`
+}
+
+/**
+ * Full-text over the SPECIFICATION — claims and description.
+ *
+ * The keyword index covers ragText + title + abstract only, i.e. roughly 150
+ * words per document. For professional prior-art work that is the single
+ * biggest recall ceiling in the product: the teaching that anticipates a claim
+ * is very often in the description and mentioned nowhere in the abstract, and a
+ * search that never reads the specification cannot find it.
+ *
+ * MUST stay byte-identical to the expression in migration
+ * 20260805120000_corpus_fulltext_specification, or the planner will not
+ * recognise the index and this becomes a sequential scan over 45M rows. The
+ * same rule already governs searchDocumentExpression() — see the note on
+ * LocalPatent in schema.prisma.
+ */
+function specificationDocumentExpression() {
+  return Prisma.sql`to_tsvector(
+    'english'::regconfig,
+    coalesce(p."claimsText", '') || ' ' ||
+    coalesce(p."descriptionText", '')
+  )`
 }
 
 function searchDocumentExpression() {
@@ -409,16 +493,18 @@ function buildCountryCondition(codes: string[] | undefined) {
 }
 
 function buildClassificationCondition(values: string[]) {
-  const normalized = uniqueStrings(values.map(normalizeClassification).filter(Boolean))
-  if (!normalized.length) return null
-  const parts = normalized.map(value => {
-    const compact = `%${compactPatentKey(value)}%`
-    return Prisma.sql`EXISTS (
+  // Prefix, not substring: a CPC selection means "this group and everything
+  // under it". The substring form additionally matched any code that merely
+  // contained the selection, and it disagreed with the count the Prior-Art
+  // Studio's Filters gate reported for the same selection.
+  // classificationPrefixKeys() is the shared definition — keep both sides on it.
+  const keys = classificationPrefixKeys(values)
+  if (!keys.length) return null
+  const parts = keys.map(key => Prisma.sql`EXISTS (
       SELECT 1
       FROM unnest(p."classifications") AS cls
-      WHERE upper(regexp_replace(cls, '[^A-Za-z0-9]', '', 'g')) LIKE ${compact}
-    )`
-  })
+      WHERE upper(regexp_replace(cls, '[^A-Za-z0-9]', '', 'g')) LIKE ${`${key}%`}
+    )`)
   return Prisma.sql`(${Prisma.join(parts, ' OR ')})`
 }
 
@@ -496,6 +582,9 @@ interface IndianRankAccumulator {
   titleScore?: number
   fieldScore?: number
   classificationScore?: number
+  /** Lexical hit inside claims or description, kept apart from the abstract lane. */
+  specificationRank?: number
+  specificationScore?: number
   matchedFeatures: Set<string>
   retrievalMatches: PatentRetrievalMatch[]
 }
@@ -504,6 +593,23 @@ function clampScore(value: unknown) {
   const score = Number(value)
   if (!Number.isFinite(score)) return 0
   return Math.max(0, Math.min(1, score))
+}
+
+/**
+ * Lexical relevance is NOT a 0..1 quantity.
+ *
+ * `ts_rank_cd` with default normalization is unbounded above and routinely
+ * exceeds 1 for a document matching many lexemes, and the structured-match lane
+ * feeds a SUM of `ts_rank_cd` across groups into the same accumulator. Clamping
+ * those to 1 made every strong keyword hit saturate at exactly 1.0, so the
+ * lexical term in the fusion score could not tell the best keyword match from a
+ * mediocre one. Keep the raw magnitude here and normalise across the retrieved
+ * set at fusion time, where a meaningful 0..1 scale actually exists.
+ */
+function nonNegativeScore(value: unknown) {
+  const score = Number(value)
+  if (!Number.isFinite(score)) return 0
+  return Math.max(0, score)
 }
 
 function trimRetrievalText(value: unknown, maxWords = 36) {
@@ -698,6 +804,8 @@ export class IndianCorpusProvider implements PatentSearchProvider {
   protected semanticSearchEnabled: boolean
   protected metadataSearchEnabled: boolean
   protected titleAbstractOnlySearch: boolean
+  /** Full-text over claims + description, behind the partial specification index. */
+  protected specificationSearchEnabled: boolean
   capabilities: PatentSearchCapabilities = {
     semantic: true,
     fullText: true,
@@ -717,6 +825,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     semanticSearchEnabled?: boolean
     metadataSearchEnabled?: boolean
     titleAbstractOnlySearch?: boolean
+    specificationSearchEnabled?: boolean
   } = {}) {
     this.id = options.id || 'indian-corpus'
     this.label = options.label || 'Indian Patent Corpus'
@@ -726,6 +835,11 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     this.semanticSearchEnabled = options.semanticSearchEnabled !== false
     this.metadataSearchEnabled = options.metadataSearchEnabled !== false
     this.titleAbstractOnlySearch = options.titleAbstractOnlySearch === true
+    // On by default, and safe on a corpus with no stored specification text:
+    // the partial index has no rows there, so the lane simply returns nothing.
+    // Providers that deliberately search titles and abstracts only opt out.
+    this.specificationSearchEnabled =
+      options.specificationSearchEnabled ?? !this.titleAbstractOnlySearch
     this.capabilities = {
       ...this.capabilities,
       semantic: this.semanticSearchEnabled,
@@ -743,8 +857,8 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     // was enough for two providers x 3 concurrent probes to starve the pool.
     const deepLaneTimeoutMs = Math.max(10_000, Number(process.env.PATENT_SEARCH_DEEP_LANE_TIMEOUT_MS || '18000') || 18_000)
     const laneTimeoutMs = deep ? Math.max(tuning.statementTimeoutMs, deepLaneTimeoutMs) : tuning.statementTimeoutMs
-    const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = laneTimeoutMs) =>
-      queryRawWithStatementTimeout<T>(query, timeoutMs, tuning.ivfflatProbes)
+    const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = laneTimeoutMs, hnswEfSearch?: number) =>
+      queryRawWithStatementTimeout<T>(query, timeoutMs, tuning.ivfflatProbes, hnswEfSearch)
     const traceId = request.requestHeaders?.['x-request-id'] ||
       `patent-search-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const laneSink = { diagnostics: request.laneDiagnostics, providerId: this.id }
@@ -752,10 +866,15 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
     const filters = withExcludedTerms(queryPlan.fieldFilters || {}, queryPlan.excludedTerms || [])
+    const scopeConditions = buildWhereConditions(filters)
     const filterConditions = [
       corpusSourceCondition(this.corpusSource),
-      ...buildWhereConditions(filters),
+      ...scopeConditions,
     ]
+    // The ANN scan cannot use any of these predicates, so it over-fetches and
+    // Postgres filters afterwards. Knowing whether the probe is filtered at all
+    // is what decides how far to over-fetch.
+    const annFiltered = scopeConditions.length > 0
     const manualMode = request.searchMode === 'manual'
     const rows = new Map<string, NormalizedPatentResult>()
     const ranks = new Map<string, IndianRankAccumulator>()
@@ -764,7 +883,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
 
     const merge = (
       row: any,
-      kind: 'vectorRank' | 'textRank' | 'fieldRank' | 'titleRank',
+      kind: 'vectorRank' | 'textRank' | 'fieldRank' | 'titleRank' | 'specificationRank',
       rank: number,
       weight: number,
       retrievalQuery?: LocalRetrievalQuery
@@ -775,10 +894,21 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       const extraMatchedFields = retrievalQuery
         ? [retrievalQuery.type === 'concept' || retrievalQuery.type === 'semantic' ? 'semantic' : '']
         : []
+      const isFeatureQuery = retrievalQuery?.type === 'feature' || retrievalQuery?.type === 'feature_pair'
       const extraMatchReasons = retrievalQuery
         ? (retrievalQuery.type === 'concept' || retrievalQuery.type === 'semantic'
           ? [`Abstract embedding matched ${retrievalQuery.type.replace('_', ' ')} query: ${retrievalQuery.label || retrievalQuery.text}`]
-          : [])
+          : isFeatureQuery
+            ? [`Abstract embedding matched feature: ${retrievalQuery.label || retrievalQuery.text}`]
+            : [])
+        : []
+      // A feature probe hitting this document IS the evidence that the document
+      // teaches that feature. It was being computed and thrown away, so both the
+      // ranking below and every downstream consumer of `matchedFeatures` (the
+      // LLM retrieval hints in novelty-search-service, the Studio's match
+      // reasons) saw an empty list on every result.
+      const extraMatchedFeatures = isFeatureQuery && kind === 'vectorRank'
+        ? [retrievalQuery.label || retrievalQuery.text].filter(Boolean).map(String)
         : []
       rows.set(key, {
         ...(existing || {}),
@@ -794,6 +924,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         ]),
         matchedFeatures: uniqueStrings([
           ...(existing?.matchedFeatures || []),
+          ...extraMatchedFeatures,
         ]),
         matchReasons: uniqueStrings([
           ...(existing?.matchReasons || []),
@@ -811,8 +942,13 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       if (kind === 'textRank') current.textRank = typeof current.textRank === 'number' ? Math.min(current.textRank, rank) : rank
       if (kind === 'titleRank') current.titleRank = typeof current.titleRank === 'number' ? Math.min(current.titleRank, rank) : rank
       if (kind === 'fieldRank') current.fieldRank = typeof current.fieldRank === 'number' ? Math.min(current.fieldRank, rank) : rank
-      if (kind === 'textRank') current.textScore = Math.max(current.textScore || 0, clampScore(row.textScore))
-      if (kind === 'titleRank') current.titleScore = Math.max(current.titleScore || 0, clampScore(row.titleScore))
+      if (kind === 'specificationRank') {
+        current.specificationRank =
+          typeof current.specificationRank === 'number' ? Math.min(current.specificationRank, rank) : rank
+        current.specificationScore = Math.max(current.specificationScore || 0, nonNegativeScore(row.textScore))
+      }
+      if (kind === 'textRank') current.textScore = Math.max(current.textScore || 0, nonNegativeScore(row.textScore))
+      if (kind === 'titleRank') current.titleScore = Math.max(current.titleScore || 0, nonNegativeScore(row.titleScore))
       if (kind === 'fieldRank') current.fieldScore = Math.max(current.fieldScore || 0, clampScore(row.fieldScore))
       if (kind === 'vectorRank') {
         const vectorScore = clampScore(row.vectorScore)
@@ -820,8 +956,13 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         if (retrievalQuery?.type === 'concept' || retrievalQuery?.type === 'semantic') {
           current.conceptVectorScore = Math.max(current.conceptVectorScore || 0, vectorScore)
         }
-        if (retrievalQuery?.type === 'feature' || retrievalQuery?.type === 'feature_pair') {
+        if (isFeatureQuery) {
           current.bestFeatureVectorScore = Math.max(current.bestFeatureVectorScore || 0, vectorScore)
+          // Distinct features this document was retrieved for. `featureCoverage`
+          // in the fusion score is computed from the size of this set, so it has
+          // to actually be populated.
+          const featureKey = String(retrievalQuery.id || retrievalQuery.label || retrievalQuery.text)
+          if (featureKey) current.matchedFeatures.add(featureKey)
         }
         if (retrievalQuery && !current.retrievalMatches.some(match => match.queryId === retrievalQuery.id)) {
           current.retrievalMatches.push({
@@ -853,9 +994,15 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             SELECT websearch_to_tsquery('english'::regconfig, ${textQuery}) AS query
           ),
           hits AS MATERIALIZED (
-            SELECT p."id"
+            SELECT p."id", ts_rank_cd(${searchDocument}, q.query) AS "poolScore"
             FROM "local_patents" p, q
             ${whereSql(conditions)}
+            -- Rank INSIDE the pool. Without this the pool was an arbitrary
+            -- sample: a broad OR-query matches millions of rows on the 45M-row
+            -- corpus, so Postgres returned whichever N the scan reached first
+            -- and the genuinely top-ranked documents were almost never in it —
+            -- which also made two identical searches return different art.
+            ORDER BY "poolScore" DESC
             LIMIT ${textCandidatePoolLimit}
           )
           SELECT ${commonSelectSql(Prisma.sql`,
@@ -869,6 +1016,51 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         textRows.forEach((row, index) => merge(row, 'textRank', index + 1, 1))
       } catch (error) {
         logOptionalSearchError('full_text_search', error, { traceId, providerId: this.id }, laneSink)
+      }
+
+      // Specification lane: the same query against claims + description.
+      //
+      // Separate from the lane above rather than folded into it, for two
+      // reasons. The index is partial (only rows that actually carry text), so
+      // one combined tsvector could not use it. And a hit in the specification
+      // is weaker evidence than a hit in the abstract — the abstract is what the
+      // document is ABOUT, the description mentions everything in the field —
+      // so it enters the fusion at a lower weight rather than pretending to be
+      // the same signal.
+      if (this.specificationSearchEnabled) {
+        try {
+          const specificationDocument = specificationDocumentExpression()
+          const specCandidatePoolLimit = Math.min(Math.max(candidateLimit * 4, 200), tuning.textCandidateCap)
+          const specConditions = [
+            Prisma.sql`numnode(sq.query) > 0`,
+            // Mirrors the partial index predicate so the planner can use it.
+            Prisma.sql`(p."claimsText" IS NOT NULL OR p."descriptionText" IS NOT NULL)`,
+            Prisma.sql`${specificationDocument} @@ sq.query`,
+            ...filterConditions,
+          ]
+          const specRows = await runQuery<any>(Prisma.sql`
+            WITH sq AS (
+              SELECT websearch_to_tsquery('english'::regconfig, ${textQuery}) AS query
+            ),
+            hits AS MATERIALIZED (
+              SELECT p."id", ts_rank_cd(${specificationDocument}, sq.query) AS "poolScore"
+              FROM "local_patents" p, sq
+              ${whereSql(specConditions)}
+              ORDER BY "poolScore" DESC
+              LIMIT ${specCandidatePoolLimit}
+            )
+            SELECT ${commonSelectSql(Prisma.sql`,
+              ts_rank_cd(${specificationDocument}, sq.query) AS "textScore"`)}
+            FROM hits
+            JOIN "local_patents" p ON p."id" = hits."id"
+            CROSS JOIN sq
+            ORDER BY "textScore" DESC
+            LIMIT ${candidateLimit}
+          `)
+          specRows.forEach((row, index) => merge(row, 'specificationRank', index + 1, 0.7))
+        } catch (error) {
+          logOptionalSearchError('specification_search', error, { traceId, providerId: this.id }, laneSink)
+        }
       }
 
       if (this.metadataSearchEnabled) {
@@ -885,9 +1077,10 @@ export class IndianCorpusProvider implements PatentSearchProvider {
               SELECT websearch_to_tsquery('simple'::regconfig, ${textQuery}) AS query
             ),
             hits AS MATERIALIZED (
-              SELECT p."id"
+              SELECT p."id", ts_rank_cd(${metadataDocument}, mq.query) AS "poolScore"
               FROM "local_patents" p, mq
               ${whereSql(metadataConditions)}
+              ORDER BY "poolScore" DESC
               LIMIT ${metadataCandidatePoolLimit}
             )
             SELECT ${commonSelectSql(Prisma.sql`,
@@ -1006,6 +1199,8 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           rows: any[]
           durationMs: number
           error?: unknown
+          /** True when the first ANN pass came back short and had to be re-run wider. */
+          widened?: boolean
         } | null> = new Array(vectorRetrievalQueries.length).fill(null)
 
         const runProbe = async (queryIndex: number) => {
@@ -1019,7 +1214,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           if (limit <= 0) return
           const vectorLiteral = corpusEmbeddingToLiteral(vector)
           const queryStartedAt = Date.now()
-          const vectorRows = await runQuery<any>(Prisma.sql`
+          const probeSql = Prisma.sql`
             SELECT ${commonSelectSql(Prisma.sql`,
               1 - ((${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorLiteral}${EMBEDDING_CAST_SQL})${EMBEDDING_SIMILARITY_DENOM}) AS "vectorScore"`)}
             FROM "local_patents" p
@@ -1032,11 +1227,33 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             ])}
             ORDER BY ${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorLiteral}${EMBEDDING_CAST_SQL}
             LIMIT ${limit}
-          `)
+          `
+          let vectorRows = await runQuery<any>(probeSql, laneTimeoutMs, annOverFetch(limit, annFiltered))
+          // The predicates above are applied AFTER the ANN scan, so a selective
+          // filter can starve a probe that had plenty of true neighbours. When
+          // the first pass comes back short of what was asked for, widen the
+          // search list to the extension's ceiling and try once more. Recording
+          // the widening matters: a probe that needed it is a probe whose recall
+          // is filter-limited, which is exactly what the funnel should disclose.
+          let widened = false
+          if (annFiltered && vectorRows.length < limit) {
+            const firstPassRows = vectorRows.length
+            widened = true
+            vectorRows = await runQuery<any>(probeSql, laneTimeoutMs, HNSW_EF_SEARCH_MAX)
+            logEmbeddingSearch('info', 'vector_probe_widened', {
+              traceId,
+              queryIndex,
+              queryType: retrievalQuery.type,
+              requestedLimit: limit,
+              firstPassRows,
+              widenedRows: vectorRows.length,
+            })
+          }
           probeOutcomes[queryIndex] = {
             retrievalQuery,
             rows: vectorRows,
             durationMs: Date.now() - queryStartedAt,
+            widened,
           }
         }
 
@@ -1162,7 +1379,11 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             SELECT set_config('pg_trgm.similarity_threshold', ${tuning.trigramThreshold}, true)
           ),
           hits AS MATERIALIZED (
-            SELECT p."id"
+            SELECT p."id",
+              GREATEST(
+                similarity(coalesce(p."title", ''), ${textQuery}),
+                similarity(coalesce(p."abstract", ''), ${textQuery}) * 0.75
+              ) AS "poolScore"
             FROM "local_patents" p, settings
             ${whereSql([
               Prisma.sql`(
@@ -1171,6 +1392,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
               )`,
               ...filterConditions,
             ])}
+            ORDER BY "poolScore" DESC
             LIMIT ${trigramCandidatePoolLimit}
           )
           SELECT ${commonSelectSql(Prisma.sql`,
@@ -1185,7 +1407,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         `)
         titleRows.forEach((row, index) => merge(row, 'titleRank', index + 1, 0.85))
       } catch (error) {
-        logOptionalSearchError('trigram_search', error, { traceId, providerId: this.id })
+        // laneSink was missing here, so a trigram timeout was the one lane
+        // failure invisible to the caller's "which lanes died" warning.
+        logOptionalSearchError('trigram_search', error, { traceId, providerId: this.id }, laneSink)
       }
     } else if (hasEnoughCandidatesForRequestedLimit && !request.skipTrigramSearch) {
       logEmbeddingSearch('info', 'trigram_search_skipped', {
@@ -1203,20 +1427,59 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       })
     }
 
-    if (hasPositiveFieldFilters(filters)) {
+    // Filter-only backfill: the newest documents matching the field filters,
+    // with NO relation to the query.
+    //
+    // This must be a last resort, not a standing lane. `hasPositiveFieldFilters`
+    // is true for a date-only or CPC-only filter, and the Prior-Art Studio sets
+    // one on essentially every run, so it used to fire every time and pour up to
+    // `candidateLimit` query-irrelevant rows into the pool. They rank last, but
+    // they still inflate the "Retrieved" gate, the lane-overlap counts and the
+    // vocabulary-gap denominator that are presented to attorneys as evidence —
+    // and they suppress the trigram lane via the pool-size check above. Run it
+    // only when the real lanes came back short, which is the case it was
+    // actually written for (a filter-driven search with little or no query).
+    if (hasPositiveFieldFilters(filters) && rows.size < safeLimit) {
       try {
-        const fieldRows = await runQuery<any>(Prisma.sql`
+        const fieldBackfillLimit = Math.max(0, Math.min(candidateLimit, safeLimit - rows.size))
+        const fieldRows = fieldBackfillLimit > 0 ? await runQuery<any>(Prisma.sql`
           SELECT ${commonSelectSql(Prisma.sql`, 1.0 AS "fieldScore"`)}
           FROM "local_patents" p
           ${whereSql(filterConditions)}
           ORDER BY p."publicationDate" DESC NULLS LAST, p."id" DESC
-          LIMIT ${candidateLimit}
-        `)
+          LIMIT ${fieldBackfillLimit}
+        `) : []
         fieldRows.forEach((row, index) => merge(row, 'fieldRank', index + 1, 1.1))
+        if (fieldRows.length) {
+          logEmbeddingSearch('info', 'field_filter_backfill', {
+            traceId,
+            providerId: this.id,
+            poolBefore: rows.size - fieldRows.length,
+            backfilled: fieldRows.length,
+            safeLimit,
+          })
+        }
       } catch (error) {
         logOptionalSearchError('field_search', error, { traceId, providerId: this.id }, laneSink)
       }
     }
+
+    // Lexical scores are raw `ts_rank_cd` magnitudes (see nonNegativeScore), so
+    // normalise them against the best hit in THIS result set before mixing them
+    // with the 0..1 vector similarities.
+    let maxTextScore = 0
+    let maxTitleScore = 0
+    let maxSpecificationScore = 0
+    ranks.forEach(rank => {
+      if ((rank.textScore || 0) > maxTextScore) maxTextScore = rank.textScore || 0
+      if ((rank.titleScore || 0) > maxTitleScore) maxTitleScore = rank.titleScore || 0
+      if ((rank.specificationScore || 0) > maxSpecificationScore) maxSpecificationScore = rank.specificationScore || 0
+    })
+    // How many distinct feature probes this search actually ran — the
+    // denominator for per-document feature coverage.
+    const featureQueryCount = vectorRetrievalQueries.filter(
+      query => query.type === 'feature' || query.type === 'feature_pair'
+    ).length
 
     const sorted = Array.from(rows.values())
       .map(result => {
@@ -1230,14 +1493,35 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           ...(result.matchedFeatures || []),
           ...Array.from(rank.matchedFeatures),
         ])
-        const featureCoverage = 0
+        // Share of the invention's features this document was retrieved for. A
+        // document answering six of six element probes is materially different
+        // evidence from one answering a single probe, and neither the score nor
+        // the UI could previously tell them apart.
+        const featureCoverage = featureQueryCount
+          ? Math.min(1, rank.matchedFeatures.size / featureQueryCount)
+          : 0
         const conceptSignal = rank.conceptVectorScore || 0
         const featureSignal = rank.bestFeatureVectorScore || 0
         const classificationSignal = classMatches.length ? 1 : 0
+        const textSignal = maxTextScore > 0 ? Math.min(1, (rank.textScore || 0) / maxTextScore) : 0
+        const titleSignal = maxTitleScore > 0 ? Math.min(1, (rank.titleScore || 0) / maxTitleScore) : 0
+        // Deliberately the smallest lexical weight: a description mentions
+        // everything in the field, so a specification hit is real evidence but
+        // weaker than the same words appearing in the abstract.
+        const specificationSignal =
+          maxSpecificationScore > 0 ? Math.min(1, (rank.specificationScore || 0) / maxSpecificationScore) : 0
+        // Feature probes carry the per-element and per-block semantic evidence —
+        // in a Studio plan they are up to eight of the nine probes issued. They
+        // used to reach the ranking only through the RRF term, which is capped
+        // at 0.08, i.e. less than half a point of text score, which made an
+        // element-driven search rank as though only the concept probe had run.
         const retrievalScore =
-          (0.45 * conceptSignal) +
-          (0.18 * (rank.textScore || 0)) +
-          (0.12 * (rank.titleScore || 0)) +
+          (0.32 * conceptSignal) +
+          (0.19 * featureSignal) +
+          (0.07 * featureCoverage) +
+          (0.15 * textSignal) +
+          (0.08 * titleSignal) +
+          (0.06 * specificationSignal) +
           (0.05 * classificationSignal) +
           Math.min(0.08, rank.rrfScore)
         const retrievalMatches = rank.retrievalMatches
@@ -1266,8 +1550,11 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             conceptVector: conceptSignal || undefined,
             bestFeatureVector: featureSignal || undefined,
             featureCoverage,
-            text: rank.textScore || result.scores?.text,
-            title: rank.titleScore || result.scores?.title,
+            // Normalised within this result set, not the raw ts_rank_cd — every
+            // consumer of `scores.text` treats it as a 0..1 relevance.
+            text: textSignal || result.scores?.text,
+            title: titleSignal || result.scores?.title,
+            specification: specificationSignal || undefined,
             field: rank.fieldScore || result.scores?.field,
             classification: classificationSignal || result.scores?.classification,
             retrieval: retrievalScore,
