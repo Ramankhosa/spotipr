@@ -321,7 +321,7 @@ export async function POST(request: NextRequest) {
     // Use a transaction to ensure atomicity - either everything succeeds or nothing does
     // This includes the user limit check to prevent race conditions in parallel signups
     const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenant.id} FOR UPDATE`
+      await tx.$queryRaw`SELECT "id" FROM "tenants" WHERE "id" = ${tenant.id} FOR UPDATE`
 
       // ATOMIC CHECK: Re-count users inside transaction to prevent race conditions
       // Two parallel signup requests could both pass the pre-check, but this ensures

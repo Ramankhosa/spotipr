@@ -227,7 +227,7 @@ export async function POST(request: NextRequest) {
 
     // Create user with social OAuth data
     const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenant.id} FOR UPDATE`
+      await tx.$queryRaw`SELECT "id" FROM "tenants" WHERE "id" = ${tenant.id} FOR UPDATE`
 
       const usersCountInTransaction = await tx.user.count({
         where: { tenantId: tenant.id }
