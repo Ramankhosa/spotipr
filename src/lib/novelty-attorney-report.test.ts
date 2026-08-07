@@ -340,8 +340,9 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.comparisons[0].rows[3]).toMatchObject({
       featureNumber: 'KF4',
       status: 'Unknown',
-      statusLabel: 'Requires Full-Text Review',
-      publicMappingStatus: 'Requires Full-Text Review',
+      // States what the record shows rather than assigning the reader homework.
+      statusLabel: 'Not Established in Reviewed Record',
+      publicMappingStatus: 'Not Established in Reviewed Record',
       publicMappingCode: 'R',
       evidenceStrength: 'Weak',
       evidenceSource: 'none',
@@ -681,9 +682,19 @@ describe('buildNoveltyAttorneyReportModel', () => {
       stage4Results: {},
     });
 
-    expect(model.claimPositioningAnalysis?.primaryClaimFocus).toContain('manual review');
-    expect(model.claimPositioningAnalysis?.remainingInventiveCore).toContain('manual review');
-    expect(model.strategicReviewFocus?.reviewReason).toContain('not strong enough');
+    // Weak mapped evidence must still produce a substantive statement about the art,
+    // not a warning about our own confidence or a task handed back to the reader.
+    expect(model.claimPositioningAnalysis?.primaryClaimFocus).toContain('feature combination');
+    expect(model.claimPositioningAnalysis?.remainingInventiveCore).toContain('feature combination');
+    expect(model.strategicReviewFocus?.reviewReason).toContain('feature combination');
+    for (const text of [
+      model.claimPositioningAnalysis?.primaryClaimFocus,
+      model.claimPositioningAnalysis?.reasoning,
+      model.strategicReviewFocus?.reviewReason,
+      model.strategicReviewFocus?.criticalRelationshipToVerify,
+    ]) {
+      expect(String(text)).not.toMatch(/manual review|not strong enough|confidence threshold|requires full-text review/i);
+    }
   });
 
   it('uses object-form feature-map evidence when comparison rows do not provide a quote', () => {
@@ -911,6 +922,62 @@ describe('buildNoveltyAttorneyReportModel', () => {
       ...invalidModel.mainComparisons,
       ...invalidModel.appendixMappedComparisons,
     ].map(item => item.publicationNumber))).toEqual(new Set(publications));
+  });
+
+  it('states a claim impact for every reference and never hands the assessment back', () => {
+    const publications = ['US800A', 'US801A', 'US802A'];
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'tone-check',
+      title: 'Adaptive irrigation controller',
+      jurisdiction: 'IN',
+      config: {},
+      stage0Results: {
+        inventionFeatures: ['soil moisture sensing', 'closed-loop valve control'],
+        featureDetails: [
+          { feature: 'soil moisture sensing', feature_type: 'core_technical' },
+          { feature: 'closed-loop valve control', feature_type: 'novelty_candidate' },
+        ],
+      },
+      stage1Results: {
+        retrievalCandidates: publications.map(publicationNumber => ({ publicationNumber, title: publicationNumber })),
+        aiRelevance: { byPn: {} },
+      },
+      stage35Results: {
+        feature_map: publications.map((publicationNumber, index) => ({
+          pn: publicationNumber,
+          title: publicationNumber,
+          feature_analysis: [
+            { feature: 'soil moisture sensing', status: 'Present', quote: 'a soil moisture sensing probe measures soil moisture', evidence_source: 'abstract', confidence: 0.9 },
+            // Only the first reference also maps the novelty-candidate feature, so it
+            // is the one that must come out at the top of the scale.
+            index === 0
+              ? { feature: 'closed-loop valve control', status: 'Present', quote: 'closed-loop control of the valve from the moisture signal', evidence_source: 'claims', confidence: 0.9 }
+              // Low confidence keeps this genuinely undetermined: with no stated
+              // confidence the builder resolves it to a definite "Not found" instead.
+              : { feature: 'closed-loop valve control', status: 'Unknown', confidence: 0.4 },
+          ],
+        })),
+      },
+      stage4Results: {},
+    });
+
+    // Every reference gets a stated level on one scale. "Review" is not a level:
+    // the strongest references are tagged Critical by applySelectivePriorities, and a
+    // display path that fails to recognise it silently understates the finding.
+    for (const comparison of model.comparisons) {
+      expect(['Critical', 'High', 'Medium', 'Low']).toContain(comparison.reviewPriority);
+      expect(comparison.referenceRole).not.toMatch(/review/i);
+    }
+    expect(model.comparisons.some(c => c.reviewPriority === 'Critical' || c.reviewPriority === 'High')).toBe(true);
+
+    // An undetermined cell reports the state of the record, not an instruction.
+    const undetermined = model.comparisons
+      .flatMap(comparison => comparison.rows)
+      .find(row => row.status === 'Unknown');
+    expect(undetermined?.statusLabel).toBe('Not Established in Reviewed Record');
+
+    const legend = model.scoringLegend.map(entry => `${entry.label} ${entry.meaning}`).join(' ');
+    expect(legend).not.toMatch(/requires full-text review/i);
   });
 
   it('recomputes a stale selection under the rule it was written with', () => {

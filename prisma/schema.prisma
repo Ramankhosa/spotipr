@@ -5632,6 +5632,14 @@ model WhitespaceHypothesis {
   /// Non-optional by design. A hypothesis that leaves the system without its
   /// caveats is a bug.
   coverageLimitations Json
+  /// The attorney's judgment, which OUTRANKS the machine verdict above it.
+  /// { verdict: 'ENDORSED' | 'REJECTED' | 'NEEDS_INVESTIGATION', note: string | null,
+  ///   reviewedById: string, reviewedAt: ISO string }. Null means unreviewed.
+  ///
+  /// The vocabulary is deliberately disjoint from `status`: the system says
+  /// whether a hypothesis survived its attacks, the attorney says whether it is
+  /// worth pursuing, and conflating those two would let a REFUTED row read as
+  /// though a human had signed off on it.
   humanReview         Json?
 
   createdBy String

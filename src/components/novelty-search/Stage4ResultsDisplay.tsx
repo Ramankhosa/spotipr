@@ -66,8 +66,6 @@ export default function Stage4ResultsDisplay({
   const inventorActions = Array.isArray(concl.inventor_action_items) ? concl.inventor_action_items : [];
   const overallAssessment = concl.overall_novelty_assessment || '';
   const filingAdvice = concl.filing_advice || '';
-  const needsReviewNotice = String(overallAssessment).toLowerCase().includes('low evidence');
-
   const sanitize = safeReportText;
 
   const trail = r.search_trail || {};
@@ -175,14 +173,10 @@ export default function Stage4ResultsDisplay({
         </section>
       )}
 
-      {needsReviewNotice && (
-        <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
-          <h3 className="text-base font-semibold text-amber-950">Attorney Review Notice</h3>
-          <p className="mt-2 text-sm leading-6 text-amber-900">
-            This result should be reviewed by a qualified patent attorney before claim strategy, filing, or business decisions are finalized.
-          </p>
-        </section>
-      )}
+      {/* A conditional "Attorney Review Notice" used to appear here whenever the
+          assessment came back low-confidence. Surfacing our own uncertainty as a
+          warning banner reads as the product not trusting its output, and the
+          standing professional note already applies to every report. */}
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-slate-900">Search Trail</h3>

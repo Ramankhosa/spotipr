@@ -269,6 +269,8 @@ export class OpenAIProvider implements LLMProvider {
           thoughtTokens,
           thoughtTokensIncludedInOutput: true,
           totalTokens: usage?.total_tokens || 0,
+          // Portion of the prompt served from OpenAI's automatic prefix cache.
+          cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens || 0,
           finishReason: choice.finish_reason,
           modelUsed: modelToUse
         }
@@ -342,6 +344,7 @@ export class OpenAIProvider implements LLMProvider {
         thoughtTokens,
         thoughtTokensIncludedInOutput: true,
         totalTokens: usage?.total_tokens || 0,
+        cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens || 0,
         finishReason,
         modelUsed: modelToUse,
         streamed: true
@@ -440,6 +443,7 @@ export class OpenAIProvider implements LLMProvider {
         thoughtTokens,
         thoughtTokensIncludedInOutput: true,
         totalTokens: usage?.total_tokens || 0,
+        cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens || 0,
         finishReason: data.status,
         modelUsed: modelToUse
       }

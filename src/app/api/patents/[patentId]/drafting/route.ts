@@ -1009,6 +1009,8 @@ export async function POST(
         return await handleTestPQAIKey();
       case 'mock_related_art_search':
         return await handleMockRelatedArtSearch();
+      case 'related_art_add_by_number':
+        return await handleRelatedArtAddByNumber(authResult.user, patentId, data);
       case 'related_art_select':
         return await handleRelatedArtSelect(authResult.user, patentId, data);
       case 'related_art_llm_review':
@@ -7728,6 +7730,291 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
       batchPriorArtPolicy,
     },
   })
+}
+
+/**
+ * Kind codes tried when a typed publication number carries none.
+ *
+ * Attorneys type "IN201811012345" or "US10999888"; the corpus stores the
+ * published form with its kind code ("...A", "...B2"). Both `publicationNumber`
+ * and `publicationNumberKey` carry unique indexes, so widening the lookup into a
+ * bounded IN-list of candidate keys keeps it index-backed. A `LIKE 'X%'` prefix
+ * scan would not be, and local_patents holds ~45M rows.
+ */
+const RELATED_ART_LOOKUP_KIND_CODES = [
+  'A', 'A1', 'A2', 'A3', 'A4', 'A9',
+  'B', 'B1', 'B2', 'B3', 'B4', 'B8', 'B9',
+  'C', 'C1', 'C2', 'E', 'E1', 'S', 'S1', 'T', 'T1', 'T2', 'U', 'U1', 'Y', 'Y1',
+]
+
+/** How many numbers one "add by number" request may resolve. Keeps the IN-list bounded. */
+const RELATED_ART_MANUAL_LOOKUP_LIMIT = 25
+
+/** Compact form with any trailing kind code removed — used only to match a typed number to a stored row. */
+function stripRelatedArtKindCode(value: unknown): string {
+  const compact = compactRelatedArtCandidateNumber(value)
+  if (!compact) return ''
+  const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/)
+  return kindSuffixMatch?.[1] || compact
+}
+
+/**
+ * Split whatever the user pasted into distinct patent numbers. Accepts an array,
+ * or one string of numbers separated by commas, semicolons, or newlines — pasting
+ * a column out of a spreadsheet is the common case.
+ */
+function parseRelatedArtPatentNumberInput(value: unknown): string[] {
+  const raw: string[] = []
+  if (Array.isArray(value)) value.forEach(item => raw.push(String(item ?? '')))
+  else if (typeof value === 'string' || typeof value === 'number') raw.push(String(value))
+
+  const seen = new Set<string>()
+  const numbers: string[] = []
+  for (const chunk of raw) {
+    // A comma between two digits is a thousands separator ("10,999,888"), not a
+    // delimiter — splitting on it would turn one number into three fragments.
+    const delimited = chunk.replace(/(\d),(\d)/g, '$1$2')
+    for (const token of delimited.split(/[\s,;|]+/)) {
+      const text = token.trim()
+      if (!text) continue
+      const key = stripRelatedArtKindCode(text)
+      // A bare kind code or punctuation run carries no number to look up.
+      if (!key || !/\d/.test(key) || seen.has(key)) continue
+      seen.add(key)
+      numbers.push(text.toUpperCase())
+      if (numbers.length >= RELATED_ART_MANUAL_LOOKUP_LIMIT) return numbers
+    }
+  }
+  return numbers
+}
+
+function relatedArtApplicantNames(value: unknown): string[] {
+  if (!value) return []
+  const list = Array.isArray(value) ? value : [value]
+  return uniqueRelatedArtStrings([
+    list.map(item => {
+      if (!item) return ''
+      if (typeof item === 'string') return item
+      if (typeof item === 'object') {
+        const record = item as Record<string, unknown>
+        return record.name || record.applicant || record.value || ''
+      }
+      return String(item)
+    }),
+  ])
+}
+
+/**
+ * Add specific patents to the current related-art run by publication number.
+ *
+ * Attorneys routinely know the references they want reviewed — an examiner
+ * citation, a competitor's filing — and the ranked search has no reason to
+ * surface them. These rows are appended to the run's `resultsJson`, which is what
+ * the AI review reads, so an added patent is assessed and tagged exactly like a
+ * searched one. Resolution is corpus-only: a number that is not stored is
+ * reported back as not found rather than silently dropped or fetched for money.
+ */
+async function handleRelatedArtAddByNumber(user: any, patentId: string, data: any) {
+  const { sessionId } = data
+  if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    select: { id: true },
+  })
+  if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+
+  const requested = parseRelatedArtPatentNumberInput(
+    data?.patentNumbers ?? data?.patentNumber ?? data?.text
+  )
+  if (requested.length === 0) {
+    return NextResponse.json({ error: 'Enter at least one patent number.' }, { status: 400 })
+  }
+
+  // Index-backed candidate keys: the number as typed, its compact form, and the
+  // compact form with each plausible kind code appended.
+  const exactValues = new Set<string>()
+  const compactValues = new Set<string>()
+  for (const number of requested) {
+    exactValues.add(number)
+    const compact = compactRelatedArtCandidateNumber(number)
+    if (!compact) continue
+    compactValues.add(compact)
+    const stripped = stripRelatedArtKindCode(number)
+    if (stripped) {
+      compactValues.add(stripped)
+      for (const kind of RELATED_ART_LOOKUP_KIND_CODES) compactValues.add(`${stripped}${kind}`)
+    }
+  }
+
+  let rows: any[] = []
+  try {
+    rows = await prisma.localPatent.findMany({
+      where: {
+        OR: [
+          { publicationNumber: { in: Array.from(exactValues) } },
+          { publicationNumberKey: { in: Array.from(compactValues) } },
+        ],
+      },
+      select: {
+        publicationNumber: true,
+        publicationNumberKey: true,
+        applicationNumberRaw: true,
+        kind: true,
+        country: true,
+        title: true,
+        abstract: true,
+        abstractOriginal: true,
+        applicants: true,
+        inventors: true,
+        classifications: true,
+        filingDate: true,
+        publicationDate: true,
+        numberOfClaims: true,
+        numberOfPages: true,
+        corpusSources: true,
+      },
+      // One typed number can match several kind codes of the same document.
+      take: RELATED_ART_MANUAL_LOOKUP_LIMIT * (RELATED_ART_LOOKUP_KIND_CODES.length + 2),
+    })
+  } catch (error) {
+    console.error('Related art corpus lookup by number failed:', error)
+    return NextResponse.json({
+      error: 'Patent lookup failed. Please try again.',
+      details: error instanceof Error ? error.message : String(error),
+    }, { status: 502 })
+  }
+
+  // Group by kind-stripped key so "US10999888" finds "US10999888B2".
+  const rowsByKey = new Map<string, any[]>()
+  for (const row of rows) {
+    const key = stripRelatedArtKindCode(row.publicationNumber)
+    if (!key) continue
+    const bucket = rowsByKey.get(key)
+    if (bucket) bucket.push(row)
+    else rowsByKey.set(key, [row])
+  }
+
+  const run = await resolveRelatedArtRunForManualAdd(user, sessionId, data?.runId)
+  if ('error' in run) return run.error
+  const existingResults: any[] = Array.isArray(run.record.resultsJson) ? run.record.resultsJson : []
+  const existingKeys = new Set(
+    existingResults
+      .map((result: any) => stripRelatedArtKindCode(getRelatedArtCandidatePatentNumber(result)))
+      .filter(Boolean)
+  )
+
+  const added: any[] = []
+  const notFound: string[] = []
+  const duplicates: string[] = []
+
+  for (const number of requested) {
+    const key = stripRelatedArtKindCode(number)
+    const matches = rowsByKey.get(key) || []
+    if (matches.length === 0) {
+      notFound.push(number)
+      continue
+    }
+    if (existingKeys.has(key)) {
+      duplicates.push(number)
+      continue
+    }
+    // Prefer the row the user actually typed; otherwise the earliest publication
+    // of that document, so the pick is deterministic rather than row-order luck.
+    const compact = compactRelatedArtCandidateNumber(number)
+    const row = matches.find(candidate => compactRelatedArtCandidateNumber(candidate.publicationNumber) === compact)
+      || matches.slice().sort((a, b) =>
+        String(a.publicationNumber || '').localeCompare(String(b.publicationNumber || ''))
+      )[0]
+
+    const classifications = Array.isArray(row.classifications) ? row.classifications : []
+    const publicationNumber = String(row.publicationNumber || number)
+    // Only claim the Indian-corpus provider when the row actually came from it —
+    // the stage labels each result by provider, and mislabelling a US or EP
+    // document as an Indian patent misleads the person reading the list. Without
+    // a provider the UI falls back to the jurisdiction, which is always right.
+    const corpusSources = Array.isArray(row.corpusSources) ? row.corpusSources : []
+    const providerId = corpusSources.includes('indian-corpus')
+      ? ('indian-corpus' as PatentSearchProviderId)
+      : undefined
+    added.push(toDraftingRelatedArtResult({
+      providerId,
+      sourceProvider: providerId,
+      sourceProviders: providerId ? [providerId] : [],
+      jurisdiction: row.country || publicationNumber.slice(0, 2).toUpperCase(),
+      publicationNumber,
+      publication_number: publicationNumber,
+      pn: publicationNumber,
+      applicationNumber: row.applicationNumberRaw || null,
+      applicationNumberRaw: row.applicationNumberRaw || null,
+      title: row.title || publicationNumber,
+      abstract: row.abstract || row.abstractOriginal || null,
+      snippet: row.abstract || row.abstractOriginal || null,
+      applicants: relatedArtApplicantNames(row.applicants),
+      inventors: Array.isArray(row.inventors) ? row.inventors : [],
+      classifications,
+      filingDate: row.filingDate || null,
+      publicationDate: row.publicationDate || null,
+      link: `https://patents.google.com/patent/${publicationNumber}`,
+      numberOfClaims: row.numberOfClaims ?? null,
+      numberOfPages: row.numberOfPages ?? null,
+      // No retrieval score exists for a hand-picked reference, and inventing one
+      // would put a fake "% match" on the row. The UI hides the score when absent.
+      addedManually: true,
+    } as any))
+    existingKeys.add(key)
+  }
+
+  let results = existingResults
+  if (added.length > 0) {
+    results = [...existingResults, ...added]
+    await prisma.relatedArtRun.update({
+      where: { id: run.record.id },
+      data: { resultsJson: results },
+    })
+  }
+
+  return NextResponse.json({
+    runId: run.record.id,
+    results,
+    added,
+    addedPatentNumbers: added.map(result => getRelatedArtCandidatePatentNumber(result)),
+    notFound,
+    duplicates,
+  })
+}
+
+/**
+ * The run manually added patents attach to: the one the stage is showing, else
+ * the latest, else a fresh empty run so "add by number" works before any search.
+ */
+async function resolveRelatedArtRunForManualAdd(
+  user: any,
+  sessionId: string,
+  requestedRunId: unknown
+): Promise<{ record: any } | { error: NextResponse }> {
+  const runId = typeof requestedRunId === 'string' && requestedRunId.trim() ? requestedRunId.trim() : null
+  if (runId) {
+    const record = await prisma.relatedArtRun.findFirst({ where: relatedArtRunOwnershipWhere(sessionId, runId) })
+    if (!record) {
+      return { error: NextResponse.json({ error: 'Related art run not found or access denied' }, { status: 404 }) }
+    }
+    return { record }
+  }
+
+  const latest = await prisma.relatedArtRun.findFirst({ where: { sessionId }, orderBy: { ranAt: 'desc' } })
+  if (latest) return { record: latest }
+
+  const created = await prisma.relatedArtRun.create({
+    data: {
+      sessionId,
+      queryText: 'Manually added patent numbers',
+      paramsJson: { endpoint: 'manual-patent-number-lookup', sourceMode: 'CORPUS_ONLY' },
+      resultsJson: [],
+      ranBy: user.id,
+    },
+  })
+  return { record: created }
 }
 
 async function handleRelatedArtSearch(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {

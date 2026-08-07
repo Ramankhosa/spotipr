@@ -316,6 +316,16 @@ export class LLMGateway {
             providerOutputTokens: response.outputTokens ?? response.metadata?.outputTokens ?? null,
             thoughtTokens: response.metadata?.thoughtTokens ?? response.metadata?.reasoningTokens ?? 0,
             thoughtTokensIncludedInOutput: response.metadata?.thoughtTokensIncludedInOutput === true,
+            // Prompt-cache accounting. Every provider prices cached input below fresh
+            // input, but only reports it per call, so without recording it here there is
+            // no way to tell an eligible prompt from one that is actually being cached.
+            cachedInputTokens: response.metadata?.cachedInputTokens ?? 0,
+            cacheWriteInputTokens: response.metadata?.cacheWriteInputTokens ?? 0,
+            cacheHitRatio: (() => {
+              const cached = Number(response.metadata?.cachedInputTokens ?? 0)
+              const total = Number(responseInputTokens ?? llmRequest.inputTokens ?? 0)
+              return total > 0 ? Math.round((cached / total) * 1000) / 1000 : 0
+            })(),
             costBreakdown: response.metadata?.costBreakdown,
             modelSource: explicitModelCode ? 'explicit' : modelResolution?.source
           }

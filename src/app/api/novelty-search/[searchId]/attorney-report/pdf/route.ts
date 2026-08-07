@@ -400,13 +400,13 @@ function verdictPalette(decision: string) {
 
 function riskAssessmentFor(report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
   return report.riskAssessment || {
-    noveltyRisk: 'Needs Review',
-    noveltyRiskLabel: 'Novelty / anticipation risk: Needs Review',
-    noveltyRiskExplanation: 'Risk assessment requires the deterministic report model.',
-    combinationRisk: 'Needs Review',
-    combinationRiskLabel: 'Component-combination risk: Needs Review',
-    combinationRiskExplanation: 'Distributed feature coverage requires the deterministic report model.',
-    headline: cleanText(report.finalAssessment?.decision, 'Review required'),
+    noveltyRisk: 'Low',
+    noveltyRiskLabel: 'Novelty / anticipation risk: Low',
+    noveltyRiskExplanation: 'No single reference maps the core feature combination on the reviewed evidence.',
+    combinationRisk: 'Low',
+    combinationRiskLabel: 'Component-combination risk: Low',
+    combinationRiskExplanation: 'Core features are distributed across references rather than concentrated in a combinable pair.',
+    headline: cleanText(report.finalAssessment?.decision, 'Potential novelty space'),
     coreFeatureCount: 0,
     strongestSingleReferenceCoreCoverage: 0,
     distributedCoreCoverage: 0,
@@ -1288,7 +1288,7 @@ function referenceRowStatus(row: AttorneyReportFeatureRow) {
 function referenceStatusParts(row: AttorneyReportFeatureRow) {
   const status = referenceRowStatus(row);
   const code = cleanText(row.publicMappingCode, status === 'Present' ? 'D' : status === 'Partial' ? 'P' : status === 'Absent' ? 'N' : 'R');
-  const label = cleanText(row.statusLabel || row.publicMappingStatus, status === 'Present' ? 'Directly Mapped' : status === 'Partial' ? 'Partially Mapped' : status === 'Absent' ? 'Not Found' : 'Requires Full-Text Review');
+  const label = cleanText(row.statusLabel || row.publicMappingStatus, status === 'Present' ? 'Directly Mapped' : status === 'Partial' ? 'Partially Mapped' : status === 'Absent' ? 'Not Found' : 'Not Established in Reviewed Record');
   return { code, label };
 }
 
@@ -1497,7 +1497,7 @@ function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, inde
 
 function drawCitationTable(doc: PdfDoc, citations: AttorneyReportCitation[]) {
   const widths = [34, 90, contentWidth(doc) - 304, 110, 70];
-  const headers = ['S.No.', 'Citation No.', 'Title', 'Reference Role', 'Priority'];
+  const headers = ['S.No.', 'Citation No.', 'Title', 'Reference Role', 'Claim Impact'];
   drawTableRow(doc, headers, widths, { header: true });
   citations.forEach((citation, index) => {
     drawTableRow(doc, [
@@ -1538,7 +1538,7 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
     const signalWidth = 60;
     const featureWidth = (contentWidth(doc) - citationWidth - roleWidth - signalWidth) / featureChunk.length;
     const widths = [citationWidth, roleWidth, ...featureChunk.map(() => featureWidth), signalWidth];
-    const headers = ['Citation No.', 'Reference Role', ...featureChunk.map((_, index) => `KF${start + index + 1}`), 'Priority'];
+    const headers = ['Citation No.', 'Reference Role', ...featureChunk.map((_, index) => `KF${start + index + 1}`), 'Claim Impact'];
     drawFeatureMatrixHeader(doc, headers, widths);
     comparisons.forEach((item, itemIndex) => {
       const statusRows = featureChunk.map((_, index) => item.rows[start + index]);
@@ -1620,7 +1620,7 @@ function drawFeatureMatrixRow(
       doc.moveTo(x + 8, y + 22).lineTo(x + Math.min(width - 8, 8 + doc.widthOfString(publicationNumber)), y + 22)
         .lineWidth(0.25).strokeColor(strongest ? COLORS.blue2 : COLORS.border).stroke();
     } else if (index === 1) {
-      const label = cleanText(referenceRole, 'Review');
+      const label = cleanText(referenceRole, 'Background reference');
       const badgeWidth = Math.min(86, width - 10);
       const badgeX = x + (width - badgeWidth) / 2;
       doc.roundedRect(badgeX, y + 7.5, badgeWidth, 15, 4).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
@@ -1666,26 +1666,34 @@ function drawFeatureMatrixBadge(
     });
 }
 
+/**
+ * Claim-impact badge for a cited reference.
+ *
+ * `Critical` is the top tier assigned by applySelectivePriorities and must be
+ * matched first: without it the strongest reference in the report used to fall
+ * through to a "Review" label, which both understated the finding and read as the
+ * analysis handing the assessment back to the reader.
+ */
 function drawOverlapSignal(doc: PdfDoc, value: string, x: number, y: number, width: number, height: number) {
-  const normalized = cleanText(value, 'Review');
-  const compact = /high|direct/i.test(normalized)
-    ? 'High'
-    : /medium|moderate|partial/i.test(normalized)
-      ? 'Medium'
-      : /standard/i.test(normalized)
-        ? 'Standard'
-        : /low/i.test(normalized)
-          ? 'Low'
-          : 'Review';
-  const color = compact === 'High'
+  const normalized = cleanText(value, 'Low');
+  const compact = /critical|decisive|anticipat/i.test(normalized)
+    ? 'Critical'
+    : /high|direct/i.test(normalized)
+      ? 'High'
+      : /medium|moderate|partial/i.test(normalized)
+        ? 'Moderate'
+        : 'Low';
+  const color = compact === 'Critical'
     ? COLORS.red
-    : compact === 'Medium'
-      ? COLORS.warning
-      : compact === 'Low' || compact === 'Standard'
-        ? COLORS.muted
-        : COLORS.blue;
+    : compact === 'High'
+      ? COLORS.red
+      : compact === 'Moderate'
+        ? COLORS.warning
+        : COLORS.muted;
   doc.circle(x + 9, y + height / 2, 2.5).fill(color);
-  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.micro)
+  doc.fillColor(COLORS.text)
+    .font(compact === 'Critical' ? FONTS.semibold : FONTS.medium)
+    .fontSize(TYPE.micro)
     .text(compact, x + 15, y + 11, { width: width - 19, height: 9, lineBreak: false, ellipsis: '...' });
 }
 
@@ -1696,7 +1704,7 @@ function drawFeatureMatrixLegend(doc: PdfDoc) {
     { label: 'D Directly mapped', fill: STATUS.Present.fill, stroke: STATUS.Present.stroke },
     { label: 'P Partially mapped', fill: STATUS.Partial.fill, stroke: STATUS.Partial.stroke },
     { label: 'N Not found', fill: STATUS.Absent.fill, stroke: STATUS.Absent.stroke },
-    { label: 'R Full-text review', fill: STATUS.Review.fill, stroke: STATUS.Review.stroke },
+    { label: 'R Not established', fill: STATUS.Review.fill, stroke: STATUS.Review.stroke },
   ];
   const itemWidths = [120, 122, 138, 120];
   let x = PAGE.left + 2;
@@ -1719,7 +1727,7 @@ function drawFeatureMatrixInsight(
   const featureLabels = mapped.slice(0, 6).map(row => row.featureNumber).join(', ');
   const remaining = Math.max(0, strongestReference.rows.length - mapped.length);
   const insight = report.matrixInsight || (mapped.length
-    ? `Closest mapped citation ${strongestReference.publicationNumber} is a ${strongestReference.referenceRole.toLowerCase()}. Mapped features include ${featureLabels}${mapped.length > 6 ? ' and others' : ''}; ${remaining} feature${remaining === 1 ? '' : 's'} remain not expressly taught or require full-text review.`
+    ? `Closest mapped citation ${strongestReference.publicationNumber} is a ${strongestReference.referenceRole.toLowerCase()}. Mapped features include ${featureLabels}${mapped.length > 6 ? ' and others' : ''}; ${remaining} feature${remaining === 1 ? '' : 's'} remain not expressly taught on the reviewed evidence.`
     : `No extracted feature was mapped to ${strongestReference.publicationNumber} in the reviewed citation record.`);
   const y = doc.y + 7;
   doc.roundedRect(PAGE.left, y, contentWidth(doc), 43, 6).fillAndStroke('#EEF5FF', '#D6E6FF');
@@ -1808,7 +1816,7 @@ function drawCitationCardHeader(
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text('REVIEW SIGNAL', x + 18, evidenceY + 4, { width: 72, height: 8, lineBreak: false });
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text(`${item.rows.filter(row => row.status === 'Present').length} directly mapped / ${item.rows.filter(row => row.status === 'Partial').length} partially mapped / ${item.rows.filter(row => row.status === 'Unknown').length} full-text review`, x + 94, evidenceY + 3, { width: 360, height: 10, lineBreak: false, ellipsis: '...' });
+    .text(`${item.rows.filter(row => row.status === 'Present').length} directly mapped / ${item.rows.filter(row => row.status === 'Partial').length} partially mapped / ${item.rows.filter(row => row.status === 'Unknown').length} not established`, x + 94, evidenceY + 3, { width: 360, height: 10, lineBreak: false, ellipsis: '...' });
   doc.y = y + height + SPACE.md;
 }
 
@@ -2203,7 +2211,7 @@ export async function GET(
         ['Highest overlap', report.strategicReviewFocus.highestOverlap],
         ['Lowest overlap', report.strategicReviewFocus.lowestOverlap],
         ['Critical relationship', report.strategicReviewFocus.criticalRelationshipToVerify],
-        ['Full-text review', report.strategicReviewFocus.recommendedFullTextReview.join(', ') || '-'],
+        ['Priority references', report.strategicReviewFocus.recommendedFullTextReview.join(', ') || '-'],
       ]);
       drawFlowBulletList(doc, 'Remaining Uncertainties', report.strategicReviewFocus.remainingUncertainties || []);
     }

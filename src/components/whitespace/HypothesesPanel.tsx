@@ -12,12 +12,17 @@
  *    one that survived twelve must look like different objects.
  *  - "What this doesn't cover" lists data-coverage facts. They are properties
  *    of the corpus, stated plainly.
+ *  - The attorney's review is the last thing on the card, below every machine
+ *    caveat, because it is the judgment that outranks them.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUpRight, FlaskConical, Loader2, Sparkles, Swords } from 'lucide-react'
+import { ArrowUpRight, FlaskConical, Gavel, Loader2, Sparkles, Swords, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
+import { GATE_LABEL, REVIEW_LABEL, STATUS_LABEL, STRATEGY_LABEL, TYPE_LABEL } from '@/lib/whitespace/labels'
+import { HUMAN_REVIEW_VERDICTS, MIN_REVIEW_NOTE, type HumanReviewVerdict } from '@/lib/whitespace/types'
 import { isPollAborted, pollRun, wsApi } from './api'
 
 interface HypothesisRow {
@@ -45,6 +50,7 @@ interface HypothesisRow {
     redTeamNotes: string | null
   } | null
   coverageLimitations: string[] | null
+  humanReview: { verdict: HumanReviewVerdict; note: string | null; reviewedAt: string } | null
   evidence: Array<{ id: string; kind: string; stance: string; refId: string | null; passage: string | null }>
 }
 
@@ -57,54 +63,32 @@ interface ConceptRow {
   features: { requiredElements?: string[]; openQuestions?: string[] } | null
 }
 
-const TYPE_LABEL: Record<string, string> = {
-  UNDETERMINED: 'Not yet tested',
-  DATA_WHITESPACE: 'Data gap — corpus cannot see this area',
-  TERMINOLOGY_WHITESPACE: 'Vocabulary gap — patented under other words',
-  PATENT_WHITESPACE: 'Sparse area',
-  CLAIM_WHITESPACE: 'Claim gap — patents exist, claims do not recite this',
-  SCIENTIFIC_WHITESPACE: 'Untouched by patents and literature',
-  PRODUCT_WHITESPACE: 'Patented but not productised',
-  TECHNICAL_FEASIBILITY_WHITESPACE: 'Tried and abandoned',
-  COMMERCIAL_WHITESPACE: 'Feasible but uneconomic',
-  REGULATORY_WHITESPACE: 'Blocked by regulation',
-  GENUINE: 'Genuine opening — survived all tests',
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: 'Proposed',
-  VALIDATING: 'Being tested',
-  VALIDATED: 'Survived testing',
-  REFUTED: 'Refuted',
-  INCONCLUSIVE: 'Inconclusive',
-}
-
-const GATE_LABEL: Record<string, string> = {
-  G1_DATA: 'Data coverage',
-  G2_TERMINOLOGY: 'Vocabulary',
-  G3_ADJACENT_CLAIMS: 'Adjacent claims',
-  G4_FEASIBILITY: 'Feasibility',
-  G5_COMMERCIAL: 'Commercial',
-  G6_REGULATORY: 'Regulatory',
-}
-
-const STRATEGY_LABEL: Record<string, string> = {
-  SYNONYM_SHIFTED: 'Other vocabulary',
-  SEMANTIC_PARAPHRASE: 'Meaning search',
-  CPC_ADJACENT: 'Adjacent classes',
-  ASSIGNEE_PIVOT: 'Competitor portfolios',
-  RED_TEAM: 'Red team',
-  LITERATURE: 'Literature',
+/** Verdict chip colours. Endorsement is the only one that earns the accent. */
+const REVIEW_TONE: Record<HumanReviewVerdict, string> = {
+  ENDORSED: 'bg-primary/10 text-primary',
+  REJECTED: 'bg-destructive/10 text-destructive',
+  NEEDS_INVESTIGATION: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
 }
 
 export function HypothesesPanel({
   studyId,
   areasReady,
   onChanged,
+  proposeEnabled = true,
+  emptyHint,
 }: {
   studyId: string
   areasReady: boolean
   onChanged?: () => void
+  /**
+   * Invention studies reach hypotheses by promoting a measured gap, never by
+   * asking a model for them — the generator reads landscape clusters, which an
+   * invention study does not have. False hides the proposal affordance rather
+   * than offering a button that can only fail.
+   */
+  proposeEnabled?: boolean
+  /** Replaces the landscape-specific empty state when the route differs. */
+  emptyHint?: string
 }) {
   const { toast } = useToast()
   const [hypotheses, setHypotheses] = useState<HypothesisRow[]>([])
@@ -113,6 +97,10 @@ export function HypothesesPanel({
   const [generating, setGenerating] = useState(false)
   const [validatingId, setValidatingId] = useState<string | null>(null)
   const [convertingId, setConvertingId] = useState<string | null>(null)
+  const [reviewingId, setReviewingId] = useState<string | null>(null)
+  const [savingReview, setSavingReview] = useState(false)
+  const [draftVerdict, setDraftVerdict] = useState<HumanReviewVerdict | null>(null)
+  const [draftNote, setDraftNote] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -215,6 +203,39 @@ export function HypothesesPanel({
     [studyId, toast, load, onChanged]
   )
 
+  const openReview = useCallback((hypothesis: HypothesisRow) => {
+    setReviewingId(hypothesis.id)
+    setDraftVerdict(hypothesis.humanReview?.verdict ?? null)
+    setDraftNote(hypothesis.humanReview?.note ?? '')
+  }, [])
+
+  const saveReview = useCallback(
+    async (hypothesisId: string, verdict: HumanReviewVerdict | null, note: string) => {
+      setSavingReview(true)
+      try {
+        await wsApi(`/api/whitespace/studies/${studyId}/hypotheses/${hypothesisId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ verdict, note }),
+        })
+        // Only a successful save may discard what the attorney typed.
+        setReviewingId(null)
+        setDraftVerdict(null)
+        setDraftNote('')
+        await load()
+        onChanged?.()
+      } catch (error) {
+        toast({
+          variant: 'error',
+          title: 'Could not save the review',
+          description: error instanceof Error ? error.message : 'Try again.',
+        })
+      } finally {
+        setSavingReview(false)
+      }
+    },
+    [studyId, toast, load, onChanged]
+  )
+
   return (
     <section className="mt-10 rounded-lg border border-border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
@@ -225,14 +246,16 @@ export function HypothesesPanel({
             hypothesis that survives its attacks becomes an answer.
           </p>
         </div>
-        <Button size="sm" onClick={() => void generate()} disabled={generating || !areasReady}>
-          {generating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-          {hypotheses.length ? 'Propose more' : 'Propose hypotheses'}
-        </Button>
+        {proposeEnabled && (
+          <Button size="sm" onClick={() => void generate()} disabled={generating || !areasReady}>
+            {generating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+            {hypotheses.length ? 'Propose more' : 'Propose hypotheses'}
+          </Button>
+        )}
       </div>
 
       <div className="px-5 py-5">
-        {!areasReady && (
+        {proposeEnabled && !areasReady && (
           <p className="text-sm text-muted-foreground">
             Map and measure the areas first — hypotheses are proposed from those numbers, not from a blank page.
           </p>
@@ -247,8 +270,8 @@ export function HypothesesPanel({
 
         {areasReady && !loading && !hypotheses.length && !generating && (
           <p className="text-sm text-muted-foreground">
-            None yet. Reading claims in a few areas first (above) gives the generator its strongest signal — element
-            combinations the field measurably avoids.
+            {emptyHint ??
+              'None yet. Reading claims in a few areas first (above) gives the generator its strongest signal — element combinations the field measurably avoids.'}
           </p>
         )}
 
@@ -354,6 +377,103 @@ export function HypothesesPanel({
                   </details>
                 )}
 
+                {/* The attorney's word, placed after every machine caveat. */}
+                {hypothesis.humanReview && reviewingId !== hypothesis.id && (
+                  <div className="mt-3 rounded-md border border-primary/30 bg-primary/[0.04] p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${REVIEW_TONE[hypothesis.humanReview.verdict]}`}
+                      >
+                        {REVIEW_LABEL[hypothesis.humanReview.verdict]}
+                      </span>
+                      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                        Your review — the operative judgment
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        · {hypothesis.humanReview.reviewedAt.slice(0, 10)}
+                      </span>
+                    </div>
+                    {hypothesis.humanReview.note && (
+                      <p className="mt-2 whitespace-pre-line text-sm text-foreground">{hypothesis.humanReview.note}</p>
+                    )}
+                    <div className="mt-2 flex items-center gap-3">
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        onClick={() => openReview(hypothesis)}
+                      >
+                        Revise
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        onClick={() => void saveReview(hypothesis.id, null, '')}
+                        disabled={savingReview}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {reviewingId === hypothesis.id && (
+                  <div className="mt-3 rounded-md border border-border bg-muted/30 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Your verdict
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {HUMAN_REVIEW_VERDICTS.map(verdict => (
+                        <button
+                          key={verdict}
+                          type="button"
+                          onClick={() => setDraftVerdict(verdict)}
+                          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                            draftVerdict === verdict
+                              ? `border-transparent ${REVIEW_TONE[verdict]}`
+                              : 'border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground'
+                          }`}
+                        >
+                          {REVIEW_LABEL[verdict]}
+                        </button>
+                      ))}
+                    </div>
+                    <Textarea
+                      className="mt-3 text-sm"
+                      rows={3}
+                      value={draftNote}
+                      onChange={event => setDraftNote(event.target.value)}
+                      placeholder={
+                        draftVerdict === 'REJECTED'
+                          ? `Why are you setting this aside? (at least ${MIN_REVIEW_NOTE} characters — it goes in the report as your reasoning)`
+                          : 'Your reasoning, in your words. It appears in the exported report.'
+                      }
+                    />
+                    <div className="mt-2 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        disabled={!draftVerdict || savingReview}
+                        onClick={() => draftVerdict && void saveReview(hypothesis.id, draftVerdict, draftNote)}
+                      >
+                        {savingReview ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                        Save review
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={savingReview}
+                        onClick={() => {
+                          setReviewingId(null)
+                          setDraftNote('')
+                          setDraftVerdict(null)
+                        }}
+                      >
+                        <X className="mr-1.5 h-3.5 w-3.5" />
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-3 flex items-center gap-2">
                   {!refuted && hypothesis.status !== 'VALIDATING' && (
                     <Button variant={hypothesis.status === 'DRAFT' ? 'default' : 'outline'} size="sm" onClick={() => void validate(hypothesis.id)} disabled={validating}>
@@ -378,6 +498,12 @@ export function HypothesesPanel({
                         <ArrowUpRight className="mr-2 h-3.5 w-3.5" />
                       )}
                       Promote to concept
+                    </Button>
+                  )}
+                  {!hypothesis.humanReview && reviewingId !== hypothesis.id && (
+                    <Button variant="outline" size="sm" onClick={() => openReview(hypothesis)}>
+                      <Gavel className="mr-2 h-3.5 w-3.5" />
+                      Record your verdict
                     </Button>
                   )}
                   {promoted && <span className="text-xs text-muted-foreground">Promoted to a concept below.</span>}

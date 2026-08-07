@@ -203,6 +203,11 @@ export class AnthropicProvider implements LLMProvider {
           provider: this.name,
           model: actualModel,
           inputTokens,
+          // Anthropic reports cache reads and writes separately: reads are billed at a
+          // fraction of input, writes at a premium, so both are needed to judge whether
+          // caching is paying for itself.
+          cachedInputTokens: response.usage?.cache_read_input_tokens || 0,
+          cacheWriteInputTokens: response.usage?.cache_creation_input_tokens || 0,
           latencyMs: latency,
           stopReason: response.stop_reason,
           thinkingEnabled: enableThinking

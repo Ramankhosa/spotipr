@@ -114,6 +114,7 @@ export class DeepSeekProvider implements LLMProvider {
           thoughtTokens,
           thoughtTokensIncludedInOutput: true,
           totalTokens: response.usage?.total_tokens || 0,
+          cachedInputTokens: response.usage?.prompt_cache_hit_tokens || 0,
           latencyMs: latency,
           finishReason: response.choices?.[0]?.finish_reason
         }

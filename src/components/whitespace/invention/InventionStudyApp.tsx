@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { AlertCircle, ArrowLeft, Compass, Lightbulb, Loader2, Play, ScrollText } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Compass, FileDown, Lightbulb, Loader2, Play, ScrollText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/hint'
 import { useToast } from '@/components/ui/toast'
-import { pollRun, wsApi, type RunProgress } from '../api'
+import { HypothesesPanel } from '../HypothesesPanel'
+import { authHeaders, pollRun, wsApi, type RunProgress } from '../api'
 import { CoOccupancyGrid } from './CoOccupancyGrid'
 import { GapDirections } from './GapDirections'
 import { JourneyRail, type JourneyStep, type StepState } from './JourneyRail'
@@ -50,7 +51,7 @@ interface RunRow {
   lastError: string | null
 }
 
-const SECTION_IDS = ['invention', 'scope', 'viewpoints', 'grid', 'directions'] as const
+const SECTION_IDS = ['invention', 'scope', 'viewpoints', 'grid', 'directions', 'hypotheses'] as const
 
 export function InventionStudyApp({ studyId }: { studyId: string }) {
   const { toast } = useToast()
@@ -68,6 +69,9 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
   const [edit, setEdit] = useState<RegistryEdit>({ removedDimensions: new Set(), removedValues: new Set() })
   const [selectedGaps, setSelectedGaps] = useState<Set<string>>(new Set())
   const [attacking, setAttacking] = useState(false)
+  /** Bumped after an attack round so the verdicts panel refetches. */
+  const [panelEpoch, setPanelEpoch] = useState(0)
+  const [downloadingReport, setDownloadingReport] = useState(false)
   const [attackLabel, setAttackLabel] = useState<string | null>(null)
   const [savingScope, setSavingScope] = useState(false)
   const autoCompiled = useRef(false)
@@ -257,10 +261,12 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
       toast({
         variant: 'success',
         title: 'Attacks finished',
-        description: `${promoted.promoted.length} direction${promoted.promoted.length === 1 ? '' : 's'} tested. Open the study's hypotheses to read the verdicts.`,
+        description: `${promoted.promoted.length} direction${promoted.promoted.length === 1 ? '' : 's'} tested. The verdicts are in the section below.`,
       })
       setSelectedGaps(new Set())
       await load()
+      // Every poll above has settled, so remounting cannot abort a live run.
+      setPanelEpoch(epoch => epoch + 1)
     } catch (error) {
       toast({
         variant: 'error',
@@ -272,6 +278,34 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
       setAttackLabel(null)
     }
   }, [load, result, runs, selectedGaps, studyId, toast])
+
+  // wsApi parses every response as JSON, so the report has to be fetched raw.
+  const downloadReport = useCallback(async () => {
+    setDownloadingReport(true)
+    try {
+      const response = await fetch(`/api/whitespace/studies/${studyId}/report`, { headers: authHeaders() })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload?.error || 'The report could not be generated.')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `Whitespace-Report_${(study?.title || 'study').replace(/[^A-Za-z0-9-_ ]/g, '').slice(0, 40).trim() || 'study'}.docx`
+      link.click()
+      URL.revokeObjectURL(url)
+      toast({ variant: 'success', title: 'Report downloaded' })
+    } catch (error) {
+      toast({
+        variant: 'error',
+        title: 'Could not build the report',
+        description: error instanceof Error ? error.message : 'Try again.',
+      })
+    } finally {
+      setDownloadingReport(false)
+    }
+  }, [studyId, study?.title, toast])
 
   const steps = useMemo<JourneyStep[]>(() => {
     const scopeReady = !scopeEmpty
@@ -305,6 +339,12 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
         label: 'Directions',
         hint: hasGaps ? `${result?.gaps.length} candidates` : mapped ? 'None survived' : 'Unoccupied combinations',
         state: state(hasGaps, false, !mapped),
+      },
+      {
+        id: 'hypotheses',
+        label: 'Verdicts',
+        hint: 'Attacked directions, and your review',
+        state: state(false, false, !hasGaps),
       },
     ]
   }, [result, running, scopeEmpty])
@@ -350,16 +390,26 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
         All studies
       </Link>
 
-      <header className="mb-6">
-        <div className="mb-2 flex items-center gap-2 text-primary">
-          <Lightbulb className="h-4 w-4" />
-          <span className="text-[11px] font-medium uppercase tracking-widest">Invention whitespace</span>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-primary">
+            <Lightbulb className="h-4 w-4" />
+            <span className="text-[11px] font-medium uppercase tracking-widest">Invention whitespace</span>
+          </div>
+          <h1 className="text-2xl font-semibold leading-tight text-foreground sm:text-3xl">{study.title}</h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            We map the field around your invention by the axes it actually varies along, count who occupies
+            what, and surface the combinations nobody has taken.
+          </p>
         </div>
-        <h1 className="text-2xl font-semibold leading-tight text-foreground sm:text-3xl">{study.title}</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          We map the field around your invention by the axes it actually varies along, count who occupies
-          what, and surface the combinations nobody has taken.
-        </p>
+        <Button variant="outline" size="sm" onClick={() => void downloadReport()} disabled={downloadingReport}>
+          {downloadingReport ? (
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <FileDown className="mr-2 h-3.5 w-3.5" />
+          )}
+          Download report
+        </Button>
       </header>
 
       <div className="lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-8">
@@ -559,6 +609,21 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                       return next
                     })
                   }
+                />
+              </section>
+
+              {/* Attacked directions land here. Before this section existed the
+                  verdicts were written and never shown. The panel brings its own
+                  card header, so this wrapper only supplies the rail anchor and
+                  cancels the standalone top margin. */}
+              <section id="section-hypotheses" className="scroll-mt-6 [&>section]:mt-0">
+                <HypothesesPanel
+                  key={panelEpoch}
+                  studyId={studyId}
+                  areasReady
+                  proposeEnabled={false}
+                  emptyHint="Nothing attacked yet. Select directions above and attack them — the verdicts, and your review of them, appear here."
+                  onChanged={() => void load()}
                 />
               </section>
 

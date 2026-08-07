@@ -86,6 +86,12 @@ type PatentTags = { background: boolean; claims: boolean }
 /** A manually entered reference. Lives in the same list as search results. */
 type ManualRef = { id: string; text: string; background: boolean; claims: boolean }
 
+/** How the user is adding a reference the search did not return. */
+type AddMode = 'number' | 'text'
+
+/** What a corpus lookup by patent number did with each number the user typed. */
+type LookupOutcome = { added: string[]; notFound: string[]; duplicates: string[] }
+
 type Phase = 'idle' | 'searching' | 'assessing'
 
 type ThreatLevel = 'anticipates' | 'obvious' | 'adjacent' | 'remote' | 'unknown'
@@ -184,7 +190,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [countryFilter, setCountryFilter] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [addFormOpen, setAddFormOpen] = useState(false)
+  const [addMode, setAddMode] = useState<AddMode>('number')
   const [manualDraft, setManualDraft] = useState('')
+  // "Add by patent number": resolved against the stored corpus, so an attorney can
+  // pull in a specific reference (an examiner citation, a competitor filing) that
+  // the ranked search had no reason to return.
+  const [numberDraft, setNumberDraft] = useState('')
+  const [lookingUp, setLookingUp] = useState(false)
+  const [lookupResult, setLookupResult] = useState<LookupOutcome | null>(null)
   const [continuing, setContinuing] = useState(false)
   const [hasHydrated, setHasHydrated] = useState(false)
   // Explicit opt-out of claim refinement, for users who are confident in their
@@ -409,7 +422,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setCountryFilter(null)
       setExpanded(new Set())
       setAddFormOpen(false)
+      setAddMode('number')
       setManualDraft('')
+      setNumberDraft('')
+      setLookupResult(null)
       setHasHydrated(false)
       setError(null)
       setStatusMessage(null)
@@ -844,7 +860,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     return true
   }
 
-  const runAIReview = async (options?: { missingOnly?: boolean; runIdOverride?: string; resultsOverride?: ResultItem[] }) => {
+  const runAIReview = async (options?: {
+    missingOnly?: boolean
+    runIdOverride?: string
+    resultsOverride?: ResultItem[]
+    /** Assess only these patents — used after adding references by number. */
+    candidateNumbersOverride?: string[]
+  }) => {
     const activeRunId = options?.runIdOverride || runId
     const activeResults = options?.resultsOverride || results
     if (!activeRunId) { setError('Run a search first.'); return }
@@ -852,8 +874,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     if (phase === 'assessing') return
 
     const missingOnly = options?.missingOnly === true
-    const candidatePatentNumbers = missingOnly ? missingAnalysisPatentNumbers : []
-    const targetCount = missingOnly ? candidatePatentNumbers.length : activeResults.length
+    const candidatePatentNumbers = options?.candidateNumbersOverride?.length
+      ? options.candidateNumbersOverride
+      : missingOnly ? missingAnalysisPatentNumbers : []
+    // A scoped run must merge into the existing analysis rather than replace it,
+    // or assessing one added patent would blank out every other row's assessment.
+    const scoped = candidatePatentNumbers.length > 0
+    const targetCount = scoped ? candidatePatentNumbers.length : activeResults.length
 
     if (missingOnly && targetCount === 0) {
       setStatusMessage({ type: 'success', text: 'All current results already have an AI assessment.' })
@@ -897,7 +924,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             sessionId: session?.id,
             runId: activeRunId,
             claimsContext,
-            candidatePatentNumbers: missingOnly ? candidatePatentNumbers : undefined
+            candidatePatentNumbers: scoped ? candidatePatentNumbers : undefined
           })
         })
 
@@ -944,11 +971,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           sessionId: session?.id,
           runId: activeRunId,
           claimsContext,
-          candidatePatentNumbers: missingOnly ? candidatePatentNumbers : undefined
+          candidatePatentNumbers: scoped ? candidatePatentNumbers : undefined
         })
       }
 
-      applyAIReviewResponse(finalResponse, activeResults, { mergeExisting: missingOnly })
+      applyAIReviewResponse(finalResponse, activeResults, { mergeExisting: scoped })
     } catch (e) {
       console.error('AI review failed:', e)
       setError(e instanceof Error ? e.message : 'AI review failed. Please try again.')
@@ -1158,6 +1185,54 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
   const removeManualRef = (id: string) => {
     setManualRefs(prev => prev.filter(m => m.id !== id))
+  }
+
+  /**
+   * Resolve the typed patent numbers against the stored corpus and append the hits
+   * to the current run, then assess just those. Existing analysis and tags are
+   * untouched — adding a reference must never cost the user their triage work.
+   */
+  const addByPatentNumber = async () => {
+    const raw = numberDraft.trim()
+    if (!raw || lookingUp || phase !== 'idle') return
+    setLookingUp(true)
+    setLookupResult(null)
+    setError(null)
+    setStatusMessage(null)
+    try {
+      const resp = await onComplete({
+        action: 'related_art_add_by_number',
+        sessionId: session?.id,
+        runId: runId || undefined,
+        patentNumbers: raw,
+      })
+
+      const addedNumbers: string[] = Array.isArray(resp?.addedPatentNumbers) ? resp.addedPatentNumbers : []
+      const nextResults: ResultItem[] = Array.isArray(resp?.results) ? resp.results : results
+      const nextRunId = resp?.runId || runId || null
+
+      setResults(nextResults)
+      if (nextRunId) setRunId(nextRunId)
+      setLookupResult({
+        added: addedNumbers,
+        notFound: Array.isArray(resp?.notFound) ? resp.notFound : [],
+        duplicates: Array.isArray(resp?.duplicates) ? resp.duplicates : [],
+      })
+
+      if (addedNumbers.length > 0) {
+        setNumberDraft('')
+        await runAIReview({
+          runIdOverride: nextRunId || undefined,
+          resultsOverride: nextResults,
+          candidateNumbersOverride: addedNumbers,
+        })
+      }
+    } catch (e) {
+      console.error('Add prior art by patent number failed:', e)
+      setError(e instanceof Error ? e.message : 'Could not look up those patent numbers. Please try again.')
+    } finally {
+      setLookingUp(false)
+    }
   }
 
   const noveltyHandoff = session?.noveltyHandoff
@@ -1629,6 +1704,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               <span className="font-mono break-all">{details.pn}</span>
                               <span>·</span>
                               <span>{details.sourceLabel}</span>
+                              {(r as any)?.addedManually && (
+                                <>
+                                  <span>·</span>
+                                  <span className="text-ai-blue-600 font-medium">Added by you</span>
+                                </>
+                              )}
                               {details.score !== null && (
                                 <>
                                   <span>·</span>
@@ -1731,16 +1812,98 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               </div>
             )}
 
-            {/* Add a manual reference */}
-            <div className="bg-white rounded-2xl border border-dashed border-paper-400 p-4">
-              {!addFormOpen ? (
-                <button
-                  type="button"
-                  onClick={() => setAddFormOpen(true)}
-                  className="text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
-                >
-                  + Add reference manually
-                </button>
+          </div>
+        )}
+
+        {/* Add references the search did not return. Available before a search too:
+            an attorney who already knows the reference should not have to run one. */}
+        <div className={`bg-white rounded-2xl border border-dashed border-paper-400 p-4 ${showTriage ? 'mt-4' : ''}`}>
+          {!addFormOpen ? (
+            <button
+              type="button"
+              onClick={() => setAddFormOpen(true)}
+              className="text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
+            >
+              + Add a reference the search missed
+            </button>
+          ) : (
+            <div className="space-y-4">
+              <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-paper-100">
+                {([
+                  { mode: 'number' as AddMode, label: 'By patent number' },
+                  { mode: 'text' as AddMode, label: 'As a note' },
+                ]).map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setAddMode(mode)}
+                    aria-pressed={addMode === mode}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      addMode === mode
+                        ? 'bg-white text-ai-graphite-900 shadow-sm'
+                        : 'text-ai-graphite-500 hover:text-ai-graphite-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {addMode === 'number' ? (
+                <div className="space-y-3">
+                  <textarea
+                    className="w-full border border-paper-400 rounded-xl p-3 text-sm font-mono focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500 disabled:bg-paper-100"
+                    rows={2}
+                    autoFocus
+                    disabled={lookingUp || running}
+                    value={numberDraft}
+                    onChange={(e) => setNumberDraft(e.target.value)}
+                    placeholder="IN201811012345, US10999888B2, EP3456789A1"
+                  />
+                  <p className="text-xs text-ai-graphite-500">
+                    Separate numbers with commas or new lines (up to 25 at a time). Each one is looked up in the
+                    patent corpus, then assessed and pre-tagged like a search result.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void addByPatentNumber()}
+                      disabled={!numberDraft.trim() || lookingUp || running}
+                      className="px-4 py-2 rounded-xl text-sm font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {lookingUp ? 'Looking up...' : 'Find and add'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setAddFormOpen(false); setNumberDraft(''); setLookupResult(null) }}
+                      className="px-4 py-2 rounded-xl text-sm font-medium text-ai-graphite-600 hover:bg-paper-100 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                  {lookupResult && (
+                    <div className="space-y-1 text-xs">
+                      {lookupResult.added.length > 0 && (
+                        <div className="text-green-700">
+                          Added {lookupResult.added.length} reference{lookupResult.added.length !== 1 ? 's' : ''}:{' '}
+                          <span className="font-mono">{lookupResult.added.join(', ')}</span>
+                        </div>
+                      )}
+                      {lookupResult.duplicates.length > 0 && (
+                        <div className="text-ai-graphite-500">
+                          Already in the list: <span className="font-mono">{lookupResult.duplicates.join(', ')}</span>
+                        </div>
+                      )}
+                      {lookupResult.notFound.length > 0 && (
+                        <div className="text-amber-700">
+                          Not in the patent corpus: <span className="font-mono">{lookupResult.notFound.join(', ')}</span>.
+                          Check the number, or add it as a note instead.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-3">
                   <textarea
@@ -1749,8 +1912,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     autoFocus
                     value={manualDraft}
                     onChange={(e) => setManualDraft(e.target.value)}
-                    placeholder="US10999888B2 — or paste a citation or description of known prior art..."
+                    placeholder="Paste a citation, a journal reference, or a description of known prior art..."
                   />
+                  <p className="text-xs text-ai-graphite-500">
+                    Notes are carried into drafting as written. They are not assessed for novelty risk.
+                  </p>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -1771,8 +1937,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 </div>
               )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Sticky footer: what happens next, an explicit opt-out, and one action. */}

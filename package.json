@@ -59,7 +59,8 @@
     "migrate:check": "node scripts/check-migration-safety.mjs",
     "oa:test:anchors": "tsx scripts/test-office-action-anchors.ts",
     "oa:backfill-numbering": "tsx scripts/backfill-oa-paragraph-numbering.ts",
-    "oa:fix-embedding-column": "tsx scripts/fix-oa-chunk-embedding-column.ts"
+    "oa:fix-embedding-column": "tsx scripts/fix-oa-chunk-embedding-column.ts",
+    "llm:cache-report": "tsx scripts/llm-cache-report.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

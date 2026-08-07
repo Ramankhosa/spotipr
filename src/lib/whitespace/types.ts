@@ -533,6 +533,36 @@ export interface ValidationRecord {
   validatedAt: string
 }
 
+/**
+ * The attorney's verdict. Deliberately NOT the same words as the machine's
+ * `status`: the system reports whether a hypothesis survived its attacks, the
+ * attorney reports whether it is worth pursuing, and a report that blurred the
+ * two would let a surviving-but-worthless direction read as endorsed.
+ */
+export type HumanReviewVerdict = 'ENDORSED' | 'REJECTED' | 'NEEDS_INVESTIGATION'
+
+export const HUMAN_REVIEW_VERDICTS: readonly HumanReviewVerdict[] = [
+  'ENDORSED',
+  'REJECTED',
+  'NEEDS_INVESTIGATION',
+]
+
+/** Stored in WhitespaceHypothesis.humanReview. Null there means unreviewed. */
+export interface HumanReview {
+  verdict: HumanReviewVerdict
+  /**
+   * Required when the verdict is REJECTED — the machine can say a hypothesis
+   * died, but the reason a human kills one has to be written by that human.
+   */
+  note: string | null
+  reviewedById: string
+  /** ISO timestamp. */
+  reviewedAt: string
+}
+
+/** Minimum characters of reasoning before a REJECTED verdict is accepted. */
+export const MIN_REVIEW_NOTE = 20
+
 export interface FieldMapResult {
   familyCount: number
   publicationCount: number

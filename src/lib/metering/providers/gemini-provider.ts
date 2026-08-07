@@ -8,6 +8,29 @@ import { emitStreamDelta, readServerSentEvents } from './streaming'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 
+/**
+ * Caller-supplied response constraints, translated to Gemini's generationConfig.
+ *
+ * Gemini expresses structured output as `responseMimeType` plus an optional
+ * `responseSchema`, where OpenAI uses `response_format`. Accepting either spelling
+ * keeps call sites provider-agnostic: a stage can ask for JSON once and be honoured
+ * whichever model the gateway routes it to.
+ */
+function responseConstraints(parameters?: Record<string, any>): Record<string, any> {
+  if (!parameters) return {}
+  const mimeType = parameters.responseMimeType
+    || (parameters.response_format?.type === 'json_object' || parameters.response_format?.type === 'json_schema'
+      ? 'application/json'
+      : undefined)
+  const schema = parameters.responseSchema
+    || parameters.response_format?.json_schema?.schema
+  if (!mimeType && !schema) return {}
+  return {
+    ...(mimeType ? { responseMimeType: mimeType } : { responseMimeType: 'application/json' }),
+    ...(schema ? { responseSchema: schema } : {}),
+  }
+}
+
 export class GeminiProvider implements LLMProvider {
   name = 'gemini'
   supportedModels = [
@@ -140,7 +163,8 @@ export class GeminiProvider implements LLMProvider {
         generationConfig: {
           maxOutputTokens: maxTokens,
           temperature: temperature,
-          topP: topP
+          topP: topP,
+          ...responseConstraints(request.parameters)
         }
       }, {
         // Bound the SDK request so a hung call can't block the worker. The SDK's
@@ -221,6 +245,9 @@ export class GeminiProvider implements LLMProvider {
               thoughtTokens: usage?.thoughtsTokenCount || 0,
               thoughtTokensIncludedInOutput: false,
               totalTokens: usage?.totalTokenCount || 0,
+              // Prompt-cache hit size. Gemini caches implicitly on 2.5+ models, so this
+              // is the only way to tell whether a stable prefix actually earned a discount.
+              cachedInputTokens: usage?.cachedContentTokenCount || 0,
               finishReason: response.candidates?.[0]?.finishReason
             }
           }
@@ -429,7 +456,8 @@ export class GeminiProvider implements LLMProvider {
       generationConfig: {
         maxOutputTokens: maxTokens,
         temperature,
-        topP
+        topP,
+        ...responseConstraints(request.parameters)
       }
     }
 
@@ -478,6 +506,7 @@ export class GeminiProvider implements LLMProvider {
         thoughtTokens: usage?.thoughtsTokenCount || 0,
         thoughtTokensIncludedInOutput: false,
         totalTokens: usage?.totalTokenCount || 0,
+        cachedInputTokens: usage?.cachedContentTokenCount || 0,
         finishReason: candidate?.finishReason,
         modelUsed: modelClass,
         thinkingLevel: thinkingLevel || undefined

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, ArrowLeft, Loader2, Play, Plus, RefreshCw, Save, Trash2, Wand2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, FileDown, Loader2, Play, Plus, RefreshCw, Save, Trash2, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -12,7 +12,7 @@ import { useToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth-context'
 import { CORPUS_FIRST_YEAR, emptyWhitespaceScope } from '@/lib/whitespace/types'
 import type { FieldMapResult, WhitespaceScope } from '@/lib/whitespace/types'
-import { wsApi } from './api'
+import { authHeaders, wsApi } from './api'
 import { ClustersPanel } from './ClustersPanel'
 import { HypothesesPanel } from './HypothesesPanel'
 
@@ -118,6 +118,7 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
   // Bumped when a downstream panel changes shared state (e.g. re-clustering
   // invalidates hypotheses' cluster labels), forcing the sibling to refetch.
   const [panelEpoch, setPanelEpoch] = useState(0)
+  const [downloadingReport, setDownloadingReport] = useState(false)
 
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoCompiled = useRef(false)
@@ -265,6 +266,34 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
     }
   }, [study, compile])
 
+  // wsApi parses every response as JSON, so the report has to be fetched raw.
+  const downloadReport = useCallback(async () => {
+    setDownloadingReport(true)
+    try {
+      const response = await fetch(`/api/whitespace/studies/${studyId}/report`, { headers: authHeaders() })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload?.error || 'The report could not be generated.')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `Whitespace-Report_${(study?.title || 'study').replace(/[^A-Za-z0-9-_ ]/g, '').slice(0, 40).trim() || 'study'}.docx`
+      link.click()
+      URL.revokeObjectURL(url)
+      toast({ variant: 'success', title: 'Report downloaded' })
+    } catch (error) {
+      toast({
+        variant: 'error',
+        title: 'Could not build the report',
+        description: error instanceof Error ? error.message : 'Try again.',
+      })
+    } finally {
+      setDownloadingReport(false)
+    }
+  }, [studyId, study?.title, toast])
+
   const saveScope = useCallback(async () => {
     setSaving(true)
     try {
@@ -379,12 +408,22 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
         All studies
       </Link>
 
-      <header className="mb-8">
-        <h1 className="font-serif text-3xl leading-tight text-foreground">{study.title}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Scope v{study.scopeVersion} · corpus from {CORPUS_FIRST_YEAR} · {runs.length}{' '}
-          {runs.length === 1 ? 'run' : 'runs'}
-        </p>
+      <header className="mb-8 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-serif text-3xl leading-tight text-foreground">{study.title}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Scope v{study.scopeVersion} · corpus from {CORPUS_FIRST_YEAR} · {runs.length}{' '}
+            {runs.length === 1 ? 'run' : 'runs'}
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => void downloadReport()} disabled={downloadingReport}>
+          {downloadingReport ? (
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <FileDown className="mr-2 h-3.5 w-3.5" />
+          )}
+          Download report
+        </Button>
       </header>
 
       {/* ------------------------------------------------------------ scope */}

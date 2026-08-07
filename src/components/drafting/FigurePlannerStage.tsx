@@ -36,7 +36,6 @@ import {
   HelpCircle,
   Paintbrush,
   Languages,
-  Lightbulb,
   Link2,
   Plus,
   ChevronRight,
@@ -66,7 +65,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -76,6 +75,8 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/toast'
 import Hint from '@/components/ui/hint'
+import SketchGenerationProgress from './SketchGenerationProgress'
+import ZoomableImage from './ZoomableImage'
 import {
   explainFigurePlannerError,
   type FigurePlannerErrorArea
@@ -582,6 +583,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [suggestionsNotice, setSuggestionsNotice] = useState<string | null>(null)
   const [sketchError, setSketchError] = useState<string | null>(null)
   const [sketchGenerating, setSketchGenerating] = useState(false)
+  // Epoch ms of the in-flight illustration request, for the waiting panel's
+  // elapsed counter. Null whenever nothing is generating.
+  const [sketchGenerationStartedAt, setSketchGenerationStartedAt] = useState<number | null>(null)
+  const [sketchGenerationLabel, setSketchGenerationLabel] = useState<string | undefined>(undefined)
   const [sketchMode, setSketchMode] = useState<'auto' | 'guided' | 'refine'>('auto')
   const [sketchPrompt, setSketchPrompt] = useState('')
   const [sketchTitle, setSketchTitle] = useState('')
@@ -1552,8 +1557,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     
     try {
       setSketchGenerating(true)
+      setSketchGenerationStartedAt(Date.now())
+      setSketchGenerationLabel(sketchTitle || undefined)
       setSketchError(null)
-      
+
       let action = 'generate_sketch'
       let body: any = {
         sessionId: session.id,
@@ -1619,6 +1626,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setSketchError(err instanceof Error ? err.message : 'Sketch generation failed')
     } finally {
       setSketchGenerating(false)
+      setSketchGenerationStartedAt(null)
+      setSketchGenerationLabel(undefined)
     }
   }
 
@@ -1693,8 +1702,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     
     try {
       setSketchGenerating(true)
+      setSketchGenerationStartedAt(Date.now())
+      setSketchGenerationLabel(sketches.find(s => s.id === sketchId)?.title || undefined)
       setSketchError(null)
-      
+
       const res = await fetch(`/api/patents/${patent.id}/drafting`, {
         method: 'POST',
         headers: {
@@ -1724,6 +1735,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setSketchError(err instanceof Error ? err.message : 'Sketch modification failed')
     } finally {
       setSketchGenerating(false)
+      setSketchGenerationStartedAt(null)
+      setSketchGenerationLabel(undefined)
     }
   }
 
@@ -1785,7 +1798,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const handleRetrySketch = async (sketchId: string) => {
     try {
       setSketchGenerating(true)
-      
+      setSketchGenerationStartedAt(Date.now())
+      setSketchGenerationLabel(sketches.find(s => s.id === sketchId)?.title || undefined)
+
       const res = await fetch(`/api/patents/${patent.id}/drafting`, {
         method: 'POST',
         headers: {
@@ -1805,6 +1820,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setSketchError(err instanceof Error ? err.message : 'Failed to retry sketch')
     } finally {
       setSketchGenerating(false)
+      setSketchGenerationStartedAt(null)
+      setSketchGenerationLabel(undefined)
     }
   }
 
@@ -1814,8 +1831,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const handleGenerateFromSuggestion = async (sketchId: string) => {
     try {
       setGeneratingSuggestionId(sketchId)
+      setSketchGenerationStartedAt(Date.now())
+      setSketchGenerationLabel(sketches.find(s => s.id === sketchId)?.title || undefined)
       setSketchError(null)
-      
+
       const res = await fetch(`/api/patents/${patent.id}/drafting`, {
         method: 'POST',
         headers: {
@@ -1839,6 +1858,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setSketchError(err instanceof Error ? err.message : 'Failed to generate sketch from suggestion')
     } finally {
       setGeneratingSuggestionId(null)
+      setSketchGenerationStartedAt(null)
+      setSketchGenerationLabel(undefined)
     }
   }
 
@@ -1850,8 +1871,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     
     try {
       setGeneratingManualSuggestionIdx(index)
+      setSketchGenerationStartedAt(Date.now())
+      setSketchGenerationLabel(suggestion.title)
       setSketchError(null)
-      
+
       // Use guided mode with the suggestion description as the prompt
       const res = await fetch(`/api/patents/${patent.id}/drafting`, {
         method: 'POST',
@@ -1886,6 +1909,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setSketchError(err instanceof Error ? err.message : 'Failed to generate sketch from suggestion')
     } finally {
       setGeneratingManualSuggestionIdx(null)
+      setSketchGenerationStartedAt(null)
+      setSketchGenerationLabel(undefined)
     }
   }
 
@@ -4057,25 +4082,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               className="bg-white rounded-xl shadow-2xl p-2 max-w-6xl w-full max-h-[90vh] flex flex-col will-change-transform"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between p-4 border-b">
+              <div className="flex shrink-0 items-center justify-between p-4 border-b">
                 <h4 className="text-lg font-semibold text-ai-graphite-900">Figure {expandedFigNo} Preview</h4>
                 <Button variant="ghost" size="icon" onClick={() => setExpandedFigNo(null)}>
                   <span className="sr-only">Close</span>
                   <span className="text-2xl">&times;</span>
                 </Button>
               </div>
-              <div className="flex-1 overflow-auto p-4 bg-paper-200 flex items-center justify-center">
-                <motion.img
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.1, duration: 0.3 }}
-                  src={renderPreview[expandedKey] || `/api/projects/${patent.project.id}/patents/${patent.id}/upload?filename=${encodeURIComponent(diagramSource?.imageFilename || '')}`}
-                  alt={`Preview Fig.${expandedFigNo}`}
-                  className="max-w-full h-auto shadow-lg"
-                  style={{ willChange: 'transform, opacity' }}
-                />
-              </div>
-              <div className="p-4 border-t flex justify-end gap-3">
+              <ZoomableImage
+                src={renderPreview[expandedKey] || `/api/projects/${patent.project.id}/patents/${patent.id}/upload?filename=${encodeURIComponent(diagramSource?.imageFilename || '')}`}
+                alt={`Preview Fig.${expandedFigNo}`}
+              />
+              <div className="shrink-0 p-4 border-t flex justify-end gap-3">
                 <Button
                   variant="outline"
                   disabled={!diagramSource?.imageFilename}
@@ -4249,67 +4267,64 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               <CardTitle className="flex items-center gap-2">
                 <Wand2 className="w-5 h-5 text-ai-blue-600" />
                 Create an illustration
+                <Hint
+                  title="What illustrations are"
+                  text="Line-art views of the physical product — a device, housing, or mechanical part shown the way it looks, rather than as a diagram. Many filings use diagrams only; add illustrations when a visual view strengthens the application."
+                />
               </CardTitle>
-              <CardDescription>
-                Illustrations are line-art views of the physical product — a device, housing, or mechanical part shown
-                the way it looks, rather than as a diagram. Many filings use diagrams only; add illustrations when a
-                visual view strengthens the application.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Step 1 — deciding what to draw. Optional: skip straight to step 2. */}
               <div className="space-y-3">
-                <div>
-                  <h4 className="text-sm font-semibold text-ai-graphite-900">Not sure what to draw?</h4>
-                  <p className="text-xs text-ai-graphite-500 mt-0.5">
-                    Grapsi reads your invention facts and proposes views worth illustrating. Optional —
-                    skip ahead if you already know what you want.
-                  </p>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      onClick={handleGenerateSketchSuggestions}
-                      disabled={suggestionsLoading}
-                      variant="outline"
-                      className="gap-2"
-                    >
-                      {suggestionsLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Sparkles className="w-4 h-4" />
-                      )}
-                      {suggestionsLoading ? 'Thinking…' : 'Suggest views'}
-                    </Button>
-                    <Button
-                      onClick={() => setShowReferenceSelector(!showReferenceSelector)}
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1 text-xs"
-                      title="Add context from existing figures to generate complementary sketch ideas"
-                    >
-                      <Link2 className="w-3 h-3" />
-                      {selectedReferenceFigures.length > 0 
-                        ? `${selectedReferenceFigures.length} context refs` 
-                        : 'Add Context'}
-                    </Button>
-                    {displayedSketchSuggestions.length > 0 && (
-                      <Badge variant="secondary" className="ml-2">
-                        {displayedSketchSuggestions.length} saved suggestions
-                      </Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    onClick={handleGenerateSketchSuggestions}
+                    disabled={suggestionsLoading}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    {suggestionsLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4" />
                     )}
-                  </div>
+                    {suggestionsLoading ? 'Thinking…' : 'Suggest views'}
+                  </Button>
+                  <Hint
+                    title="Suggest views"
+                    text="Grapsi reads your invention facts and proposes views worth illustrating. Optional — skip it and describe your own view below if you already know what you want."
+                  />
+                  <Button
+                    onClick={() => setShowReferenceSelector(!showReferenceSelector)}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1 text-xs"
+                  >
+                    <Link2 className="w-3 h-3" />
+                    {selectedReferenceFigures.length > 0
+                      ? `${selectedReferenceFigures.length} context refs`
+                      : 'Add context'}
+                  </Button>
+                  {displayedSketchSuggestions.length > 0 && (
+                    <Badge variant="secondary">
+                      {displayedSketchSuggestions.length} saved
+                    </Badge>
+                  )}
                 </div>
 
                 {/* Optional Reference Figure Selector - for AI suggestions context (text only) */}
                 {showReferenceSelector && (
-                  <div className="p-3 border rounded-lg bg-slate-50 space-y-2">
+                  <div className="p-3 border border-paper-300 rounded-lg bg-paper-100 space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label className="text-xs font-medium text-ai-graphite-600">
-                        Context for Suggestions (optional)
+                      <Label className="flex items-center gap-1.5 text-xs font-medium text-ai-graphite-600">
+                        Context for suggestions
+                        <Hint
+                          title="Context for suggestions"
+                          text="Select existing figures so Grapsi knows which views already exist. It then proposes complementary ideas instead of repeating what you have."
+                        />
                       </Label>
                       {selectedReferenceFigures.length > 0 && (
-                        <button 
+                        <button
                           onClick={() => setSelectedReferenceFigures([])}
                           className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700"
                         >
@@ -4317,9 +4332,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-ai-graphite-500">
-                      Select existing figures to help AI understand what views already exist. This helps generate complementary sketch <em>ideas</em>.
-                    </p>
                     <div className="max-h-40 overflow-y-auto space-y-1">
                       {/* Show existing diagrams */}
                       {Object.keys(diagramsByFigure).map((figNoStr) => {
@@ -4418,31 +4430,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
               {/* Sketch Suggestions - with Generate Image buttons */}
               {displayedSketchSuggestions.length > 0 && (
-                <section className="overflow-hidden rounded-2xl border border-ai-blue-100 bg-gradient-to-br from-white via-white to-ai-blue-50/50 shadow-sm">
-                  <div className="flex flex-col gap-3 border-b border-ai-blue-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ai-blue-100 text-ai-blue-700">
-                        <Lightbulb className="h-5 w-5" aria-hidden="true" />
-                      </div>
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h4 className="font-semibold text-ai-graphite-900">Saved view ideas</h4>
-                          <Badge className="border-ai-blue-200 bg-white text-ai-blue-700 hover:bg-white">
-                            {displayedSketchSuggestions.length} available
-                          </Badge>
-                        </div>
-                        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ai-graphite-500">
-                          Generate a sketch now, or customize an idea first. Every idea stays saved and can be reused.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-emerald-700">
-                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                      Reusable after generation
-                    </div>
+                <section className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-sm font-semibold text-ai-graphite-900">Saved view ideas</h4>
+                    <Badge variant="secondary">{displayedSketchSuggestions.length}</Badge>
+                    <Hint
+                      title="Saved view ideas"
+                      text="Generate an illustration now, or customize an idea first. Every idea stays saved and can be reused, including after you generate from it."
+                    />
                   </div>
 
-                  <div className="grid gap-4 p-4 md:grid-cols-2 sm:p-5">
+                  <div className="grid gap-3 md:grid-cols-2">
                     {displayedSketchSuggestions.map((suggestion, index) => {
                       const isPersistent = typeof suggestion.id === 'string'
                       const isGeneratingThis = isPersistent
@@ -4452,42 +4450,24 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       return (
                       <article
                         key={suggestion.id || `${suggestion.title}-${index}`}
-                        className="group flex min-h-[280px] flex-col overflow-hidden rounded-xl border border-paper-300 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-ai-blue-200 hover:shadow-md"
+                        className="flex flex-col rounded-lg border border-paper-300 bg-white p-4 transition-colors hover:border-ai-blue-200"
                       >
-                        <div className="relative flex h-24 items-center justify-center overflow-hidden border-b border-paper-200 bg-gradient-to-br from-slate-50 to-ai-blue-50">
-                          <div className="absolute inset-0 opacity-40" style={{
-                            backgroundImage: 'linear-gradient(to right, #cbd5e1 1px, transparent 1px), linear-gradient(to bottom, #cbd5e1 1px, transparent 1px)',
-                            backgroundSize: '20px 20px'
-                          }} />
-                          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white bg-white/90 text-ai-blue-600 shadow-sm transition-transform duration-200 group-hover:scale-105">
-                            {viewType === 'Exploded view' || viewType === 'Internal view'
-                              ? <Layers className="h-6 w-6" aria-hidden="true" />
-                              : viewType === 'Detail view'
-                                ? <Eye className="h-6 w-6" aria-hidden="true" />
-                                : <Pencil className="h-6 w-6" aria-hidden="true" />}
-                          </div>
-                          <div className="absolute left-3 top-3 flex items-center gap-2">
-                            <Badge className="border-white bg-white/90 text-ai-graphite-700 shadow-sm hover:bg-white">
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <h5 className="font-medium leading-snug text-ai-graphite-900">{suggestion.title}</h5>
+                            <Badge variant="outline" className="shrink-0 text-[10px] font-normal">
                               {viewType}
                             </Badge>
                           </div>
-                          <span className="absolute right-3 top-3 flex h-6 min-w-6 items-center justify-center rounded-full border border-white bg-white/90 px-1.5 text-[11px] font-semibold text-ai-graphite-500 shadow-sm">
-                            {index + 1}
-                          </span>
+                          <p
+                            className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-ai-graphite-600"
+                            title={suggestion.description}
+                          >
+                            {suggestion.description}
+                          </p>
                         </div>
 
-                        <div className="flex flex-1 flex-col p-4">
-                          <div className="flex-1">
-                            <h5 className="font-semibold leading-snug text-ai-graphite-900">{suggestion.title}</h5>
-                            <p
-                              className="mt-2 line-clamp-4 text-sm leading-relaxed text-ai-graphite-600"
-                              title={suggestion.description}
-                            >
-                              {suggestion.description}
-                            </p>
-                          </div>
-
-                          <div className="mt-4 flex items-center gap-2 border-t border-paper-200 pt-3">
+                          <div className="mt-4 flex items-center gap-2">
                             <Button
                               size="sm"
                               className="min-w-0 flex-1 gap-1.5 bg-ai-blue-600 text-white hover:bg-ai-blue-700"
@@ -4504,7 +4484,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               ) : (
                                 <>
                                   <Wand2 className="h-3.5 w-3.5" />
-                                  Generate sketch
+                                  Generate
                                 </>
                               )}
                             </Button>
@@ -4544,7 +4524,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </div>
-                        </div>
                       </article>
                     )})}
                   </div>
@@ -4557,61 +4536,46 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 suggestions that button produces, splitting one task in half.
               */}
               <div id="sketch-illustration-form" className="scroll-mt-4 space-y-3 border-t border-paper-200 pt-4">
-                <div>
+                <div className="flex items-center gap-1.5">
                   <h4 className="text-sm font-semibold text-ai-graphite-900">Make the illustration</h4>
-                  <p className="text-xs text-ai-graphite-500 mt-0.5">
-                    Pick a suggestion above, or describe your own view below.
-                  </p>
+                  <Hint
+                    title="The three modes"
+                    text="Draw it for me — Grapsi picks the view and draws it from your invention facts. I'll describe it — you specify the angle, components and detail level. Clean up my drawing — upload your own sketch or photo and have it redrawn as patent-style line art."
+                  />
                 </div>
 
                 {/* Mode Selector */}
-                <div className="flex items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit">
-                  <button
-                    onClick={() => setSketchMode('auto')}
-                    title="Grapsi chooses the view and draws it from your invention facts."
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                      sketchMode === 'auto'
-                        ? 'bg-white text-ai-blue-600 shadow-sm'
-                        : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-                    }`}
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    Draw it for me
-                  </button>
-                  <button
-                    onClick={() => setSketchMode('guided')}
-                    title="You describe the view you want — angle, components, detail level — and Grapsi draws that."
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                      sketchMode === 'guided'
-                        ? 'bg-white text-ai-blue-600 shadow-sm'
-                        : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-                    }`}
-                  >
-                    <Edit2 className="w-4 h-4" />
-                    I&apos;ll describe it
-                  </button>
-                  <button
-                    onClick={() => setSketchMode('refine')}
-                    title="Upload your own sketch or photo and have it redrawn as patent-style line art."
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                      sketchMode === 'refine'
-                        ? 'bg-white text-ai-blue-600 shadow-sm'
-                        : 'text-ai-graphite-600 hover:text-ai-graphite-900'
-                    }`}
-                  >
-                    <Upload className="w-4 h-4" />
-                    Clean up my drawing
-                  </button>
+                <div role="tablist" aria-label="Illustration mode" className="flex flex-wrap items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit max-w-full">
+                  {([
+                    { id: 'auto' as const, icon: Sparkles, label: 'Draw it for me' },
+                    { id: 'guided' as const, icon: Edit2, label: "I'll describe it" },
+                    { id: 'refine' as const, icon: Upload, label: 'Clean up my drawing' },
+                  ]).map(({ id, icon: Icon, label }) => (
+                    <button
+                      key={id}
+                      role="tab"
+                      aria-selected={sketchMode === id}
+                      onClick={() => setSketchMode(id)}
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 ${
+                        sketchMode === id
+                          ? 'bg-white text-ai-blue-600 shadow-sm'
+                          : 'text-ai-graphite-600 hover:text-ai-graphite-900'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {/* Mode-specific inputs */}
               <div className="space-y-4">
                 <div>
-                  <Label htmlFor="sketch-title">Title (Optional)</Label>
+                  <Label htmlFor="sketch-title">Title <span className="font-normal text-ai-graphite-400">(optional)</span></Label>
                   <Input
                     id="sketch-title"
-                    placeholder="e.g., System Block Diagram"
+                    placeholder="e.g., Housing assembly — front isometric view"
                     value={sketchTitle}
                     onChange={(e) => setSketchTitle(e.target.value)}
                     disabled={sketchGenerating}
@@ -4621,14 +4585,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 {sketchMode !== 'auto' && (
                   <div>
                     <Label htmlFor="sketch-prompt">
-                      {sketchMode === 'guided' ? 'Instructions' : 'Refinement Instructions (Optional)'}
+                      {sketchMode === 'guided'
+                        ? 'Instructions'
+                        : <>Instructions <span className="font-normal text-ai-graphite-400">(optional)</span></>}
                     </Label>
                     <Textarea
                       id="sketch-prompt"
                       placeholder={
                         sketchMode === 'guided'
-                          ? "Describe what the sketch should show, layout preferences, focus areas..."
-                          : "Optional: Specify how to refine the uploaded sketch..."
+                          ? 'Describe the view: angle, which components to show, level of detail…'
+                          : 'Anything specific to change while cleaning up the drawing…'
                       }
                       value={sketchPrompt}
                       onChange={(e) => setSketchPrompt(e.target.value)}
@@ -4640,7 +4606,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                 {sketchMode === 'refine' && (
                   <div className="space-y-2">
-                    <Label>Upload Your Sketch</Label>
+                    <Label>Your drawing</Label>
                     <input
                       ref={sketchFileInputRef}
                       type="file"
@@ -4689,21 +4655,22 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                 {/* Reference Sketch Selection - for visual style consistency */}
                 {sketches.filter(s => s.status === 'SUCCESS').length > 0 && (
-                  <div className="border border-amber-200 bg-amber-50/30 rounded-lg p-4 space-y-3">
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Link2 className="w-4 h-4 text-amber-600" />
-                        <Label className="text-sm font-medium text-ai-graphite-700">
-                          Style Reference (Optional)
-                        </Label>
+                      <Label className="flex items-center gap-1.5 text-sm font-medium text-ai-graphite-700">
+                        Style reference <span className="font-normal text-ai-graphite-400">(optional)</span>
+                        <Hint
+                          title="Style reference"
+                          text="Pick existing illustrations and their images are sent along, so the new one matches their line weight, hatching and labelling. Use it to keep a figure set looking like one hand drew it."
+                        />
                         {selectedReferenceSketchIds.length > 0 && (
-                          <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-xs">
+                          <Badge variant="secondary" className="text-xs">
                             {selectedReferenceSketchIds.length} selected
                           </Badge>
                         )}
-                      </div>
+                      </Label>
                       {selectedReferenceSketchIds.length > 0 && (
-                        <button 
+                        <button
                           onClick={() => setSelectedReferenceSketchIds([])}
                           className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700"
                         >
@@ -4711,16 +4678,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-ai-graphite-600">
-                      Select existing sketches to maintain <strong>visual consistency</strong> (line style, shading, layout). 
-                      Selected images are passed to the AI to match the same drawing style.
-                    </p>
                     <div className="flex flex-wrap gap-2">
                       {sketches.filter(s => s.status === 'SUCCESS').map((sketch) => {
                         const isSelected = selectedReferenceSketchIds.includes(sketch.id)
                         return (
-                          <div
+                          <button
                             key={sketch.id}
+                            type="button"
+                            aria-pressed={isSelected}
                             onClick={() => {
                               if (isSelected) {
                                 setSelectedReferenceSketchIds(selectedReferenceSketchIds.filter(id => id !== sketch.id))
@@ -4728,18 +4693,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                 setSelectedReferenceSketchIds([...selectedReferenceSketchIds, sketch.id])
                               }
                             }}
-                            className={`relative cursor-pointer rounded-lg border-2 overflow-hidden transition-all ${
-                              isSelected 
-                                ? 'border-amber-500 ring-2 ring-amber-200 scale-105' 
-                                : 'border-paper-300 hover:border-amber-300'
+                            className={`relative cursor-pointer rounded-lg border-2 overflow-hidden transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 ${
+                              isSelected
+                                ? 'border-ai-blue-500'
+                                : 'border-paper-300 hover:border-ai-blue-300'
                             }`}
-                            title={sketch.title || 'Untitled Sketch'}
+                            title={sketch.title || 'Untitled illustration'}
                           >
                             <div className="w-16 h-16 bg-paper-200 flex items-center justify-center">
                               {sketch.imagePath ? (
                                 <img
                                   src={sketch.imagePath}
-                                  alt={sketch.title || 'Sketch'}
+                                  alt={sketch.title || 'Illustration'}
                                   className="w-full h-full object-cover"
                                 />
                               ) : (
@@ -4747,18 +4712,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               )}
                             </div>
                             {isSelected && (
-                              <div className="absolute inset-0 bg-amber-500/20 flex items-center justify-center">
-                                <div className="w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
+                              <div className="absolute inset-0 bg-ai-blue-500/20 flex items-center justify-center">
+                                <div className="w-5 h-5 bg-ai-blue-600 rounded-full flex items-center justify-center">
                                   <Check className="w-3 h-3 text-white" />
                                 </div>
                               </div>
                             )}
                             <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
                               <p className="text-[9px] text-white truncate text-center">
-                                {sketch.title?.slice(0, 12) || 'Sketch'}
+                                {sketch.title?.slice(0, 12) || 'Untitled'}
                               </p>
                             </div>
-                          </div>
+                          </button>
                         )
                       })}
                     </div>
@@ -4774,17 +4739,24 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 {sketchGenerating ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Generating Sketch...
+                    Generating…
                   </>
                 ) : (
                   <>
                     <Wand2 className="w-4 h-4" />
-                    {sketchMode === 'auto' && 'Generate from Context'}
-                    {sketchMode === 'guided' && 'Generate with Instructions'}
-                    {sketchMode === 'refine' && 'Refine Uploaded Sketch'}
+                    {sketchMode === 'refine' ? 'Clean up my drawing' : 'Generate illustration'}
                   </>
                 )}
               </Button>
+
+              {/* Waiting state — image generation returns one response at the end,
+                  so this fills the gap with elapsed time and phase captions. */}
+              {sketchGenerationStartedAt !== null && (
+                <SketchGenerationProgress
+                  startedAt={sketchGenerationStartedAt}
+                  label={sketchGenerationLabel}
+                />
+              )}
             </CardContent>
           </Card>
 
@@ -4793,7 +4765,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-ai-graphite-900 flex items-center gap-2">
                 <Grid3X3 className="w-5 h-5" />
-                Generated Sketches
+                Your illustrations
               </h3>
               <Button variant="outline" size="sm" onClick={loadSketches} disabled={sketchesLoading}>
                 <RefreshCw className={`w-4 h-4 mr-2 ${sketchesLoading ? 'animate-spin' : ''}`} />
@@ -4809,11 +4781,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               <Card className="border-dashed">
                 <CardContent className="py-12 text-center">
                   <Pencil className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-                  <h4 className="text-lg font-medium text-ai-graphite-900 mb-2">No generated sketches yet</h4>
+                  <h4 className="text-lg font-medium text-ai-graphite-900 mb-2">No illustrations yet</h4>
                   <p className="text-ai-graphite-500 mb-4">
-                    {sketches.some(s => s.status === 'SUGGESTED') 
-                      ? 'Generate sketches from the suggestions above, or create a new one using the controls.'
-                      : 'Generate your first patent-style sketch using the controls above.'}
+                    {sketches.some(s => s.status === 'SUGGESTED')
+                      ? 'Generate one from a saved view idea above, or describe your own.'
+                      : 'Use the controls above to create your first illustration.'}
                   </p>
                 </CardContent>
               </Card>
@@ -5027,25 +4999,33 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     className="bg-white rounded-xl shadow-2xl p-2 max-w-4xl w-full max-h-[90vh] flex flex-col"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="flex items-center justify-between p-4 border-b">
-                      <div>
+                    {/*
+                      The image is the point of this modal. Generated sketches carry the
+                      full drawing-instruction paragraph as their description, which is
+                      long enough to push the figure down to a sliver — so it collapses
+                      behind a disclosure and scrolls within its own box when opened.
+                    */}
+                    <div className="flex shrink-0 items-start justify-between gap-3 p-4 border-b">
+                      <div className="min-w-0">
                         <h4 className="text-lg font-semibold text-ai-graphite-900">{sketch.title}</h4>
                         {sketch.description && (
-                          <p className="text-sm text-ai-graphite-600 mt-1 max-w-xl">{sketch.description}</p>
+                          <details className="group mt-1">
+                            <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-ai-graphite-500 hover:text-ai-graphite-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 rounded">
+                              <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+                              Drawing instructions
+                            </summary>
+                            <p className="mt-2 max-h-32 overflow-y-auto pr-2 text-sm leading-relaxed text-ai-graphite-600">
+                              {sketch.description}
+                            </p>
+                          </details>
                         )}
                       </div>
-                      <Button variant="ghost" size="icon" onClick={() => setExpandedSketchId(null)}>
+                      <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setExpandedSketchId(null)}>
                         <span className="text-2xl">&times;</span>
                       </Button>
                     </div>
-                    <div className="flex-1 overflow-auto p-4 bg-paper-200 flex items-center justify-center">
-                      <img
-                        src={modalSketchImageUrl}
-                        alt={sketch.title}
-                        className="max-w-full h-auto shadow-lg"
-                      />
-                    </div>
-                    <div className="p-4 border-t flex justify-between items-center">
+                    <ZoomableImage src={modalSketchImageUrl} alt={sketch.title} />
+                    <div className="shrink-0 p-4 border-t flex flex-wrap gap-3 justify-between items-center">
                       <div className="text-sm text-ai-graphite-500">
                         Mode: {sketch.mode} • Created: {new Date(sketch.createdAt).toLocaleString()}
                       </div>

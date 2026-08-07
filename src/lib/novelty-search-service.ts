@@ -6049,6 +6049,8 @@ RESPONSE:`;
             reasoning_effort: 'low',
             // Batches of one run share the invention context prefix.
             prompt_cache_key: `NOVELTY_CONSOLIDATED_ANALYSIS:${searchId}`,
+            responseMimeType: 'application/json',
+            response_format: { type: 'json_object' },
           },
         }
       );
@@ -6079,39 +6081,82 @@ RESPONSE:`;
       if (!Array.isArray(parsed.per_patent_remarks) || parsed.per_patent_remarks.length === 0) {
         throw new Error(`Consolidated analysis batch ${batchIndex + 1} did not return per-patent remarks.`);
       }
+      // Per-patent salvage rather than all-or-nothing validation.
+      //
+      // These checks used to throw on any defect anywhere in the batch, so one
+      // hallucinated, duplicated or omitted publication number discarded the analysis
+      // of every patent in the batch — after paying for a retry — and marked all of
+      // them Unknown. A batch of 8 with 7 good rows produced 8 useless rows at twice
+      // the cost. Now each patent is judged on its own row: complete rows are kept,
+      // and only the patents genuinely absent from the response fall back to Unknown.
       const expectedPns = batch.map(item => this.canonicalPatentNumber(item.canonicalPn)).filter(Boolean);
-      const validateExactPatentSet = (rows: any[], label: string) => {
-        const actualPns = rows.map(row => this.canonicalPatentNumber(row?.pn)).filter(Boolean);
-        const unique = new Set(actualPns);
-        const missing = expectedPns.filter(pn => !unique.has(pn));
-        const unexpected = actualPns.filter(pn => !expectedPns.includes(pn));
-        if (unique.size !== actualPns.length || missing.length > 0 || unexpected.length > 0 || actualPns.length !== expectedPns.length) {
-          throw new Error(`Consolidated analysis batch ${batchIndex + 1} returned an invalid ${label} patent set.`);
-        }
+      const expectedFeatureKeys = inventionFeatures.map(feature => String(feature).trim().toLowerCase());
+      const coversEveryFeature = (keys: string[]) => {
+        const unique = new Set(keys);
+        return unique.size === expectedFeatureKeys.length
+          && expectedFeatureKeys.every(feature => unique.has(feature));
       };
-      validateExactPatentSet(parsed.feature_map, 'feature-map');
-      validateExactPatentSet(parsed.per_patent_remarks, 'remarks');
-      for (const map of parsed.feature_map) {
-        const mappedFeatures = [
-          ...(Array.isArray(map?.present) ? map.present : []),
-          ...(Array.isArray(map?.partial) ? map.partial : []),
-          ...(Array.isArray(map?.absent) ? map.absent : []),
-          ...(Array.isArray(map?.unknown) ? map.unknown : []),
-          ...(Array.isArray(map?.feature_analysis) ? map.feature_analysis : []),
-        ].map((cell: any) => String(cell?.feature || '').trim().toLowerCase()).filter(Boolean);
-        const missingFeatures = inventionFeatures.filter(feature => !mappedFeatures.includes(String(feature).trim().toLowerCase()));
-        if (mappedFeatures.length !== inventionFeatures.length || new Set(mappedFeatures).size !== inventionFeatures.length || missingFeatures.length > 0) {
-          throw new Error(`Consolidated analysis batch ${batchIndex + 1} omitted or duplicated invention feature mappings.`);
+
+      const keepFirstByPn = <T,>(rows: T[], featureKeysOf: (row: T) => string[]) => {
+        const kept = new Map<string, T>();
+        for (const row of rows) {
+          const pn = this.canonicalPatentNumber((row as any)?.pn);
+          // Drop rows for patents we did not ask about, duplicates, and rows whose
+          // feature coverage is incomplete — a partial row would silently understate
+          // overlap for that reference.
+          if (!pn || !expectedPns.includes(pn) || kept.has(pn)) continue;
+          if (!coversEveryFeature(featureKeysOf(row))) continue;
+          // Rewrite to the canonical form we asked for. Downstream decoration matches
+          // maps to candidates on canonicalPn, so a reply echoing a kind-coded variant
+          // (US1234567A1 for US1234567) would otherwise be silently dropped later.
+          kept.set(pn, { ...(row as any), pn } as T);
         }
+        return kept;
+      };
+
+      const featureKeysOfMap = (map: any) => [
+        ...(Array.isArray(map?.present) ? map.present : []),
+        ...(Array.isArray(map?.partial) ? map.partial : []),
+        ...(Array.isArray(map?.absent) ? map.absent : []),
+        ...(Array.isArray(map?.unknown) ? map.unknown : []),
+        ...(Array.isArray(map?.feature_analysis) ? map.feature_analysis : []),
+      ].map((cell: any) => String(cell?.feature || '').trim().toLowerCase()).filter(Boolean);
+
+      const keptMaps = keepFirstByPn(parsed.feature_map, featureKeysOfMap);
+      const keptRemarks = keepFirstByPn(
+        parsed.per_patent_remarks,
+        (remark: any) => (Array.isArray(remark?.comparison_rows) ? remark.comparison_rows : [])
+          .map((row: any) => String(row?.feature || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+
+      // A response with nothing usable is a real failure: retry, then fall back.
+      if (keptMaps.size === 0) {
+        throw new Error(`Consolidated analysis batch ${batchIndex + 1} returned no usable patent mappings.`);
       }
-      for (const remark of parsed.per_patent_remarks) {
-        const rows = Array.isArray(remark?.comparison_rows) ? remark.comparison_rows : [];
-        const comparedFeatures = rows.map((row: any) => String(row?.feature || '').trim().toLowerCase()).filter(Boolean);
-        if (comparedFeatures.length !== inventionFeatures.length || new Set(comparedFeatures).size !== inventionFeatures.length ||
-          inventionFeatures.some(feature => !comparedFeatures.includes(String(feature).trim().toLowerCase()))) {
-          throw new Error(`Consolidated analysis batch ${batchIndex + 1} returned an incomplete comparison matrix.`);
-        }
+
+      const missingPns = expectedPns.filter(pn => !keptMaps.has(pn));
+      const unknownFill = missingPns.length > 0
+        ? this.createUnknownFeatureMap(
+          batch.filter(item => missingPns.includes(this.canonicalPatentNumber(item.canonicalPn))),
+          inventionFeatures
+        ).feature_map
+        : [];
+      if (missingPns.length > 0) {
+        console.warn('[ConsolidatedAnalysis] batch_partially_salvaged', JSON.stringify({
+          batch: batchIndex + 1,
+          requested: expectedPns.length,
+          salvaged: keptMaps.size,
+          unknown: missingPns.length,
+          missingPns,
+        }));
       }
+
+      parsed.feature_map = [...Array.from(keptMaps.values()), ...unknownFill];
+      // Remarks may legitimately be a subset: buildDeterministicPerPatentRemarks fills
+      // any gaps downstream, so an incomplete remark set is not a batch failure.
+      parsed.per_patent_remarks = Array.from(keptRemarks.values());
+      parsed.salvage = { requested: expectedPns.length, salvaged: keptMaps.size, unknown: missingPns.length };
 
       totalInputTokens += Number((response as any).inputTokens ?? response.metadata?.inputTokens ?? 0);
       totalOutputTokens += Number(response.outputTokens || 0);
@@ -6953,6 +6998,11 @@ RESPONSE:`;
                   // both the static policy block and this run's feature list, and
                   // a run now issues up to a dozen of these calls.
                   prompt_cache_key: `NOVELTY_COMPARISON:${searchId}`,
+                  // Constrain decoding to JSON so a prose preamble or an unclosed
+                  // brace cannot cost a whole batch. Both provider shapes are given
+                  // because the gateway may route this stage to either.
+                  responseMimeType: 'application/json',
+                  response_format: { type: 'json_object' },
                 },
               }
             ),
@@ -8315,7 +8365,9 @@ RESPONSE:`;
       filing_advice: filingAdvice,
       inventor_action_items: inventorActions,
       analysis_date: new Date().toISOString().split('T')[0],
-      disclaimer: 'This analysis is AI-generated and should be reviewed by a qualified patent attorney before making legal or business decisions. Patent law is complex and fact-specific; this report does not constitute legal advice.'
+      // Keeps the professional/legal substance — this is not a legal opinion — without
+      // disclaiming the quality of the analysis itself.
+      disclaimer: 'This is a preliminary novelty assessment prepared for attorney review. It does not constitute a legal opinion on patentability, validity, or freedom to operate.'
     };
   }
 
@@ -10861,15 +10913,47 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       }
     }
 
-    await (prisma as any).featureMapCell.deleteMany({ where: { searchId } });
+    // Upsert rather than delete-then-insert.
+    //
+    // Two reasons. FeatureMapOverride cascades on its FK to FeatureMapCell, so wiping
+    // cells silently destroyed every attorney correction for the search on any
+    // re-analysis. And the delete/insert pair was not transactional, so a failure
+    // between them left the search with no cells at all.
+    //
+    // Rows for references that are no longer analysed are pruned afterwards, which
+    // only cascades to overrides whose reference has genuinely left the report.
+    const keptKeys = new Set(cells.map(cell => `${cell.publicationNumber} ${cell.feature}`));
 
-    // Bulk insert
-    if (cells.length > 0) {
-      await (prisma as any).featureMapCell.createMany({
-        data: cells,
-        skipDuplicates: true
+    await (prisma as any).$transaction(async (tx: any) => {
+      for (const cell of cells) {
+        await tx.featureMapCell.upsert({
+          where: {
+            searchId_publicationNumber_feature: {
+              searchId,
+              publicationNumber: cell.publicationNumber,
+              feature: cell.feature,
+            },
+          },
+          create: cell,
+          update: {
+            status: cell.status,
+            evidence: cell.evidence,
+            confidence: cell.confidence,
+          },
+        });
+      }
+
+      const existing = await tx.featureMapCell.findMany({
+        where: { searchId },
+        select: { id: true, publicationNumber: true, feature: true },
       });
-    }
+      const staleIds = existing
+        .filter((row: any) => !keptKeys.has(`${row.publicationNumber} ${row.feature}`))
+        .map((row: any) => row.id);
+      if (staleIds.length > 0) {
+        await tx.featureMapCell.deleteMany({ where: { id: { in: staleIds } } });
+      }
+    });
   }
 
   private calculateQualityFlags(featureMaps: PatentFeatureMap[], originalPatents: any[]): { low_evidence: boolean; ambiguous_abstracts: boolean; language_mismatch: boolean } {

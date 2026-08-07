@@ -909,7 +909,7 @@ function buildRefineModePrompt(
   context: SketchContextBundle,
   userPrompt?: string
 ): string {
-  let prompt = `Interpret and refine this user-uploaded sketch into a USPTO/EPO/WIPO-compliant patent line drawing.
+  let prompt = `Interpret and refine this user-uploaded sketch (often hand-drawn) into a formal USPTO/EPO/WIPO-compliant patent figure.
 
 ${buildLanguageRequirementSection(context)}
 ═══════════════════════════════════════════════════════════════════════════════
@@ -947,15 +947,15 @@ REFINEMENT TASKS
 1. Extract the structure and layout from the uploaded sketch
 2. Identify components and map them to the official component list
 3. REMOVE any components not in the invention context
-4. REPLACE all text labels with the official reference labels (${labelFormatDesc})
-5. Convert to clean black-and-white line art (no shading/gradients)
-6. Apply solid lines for visible features, dashed for internal/hidden
-7. Remove any arrows, dimension lines, icons, or decorative elements
+4. REPLACE all text labels with the official reference labels (${labelFormatDesc}), drawn in plain upright characters placed OUTSIDE the geometry with short straight leader lines
+5. Redraw in the formal patent-figure style: crisp, uniform black technical-pen linework on a pure white background, with a line-weight hierarchy (slightly heavier outline on the primary structure, lighter lines for detail) — no shading, gray fills, gradients, or sketch texture
+6. Apply solid lines for visible features, dashed lines only for disclosed internal/hidden features
+7. Remove dimension lines, icons, and decorative elements; remove arrows unless they are disclosed flow indicators or section-plane indicators for a cross-section
 
 ═══════════════════════════════════════════════════════════════════════════════
 REFINEMENT RULES
 ═══════════════════════════════════════════════════════════════════════════════
-- Preserve the user's intended LAYOUT and SPATIAL ARRANGEMENT
+- Preserve the user's intended LAYOUT, SPATIAL ARRANGEMENT, and VIEW — refine the same view; do NOT add extra views
 - Correct all labels to match the official reference label format provided above
 - Remove any non-compliant elements (text descriptions, shading, icons)
 - If sketch shows unlisted components → REMOVE them (don't invent labels)
@@ -971,22 +971,12 @@ ${userPrompt}
 `
   }
 
-  // Get label example based on numbering style
-  const labelExample = context.numberingStyle === 'STEP_LABEL' 
-    ? 'S100, S200, etc.' 
-    : context.numberingStyle === 'CONSTITUENT_LABEL' 
-      ? '(a), (b), (c), etc.' 
-      : 'assigned numeric labels'
-
   prompt += `
 ═══════════════════════════════════════════════════════════════════════════════
 COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
-✔ Only listed components shown (no extras)
-✔ Reference labels only (${labelExample}) — use exactly the labels from the provided list
-✔ Clean line art (no shading, gradients, textures)
-✔ Dashed lines used correctly (internal/hidden only)
-✔ No forbidden elements present`
+${getComplianceChecklistForStyle(context.numberingStyle)}
+✔ Same view as the uploaded sketch, refined — no extra views added`
 
   return prompt
 }
@@ -1008,6 +998,7 @@ ORIGINAL SKETCH INFO
 Title: ${originalSketchTitle || 'Untitled'}
 ${originalSketchDescription ? `Description: ${originalSketchDescription}` : ''}
 
+${buildLanguageRequirementSection(context)}
 ═══════════════════════════════════════════════════════════════════════════════
 INVENTION CONTEXT (Source of Truth - must remain accurate)
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1039,13 +1030,15 @@ MODIFICATION RULES
 ═══════════════════════════════════════════════════════════════════════════════
 ✓ PRESERVE: Reference labels from context (${labelFormatDesc})
 ✓ PRESERVE: Essential invention components
+✓ PRESERVE: The original view, projection, layout, and drawing style (line weights, hatching, label conventions) except where the modification requires change
 ✓ APPLY: Only the requested modifications
 ✓ OUTPUT: New clean sketch (not overlay on original)
 
 ✗ DO NOT: Add components not in invention context
 ✗ DO NOT: Remove components essential to the invention
 ✗ DO NOT: Add text labels — use only the official reference labels provided
-✗ DO NOT: Add shading, gradients, icons, or arrows
+✗ DO NOT: Add shading, gray fills, gradients, icons, or decorative arrows (section-plane or disclosed flow indicators are permitted)
+✗ DO NOT: Add extra views beyond those in the original sketch unless the modification explicitly requests them
 ✗ DO NOT: Misrepresent the invention structure
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1054,7 +1047,12 @@ IF MODIFICATION CONFLICTS WITH COMPLIANCE
 If the requested modification would violate patent drawing rules:
 1. Apply the closest compliant alternative
 2. Maintain invention accuracy over user aesthetic preference
-3. When in doubt, make minimal changes to preserve compliance`
+3. When in doubt, make minimal changes to preserve compliance
+
+═══════════════════════════════════════════════════════════════════════════════
+COMPLIANCE CHECKLIST (Self-verify before output)
+═══════════════════════════════════════════════════════════════════════════════
+${getComplianceChecklistForStyle(context.numberingStyle)}`
 
   return prompt
 }
@@ -1501,7 +1499,11 @@ async function finalizeSketchWithQa(
   }
 
   const verdict = await verifySketchCompliance(generated.imageBase64, qaContext)
-  if (!verdict || verdict.passed) return generated
+  if (!verdict) return generated
+  if (verdict.passed) {
+    console.log('[SketchService] QA passed; no repair needed')
+    return generated
+  }
   if (verdict.defects.length === 0) {
     console.warn('[SketchService] QA flagged the sketch without actionable defects; keeping original')
     return generated

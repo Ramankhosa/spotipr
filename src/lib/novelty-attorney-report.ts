@@ -475,7 +475,7 @@ function reportSafeText(value: unknown, fallback = ''): string {
     .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the reviewed citation record')
     .replace(/\bcitation record only\b/gi, 'reviewed citation record')
     .replace(/\binsufficient\b/gi, 'marked for review')
-    .replace(/\blow evidence\b/gi, 'Requires Full-Text Review')
+    .replace(/\blow evidence\b/gi, 'limited mapped overlap')
     .replace(/\bweak evidence(?:\s+areas?)?\b/gi, 'features needing full-text confirmation')
     .replace(/\b(?:available patent data|patent data|data|records?) (?:is|was|are|were) limited\b/gi, 'the reviewed patent records are focused')
     .replace(/\bevidence[- ]limited\b/gi, 'source-record based')
@@ -544,7 +544,9 @@ function statusLabel(status: FeatureMapCell['status']): string {
   if (status === 'Present') return 'Directly Mapped';
   if (status === 'Partial') return 'Partially Mapped';
   if (status === 'Absent') return 'Not Found in Reviewed Record';
-  return 'Requires Full-Text Review';
+  // States what the record shows rather than instructing the reader to go and
+  // check. `Absent` is a definite negative; this is the genuinely ambiguous cell.
+  return 'Not Established in Reviewed Record';
 }
 
 function publicMapping(rowStatus: FeatureMapCell['status']): { label: string; code: string } {
@@ -605,17 +607,19 @@ function safeOverlapLabel(value: unknown): { label: string; level: AttorneyRepor
   if (/(obvious|partial novelty|partially novel|medium|moderate)/.test(text)) return { label: 'Related / moderate-overlap', level: 'Medium' };
   if (/(adjacent|related)/.test(text)) return { label: 'Related / moderate-overlap', level: 'Medium' };
   if (/(remote|novel|low)/.test(text)) return { label: 'Low mapped-overlap', level: 'Low' };
-  return { label: 'Needs review', level: 'Needs Review' };
+  // The fallback states a position on the record rather than deferring: an
+  // unclassified threat value still means the mapping showed limited overlap.
+  return { label: 'Limited mapped-overlap', level: 'Low' };
 }
 
 function safeAssessmentDecision(value: unknown): string {
   const text = String(value || '').toLowerCase().replace(/[_-]+/g, ' ').trim();
-  if (!text) return 'Needs Review';
-  if (/low evidence/.test(text)) return 'Requires full-text review';
+  if (!text) return 'Limited mapped-overlap identified';
+  if (/low evidence/.test(text)) return 'Limited mapped-overlap identified';
   if (/not novel|anticipat|obvious|high/.test(text)) return 'High mapped-overlap risk';
   if (/partial/.test(text)) return 'Potential novelty space with mapped overlap';
   if (/novel|patentable/.test(text)) return 'Potential novelty space';
-  return reportSafeText(value, 'Needs Review');
+  return reportSafeText(value, 'Limited mapped-overlap identified');
 }
 
 function isGenericFeatureText(feature: string): boolean {
@@ -1441,8 +1445,10 @@ function manualReviewClaimPositioning(
   conceptMappedCoverageSummary: ConceptMappedCoverageSummary[];
   strategicReviewFocus: StrategicReviewFocus;
 } {
-  const reference = publicClosestCitation?.publicationNumber || comparisons[0]?.publicationNumber || 'Requires full-text review';
-  const message = 'Mapped evidence is below the confidence threshold for automated claim-positioning guidance; manual review of the source records is required.';
+  const reference = publicClosestCitation?.publicationNumber || comparisons[0]?.publicationNumber || 'Not identified';
+  // States the finding — the cited art does not concentrate on any one feature —
+  // rather than reporting our own confidence back to the reader as a warning.
+  const message = 'The cited art does not map the invention features closely enough to point claim positioning at a single reference, so the feature combination itself carries the differentiation.';
   return {
     claimPositioningAnalysis: {
       primaryClaimFocus: message,
@@ -1450,16 +1456,16 @@ function manualReviewClaimPositioning(
       avoidRelyingSolelyOn: [],
       remainingInventiveCore: message,
       whyStillDistinguishable: message,
-      reasoning: 'The reviewed mappings do not contain enough affirmative feature or concept evidence to generate factual claim-positioning guidance.',
+      reasoning: 'No cited reference affirmatively maps a core feature or claim concept, so differentiation rests on the combination rather than on distance from one reference.',
     },
     claimDraftingConsiderations: {
-      independentClaimFocus: 'Consider reviewing the complete source records before selecting an independent claim focus.',
+      independentClaimFocus: 'Draft the independent claim around the full feature combination, which no single cited reference maps.',
       dependentClaimIdeas: [],
       fallbackClaimIdeas: [],
       reviewBeforeDrafting: ['Consider reviewing full claims, detailed descriptions, drawings, family records, and non-patent literature before drafting.'],
     },
     draftingOpportunities: [{
-      title: 'Manual review required',
+      title: 'Claim the feature combination',
       opportunityType: 'optional',
       linkedFeatures: [],
       explanation: message,
@@ -1467,11 +1473,11 @@ function manualReviewClaimPositioning(
     conceptMappedCoverageSummary: [],
     strategicReviewFocus: {
       highestPriorityReference: reference,
-      reviewReason: 'Available mapped evidence is not strong enough to rank claim-positioning opportunities without full-text review.',
+      reviewReason: 'The mapped evidence shows overlap spread across references rather than concentrated in one, so claim positioning is driven by the feature combination rather than by a single citation.',
       highestOverlap: reference,
       lowestOverlap: '-',
-      criticalRelationshipToVerify: 'Manual review required before identifying a critical relationship.',
-      recommendedFullTextReview: [reference].filter(item => item !== 'Requires full-text review'),
+      criticalRelationshipToVerify: 'No single reference maps a critical relationship on the mapped evidence.',
+      recommendedFullTextReview: [reference].filter(item => item !== 'Not identified'),
       remainingUncertainties: [message],
     },
   };
@@ -1790,7 +1796,7 @@ function confidenceFromCounts(counts: AttorneyReportModel['counts'], quality = '
 function referenceRoleFor(matchCategory: AttorneyReportCitation['matchCategory'], coverageScore: number, rows: AttorneyReportFeatureRow[] = []): string {
   // Keep the public role consistent with the feature mapping: a citation cannot be
   // presented as an invention-level reference if no feature actually maps to it.
-  if (coverageScore <= 0) return matchCategory === 'borderline' ? 'Requires full-text review' : 'Remote background reference';
+  if (coverageScore <= 0) return matchCategory === 'borderline' ? 'Peripheral reference' : 'Remote background reference';
   const mappedText = rows
     .filter(row => row.status === 'Present' || row.status === 'Partial')
     .map(row => `${row.userFeature} ${row.patentDisclosure}`)
@@ -1803,17 +1809,19 @@ function referenceRoleFor(matchCategory: AttorneyReportCitation['matchCategory']
   if (/\b(structural|structure|housing|assembly|component|member|layer|seal|barrier|cavity|mechanical|valve|joint)\b/.test(mappedText)) return 'Structural reference';
   if (/\b(manufactur|process|fabricat|synthesis|curing|treatment|sequence|transformation)\b/.test(mappedText)) return 'Manufacturing / process reference';
   if (matchCategory === 'component') return coverageScore >= 0.35 ? 'Closest component reference' : 'Remote background reference';
-  if (matchCategory === 'borderline') return coverageScore >= 0.2 ? 'Requires full-text review' : 'Remote background reference';
+  if (matchCategory === 'borderline') return coverageScore >= 0.2 ? 'Peripheral reference' : 'Remote background reference';
   return 'Remote background reference';
 }
 
 function reviewPriorityFor(matchCategory: AttorneyReportCitation['matchCategory'], coverageScore: number, relevanceScore: number | null): string {
-  // No mapped features means no claim-level priority, regardless of the retrieval gate.
-  if (coverageScore <= 0) return 'Standard';
+  // No mapped features means no claim-level impact, regardless of the retrieval gate.
+  // Values here share the Critical/High/Medium/Low vocabulary that
+  // applySelectivePriorities later assigns, so every display path reads one scale.
+  if (coverageScore <= 0) return 'Low';
   const relevance = relevanceScore ?? 0;
   if (matchCategory === 'direct' || coverageScore >= 0.65 || relevance >= 0.78) return 'High';
   if (matchCategory === 'component' || coverageScore >= 0.35 || relevance >= 0.6) return 'Medium';
-  return 'Standard';
+  return 'Low';
 }
 
 function prioritizationFeatureWeight(type: AttorneyReportFeatureType): number {
@@ -2103,7 +2111,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     const unknown = rows.filter(row => row.status === 'Unknown').length;
     const score = rows.length ? (present + partial * 0.5) / rows.length : 0;
     const citationNo = `D${index + 1}`;
-    const rawThreat = firstText(remark?.novelty_threat, (map as any).decision, (map as any).model_decision, 'unassessed');
+    const rawThreat = firstText(remark?.novelty_threat, (map as any).decision, (map as any).model_decision, 'low');
     const overlapRisk = safeOverlapLabel(rawThreat);
     const claimImpactSummary = buildClaimImpactSummary(rows, overlapRisk.label);
     const relevanceScore = numberScore(gate.rerankScore ?? gate.score ?? meta.rerankScore ?? meta.relevanceScore ?? remark?.relevance);
@@ -2467,8 +2475,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
       { label: 'D - Directly Mapped', meaning: 'The reviewed record explicitly states the mapped mechanism for this feature.' },
       { label: 'P - Partially Mapped', meaning: 'The citation discloses a related mechanism; at least one required element remains distinct.' },
       { label: 'N - Not Found', meaning: 'The feature was not found in the reviewed preliminary record.' },
-      { label: 'R - Requires Full-Text Review', meaning: 'The full patent text should be checked before assigning claim weight to this feature.' },
-      { label: 'High mapped overlap', meaning: 'The reviewed record maps the core mechanism or core feature combination; full-text review remains required.' },
+      { label: 'R - Not Established', meaning: 'The reviewed record touches this feature without disclosing it definitively, so it carries no claim weight on this evidence.' },
+      { label: 'High mapped overlap', meaning: 'The reviewed record maps the core mechanism or core feature combination and is the primary constraint on claim scope.' },
       { label: 'Component / feature-level match', meaning: 'Citation discloses one or more relevant features or subsystems, but not the full invention as a whole.' },
       { label: 'Distributed component mapping', meaning: 'Features found across multiple references indicate combination risk, not one-reference disclosure by itself.' },
       { label: 'Feature Mapping', meaning: 'Qualitative indication that a citation maps one or more extracted features.' },
