@@ -14,6 +14,22 @@ const MIN_MAIN_REFERENCES_CEILING = 10;
 const UNMAPPED_SUPPLEMENTARY_CEILING = 50;
 
 /**
+ * How many references `main` holds when the materiality bar admits fewer.
+ *
+ * Under `materiality_v1` this is the only thing standing between a report and a
+ * three-reference prior-art section: `mainReferenceTarget` is not read by that
+ * rule, so the floor — not the target — decides the report's baseline width. It
+ * was 3, which is a sanity minimum rather than a usable report, and on a typical
+ * run nothing clears the bar, so 3 was what attorneys actually got.
+ *
+ * Set to the ceiling on the floor itself, so a report shows ten detailed
+ * references by default and the materiality bar can still promote above that up
+ * to MAIN_REFERENCE_CEILING. Raising it further means raising
+ * MIN_MAIN_REFERENCES_CEILING too.
+ */
+export const DEFAULT_MIN_MAIN_REFERENCES = 10;
+
+/**
  * Which selection rule produced a stored selection.
  *
  * Carried inside the persisted blob rather than encoded in
@@ -116,7 +132,9 @@ export interface ReportReferenceSelectionV1 {
 }
 
 export interface ReportReferenceSelectionOptions {
+  /** `fixed_target_v1` only. `materiality_v1` sizes `main` from the bar and the floor. */
   mainReferenceTarget?: number;
+  /** Defaults to DEFAULT_MIN_MAIN_REFERENCES. Clamped to MIN_MAIN_REFERENCES_CEILING. */
   minMainReferences?: number;
   maxUnmappedSupplementaryReferences?: number;
   /** Defaults to `fixed_target_v1` so existing call sites are unchanged. */
@@ -458,7 +476,12 @@ export function selectNoveltyReportReferences(
   const { candidates, invalidPublicationNumbersExcluded } = normalizeCandidates(inputCandidates);
   const rule = normalizeReportReferenceSelectionRule(options.rule);
   const mainReferenceTarget = boundedInteger(options.mainReferenceTarget, 10, 0, MAIN_REFERENCE_CEILING);
-  const minMainReferences = boundedInteger(options.minMainReferences, 3, 0, MIN_MAIN_REFERENCES_CEILING);
+  const minMainReferences = boundedInteger(
+    options.minMainReferences,
+    DEFAULT_MIN_MAIN_REFERENCES,
+    0,
+    MIN_MAIN_REFERENCES_CEILING
+  );
   const maxUnmappedSupplementaryReferences = boundedInteger(
     options.maxUnmappedSupplementaryReferences,
     20,

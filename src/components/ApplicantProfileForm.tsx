@@ -5,7 +5,17 @@ import { z } from 'zod'
 
 const applicantProfileSchema = z.object({
   applicantLegalName: z.string().min(3, 'Legal name must be at least 3 characters').max(200, 'Legal name too long'),
-  applicantCategory: z.enum(['natural_person', 'small_entity', 'startup', 'others']),
+  applicantCategory: z.enum(['natural_person', 'small_entity', 'startup', 'educational_institute', 'others']),
+  // Form 1 wants the demonym ("Indian") beside the name and the country name ("India") in
+  // the residence column, so nationality is stored separately from the country code.
+  applicantNationality: z.string().max(60).optional(),
+  // The person authorised to sign for an organisation applicant. Printed as name +
+  // designation over a blank signature line on Form 1 para 13, Form 5, and every drawing
+  // sheet — no signature image is ever stored.
+  signatoryName: z.string().max(160).optional(),
+  signatoryDesignation: z.string().max(160).optional(),
+  signatoryMobile: z.string().max(30).optional(),
+  signatoryEmail: z.string().email('Invalid email format').optional().or(z.literal('')),
   applicantAddressLine1: z.string().min(1, 'Address line 1 is required'),
   applicantAddressLine2: z.string().optional(),
   applicantCity: z.string().min(1, 'City is required'),
@@ -59,6 +69,11 @@ export function ApplicantProfileForm({ projectId, initialData, onSuccess }: Appl
   const [formData, setFormData] = useState<ApplicantProfileData>({
     applicantLegalName: initialData?.applicantLegalName || '',
     applicantCategory: (initialData?.applicantCategory as any) || 'others',
+    applicantNationality: initialData?.applicantNationality || '',
+    signatoryName: initialData?.signatoryName || '',
+    signatoryDesignation: initialData?.signatoryDesignation || '',
+    signatoryMobile: initialData?.signatoryMobile || '',
+    signatoryEmail: initialData?.signatoryEmail || '',
     applicantAddressLine1: initialData?.applicantAddressLine1 || '',
     applicantAddressLine2: initialData?.applicantAddressLine2 || '',
     applicantCity: initialData?.applicantCity || '',
@@ -436,9 +451,26 @@ export function ApplicantProfileForm({ projectId, initialData, onSuccess }: Appl
                 <option value="natural_person">Natural person</option>
                 <option value="small_entity">Small entity</option>
                 <option value="startup">Startup</option>
+                <option value="educational_institute">Educational institute</option>
                 <option value="others">Others</option>
               </select>
               {errors.applicantCategory && <p className="mt-1 text-sm text-red-600">{errors.applicantCategory}</p>}
+            </div>
+
+            {/* Form 1 prints the demonym beside the name, separately from country of residence. */}
+            <div>
+              <label htmlFor="applicantNationality" className="block text-sm font-medium text-gpt-gray-700 mb-1">
+                Nationality
+              </label>
+              <input
+                id="applicantNationality"
+                type="text"
+                value={formData.applicantNationality}
+                onChange={(e) => handleInputChange('applicantNationality', e.target.value)}
+                placeholder="e.g. Indian"
+                className="appearance-none relative block w-full px-3 py-3 border border-gpt-gray-300 text-gpt-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-gpt-blue-500 focus:border-transparent transition-all duration-200"
+              />
+              <p className="mt-1 text-xs text-gpt-gray-500">Printed on Form 1 beside the applicant name.</p>
             </div>
 
             <div className="md:col-span-2">
@@ -684,6 +716,92 @@ export function ApplicantProfileForm({ projectId, initialData, onSuccess }: Appl
                 required
               />
               {errors.correspondencePostalCode && <p className="mt-1 text-sm text-red-600">{errors.correspondencePostalCode}</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* Authorised signatory. An organisation cannot sign — a named person signs for it,
+            and that name + designation prints on Form 1, Form 5 and every drawing sheet. */}
+        <div className="bg-white rounded-lg shadow-sm p-6">
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gpt-gray-900">Authorised signatory</h3>
+            <p className="mt-1 text-sm text-gpt-gray-500">
+              The person who signs filing forms on behalf of the applicant. Their name and designation print
+              above the signature line — you still sign the printed forms yourself.
+            </p>
+          </div>
+
+          <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => {
+                handleInputChange('signatoryName', formData.correspondenceName)
+                handleInputChange('signatoryMobile', formData.correspondencePhone)
+                handleInputChange('signatoryEmail', formData.correspondenceEmail)
+              }}
+              className="text-sm font-medium text-gpt-blue-600 hover:text-gpt-blue-700"
+            >
+              Same as the correspondence contact
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="signatoryName" className="block text-sm font-medium text-gpt-gray-700 mb-1">
+                Name
+              </label>
+              <input
+                id="signatoryName"
+                type="text"
+                value={formData.signatoryName}
+                onChange={(e) => handleInputChange('signatoryName', e.target.value)}
+                placeholder="e.g. Dr. Monica Gulati"
+                className="appearance-none relative block w-full px-3 py-3 border border-gpt-gray-300 placeholder-gpt-gray-500 text-gpt-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-gpt-blue-500 focus:border-transparent transition-all duration-200"
+              />
+              {errors.signatoryName && <p className="mt-1 text-sm text-red-600">{errors.signatoryName}</p>}
+            </div>
+
+            <div>
+              <label htmlFor="signatoryDesignation" className="block text-sm font-medium text-gpt-gray-700 mb-1">
+                Designation
+              </label>
+              <input
+                id="signatoryDesignation"
+                type="text"
+                value={formData.signatoryDesignation}
+                onChange={(e) => handleInputChange('signatoryDesignation', e.target.value)}
+                placeholder="e.g. Registrar"
+                className="appearance-none relative block w-full px-3 py-3 border border-gpt-gray-300 placeholder-gpt-gray-500 text-gpt-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-gpt-blue-500 focus:border-transparent transition-all duration-200"
+              />
+              {errors.signatoryDesignation && <p className="mt-1 text-sm text-red-600">{errors.signatoryDesignation}</p>}
+            </div>
+
+            <div>
+              <label htmlFor="signatoryMobile" className="block text-sm font-medium text-gpt-gray-700 mb-1">
+                Mobile
+              </label>
+              <input
+                id="signatoryMobile"
+                type="text"
+                value={formData.signatoryMobile}
+                onChange={(e) => handleInputChange('signatoryMobile', e.target.value)}
+                placeholder="e.g. 9915020408"
+                className="appearance-none relative block w-full px-3 py-3 border border-gpt-gray-300 placeholder-gpt-gray-500 text-gpt-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-gpt-blue-500 focus:border-transparent transition-all duration-200"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="signatoryEmail" className="block text-sm font-medium text-gpt-gray-700 mb-1">
+                E-mail
+              </label>
+              <input
+                id="signatoryEmail"
+                type="email"
+                value={formData.signatoryEmail}
+                onChange={(e) => handleInputChange('signatoryEmail', e.target.value)}
+                className="appearance-none relative block w-full px-3 py-3 border border-gpt-gray-300 placeholder-gpt-gray-500 text-gpt-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-gpt-blue-500 focus:border-transparent transition-all duration-200"
+              />
+              {errors.signatoryEmail && <p className="mt-1 text-sm text-red-600">{errors.signatoryEmail}</p>}
             </div>
           </div>
         </div>

@@ -784,6 +784,19 @@ export default function PatentDraftingPage() {
                   </div>
                 )}
 
+                {/* Filing forms live outside the drafting stages — the draft is the
+                    specification, this is the paperwork that goes with it. */}
+                <Link
+                  href={`/patents/${patentId}/filing`}
+                  className="inline-flex items-center px-2.5 sm:px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                  title="Generate Form 1, Form 5 and drawing sheets"
+                >
+                  <svg className="w-3 h-3 sm:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span className="hidden sm:inline">Filing forms</span>
+                </Link>
+
                 <button
                   onClick={resumeSession}
                   className="inline-flex items-center px-2.5 sm:px-3 py-1.5 border border-lamp-600/20 text-xs font-medium rounded-md text-lamp-700 bg-lamp-50 hover:bg-lamp-100 transition-colors"

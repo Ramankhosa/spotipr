@@ -4,6 +4,38 @@ export const DEFAULT_MINIMUM_VISIBLE_CONFIDENCE = 0.7;
 export type RerankDecision = 'accept' | 'component' | 'borderline' | 'reject';
 export type PriorArtMatchCategory = 'direct' | 'component' | 'borderline' | 'rejected';
 
+export type ScreeningStopReason =
+  | 'pool_exhausted'
+  | 'yield_below_threshold'
+  | 'candidate_ceiling'
+  | 'wall_clock'
+  | 'token_budget'
+  | 'gate_errors'
+  | 'empty_wave';
+
+/**
+ * Why screening stopped, grouped by what it means for the reader.
+ *
+ * - `exhausted` — the pool ran out, or the tail stopped yielding relevant art.
+ *   Coverage is as complete as the corpus allows.
+ * - `bounded`   — a configured ceiling was reached. Coverage is deliberate and
+ *   more candidates remain.
+ * - `error`     — the gate failed. Coverage is incomplete for a reason that has
+ *   nothing to do with the invention, which is the one case a reader must not
+ *   mistake for "we looked and found little".
+ *
+ * Lives here rather than beside the screening loop so the report renderer can read
+ * it without importing the pipeline service, and its database and gateway clients,
+ * at runtime.
+ */
+export type ScreeningStopClass = 'exhausted' | 'bounded' | 'error';
+
+export function classifyScreeningStopReason(reason?: string | null): ScreeningStopClass {
+  if (reason === 'gate_errors' || reason === 'empty_wave') return 'error';
+  if (reason === 'candidate_ceiling' || reason === 'wall_clock' || reason === 'token_budget') return 'bounded';
+  return 'exhausted';
+}
+
 export interface PriorArtGateRecord {
   pn?: string;
   score?: number;
@@ -43,32 +75,53 @@ export function canonicalPriorArtNumber(value: unknown): string {
   return compact.replace(/[A-Z]\d*$/, '');
 }
 
+const ACCEPT_LITERALS = new Set(['accept', 'accepted']);
+const COMPONENT_LITERALS = new Set([
+  'component', 'feature', 'feature_level', 'feature-level', 'partial_feature', 'subsystem',
+]);
+const BORDERLINE_LITERALS = new Set([
+  'borderline', 'review_error', 'review-error', 'needs_review', 'needs-review',
+  'manual_review', 'manual-review', 'uncertain', 'unknown', 'parse_error', 'parse-error', 'error',
+]);
+/**
+ * Rejection has to be stated, not inferred from "nothing else matched".
+ *
+ * This set exists so the fallback below can be `borderline`. Everywhere else the
+ * gate is unsure — a thrown call, unparseable JSON, a candidate the model skipped,
+ * an empty decision field — the candidate is kept for bounded review. An
+ * unrecognised decision string carries the same information as those, so it
+ * resolves the same way. Defaulting to `reject` instead meant one drifted literal
+ * ("partial", "accept.", a renamed label after a model change) silently erased the
+ * candidate from deep analysis, from the visible list and from both appendices,
+ * while the run still reported gateStatus 'complete'.
+ */
+const REJECT_LITERALS = new Set([
+  'reject', 'rejected', 'irrelevant', 'not_relevant', 'not-relevant', 'not relevant',
+  'discard', 'discarded', 'exclude', 'excluded', 'remote', 'no',
+]);
+
+export interface RerankDecisionClassification {
+  decision: RerankDecision;
+  /**
+   * False when the raw value matched no known literal. The decision is still
+   * usable — it degrades to `borderline` — but callers on the ingestion path
+   * should count it, because a prompt or model change that shifts the decision
+   * vocabulary is otherwise undetectable.
+   */
+  recognized: boolean;
+}
+
+export function classifyRerankDecision(value: unknown): RerankDecisionClassification {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (ACCEPT_LITERALS.has(normalized)) return { decision: 'accept', recognized: true };
+  if (COMPONENT_LITERALS.has(normalized)) return { decision: 'component', recognized: true };
+  if (BORDERLINE_LITERALS.has(normalized)) return { decision: 'borderline', recognized: true };
+  if (REJECT_LITERALS.has(normalized)) return { decision: 'reject', recognized: true };
+  return { decision: 'borderline', recognized: false };
+}
+
 export function normalizeRerankDecision(value: unknown): RerankDecision {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'accept' || normalized === 'accepted') return 'accept';
-  if (
-    normalized === 'component' ||
-    normalized === 'feature' ||
-    normalized === 'feature_level' ||
-    normalized === 'feature-level' ||
-    normalized === 'partial_feature' ||
-    normalized === 'subsystem'
-  ) return 'component';
-  if (
-    normalized === 'borderline' ||
-    normalized === 'review_error' ||
-    normalized === 'review-error' ||
-    normalized === 'needs_review' ||
-    normalized === 'needs-review' ||
-    normalized === 'manual_review' ||
-    normalized === 'manual-review' ||
-    normalized === 'uncertain' ||
-    normalized === 'unknown' ||
-    normalized === 'parse_error' ||
-    normalized === 'parse-error' ||
-    normalized === 'error'
-  ) return 'borderline';
-  return 'reject';
+  return classifyRerankDecision(value).decision;
 }
 
 export function matchCategoryFromDecision(value: unknown): PriorArtMatchCategory {

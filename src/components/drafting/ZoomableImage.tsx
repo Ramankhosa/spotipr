@@ -57,10 +57,31 @@ export default function ZoomableImage({ src, alt, children }: ZoomableImageProps
   }, [zoom, measureFit])
 
   const clamp = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 100) / 100))
+
+  // Where the viewport centre sits within the content, captured before a zoom
+  // step and restored after it so zooming holds its place instead of jumping.
+  const anchorRef = useRef<{ x: number; y: number } | null>(null)
+
   const zoomBy = (delta: number) => {
     measureFit()
+    const node = scrollRef.current
+    if (node) {
+      anchorRef.current = {
+        x: (node.scrollLeft + node.clientWidth / 2) / Math.max(1, node.scrollWidth),
+        y: (node.scrollTop + node.clientHeight / 2) / Math.max(1, node.scrollHeight),
+      }
+    }
     setZoom(current => clamp(current + delta))
   }
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current
+    const anchor = anchorRef.current
+    anchorRef.current = null
+    if (!node || !anchor) return
+    node.scrollLeft = anchor.x * node.scrollWidth - node.clientWidth / 2
+    node.scrollTop = anchor.y * node.scrollHeight - node.clientHeight / 2
+  }, [zoom])
 
   // Ctrl/Cmd + wheel zooms; a plain wheel keeps scrolling so panning still works.
   useEffect(() => {
@@ -121,10 +142,7 @@ export default function ZoomableImage({ src, alt, children }: ZoomableImageProps
         {children}
       </div>
 
-      <div
-        ref={scrollRef}
-        className={`absolute inset-0 overflow-auto p-4 ${isFitted ? 'flex items-center justify-center' : ''}`}
-      >
+      <div ref={scrollRef} className="zoom-viewport absolute inset-0 overflow-auto p-4">
         <img
           ref={imageRef}
           src={src}
@@ -132,10 +150,27 @@ export default function ZoomableImage({ src, alt, children }: ZoomableImageProps
           onLoad={measureFit}
           onDoubleClick={() => (isFitted ? zoomBy(1) : setZoom(1))}
           draggable={false}
-          className={`shadow-lg ${isFitted ? 'max-h-full max-w-full object-contain' : 'max-w-none'}`}
+          className={`shadow-lg ${isFitted ? 'max-h-full max-w-full object-contain' : 'max-w-none shrink-0'}`}
           style={isFitted || zoomedWidth == null ? undefined : { width: `${zoomedWidth}px`, height: 'auto' }}
         />
       </div>
+
+      {/*
+        The figure stays centred at every zoom level. Plain `center` would clip
+        the top/left of a figure larger than the viewport — the overflow spills
+        past the scroll origin and becomes unreachable — so the `safe` keyword
+        follows, falling back to start-alignment only once the content actually
+        overflows. Browsers without `safe` keep the plain `center` above it.
+      */}
+      <style jsx>{`
+        .zoom-viewport {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          align-items: safe center;
+          justify-content: safe center;
+        }
+      `}</style>
     </div>
   )
 }

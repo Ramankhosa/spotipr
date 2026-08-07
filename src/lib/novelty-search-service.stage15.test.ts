@@ -843,3 +843,150 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     }).percent).toBe(100);
   });
 });
+
+describe('NoveltySearchService Stage 1.5 gate observability', () => {
+  function pool(size: number) {
+    return Array.from({ length: size }, (_, index) => ({
+      publicationNumber: `US${String(index).padStart(7, '0')}A1`,
+      title: `Candidate ${index}`,
+      abstract: `Abstract ${index}`,
+      relevanceScore: 1 - index * 0.001,
+    }));
+  }
+
+  function promptIds(request: any): string[] {
+    return Array.from(String(request.prompt).matchAll(/Reference ID: (\S+)/g)).map(m => (m as any)[1]);
+  }
+
+  // Stripping non-digits would fold the "1" of the A1 kind code into the index
+  // (US0000003A1 -> 31), so read the padded ordinal on its own.
+  function ordinal(pn: string): number {
+    return Number(String(pn).match(/US(\d{7})A1/)?.[1] ?? -1);
+  }
+
+  function harness() {
+    const svc = service();
+    vi.spyOn(svc as any, 'persistStage15Progress').mockResolvedValue(undefined);
+    vi.spyOn(svc as any, 'ensureSearchNotCancelled').mockResolvedValue({ success: true });
+    return svc;
+  }
+
+  test('records a decision census and the reject rate for the run', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = harness();
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      const rows = promptIds(request).map(pn => ({
+        pn,
+        score: 0.2,
+        decision: ordinal(pn) < 4 ? 'accept' : 'reject',
+        matched_features: [],
+        missing_features: [],
+        evidence_quality: 'low',
+      }));
+      return { success: true, response: { output: JSON.stringify(rows), inputTokens: 10, outputTokens: 5 } };
+    });
+
+    const result = await (svc as any).performStage15(
+      'census-run',
+      { inventionFeatures: ['adaptive control'], searchQuery: 'adaptive control' },
+      { retrievalCandidates: pool(40) },
+      svc.mergeConfig(),
+      {}
+    );
+
+    const coverage = result.data.screeningCoverage;
+    expect(coverage.decisionCounts).toEqual({ accept: 4, component: 0, borderline: 0, reject: 36 });
+    expect(coverage.rejectRate).toBe(0.9);
+    expect(coverage.poolSize).toBe(40);
+    expect(coverage.stopClass).toBe('exhausted');
+    expect(coverage.unknownDecisionCount).toBe(0);
+  });
+
+  test('counts decision literals the gate invented instead of discarding those candidates', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = harness();
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      const rows = promptIds(request).map(pn => ({
+        pn, score: 0.5, decision: 'partial', matched_features: [], missing_features: [], evidence_quality: 'medium',
+      }));
+      return { success: true, response: { output: JSON.stringify(rows), inputTokens: 10, outputTokens: 5 } };
+    });
+
+    const result = await (svc as any).performStage15(
+      'drift-run',
+      { inventionFeatures: ['adaptive control'], searchQuery: 'adaptive control' },
+      { retrievalCandidates: pool(20) },
+      svc.mergeConfig(),
+      {}
+    );
+
+    const coverage = result.data.screeningCoverage;
+    expect(coverage.unknownDecisionCount).toBe(20);
+    expect(coverage.unknownDecisionSamples[0]).toBe('partial x20');
+    // The whole point: a drifted vocabulary must not empty the pipeline.
+    expect(coverage.decisionCounts.reject).toBe(0);
+    expect(coverage.decisionCounts.borderline).toBe(20);
+    expect(result.data.borderline.length).toBeGreaterThan(0);
+  });
+
+  test('retries once when a wave fails wholesale, then keeps screening', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = harness();
+    // Every wave-2 batch fails on first contact and succeeds when retried, keyed by
+    // batch rather than by call count so batch size and concurrency cannot skew it.
+    const failedOnce = new Set<string>();
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      const ids = promptIds(request);
+      // Wave 2 only (candidates 80-159), so wave 3 is a clean pass and the run can
+      // be asserted to finish undegraded.
+      if (ids.some(pn => ordinal(pn) >= 80 && ordinal(pn) < 160) && !failedOnce.has(ids[0])) {
+        failedOnce.add(ids[0]);
+        throw new Error('provider unavailable');
+      }
+      const rows = ids.map(pn => ({ pn, score: 0.9, decision: 'accept', matched_features: [], missing_features: [], evidence_quality: 'high' }));
+      return { success: true, response: { output: JSON.stringify(rows), inputTokens: 10, outputTokens: 5 } };
+    });
+
+    const result = await (svc as any).performStage15(
+      'retry-run',
+      { inventionFeatures: ['adaptive control'], searchQuery: 'adaptive control' },
+      { retrievalCandidates: pool(180) },
+      svc.mergeConfig(),
+      {}
+    );
+
+    const coverage = result.data.screeningCoverage;
+    expect(coverage.gateErrorRetryUsed).toBe(true);
+    expect(coverage.gateErrorRetryRecovered).toBe(true);
+    // Recovered, so the run is not truncated at wave 1 and not marked degraded.
+    expect(result.data.screeningStopReason).not.toBe('gate_errors');
+    expect(result.data.gateStatus).toBe('complete');
+    expect(coverage.decisionCounts.accept).toBe(180);
+  });
+
+  test('stops and reports an error class when the retry does not recover', async () => {
+    const { llmGateway } = await import('./metering/gateway');
+    const svc = harness();
+    (llmGateway.executeLLMOperation as any).mockImplementation(async ({}, request: any) => {
+      const ids = promptIds(request);
+      if (ids.some(pn => ordinal(pn) >= 80)) throw new Error('provider down');
+      const rows = ids.map(pn => ({ pn, score: 0.9, decision: 'accept', matched_features: [], missing_features: [], evidence_quality: 'high' }));
+      return { success: true, response: { output: JSON.stringify(rows), inputTokens: 10, outputTokens: 5 } };
+    });
+
+    const result = await (svc as any).performStage15(
+      'retry-failed-run',
+      { inventionFeatures: ['adaptive control'], searchQuery: 'adaptive control' },
+      { retrievalCandidates: pool(180) },
+      svc.mergeConfig(),
+      {}
+    );
+
+    const coverage = result.data.screeningCoverage;
+    expect(coverage.gateErrorRetryUsed).toBe(true);
+    expect(coverage.gateErrorRetryRecovered).toBe(false);
+    expect(result.data.screeningStopReason).toBe('gate_errors');
+    // An incomplete search must be distinguishable from an exhausted one.
+    expect(coverage.stopClass).toBe('error');
+  });
+});

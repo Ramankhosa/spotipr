@@ -135,6 +135,9 @@ model Tenant {
   // Firm branding / white-label profile (1:1)
   firmProfile FirmProfile?
 
+  // Filing house-style presets (Form 1 / Form 5 / Drawings)
+  firmFilingPresets FirmFilingPreset[]
+
   @@map("tenants")
 }
 
@@ -466,6 +469,21 @@ model ApplicantProfile {
   correspondenceState        String
   correspondenceCountryCode  String
   correspondencePostalCode   String
+  // Form 1 prints the demonym ("Indian") in the Nationality column and the country name
+  // ("India") in Country of Residence, so nationality is stored separately. Seeded from
+  // applicantCountryCode via the demonym map, always editable.
+  applicantNationality       String?
+  // Person authorised to sign on behalf of an organisation applicant. Distinct from the
+  // correspondence contact (they coincide often, not always) and mutually exclusive with
+  // a registered agent signing. Printed under a blank signature line on Form 1 para 13,
+  // Form 5, and every drawing sheet — we never store signature images.
+  signatoryName              String?
+  signatoryDesignation       String?
+  signatoryMobile            String?
+  signatoryEmail             String?
+  // Project layer of the filing-settings cascade: a sparse patch over the firm preset.
+  // Absent key = inherit; present key = deliberate override. Shape: FilingSettingsPatch.
+  filingSettings             Json?
   useAgent                   Boolean           @default(false)
   agentName                  String?
   agentRegistrationNo        String?
@@ -515,6 +533,32 @@ model FirmProfile {
   @@map("firm_profiles")
 }
 
+// Firm-level house style for filing forms — the top layer of the
+// firm -> project -> patent settings cascade. A firm serving mixed client types keeps
+// several named presets ("University - ordinary provisional", "Startup - complete spec")
+// because real firms differentiate by client AND filing type, not by category alone.
+//
+// `settings` is a SPARSE patch (FilingSettingsPatch): only keys the firm deliberately
+// pinned. Absent key = fall through to the rule-derived default. That distinction is why
+// this is Json and not a wide column set — "unset" and "explicitly crossed" must differ.
+model FirmFilingPreset {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  isDefault Boolean  @default(false) // applied when a project picks nothing
+  // Optional auto-suggest hints, e.g. { applicantCategory: ["educational_institute"] }.
+  // Only ever suggests a preset in the UI; never silently switches one.
+  appliesTo Json?
+  settings  Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isDefault])
+  @@map("firm_filing_presets")
+}
+
 model ProjectCollaborator {
   id        String   @id @default(cuid())
   projectId String
@@ -535,6 +579,7 @@ enum ApplicantCategory {
   natural_person
   small_entity
   startup
+  educational_institute // Form 1 para 3B has its own tick box for this
   others
 }
 
@@ -603,6 +648,10 @@ enum TaskCode {
   WS_VALIDATE // Element-map disproof candidates against a hypothesis
   WS_REDTEAM // Adversarial pass: name and run the strongest remaining attack
   WS_DIMENSIONS // Invention whitespace: propose/grow viewpoint taxonomies (counts stay SQL)
+  // Filing forms: turn a pasted block of inventor details into structured rows.
+  // Cheap, mechanical extraction — the attorney reviews every field before saving,
+  // so the model never decides what goes on a legal document.
+  FILING_INVENTOR_PARSE
 }
 
 enum ModelClass {
@@ -629,11 +678,100 @@ model Patent {
   patentDraftingJobs PatentDraftingJob[]
   sketchRecords      SketchRecord[]
   emailDraftRequest  EmailDraftRequest?
+  inventors          PatentInventor[]
+  filingDetail       PatentFilingDetail?
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   creator User    @relation(fields: [createdBy], references: [id])
 
   @@map("patents")
+}
+
+// Inventors are patent-specific (the same project routinely files different inventor sets).
+// Each row is an independent SNAPSHOT, even when seeded from the project's inventor
+// directory: editing a person's address next year must not retroactively change what an
+// already-filed patent's forms regenerate to.
+//
+// Address columns mirror Form 1's fixed rows exactly (House No. & Address / Street / City /
+// State / Country / Pin) so no re-parsing happens at render time.
+model PatentInventor {
+  id                String   @id @default(cuid())
+  patentId          String
+  sortOrder         Int // print order on Form 1 para 4, Form 1 para 12(i) and Form 5
+  honorific         String? // "Dr." / "Prof." — split out so name-order lint sees the body alone
+  nameBody          String
+  familyNameFirst   Boolean  @default(false) // Form 1 asks for family name first; drives the lint
+  nationality       String // demonym, e.g. "Indian"
+  countryOfResidence String
+  addressLine1      String // "House No. & Address" row
+  street            String? // empty renders per the firm's emptyFieldStyle (e.g. "-")
+  city              String
+  state             String
+  country           String
+  pinCode           String
+  // Form 5 para 4: inventors who did not sign the application form assent separately.
+  isAdditionalInventor Boolean @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  patent            Patent   @relation(fields: [patentId], references: [id], onDelete: Cascade)
+
+  @@index([patentId, sortOrder])
+  @@map("patent_inventors")
+}
+
+// Per-patent filing facts + the bottom layer of the settings cascade.
+// Page counts seed from the drafting export and stay editable — we suggest, the attorney
+// decides. `resolvedSnapshot` freezes the fully-resolved settings at generation time so a
+// firm changing its house style months later cannot alter what an already-filed
+// application regenerates to.
+model PatentFilingDetail {
+  id              String            @id @default(cuid())
+  patentId        String            @unique
+  applicationType FilingApplicationType @default(ordinary)
+  specType        FilingSpecType    @default(provisional)
+  isDivisional    Boolean           @default(false)
+  isPatentOfAddition Boolean        @default(false)
+  officeBranch    String            @default("Delhi") // Delhi | Mumbai | Chennai | Kolkata
+  applicantRefNo  String? // Form 1 para 1
+  // Page/count block for Form 1 para 13
+  specPages       Int               @default(0)
+  claimsCount     Int               @default(0)
+  claimsPages     Int               @default(0)
+  abstractPages   Int               @default(0)
+  drawingsCount   Int               @default(0)
+  drawingsPages   Int               @default(0)
+  feeAmount       Int? // rupees; seeded from the First Schedule table by category
+  feeMode         String            @default("efiling")
+  // Known only after filing. Form 5 prints these as dotted blanks until they exist, so
+  // the bundle can be regenerated post-filing with the real particulars.
+  applicationNo   String?
+  filingDate      DateTime?
+  // Particulars of the parent/original application (Form 1 paras 10 and 11)
+  parentApplicationNo   String?
+  parentFilingDate      DateTime?
+  // Patent layer of the cascade: sparse FilingSettingsPatch over firm + project.
+  filingSettings  Json?
+  // Signatory override when someone other than the project's default signs this filing.
+  signatoryOverride Json?
+  presetId        String? // which firm preset this filing resolved against
+  resolvedSnapshot Json? // frozen resolved settings from the last generation
+  lastGeneratedAt DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  patent          Patent            @relation(fields: [patentId], references: [id], onDelete: Cascade)
+
+  @@map("patent_filing_details")
+}
+
+enum FilingApplicationType {
+  ordinary
+  convention
+  pct_np
+}
+
+enum FilingSpecType {
+  provisional
+  complete
 }
 
 model AnnexureVersion {

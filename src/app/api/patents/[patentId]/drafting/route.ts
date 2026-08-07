@@ -1276,7 +1276,10 @@ export async function POST(
         return await handleRevertAIFix(authResult.user, patentId, data);
 
       case 'export_docx':
-        return await handleExportDOCX(authResult.user, patentId, data, request);
+        return await handleExportDOCX(authResult.user, patentId, data, request) as NextResponse;
+
+      case 'export_bundle':
+        return await handleExportBundle(authResult.user, patentId, data, request);
 
       case 'export_pdf':
         return await handleExportPDF(authResult.user, patentId, data, request);
@@ -2606,7 +2609,23 @@ function injectParagraphNumbering(
   console.log(`[injectParagraphNumbering] ${jurisdiction}: Numbered ${paragraphNumber - 1} paragraphs with format ${format.prefix}XXXX${format.suffix}`)
 }
 
-async function handleExportDOCX(user: any, patentId: string, data: any, request?: NextRequest) {
+/**
+ * Result shape when the caller wants the bytes rather than an HTTP response — used by the
+ * complete-bundle export, which needs the specification buffer plus the figures it removed.
+ */
+interface SpecExportBuffer {
+  buffer: Buffer
+  figures: Array<{ figureNo: number; title: string; imagePath: string; imageFilename: string; type?: string }>
+  jurisdiction: string
+}
+
+async function handleExportDOCX(
+  user: any,
+  patentId: string,
+  data: any,
+  request?: NextRequest,
+  opts: { returnBuffer?: boolean } = {}
+): Promise<NextResponse | SpecExportBuffer> {
   const { sessionId, jurisdiction: requestedJurisdiction } = data
   // Note: autoNumberParagraphs may be explicitly provided or undefined - we'll use country config as default
   const requestAutoNumberParagraphs = data.autoNumberParagraphs
@@ -2847,6 +2866,17 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
     }
   }
   if (figuresSkipped) {
+    figuresSorted = []
+  }
+
+  // Complete-bundle export lifts the figures out of the specification and into a separate
+  // Drawings annexure filed alongside it. We reuse the figures-skipped path rather than
+  // adding a second rendering mode, so the specification's Word formatting — margins,
+  // fonts, paragraph numbering, section breaks — is byte-for-byte what it always was; the
+  // document simply has no figure pages.
+  const excludeFigures = data.excludeFigures === true
+  const figuresForAnnexure = excludeFigures ? [...figuresSorted] : []
+  if (excludeFigures) {
     figuresSorted = []
   }
 
@@ -3213,25 +3243,10 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
 
       // Try to load and size the image
       let imageElement: any = null
-      const candidates: string[] = []
-      if (figure.imagePath) {
-        // Normalize imagePath (handles absolute paths and /uploads/* stored paths for sketches)
-        const normalizedPath = path.isAbsolute(figure.imagePath)
-          ? figure.imagePath
-          : path.join(process.cwd(), figure.imagePath.replace(/^[/\\]+/, ''))
-        candidates.push(normalizedPath)
-        if (figure.imagePath.startsWith('/uploads/')) {
-          candidates.push(path.join(process.cwd(), 'public', figure.imagePath.replace(/^[/\\]+/, '')))
-        }
-      }
-      if (figure.imageFilename) {
-        candidates.push(path.join(process.cwd(), 'uploads', 'patents', patentId, 'figures', figure.imageFilename))
-        if (pat?.projectId) candidates.push(path.join(process.cwd(), 'uploads', 'projects', pat.projectId, 'patents', patentId, 'figures', figure.imageFilename))
-        // Sketches are stored under public/uploads/sketches
-        if (figure.type === 'sketch') {
-          candidates.push(path.join(process.cwd(), 'public', 'uploads', 'sketches', figure.imageFilename))
-        }
-      }
+      // Shared with the Drawings annexure so both documents resolve a figure to the very
+      // same file — see src/lib/filing/figure-images.ts.
+      const { figureImageCandidates } = await import('@/lib/filing/figure-images')
+      const candidates: string[] = figureImageCandidates(figure, { patentId, projectId: pat?.projectId })
 
       for (const candidatePath of candidates) {
         if (!candidatePath) continue
@@ -3375,6 +3390,13 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
     }
 
     const buffer = await Packer.toBuffer(doc)
+
+    // The bundle export wants the bytes so it can zip them with the Drawings annexure and
+    // the filing forms, rather than streaming a single file.
+    if (opts.returnBuffer) {
+      return { buffer, figures: figuresForAnnexure, jurisdiction: effectiveJurisdiction }
+    }
+
     return new NextResponse(buffer, {
       status: 200,
       headers: {
@@ -3399,6 +3421,118 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
 }
 
 // PDF Export Handler
+/**
+ * Complete filing bundle: the specification WITHOUT its figures, a separate Drawings
+ * annexure holding those same figures, and the filing forms — all in one ZIP.
+ *
+ * The specification is produced by the ordinary export path with figures suppressed, so its
+ * Word formatting is untouched. The figures it would have contained are re-embedded in the
+ * Drawings annexure from the same image files, in the same order, with the same numbering.
+ */
+async function handleExportBundle(user: any, patentId: string, data: any, request?: NextRequest) {
+  const { sessionId } = data
+  if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+
+  // 1. Specification, figures lifted out.
+  const specResult = await handleExportDOCX(
+    user,
+    patentId,
+    { ...data, excludeFigures: true },
+    request,
+    { returnBuffer: true }
+  )
+  // An error (or the plain-text fallback when docx is unavailable) comes back as a response.
+  if (specResult instanceof NextResponse) return specResult
+
+  const [
+    { default: AdmZip },
+    { loadFigureImage, imageTypeFor },
+    { buildDrawingsDocx },
+    { assembleFiling, renderFilingBundle, snapshotResolvedSettings, bundleRef }
+  ] = await Promise.all([
+    import('adm-zip'),
+    import('@/lib/filing/figure-images'),
+    import('@/lib/filing/drawings-docx'),
+    import('@/lib/filing/filing-service')
+  ])
+
+  const patent = await prisma.patent.findUnique({
+    where: { id: patentId },
+    select: { projectId: true, title: true }
+  })
+
+  const zip = new AdmZip()
+  const included: string[] = []
+  const skipped: string[] = []
+
+  // 2. Assemble the filing context — also gives us the applicant and signatory the drawing
+  //    sheets are headed and signed with.
+  const assembled = await assembleFiling(patentId)
+  const filingReady = assembled.ok && !assembled.data.issues.some(i => i.severity === 'blocking')
+  const ref = assembled.ok ? bundleRef(assembled.data) : patentId.slice(-6)
+
+  const specName = `Specification_${ref}.docx`
+  zip.addFile(specName, specResult.buffer)
+  included.push(specName)
+
+  // 3. Drawings annexure — the figures removed from the specification, unchanged.
+  if (specResult.figures.length) {
+    const drawingFigures = []
+    for (const figure of specResult.figures) {
+      const loaded = await loadFigureImage(figure, { patentId, projectId: patent?.projectId })
+      if (!loaded) {
+        skipped.push(`Figure ${figure.figureNo}`)
+        continue
+      }
+      drawingFigures.push({
+        figureNo: figure.figureNo,
+        image: loaded.buffer,
+        imageType: imageTypeFor(loaded.sourcePath),
+        caption: figure.title || `Figure ${figure.figureNo}`
+      })
+    }
+
+    if (drawingFigures.length) {
+      const drawingsBuffer = await buildDrawingsDocx({
+        applicantName: assembled.ok ? assembled.data.context.applicant.legalName : (patent?.title || ''),
+        signatory: assembled.ok ? assembled.data.context.signatory : null,
+        organisation: assembled.ok ? assembled.data.context.applicant.legalName : null,
+        figures: drawingFigures
+      })
+      const drawingsName = `Drawings_${ref}.docx`
+      zip.addFile(drawingsName, drawingsBuffer)
+      included.push(drawingsName)
+    }
+  }
+
+  // 4. Form 1 and Form 5. A filing that is not ready yet still yields the specification and
+  //    drawings — we tell the caller what was left out rather than failing the whole export.
+  const filingIssues = assembled.ok ? assembled.data.issues.filter(i => i.severity === 'blocking') : []
+  if (filingReady && assembled.ok) {
+    const { files } = await renderFilingBundle(assembled.data, ['form1', 'form5'])
+    for (const file of files) {
+      zip.addFile(file.filename, file.buffer)
+      included.push(file.filename)
+    }
+    await snapshotResolvedSettings(patentId, assembled.data)
+  }
+
+  const zipBuffer = zip.toBuffer()
+  return new NextResponse(new Uint8Array(zipBuffer), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="Filing_${ref}.zip"`,
+      'Content-Length': String(zipBuffer.length),
+      'X-Bundle-Documents': included.join(','),
+      // Surfaced as a warning in the UI so the attorney knows the forms need attention.
+      'X-Bundle-Forms-Skipped': filingReady ? '' : (filingIssues.map(i => i.message).join(' | ') || (assembled.ok ? '' : (assembled as any).error || 'Filing details incomplete')),
+      'X-Bundle-Figures-Skipped': skipped.join(','),
+      'Cache-Control': 'no-store'
+    }
+  })
+}
+
 async function handleExportPDF(user: any, patentId: string, data: any, request?: NextRequest) {
   const { sessionId, jurisdiction: requestedJurisdiction } = data
   // Note: autoNumberParagraphs may be explicitly provided or undefined - we'll use country config as default

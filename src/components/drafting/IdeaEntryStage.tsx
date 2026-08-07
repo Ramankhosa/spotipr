@@ -34,8 +34,16 @@ import {
   ArrowLeft,
   Link2,
   Image,
-  FileSearch
+  FileSearch,
+  Users
 } from 'lucide-react'
+import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
+import InventorCapture, {
+  toInventorForm,
+  toInventorPayload,
+  type InventorForm
+} from '@/components/filing/InventorCapture'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -80,6 +88,8 @@ interface IdeaEntryStageProps {
 }
 
 export default function IdeaEntryStage({ session, patent, onComplete, onRefresh }: IdeaEntryStageProps) {
+  const { token } = useAuth()
+  const { toast } = useToast()
   const [normalizedData, setNormalizedData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
   const [showNormalized, setShowNormalized] = useState(false)
@@ -87,6 +97,53 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [showOriginal, setShowOriginal] = useState(false)
   const [showInventionDetails, setShowInventionDetails] = useState(true)
+  // Inventors are captured here rather than deferred to the filing step — the attorney
+  // still has the disclosure open at stage 0, and the Filing tab reads the same records.
+  const [showInventors, setShowInventors] = useState(false)
+  const [inventors, setInventors] = useState<InventorForm[]>([])
+  const [savingInventors, setSavingInventors] = useState(false)
+
+  // Load whatever inventors this patent already has, so re-entering stage 0 (or arriving
+  // from the Filing tab) shows the same list rather than an empty panel.
+  useEffect(() => {
+    if (!token || !patent?.id) return
+    let cancelled = false
+    fetch(`/api/patents/${patent.id}/filing/inventors`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data?.inventors) return
+        setInventors(data.inventors.map(toInventorForm))
+        if (data.inventors.length) setShowInventors(true)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [token, patent?.id])
+
+  const saveInventors = async () => {
+    if (!token || !patent?.id) return
+    setSavingInventors(true)
+    try {
+      const res = await fetch(`/api/patents/${patent.id}/filing/inventors`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ inventors: toInventorPayload(inventors) })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not save inventors')
+      setInventors((data.inventors || []).map(toInventorForm))
+      toast({
+        title: `${data.inventors?.length || 0} inventor${data.inventors?.length === 1 ? '' : 's'} saved`,
+        description: 'They will appear on Form 1 and Form 5 when you generate the filing bundle.',
+        variant: 'success'
+      })
+    } catch (err) {
+      toast({ title: 'Could not save inventors', description: String(err), variant: 'error' })
+    } finally {
+      setSavingInventors(false)
+    }
+  }
   const [isNavigating, setIsNavigating] = useState(false)
   const [stage0OverlayStatus, setStage0OverlayStatus] = useState<Stage0PatentIntelligenceStatus | null>(null)
   const [stage0StartedAt, setStage0StartedAt] = useState<number | null>(null)
@@ -514,6 +571,54 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         {rawIdea}
                       </div>
                     </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Inventors — captured here, while the attorney still has the disclosure e-mail
+              open, rather than left until the filing forms are being generated. The same
+              panel appears on the Filing tab and writes to the same records. */}
+          <div className="border border-paper-300 rounded-lg overflow-hidden bg-white shadow-sm">
+            <button
+              onClick={() => setShowInventors(!showInventors)}
+              className="w-full flex justify-between items-center px-5 py-3 bg-paper-100/50 hover:bg-paper-100 transition-colors text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-ai-graphite-400" />
+                <span className="text-sm font-medium text-ai-graphite-700">Inventors</span>
+                {inventors.length > 0 && (
+                  <span className="rounded-full bg-lamp-100 px-2 py-0.5 text-[10px] font-semibold text-lamp-700">
+                    {inventors.length}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {inventors.length === 0 && (
+                  <span className="text-xs text-ai-graphite-400">Paste the details — we&apos;ll fill them in</span>
+                )}
+                {showInventors ? <ChevronDown className="w-4 h-4 text-ai-graphite-400" /> : <ChevronRight className="w-4 h-4 text-ai-graphite-400" />}
+              </div>
+            </button>
+            <AnimatePresence>
+              {showInventors && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="p-5 border-t border-paper-200">
+                    <InventorCapture
+                      patentId={patent?.id}
+                      value={inventors}
+                      onChange={setInventors}
+                      showAdditionalInventorToggle={false}
+                      onSave={saveInventors}
+                      saving={savingInventors}
+                    />
                   </div>
                 </motion.div>
               )}

@@ -764,7 +764,10 @@ export class LLMGateway {
       WS_HYPOTHESIZE: 'WHITESPACE_ANALYSIS',
       WS_VALIDATE: 'WHITESPACE_ANALYSIS',
       WS_REDTEAM: 'WHITESPACE_ANALYSIS',
-      WS_DIMENSIONS: 'WHITESPACE_ANALYSIS'
+      WS_DIMENSIONS: 'WHITESPACE_ANALYSIS',
+      // Filing forms accompany a draft, so inventor extraction meters against the drafting
+      // feature rather than introducing a quota an attorney would have to think about.
+      FILING_INVENTOR_PARSE: 'PATENT_DRAFTING'
     }
     return taskToFeatureMap[taskCode]
   }

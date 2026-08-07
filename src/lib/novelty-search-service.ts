@@ -29,16 +29,24 @@ import {
   DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
   buildVisiblePriorArtResults,
   canonicalPriorArtNumber,
+  classifyRerankDecision,
   getPriorArtPublicationNumber,
   matchCategoryFromDecision,
   matchCategoryLabel,
   normalizeRerankDecision,
+  classifyScreeningStopReason,
   type PriorArtGateRecord,
+  type RerankDecision,
+  type ScreeningStopClass,
+  type ScreeningStopReason,
 } from '@/lib/novelty-prior-art-visibility';
+
+export type { ScreeningStopReason, ScreeningStopClass };
 import { canonicalStudioFamilyKey } from '@/lib/prior-art-studio/family-key';
 import {
   canonicalReportPublicationNumber,
   selectNoveltyReportReferences,
+  DEFAULT_MIN_MAIN_REFERENCES,
   type ReportReferenceCandidate,
   type ReportReferenceSelectionRule,
   type ReportReferenceSelectionV1,
@@ -1085,14 +1093,27 @@ function stage4PublicationKey(value: unknown): string {
   return canonicalReportPublicationNumber(value);
 }
 
-export type ScreeningStopReason =
-  | 'pool_exhausted'
-  | 'yield_below_threshold'
-  | 'candidate_ceiling'
-  | 'wall_clock'
-  | 'token_budget'
-  | 'gate_errors'
-  | 'empty_wave';
+export interface ScreeningCoverageSummary {
+  stopReason?: ScreeningStopReason;
+  stopClass: ScreeningStopClass;
+  poolSize: number;
+  reviewedCount: number;
+  unreviewedCount: number;
+  decisionCounts: Record<RerankDecision, number>;
+  /** Share of reviewed candidates the gate rejected. The pipeline's widest filter. */
+  rejectRate: number;
+  /** Decisions that matched no known literal and were kept for review instead. */
+  unknownDecisionCount: number;
+  unknownDecisionSamples: string[];
+  gateErrorRetryUsed: boolean;
+  gateErrorRetryRecovered: boolean;
+}
+
+/**
+ * Reject rate above which a run is worth a second look. Not a failure threshold:
+ * a genuinely novel invention legitimately rejects almost everything retrieved.
+ */
+const HIGH_GATE_REJECT_RATE = 0.9;
 
 export interface ScreeningWaveConfig {
   maxTotalCandidates: number;
@@ -1959,7 +1980,7 @@ export class NoveltySearchService extends BasePatentService {
       maxRefsForReportMain: 10,
       maxRefsForUI: 12,
       mainReferenceTarget: 10,
-      minMainReferences: 3,
+      minMainReferences: DEFAULT_MIN_MAIN_REFERENCES,
       maxUnmappedSupplementaryReferences: 20
     }
   };
@@ -4626,6 +4647,57 @@ RESPONSE:`;
     };
   }
 
+  /**
+   * Census of what the relevance gate actually did to the candidate pool.
+   *
+   * Counted from `byPn` over the pool rather than from the decision lists, because
+   * `buildStage15DecisionLists` caps `borderline` at the UI quota — counting that
+   * list would under-report every run that reviewed more than a handful.
+   * Deduplicated by canonical number since each record is keyed under several
+   * aliases.
+   */
+  private summarizeScreeningCoverage(params: {
+    candidatePool: any[];
+    byPn: Record<string, PriorArtGateRecord | undefined>;
+    stopReason?: ScreeningStopReason;
+    reviewedCount: number;
+    unreviewedCount: number;
+    unknownDecisionLiterals: Map<string, number>;
+    gateErrorRetryUsed: boolean;
+    gateErrorRetryRecovered: boolean;
+  }): ScreeningCoverageSummary {
+    const decisionCounts: Record<RerankDecision, number> = { accept: 0, component: 0, borderline: 0, reject: 0 };
+    const seen = new Set<string>();
+    for (const candidate of params.candidatePool) {
+      const pn = getPriorArtPublicationNumber(candidate);
+      const record = pn ? this.getGateRecordForPublication(params.byPn, pn) : undefined;
+      if (!record) continue;
+      const key = canonicalPriorArtNumber(pn) || String(pn).toUpperCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      decisionCounts[normalizeRerankDecision(record.rerankDecision || record.decision)] += 1;
+    }
+    const decided = decisionCounts.accept + decisionCounts.component + decisionCounts.borderline + decisionCounts.reject;
+    const unknownDecisionCount = Array.from(params.unknownDecisionLiterals.values()).reduce((sum, count) => sum + count, 0);
+
+    return {
+      stopReason: params.stopReason,
+      stopClass: classifyScreeningStopReason(params.stopReason),
+      poolSize: params.candidatePool.length,
+      reviewedCount: params.reviewedCount,
+      unreviewedCount: params.unreviewedCount,
+      decisionCounts,
+      rejectRate: decided > 0 ? Math.round((decisionCounts.reject / decided) * 1000) / 1000 : 0,
+      unknownDecisionCount,
+      unknownDecisionSamples: Array.from(params.unknownDecisionLiterals.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([literal, count]) => `${literal} x${count}`),
+      gateErrorRetryUsed: params.gateErrorRetryUsed,
+      gateErrorRetryRecovered: params.gateErrorRetryRecovered,
+    };
+  }
+
   private buildStage15DecisionLists(
     candidatePool: any[],
     byPn: Record<string, PriorArtGateRecord | undefined>,
@@ -6918,6 +6990,10 @@ RESPONSE:`;
       let processedBatches = 0;
       let timedOut = false;
       let gateTokensUsed = 0;
+      // Decision strings the gate returned that matched no known literal. They are
+      // kept for review rather than discarded, but they mean the model is answering
+      // outside the prompt's vocabulary, which is worth seeing in the logs.
+      const unknownDecisionLiterals = new Map<string, number>();
 
       const waveConfig: ScreeningWaveConfig = {
         maxTotalCandidates: Math.max(waveSize, Math.trunc(Number(config.stage15.maxTotalCandidates ?? waveSize))),
@@ -7066,7 +7142,14 @@ RESPONSE:`;
             ? found.decision
             : (typeof found?.rerankDecision === 'string' && found.rerankDecision.trim() ? found.rerankDecision : '');
           const rawScore = found?.score ?? found?.rerankScore ?? found?.relevanceScore ?? found?.relevance;
-          const decision = rawDecision ? normalizeRerankDecision(rawDecision) : 'borderline';
+          const classified = rawDecision
+            ? classifyRerankDecision(rawDecision)
+            : { decision: 'borderline' as const, recognized: true };
+          const decision = classified.decision;
+          if (!classified.recognized) {
+            const literal = String(rawDecision).trim().toLowerCase().slice(0, 40);
+            unknownDecisionLiterals.set(literal, (unknownDecisionLiterals.get(literal) || 0) + 1);
+          }
           const score = rawScore === undefined || rawScore === null || rawScore === ''
             ? (decision === 'borderline' ? 0.2 : 0)
             : this.coerceGateScore(found);
@@ -7123,26 +7206,72 @@ RESPONSE:`;
       let consecutiveLowWaves = 0;
       let screeningStopReason: ScreeningStopReason | undefined;
       let wave = firstWave;
+      // One retry for the whole run, not one per wave: a provider blip should not
+      // end screening, but a provider that is genuinely down should not be paid for
+      // twice on every remaining wave either.
+      let gateErrorRetryUsed = false;
+      let gateErrorRetryRecovered = false;
+
+      const waveErrorRecords = (items: any[]) => items.filter(item =>
+        this.getGateRecordForPublication(byPn, getPriorArtPublicationNumber(item))?.reviewStatus === 'gate_error'
+      );
+
+      const evaluateWave = (items: any[]) => evaluateScreeningWave({
+        records: items.map(item => this.getGateRecordForPublication(byPn, getPriorArtPublicationNumber(item))),
+        waveIndex,
+        firstWaveYield,
+        elapsedMs: Date.now() - runStartedAt,
+        tokensUsed: gateTokensUsed,
+        cursor,
+        poolSize: candidatePool.length,
+        orderTrusted,
+        consecutiveLowWaves,
+        config: waveConfig,
+      });
 
       while (wave.length > 0) {
         waveIndex += 1;
         gatedCandidates.push(...wave);
         candidates = gatedCandidates;
+        const failedBatchesBeforeWave = failedBatches;
         await runWave(wave);
         cursor = Math.min(candidatePool.length, cursor + wave.length);
 
-        const decision = evaluateScreeningWave({
-          records: wave.map(item => this.getGateRecordForPublication(byPn, getPriorArtPublicationNumber(item))),
-          waveIndex,
-          firstWaveYield,
-          elapsedMs: Date.now() - runStartedAt,
-          tokensUsed: gateTokensUsed,
-          cursor,
-          poolSize: candidatePool.length,
-          orderTrusted,
-          consecutiveLowWaves,
-          config: waveConfig,
-        });
+        let decision = evaluateWave(wave);
+
+        // Widespread gate failure means the provider misbehaved, not that the tail
+        // of the pool is irrelevant — so retry the failed candidates once before
+        // accepting a truncated search. Only the erroring subset is re-run; the
+        // cursor and the gated list already account for the whole wave, and
+        // processBatch overwrites byPn in place.
+        if (decision.stopReason === 'gate_errors' && !gateErrorRetryUsed) {
+          gateErrorRetryUsed = true;
+          const retryItems = waveErrorRecords(wave);
+          console.warn('[NoveltyScreening]', JSON.stringify({
+            event: 'gate_error_retry',
+            searchId,
+            waveIndex,
+            retrying: retryItems.length,
+            waveSize: wave.length,
+          }));
+          if (retryItems.length > 0) {
+            await runWave(retryItems);
+            const remainingErrors = waveErrorRecords(wave).length;
+            gateErrorRetryRecovered = remainingErrors === 0;
+            // A wave that fully recovered contributed no failed batches. Partial
+            // recovery keeps the pessimistic count rather than guessing.
+            if (gateErrorRetryRecovered) failedBatches = failedBatchesBeforeWave;
+            decision = evaluateWave(wave);
+            console.info('[NoveltyScreening]', JSON.stringify({
+              event: 'gate_error_retry_result',
+              searchId,
+              waveIndex,
+              remainingErrors,
+              recovered: gateErrorRetryRecovered,
+              shouldContinue: decision.shouldContinue,
+            }));
+          }
+        }
         if (waveIndex === 1) firstWaveYield = decision.waveYield;
         consecutiveLowWaves = decision.consecutiveLowWaves;
         console.info('[NoveltyScreening]', JSON.stringify({
@@ -7193,6 +7322,40 @@ RESPONSE:`;
       const hasMoreCandidates = nextBatchCursor < candidatePool.length || visibility.highConfidenceCount > visibility.visiblePriorArtResults.length;
       const gateCounts = this.summarizeStage15GateCounts(candidatePool, byPn);
       const activeCounts = this.summarizeStage15GateCounts(candidates, byPn);
+      const screeningCoverage = this.summarizeScreeningCoverage({
+        candidatePool,
+        byPn,
+        stopReason: screeningStopReason,
+        reviewedCount: gateCounts.reviewedCount,
+        unreviewedCount: gateCounts.unreviewedCount,
+        unknownDecisionLiterals,
+        gateErrorRetryUsed,
+        gateErrorRetryRecovered,
+      });
+      console.info('[NoveltyScreening]', JSON.stringify({
+        event: 'screening_completed',
+        searchId,
+        ...screeningCoverage,
+      }));
+      // The gate is the pipeline's widest filter: everything downstream only ever
+      // sees what it kept. An extreme reject rate may be correct on a genuinely
+      // novel invention, so this warns rather than fails — but it must be visible,
+      // because a starved gate and a normal run are otherwise indistinguishable.
+      if (screeningCoverage.rejectRate >= HIGH_GATE_REJECT_RATE && screeningCoverage.decisionCounts.reject > 0) {
+        console.warn('[NoveltyScreening]', JSON.stringify({
+          event: 'gate_reject_rate_high',
+          searchId,
+          ...screeningCoverage,
+        }));
+      }
+      if (screeningCoverage.unknownDecisionCount > 0) {
+        console.warn('[NoveltyScreening]', JSON.stringify({
+          event: 'gate_unknown_decisions',
+          searchId,
+          unknownDecisionCount: screeningCoverage.unknownDecisionCount,
+          literals: screeningCoverage.unknownDecisionSamples,
+        }));
+      }
 
       return {
         success: true,
@@ -7214,6 +7377,7 @@ RESPONSE:`;
           boundedToTopCandidates: nextBatchCursor < candidatePool.length,
           cacheKey: this.createStage15CacheKey(stage0Data, candidatePool.slice(0, nextBatchCursor)),
           screeningStopReason,
+          screeningCoverage,
           screeningWaves: waveIndex,
           screeningOrderTrusted: orderTrusted,
           screeningTokensUsed: gateTokensUsed,
@@ -9990,7 +10154,7 @@ OUTPUT JSON:
       );
       const reportReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
         mainReferenceTarget: config.stage4.mainReferenceTarget ?? config.stage4.maxRefsForReportMain ?? 10,
-        minMainReferences: config.stage4.minMainReferences ?? 3,
+        minMainReferences: config.stage4.minMainReferences ?? DEFAULT_MIN_MAIN_REFERENCES,
         maxUnmappedSupplementaryReferences: config.stage4.maxUnmappedSupplementaryReferences ?? 20,
         rule: NOVELTY_REPORT_SELECTION_RULE,
       });

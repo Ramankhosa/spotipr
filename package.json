@@ -12,6 +12,8 @@
     "seed:plans:dry": "tsx scripts/seed-plans-v2.ts --dry",
     "seed:plans:prod": "node scripts/seed-production-plans.js",
     "seed:llm-models": "node Seed/seed-llm-models.js",
+    "filing:test": "tsx scripts/test-filing-forms.ts",
+    "filing:seed-stages": "node scripts/add-filing-stages.js",
     "oa:test": "tsx scripts/test-office-action-foundation.ts && tsx scripts/test-office-action-pipeline.ts && tsx scripts/test-office-action-intake.ts && tsx scripts/test-office-action-export.ts && tsx scripts/test-office-action-citations.ts",
     "oa:eval": "tsx scripts/office-action-eval/validate-real-fers.ts",
     "oa:worker": "tsx scripts/office-action-worker.ts",

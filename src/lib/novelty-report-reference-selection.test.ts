@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   selectNoveltyReportReferences,
   validateReportReferenceSelection,
+  DEFAULT_MIN_MAIN_REFERENCES,
+  MAIN_REFERENCE_CEILING,
   type ReportReferenceCandidate,
 } from './novelty-report-reference-selection';
 
@@ -130,6 +132,12 @@ describe('selectNoveltyReportReferences', () => {
 
   describe('materiality_v1', () => {
     const materiality = { rule: 'materiality_v1' as const };
+    // Several cases below check which references the bar admits and which the
+    // family and diversity rules move, on fixtures of four to eight candidates.
+    // DEFAULT_MIN_MAIN_REFERENCES would top every one of those up to ten and hide
+    // the behaviour under test, so they pin the floor low. The production floor is
+    // asserted on its own below.
+    const smallFloor = { ...materiality, minMainReferences: 3 };
 
     function material(index: number, overrides: Partial<ReportReferenceCandidate> = {}): ReportReferenceCandidate {
       return mapped(index, {
@@ -150,6 +158,33 @@ describe('selectNoveltyReportReferences', () => {
       });
     }
 
+    it('falls back to ten references, not three, when nothing clears the bar', () => {
+      // The regression this guards: materiality_v1 never reads mainReferenceTarget,
+      // so the floor alone sets a report's baseline width. At 3 a typical run —
+      // where the bar admits nobody — produced a three-reference prior-art section.
+      const candidates = Array.from({ length: 18 }, (_, index) => immaterial(index));
+      const result = selectNoveltyReportReferences(candidates, materiality);
+
+      expect(DEFAULT_MIN_MAIN_REFERENCES).toBe(10);
+      expect(result.main).toHaveLength(10);
+      expect(result.mappedSupplementary).toHaveLength(8);
+      // A raised floor must not start admitting references the bar rejected.
+      expect(result.main.every(item => item.reason === 'ranked_fill')).toBe(true);
+    });
+
+    it('lets the bar promote above the floor, up to the ceiling', () => {
+      const admitted = (materialCount: number) => selectNoveltyReportReferences(
+        [...Array.from({ length: materialCount }, (_, index) => material(index)),
+          ...Array.from({ length: 20 }, (_, index) => immaterial(index + materialCount))],
+        materiality
+      ).main.length;
+
+      // Below the floor the floor wins; above it the evidence does.
+      expect(admitted(4)).toBe(10);
+      expect(admitted(15)).toBe(15);
+      expect(admitted(25)).toBe(MAIN_REFERENCE_CEILING);
+    });
+
     it('shows nothing when nothing was mapped', () => {
       const result = selectNoveltyReportReferences([unmapped(1, 'accept')], materiality);
       expect(result.main).toHaveLength(0);
@@ -166,12 +201,12 @@ describe('selectNoveltyReportReferences', () => {
     it('varies the count with the evidence instead of pinning it to a target', () => {
       const dense = selectNoveltyReportReferences(
         Array.from({ length: 18 }, (_, index) => material(index)),
-        materiality
+        smallFloor
       );
       const sparse = selectNoveltyReportReferences(
         [...Array.from({ length: 4 }, (_, index) => material(index)),
           ...Array.from({ length: 14 }, (_, index) => immaterial(index + 4))],
-        materiality
+        smallFloor
       );
 
       expect(dense.main).toHaveLength(18);
@@ -192,7 +227,7 @@ describe('selectNoveltyReportReferences', () => {
     it('falls back to the floor when nothing clears the bar, in ranked order', () => {
       const result = selectNoveltyReportReferences(
         Array.from({ length: 8 }, (_, index) => immaterial(index)),
-        materiality
+        smallFloor
       );
       expect(result.main).toHaveLength(3);
       // priorityScore descends with index, so the floor takes the top three.
@@ -206,7 +241,7 @@ describe('selectNoveltyReportReferences', () => {
         immaterial(2, { hasMappedEvidence: true, priorityScore: 10 }),
         immaterial(3, { hasMappedEvidence: true, priorityScore: 9 }),
         immaterial(4, { hasMappedEvidence: true, priorityScore: 8 }),
-      ], materiality);
+      ], smallFloor);
 
       expect(result.main).toHaveLength(3);
       expect(result.main.map(item => item.publicationNumber)).toEqual([2, 3, 4].map(pn));
@@ -218,7 +253,7 @@ describe('selectNoveltyReportReferences', () => {
         featureCoverage: 0,
         mappedImportantFeatures: [],
       }));
-      const result = selectNoveltyReportReferences(degraded, materiality);
+      const result = selectNoveltyReportReferences(degraded, smallFloor);
       // Only the floor admits them.
       expect(result.main).toHaveLength(3);
       expect(result.main.every(item => item.reason === 'ranked_fill')).toBe(true);
@@ -283,7 +318,7 @@ describe('selectNoveltyReportReferences', () => {
         priority: index < 2 ? 'High' : 'Low',
         hasMappedEvidence: true,
       }));
-      const result = selectNoveltyReportReferences(candidates, materiality);
+      const result = selectNoveltyReportReferences(candidates, smallFloor);
       // 2 clear the bar, floor lifts it to 3.
       expect(result.main).toHaveLength(3);
     });
@@ -307,7 +342,7 @@ describe('selectNoveltyReportReferences', () => {
         material(3, { familyKey: 'FAM-2' }),
         material(4, { familyKey: 'FAM-2' }),
         material(5),
-      ], materiality);
+      ], smallFloor);
 
       expect(result.main.map(item => item.publicationNumber)).toEqual([pn(0), pn(3), pn(5)]);
       expect(result.counts.familyDemoted).toBe(3);
@@ -322,7 +357,7 @@ describe('selectNoveltyReportReferences', () => {
         material(1, { familyKey: 'FAM-1', canonicalDecisive: true }),
         material(2, { familyKey: 'FAM-1' }),
         material(3),
-      ], materiality);
+      ], smallFloor);
 
       expect(result.main.filter(item => item.reason === 'decisive')).toHaveLength(2);
       expect(result.main.map(item => item.publicationNumber)).toContain(pn(0));
@@ -335,7 +370,7 @@ describe('selectNoveltyReportReferences', () => {
         material(0, { familyKey: 'FAM-1' }),
         material(1, { familyKey: 'FAM-1' }),
         material(2, { familyKey: 'FAM-1' }),
-      ], materiality);
+      ], smallFloor);
 
       // Only one distinct family exists, so the floor has to fall back to siblings.
       expect(result.main).toHaveLength(3);

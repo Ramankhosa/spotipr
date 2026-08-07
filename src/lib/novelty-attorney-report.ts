@@ -1,11 +1,12 @@
 import type { ClaimConcept, ClaimConceptMapping, FeatureMapCell, NormalizedIdea, PatentFeatureMap, PerPatentRemark } from './novelty-search-service';
 import { buildNoveltyReportCountSummary } from './novelty-report-counts';
-import { matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
+import { classifyScreeningStopReason, matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
 import { canonicalStudioFamilyKey } from './prior-art-studio/family-key';
 import {
   normalizeReportReferenceSelectionRule,
   selectNoveltyReportReferences,
   validateReportReferenceSelection,
+  DEFAULT_MIN_MAIN_REFERENCES,
   type ReportReferenceCandidate,
   type ReportReferenceSelectionV1,
 } from './novelty-report-reference-selection';
@@ -1787,6 +1788,38 @@ function sourceModeLabel(value: unknown): string {
  */
 const HIGH_CONFIDENCE_ANALYZED_MINIMUM = 8;
 
+/**
+ * State how far relevance screening actually got, in words rather than an enum.
+ *
+ * This previously rendered the raw stop reason ("Adaptive workflow status: gate
+ * errors"), which gave a reader no way to tell a search truncated by a provider
+ * failure from one that simply ran out of relevant art. Those two need different
+ * responses, so they read differently.
+ *
+ * Nothing is said in the ordinary case. A run that exhausted the pool, or walked
+ * far enough down the ranked list that the tail stopped yielding, has complete
+ * coverage — narrating that would be noise.
+ */
+function buildScreeningCoverageNote(stopReason: string, coverage?: any): string {
+  if (!stopReason) return '';
+  const reviewed = Number(coverage?.reviewedCount);
+  const poolSize = Number(coverage?.poolSize);
+  const span = Number.isFinite(reviewed) && Number.isFinite(poolSize) && poolSize > 0
+    ? `${reviewed} of ${poolSize} retrieved records were screened for relevance`
+    : 'not every retrieved record was screened for relevance';
+
+  const stopClass = classifyScreeningStopReason(stopReason);
+  if (stopClass === 'error') {
+    // The one case a reader must not mistake for a finding about the art: the
+    // shortfall is a screening failure, and it says nothing about the invention.
+    return `Relevance screening did not run to completion: ${span} before the screening step returned errors. This reflects a processing failure rather than the state of the prior art, and re-running the search will widen coverage.`;
+  }
+  if (stopClass === 'bounded') {
+    return `Relevance screening reached its configured limit for this run: ${span}.`;
+  }
+  return '';
+}
+
 function confidenceFromCounts(counts: AttorneyReportModel['counts'], quality = 'medium'): string {
   if (counts.analyzed >= HIGH_CONFIDENCE_ANALYZED_MINIMUM && counts.reviewed >= 20 && !/low/i.test(quality)) return 'High';
   if (counts.analyzed > 0 && counts.reviewed > 0) return 'Medium';
@@ -2261,7 +2294,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
   );
   const computedReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
     mainReferenceTarget: stage4Config.mainReferenceTarget ?? stage4Config.maxRefsForReportMain ?? 10,
-    minMainReferences: stage4Config.minMainReferences ?? 3,
+    minMainReferences: stage4Config.minMainReferences ?? DEFAULT_MIN_MAIN_REFERENCES,
     maxUnmappedSupplementaryReferences: stage4Config.maxUnmappedSupplementaryReferences ?? 20,
     rule: recomputeRule,
   });
@@ -2424,6 +2457,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     || adaptiveScreening?.terminalStopReason
     || adaptiveScreening?.projectedStopReason
   );
+  const screeningCoverage = stage4?.screeningCoverage || stage1?.aiRelevance?.screeningCoverage;
+  const screeningCoverageNote = buildScreeningCoverageNote(stopReason, screeningCoverage);
 
   return {
     reportNumber,
@@ -2443,7 +2478,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     methodology: {
       corpus: [sourceConfig.includePatents === false ? '' : sourceModeLabel(sourceMode), paperSources.length ? `Scholarly papers (${paperSources.join(', ')})` : ''].filter(Boolean).join('; ') || 'Configured prior-art sources',
       retrievalMode: 'Hybrid retrieval/ranking with AI relevance gating and feature mapping',
-      searchedEvidence: `This preliminary screening uses selected patent records and scholarly-paper bibliographic records, including available abstracts and metadata. Review the full patent text, claims, specification, drawings, prosecution history, legal status, and complete family records, as well as complete scholarly publications, before any final conclusion.${stopReason ? ` Adaptive workflow status: ${stopReason.replace(/_/g, ' ')}.` : ''}`,
+      searchedEvidence: `This preliminary screening uses selected patent records and scholarly-paper bibliographic records, including available abstracts and metadata. Review the full patent text, claims, specification, drawings, prosecution history, legal status, and complete family records, as well as complete scholarly publications, before any final conclusion.${screeningCoverageNote ? ` ${screeningCoverageNote}` : ''}`,
       techniques: [
         'LLM-assisted invention normalization and key-feature extraction',
         'Patent and scholarly-paper candidate retrieval and ranking',

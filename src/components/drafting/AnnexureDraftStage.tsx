@@ -1531,10 +1531,24 @@ interface ExportButtonProps {
   disabled?: boolean
 }
 
+/**
+ * Two ways out of the drafting workspace:
+ *
+ *   draft   — the specification exactly as drafted, figures inline. What you want while the
+ *             draft is still being reviewed.
+ *   bundle  — the filing set: specification with the figures LIFTED OUT into a separate
+ *             Drawings annexure, plus Form 1 and Form 5, zipped. What you file.
+ *
+ * The specification in bundle mode goes through the identical renderer — same margins,
+ * fonts, paragraph numbering and section breaks — it simply has no figure pages.
+ */
+type ExportScope = 'draft' | 'bundle'
+
 function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportButtonProps) {
   const { toast } = useToast()
   const [exporting, setExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState<'docx' | 'pdf'>('docx')
+  const [exportScope, setExportScope] = useState<ExportScope>('draft')
   const [showSuccess, setShowSuccess] = useState(false)
 
   const handleExport = async () => {
@@ -1542,13 +1556,13 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       toast({ title: 'Missing required information for export', description: 'Please ensure you have a valid session and jurisdiction.', variant: 'warning' })
       return
     }
-    
+
     // Check for unsupported format
     if (exportFormat === 'pdf') {
       toast({ title: 'PDF export is coming soon!', description: 'Please use MS Word (.docx) format for now.' })
       return
     }
-    
+
     setExporting(true)
     setShowSuccess(false)
     try {
@@ -1559,7 +1573,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
           'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
         },
         body: JSON.stringify({
-          action: 'export_docx',
+          action: exportScope === 'bundle' ? 'export_bundle' : 'export_docx',
           sessionId,
           jurisdiction,
           format: exportFormat
@@ -1580,7 +1594,8 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
 
       // Check content type to ensure we got a file
       const contentType = res.headers.get('content-type')
-      if (!contentType?.includes('application/vnd.openxmlformats')) {
+      const expected = exportScope === 'bundle' ? 'application/zip' : 'application/vnd.openxmlformats'
+      if (!contentType?.includes(expected)) {
         // Might be an error response
         const errorText = await res.text()
         toast({ title: 'Export failed', description: `Invalid response format. ${errorText.substring(0, 100)}`, variant: 'error' })
@@ -1592,15 +1607,44 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `patent_draft_${jurisdiction}_${new Date().toISOString().split('T')[0]}.docx`
+      const stamp = new Date().toISOString().split('T')[0]
+      const disposition = res.headers.get('Content-Disposition') || ''
+      const named = disposition.match(/filename="([^"]+)"/)?.[1]
+      a.download = named || (exportScope === 'bundle'
+        ? `filing_bundle_${jurisdiction}_${stamp}.zip`
+        : `patent_draft_${jurisdiction}_${stamp}.docx`)
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-      
+
       // Show success feedback
       setShowSuccess(true)
       setTimeout(() => setShowSuccess(false), 3000)
+
+      if (exportScope === 'bundle') {
+        const included = res.headers.get('X-Bundle-Documents') || ''
+        const formsSkipped = res.headers.get('X-Bundle-Forms-Skipped') || ''
+        const figuresSkipped = res.headers.get('X-Bundle-Figures-Skipped') || ''
+        if (formsSkipped) {
+          // The specification and drawings are still valid — say plainly what is missing
+          // rather than failing an export the attorney can otherwise use.
+          toast({
+            title: 'Bundle downloaded without the forms',
+            description: `Form 1 and Form 5 need attention first: ${formsSkipped.split(' | ')[0]}`,
+            variant: 'warning'
+          })
+        } else {
+          toast({
+            title: 'Filing bundle downloaded',
+            description: included.split(',').filter(Boolean).join('  ·  '),
+            variant: 'success'
+          })
+        }
+        if (figuresSkipped) {
+          toast({ title: 'Some figures could not be read', description: figuresSkipped, variant: 'warning' })
+        }
+      }
     } catch (err) {
       console.error('Export error:', err)
       toast({ title: 'Export failed', description: `${err instanceof Error ? err.message : 'Network error'}. Please check your connection and try again.`, variant: 'error' })
@@ -1619,20 +1663,32 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
         <option value="docx">MS Word (.docx)</option>
         <option value="pdf">PDF (coming soon)</option>
       </select>
-      
+
+      <select
+        value={exportScope}
+        onChange={(e) => setExportScope(e.target.value as ExportScope)}
+        className="px-3 py-2 border border-paper-400 rounded-lg text-sm bg-white"
+        title={exportScope === 'bundle'
+          ? 'Specification with the figures moved into a separate Drawings annexure, plus Form 1 and Form 5'
+          : 'The specification on its own, figures inline'}
+      >
+        <option value="draft">Draft only (figures inline)</option>
+        <option value="bundle">Complete filing bundle (.zip)</option>
+      </select>
+
       <button
         onClick={handleExport}
         disabled={disabled || exporting}
         className={`px-6 py-3 rounded-lg font-medium flex items-center gap-2 shadow-lg transition-all ${
-          showSuccess 
-            ? 'bg-emerald-500 text-white' 
+          showSuccess
+            ? 'bg-emerald-500 text-white'
             : 'bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60'
         }`}
       >
         {exporting ? (
           <>
             <span className="animate-spin">⏳</span>
-            Exporting...
+            {exportScope === 'bundle' ? 'Building bundle...' : 'Exporting...'}
           </>
         ) : showSuccess ? (
           <>
@@ -1642,7 +1698,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
         ) : (
           <>
             <span>📄</span>
-            Export {jurisdiction} Draft
+            {exportScope === 'bundle' ? `Export ${jurisdiction} Filing Bundle` : `Export ${jurisdiction} Draft`}
           </>
         )}
       </button>

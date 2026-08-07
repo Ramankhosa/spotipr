@@ -6,7 +6,16 @@ import { isCountrySupported, getSupportedCountryCodes } from '@/lib/country-prof
 
 const applicantProfileSchema = z.object({
   applicantLegalName: z.string().min(3, 'Legal name must be at least 3 characters').max(200, 'Legal name too long'),
-  applicantCategory: z.enum(['natural_person', 'small_entity', 'startup', 'others']),
+  applicantCategory: z.enum(['natural_person', 'small_entity', 'startup', 'educational_institute', 'others']),
+  // Form 1 prints the demonym ("Indian") beside the name and the country ("India") in the
+  // residence column, so nationality is its own field.
+  applicantNationality: z.string().max(60).optional(),
+  // Person authorised to sign for an organisation applicant; prints on Form 1 para 13,
+  // Form 5, and every drawing sheet.
+  signatoryName: z.string().max(160).optional(),
+  signatoryDesignation: z.string().max(160).optional(),
+  signatoryMobile: z.string().max(30).optional(),
+  signatoryEmail: z.string().email('Invalid email format').optional().or(z.literal('')),
   applicantAddressLine1: z.string().min(1, 'Address line 1 is required'),
   applicantAddressLine2: z.string().optional(),
   applicantCity: z.string().min(1, 'City is required'),

@@ -27,6 +27,7 @@ import {
   Building2,
   BadgeCheck,
   BarChart3,
+  FileSignature,
   ShieldCheck,
   ChevronsLeft,
   ChevronsRight,
@@ -80,6 +81,8 @@ const SEGMENT_LABELS: Record<string, string> = {
   users: 'Users',
   teams: 'Teams',
   'firm-profile': 'Firm Profile',
+  'filing-defaults': 'Filing Defaults',
+  filing: 'Filing',
   analytics: 'Analytics',
   'email-drafting': 'Email Drafting',
   requests: 'Requests',
@@ -101,7 +104,7 @@ const LINKABLE_PATTERNS = [
   /^\/office-actions$/,
   /^\/patents\/draft\/batch$/,
   /^\/patents\/draft\/batch\/history$/,
-  /^\/tenant-admin\/(users|teams|analytics|firm-profile)$/
+  /^\/tenant-admin\/(users|teams|analytics|firm-profile|filing-defaults)$/
 ]
 
 function segmentLabel(segment: string): string {
@@ -190,6 +193,7 @@ const MAIN_NAV: NavItem[] = [
 
 const TENANT_ADMIN_NAV: NavItem[] = [
   { label: 'Firm Profile', href: '/tenant-admin/firm-profile', icon: BadgeCheck },
+  { label: 'Filing Defaults', href: '/tenant-admin/filing-defaults', icon: FileSignature },
   { label: 'Users', href: '/tenant-admin/users', icon: Users },
   { label: 'Teams', href: '/tenant-admin/teams', icon: Building2 },
   { label: 'Usage Analytics', href: '/tenant-admin/analytics', icon: BarChart3 }
