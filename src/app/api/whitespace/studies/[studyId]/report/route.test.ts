@@ -290,7 +290,7 @@ describe('Whitespace study report', () => {
   it('records an attack that could not run, with its reason', async () => {
     const text = await textOf(await get())
 
-    expect(text).toContain('NOT RUN — No literature source is configured.')
+    expect(text).toContain('Could not run — No literature source is configured.')
     expect(text).toMatch(/5 of 6/i)
   })
 
@@ -318,8 +318,10 @@ describe('Whitespace study report', () => {
     expect(prismaMock.whitespaceCluster.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { studyId: STUDY.id, depth: 0 } })
     )
-    const clusterArgs = prismaMock.whitespaceCluster.findMany.mock.calls[0][0] as Record<string, unknown>
-    expect(clusterArgs).not.toHaveProperty('include')
+    // No `include` — an include is the only way members could be pulled in.
+    expect(prismaMock.whitespaceCluster.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ include: expect.anything() })
+    )
   })
 
   it('loads run results only for the latest completed run of each rendered stage', async () => {

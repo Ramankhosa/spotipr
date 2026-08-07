@@ -20,8 +20,10 @@ async function main() {
     `SELECT
        COALESCE(meta->>'stageCode', '(unknown)')            AS stage,
        COUNT(*)::int                                        AS calls,
-       SUM("inputTokens")::bigint                           AS input_tokens,
-       SUM(COALESCE((meta->>'cachedInputTokens')::numeric, 0))::bigint AS cached_tokens,
+       -- float8 rather than bigint: Prisma maps bigint to a JS BigInt, and token
+       -- totals are far inside the exact-integer range of a double.
+       SUM("inputTokens")::float8                           AS input_tokens,
+       SUM(COALESCE((meta->>'cachedInputTokens')::numeric, 0))::float8 AS cached_tokens,
        SUM(CASE WHEN COALESCE((meta->>'cachedInputTokens')::numeric, 0) > 0 THEN 1 ELSE 0 END)::int AS calls_with_hit
      FROM usage_logs
      WHERE "completedAt" >= $1 AND status = 'COMPLETED'
@@ -41,22 +43,22 @@ async function main() {
   console.log('stage                            calls   hits   input tokens   cached tokens   cached %');
   console.log('-'.repeat(88));
 
-  let totalIn = 0n;
-  let totalCached = 0n;
+  let totalIn = 0;
+  let totalCached = 0;
   for (const r of rows) {
-    const input = BigInt(r.input_tokens ?? 0);
-    const cached = BigInt(r.cached_tokens ?? 0);
+    const input = Math.round(Number(r.input_tokens ?? 0));
+    const cached = Math.round(Number(r.cached_tokens ?? 0));
     totalIn += input;
     totalCached += cached;
-    const pct = input > 0n ? Number((cached * 1000n) / input) / 10 : 0;
+    const pct = input > 0 ? (cached / input) * 100 : 0;
     console.log(
       `${String(r.stage).slice(0, 31).padEnd(32)}${pad(r.calls, 5)}${pad(r.calls_with_hit, 7)}` +
-      `${pad(input.toString(), 15)}${pad(cached.toString(), 16)}${pad(pct.toFixed(1), 10)}`
+      `${pad(input, 15)}${pad(cached, 16)}${pad(pct.toFixed(1), 10)}`
     );
   }
   console.log('-'.repeat(88));
-  const overall = totalIn > 0n ? Number((totalCached * 1000n) / totalIn) / 10 : 0;
-  console.log(`${'TOTAL'.padEnd(32)}${' '.repeat(12)}${pad(totalIn.toString(), 15)}${pad(totalCached.toString(), 16)}${pad(overall.toFixed(1), 10)}`);
+  const overall = totalIn > 0 ? (totalCached / totalIn) * 100 : 0;
+  console.log(`${'TOTAL'.padEnd(32)}${' '.repeat(12)}${pad(totalIn, 15)}${pad(totalCached, 16)}${pad(overall.toFixed(1), 10)}`);
   console.log(
     '\nA stage showing 0.0% either has no stable prompt prefix, sits under the provider' +
     '\nminimum (~1,024 tokens), or is routed to a model without prompt caching.'

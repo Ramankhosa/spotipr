@@ -579,6 +579,10 @@ describe('metered fan-out', () => {
    * many generation calls were ever in flight at once. The calls are made to
    * overlap by suspending inside the gateway stub — measuring the stub's
    * synchronous body would report 1 no matter what the pipeline did.
+   *
+   * `observedAtStart` records what each call saw in flight as it began, which is
+   * what distinguishes "ran alone" from merely "ran first": a call that starts
+   * while an earlier one is still open observes 2, not 1.
    */
   async function peakDetailConcurrency(limit: number, figureCount: number) {
     vi.spyOn(llmGateway, 'getTaskConcurrencyLimit').mockResolvedValue(limit)
@@ -586,17 +590,19 @@ describe('metered fan-out', () => {
     const baseImplementation = gateway.getMockImplementation()
     let inFlight = 0
     let peak = 0
+    const observedAtStart: number[] = []
     gateway.mockImplementation(async (context: any, request: any) => {
       if (request.stageCode !== 'DRAFT_DIAGRAM_GENERATION') return baseImplementation(context, request)
       inFlight++
       peak = Math.max(peak, inFlight)
+      observedAtStart.push(inFlight)
       await new Promise(resolve => setTimeout(resolve, 5))
       try { return await baseImplementation(context, request) } finally { inFlight-- }
     })
     try {
       planResponder = () => defaultPlan(figureCount)
       const result = await generateManagedFigureSet({ ...INPUT, figureCount })
-      return { peak, figures: result.figures.length }
+      return { peak, observedAtStart, figures: result.figures.length }
     } finally {
       gateway.mockImplementation(baseImplementation)
       vi.mocked(llmGateway.getTaskConcurrencyLimit).mockRestore?.()
@@ -614,5 +620,19 @@ describe('metered fan-out', () => {
     expect(figures).toBe(8)
     expect(peak).toBeGreaterThan(2)
     expect(peak).toBeLessThanOrEqual(4)
+  })
+
+  // Providers write a prompt cache entry when a request COMPLETES. Every generation
+  // call in a run shares a multi-thousand-token preamble, so fanning out immediately
+  // puts the whole first wave in flight before any of them has written that entry and
+  // every one pays full input price. One call must land before the rest start.
+  test('the first generation call runs alone so the rest find a warm prompt cache', async () => {
+    const { observedAtStart, peak, figures } = await peakDetailConcurrency(4, 8)
+
+    expect(figures).toBe(8)
+    // Call 2 seeing only itself in flight is what proves call 1 had already finished.
+    expect(observedAtStart.slice(0, 2)).toEqual([1, 1])
+    // ...and the remaining batches still overlap rather than running one by one.
+    expect(peak).toBeGreaterThan(1)
   })
 })

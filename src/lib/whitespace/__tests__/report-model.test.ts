@@ -386,7 +386,8 @@ describe('buildWhitespaceReportModel', () => {
     )
 
     const attacks = model.hypotheses[0].attacks
-    expect(attacks[0]).toMatchObject({ outcome: 'NOT_RUN', reason: 'No literature source is configured.' })
+    expect(attacks[0]).toMatchObject({ notRun: true, reason: 'No literature source is configured.' })
+    expect(attacks[1].notRun).toBe(false)
     expect(model.hypotheses[0].attacksRun).toBe(4)
     expect(model.hypotheses[0].gates[0].label).toBe('Data coverage')
   })

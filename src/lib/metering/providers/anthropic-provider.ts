@@ -13,6 +13,21 @@ import { emitStreamDelta } from './streaming'
 // the output budget when thinking is on (mirrors the OpenAI reasoning-model floor).
 const ANTHROPIC_THINKING_MIN_OUTPUT_TOKENS = Number(process.env.ANTHROPIC_THINKING_MIN_OUTPUT_TOKENS) || 24000
 
+/**
+ * Anthropic prompt caching is opt-in, unlike OpenAI's and Gemini's automatic prefix
+ * caches: without an explicit `cache_control` breakpoint the entire prompt is billed
+ * as fresh input on every call, however stable its prefix. Callers that build a long
+ * invariant preamble pass `cacheablePrefixLength` (see LLMRequest.parameters) so the
+ * preamble becomes one cached block and only the varying tail is re-read.
+ *
+ * Anthropic will not create a cache entry below a per-model token floor, so a prefix
+ * under it is left unmarked — splitting it into two blocks would buy nothing.
+ * Approximated at four characters per token, rounded up.
+ */
+function minimumCacheableCharacters(apiModel: string): number {
+  return apiModel.includes('haiku') ? 9_000 : 4_500
+}
+
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
   supportedModels = [
@@ -140,7 +155,7 @@ export class AnthropicProvider implements LLMProvider {
         
         messages.push({ role: 'user', content: contentParts })
       } else if (request.prompt) {
-        messages.push({ role: 'user', content: request.prompt })
+        messages.push({ role: 'user', content: this.promptContent(request, actualModel) })
       }
 
       // Adaptive extended thinking is supported on Opus 4.6/4.7/4.8, Sonnet 5, and Fable 5.
@@ -218,6 +233,28 @@ export class AnthropicProvider implements LLMProvider {
       // IMPORTANT: Throw error instead of swallowing it, so fallback routing can work
       throw new Error(`Anthropic API error: ${error.message || 'Unknown error'}`)
     }
+  }
+
+  /**
+   * The user message for a text prompt: a plain string normally, or a cached-prefix
+   * block pair when the caller declared where its invariant preamble ends.
+   *
+   * The split is validated against the prompt actually being sent rather than trusted,
+   * so a stale or miscomputed length degrades to an uncached (but correct) call instead
+   * of truncating the prompt.
+   */
+  private promptContent(request: LLMRequest, apiModel: string): any {
+    const prompt = request.prompt as string
+    const prefixLength = Number(request.parameters?.cacheablePrefixLength)
+    if (!Number.isInteger(prefixLength)
+      || prefixLength < minimumCacheableCharacters(apiModel)
+      || prefixLength >= prompt.length) {
+      return prompt
+    }
+    return [
+      { type: 'text', text: prompt.slice(0, prefixLength), cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: prompt.slice(prefixLength) },
+    ]
   }
 
   /**

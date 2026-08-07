@@ -49,6 +49,36 @@ export const STRATEGY_LABEL: Record<string, string> = {
   LITERATURE: 'Literature',
 }
 
+/** Stage names as a reader would say them. */
+export const STAGE_LABEL: Record<string, string> = {
+  FIELD_MAP: 'Field census',
+  CLUSTER: 'Grouping the field',
+  SIGNALS: 'Measuring the groups',
+  DEEP_DIVE: 'Reading the claims',
+  VALIDATE: 'Attacking a hypothesis',
+  DIMENSION_MAP: 'Finding the viewpoints',
+}
+
+/** What an attack outcome meant. */
+export const OUTCOME_LABEL: Record<string, string> = {
+  CLEAN: 'Nothing close found',
+  WEAKENING: 'Partial matches found',
+  REFUTING: 'Full combination found — refuted',
+  NOT_RUN: 'Could not run',
+}
+
+/**
+ * Gate results. `PASSED_WITH_WEAKENING` and `UNASSESSED` are the two that must
+ * never be read as a clean pass, so they say so in words.
+ */
+export const GATE_OUTCOME_LABEL: Record<string, string> = {
+  PASSED: 'Passed',
+  PASSED_WITH_WEAKENING: 'Passed, but weakened',
+  FAILED: 'Failed',
+  ADVISORY: 'Advisory only — not tested',
+  UNASSESSED: 'Not assessed',
+}
+
 /** The attorney's verdict, in the words the attorney would use. */
 export const REVIEW_LABEL: Record<HumanReviewVerdict, string> = {
   ENDORSED: 'Endorsed',

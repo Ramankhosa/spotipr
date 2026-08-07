@@ -231,6 +231,13 @@ interface StructuredStageInput<S extends z.ZodTypeAny> {
   responseSchema?: { name: string; schema: Record<string, unknown> }
   /** Session-stable key so same-prefix prompts land on the same provider cache shard. */
   promptCacheKey?: string
+  /**
+   * Characters of `prompt` that are invariant across sibling calls, marking where
+   * Anthropic's explicit cache breakpoint goes. Retries append to the tail, so the
+   * offset stays valid across attempts. Other providers ignore it and find the
+   * shared prefix themselves.
+   */
+  cacheablePrefixLength?: number
   maxAttempts?: number
 }
 
@@ -267,6 +274,7 @@ export async function executeStructured<S extends z.ZodTypeAny>(input: Structure
           },
         } : {}),
         ...(input.promptCacheKey ? { prompt_cache_key: input.promptCacheKey } : {}),
+        ...(input.cacheablePrefixLength ? { cacheablePrefixLength: input.cacheablePrefixLength } : {}),
       },
       metadata: { ...input.metadata, structuredDiagram: true, attempt: attempt + 1 },
     })
@@ -471,7 +479,7 @@ async function detailFigureBatch(input: {
   pipeline: PatentDiagramPipelineInput
   existingDiagrams?: PatentDiagram[]
 }): Promise<PatentDiagram[]> {
-  const prompt = buildDiagramBatchPrompt({
+  const { prompt, cacheablePrefixLength } = buildDiagramBatchPrompt({
     plans: input.plans,
     inventionContext: input.context.idea,
     claimsContext: input.context.claims,
@@ -484,6 +492,7 @@ async function detailFigureBatch(input: {
     userHeaders: input.pipeline.requestHeaders,
     stageCode: 'DRAFT_DIAGRAM_GENERATION',
     prompt,
+    cacheablePrefixLength,
     schema: patentDiagramBatchSchema,
     responseSchema: {
       name: 'patent_diagram_batch',
@@ -549,9 +558,21 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
 
 /** Details every planned figure, two per LLM call, batches running concurrently. */
 async function detailPlannedFigures(plan: FigureSetPlan, context: PipelineContext, pipeline: PatentDiagramPipelineInput): Promise<PatentDiagram[]> {
-  const batches = chunk(plan.figures, FIGURES_PER_GENERATION_CALL)
+  const [firstBatch, ...remainingBatches] = chunk(plan.figures, FIGURES_PER_GENERATION_CALL)
   const concurrency = await resolveDiagramConcurrency(pipeline.requestHeaders)
-  const detailed = await mapWithConcurrency(batches, concurrency, plans => detailFigureBatch({ plans, context, pipeline }))
+  // Every generation call in a run carries the same multi-thousand-token preamble
+  // (invention context, claims, evidence catalog, component registry) and differs
+  // only in its figure tail. Providers populate a prompt cache when a request
+  // COMPLETES, so firing the whole fan-out at once means the first `concurrency`
+  // calls are all in flight before any of them has written the shared prefix, and
+  // every one of them pays full input price. Running one batch alone first writes
+  // the cache entry the rest then read, at the cost of serializing a single call.
+  const detailed = firstBatch
+    ? [
+      await detailFigureBatch({ plans: firstBatch, context, pipeline }),
+      ...await mapWithConcurrency(remainingBatches, concurrency, plans => detailFigureBatch({ plans, context, pipeline })),
+    ]
+    : []
   const diagrams = detailed.flat()
   if (!diagrams.length) {
     throw new PatentDiagramPipelineError('The diagram model did not return any usable figures.', 422, undefined, {

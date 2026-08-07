@@ -22,7 +22,17 @@
  */
 
 import { formatFirmAddressLines, type FirmBranding } from '@/lib/novelty-attorney-report'
-import { GATE_LABEL, REVIEW_LABEL, REVIEW_MEANING, STATUS_LABEL, STRATEGY_LABEL, TYPE_LABEL } from './labels'
+import {
+  GATE_LABEL,
+  GATE_OUTCOME_LABEL,
+  OUTCOME_LABEL,
+  REVIEW_LABEL,
+  REVIEW_MEANING,
+  STAGE_LABEL,
+  STATUS_LABEL,
+  STRATEGY_LABEL,
+  TYPE_LABEL,
+} from './labels'
 import {
   type AttackRecord,
   type DimensionGap,
@@ -287,7 +297,15 @@ export interface ReportHypothesisBlock {
   elements: string[]
   /** Six pillars, always presented side by side and never averaged. */
   scoreLine: Array<{ label: string; value: string }>
-  attacks: Array<{ label: string; query: string; hits: number; outcome: string; reason: string | null }>
+  attacks: Array<{
+    label: string
+    query: string
+    hits: number
+    outcome: string
+    reason: string | null
+    /** Structural, so the renderer never has to string-match a display label. */
+    notRun: boolean
+  }>
   attacksRun: number
   attacksPlanned: number
   gates: Array<{ label: string; outcome: string; basis: string }>
@@ -468,7 +486,7 @@ export function buildWhitespaceReportModel(input: WhitespaceReportInput): Whites
 
   // ---- run diagnostics ----------------------------------------------------
   const runDiagnostics: ReportRunDiagnostic[] = input.runs.map(run => ({
-    stage: run.stage,
+    stage: STAGE_LABEL[run.stage] || run.stage,
     status: run.status,
     when: isoMinute(run.createdAt),
     duration: typeof run.durationMs === 'number' ? `${(run.durationMs / 1000).toFixed(1)}s` : '—',
@@ -712,14 +730,15 @@ export function buildWhitespaceReportModel(input: WhitespaceReportInput): Whites
         label: STRATEGY_LABEL[attack.strategy] || attack.strategy,
         query: attack.query,
         hits: attack.hits,
-        outcome: attack.outcome,
+        outcome: OUTCOME_LABEL[attack.outcome] || attack.outcome,
         reason: attack.reason || null,
+        notRun: attack.outcome === 'NOT_RUN',
       })),
       attacksRun: validation?.attacksRun ?? 0,
       attacksPlanned: validation?.attacksPlanned ?? 0,
       gates: (validation?.gates || []).map((gate: GateOutcome) => ({
         label: GATE_LABEL[gate.gate] || gate.gate,
-        outcome: gate.outcome,
+        outcome: GATE_OUTCOME_LABEL[gate.outcome] || gate.outcome,
         basis: gate.basis,
       })),
       redTeamNotes: validation?.redTeamNotes || null,

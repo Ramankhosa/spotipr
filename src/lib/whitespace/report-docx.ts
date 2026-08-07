@@ -351,7 +351,7 @@ export async function buildWhitespaceReportDocx(model: WhitespaceReportModel): P
       table(
         ['Stage', 'Outcome', 'When', 'Took', 'Scope'],
         model.runDiagnostics.map(run => [
-          run.stage.replace(/_/g, ' ').toLowerCase(),
+          run.stage,
           run.status,
           run.when,
           run.duration,
@@ -788,9 +788,11 @@ function renderDimensionMap(children: (Paragraph | Table)[], map: ReportDimensio
       children.push(h3(gap.title))
       children.push(
         para(
-          `Seen ${int(gap.observed)} times where ${gap.expected.toFixed(1)} were expected. Margins: ${int(
-            gap.marginA
-          )} × ${int(gap.marginB)} families. Surprisal ${gap.surprisal.toFixed(1)} decibans.`
+          `Seen ${gap.observed === 1 ? 'once' : `${int(gap.observed)} times`} where ${gap.expected.toFixed(
+            1
+          )} were expected. Margins: ${int(gap.marginA)} × ${int(gap.marginB)} families. Surprisal ${gap.surprisal.toFixed(
+            1
+          )} decibans.`
         )
       )
       if (gap.nearMissLine) children.push(para(gap.nearMissLine, { size: 18 }))
@@ -821,7 +823,12 @@ function renderHypotheses(children: (Paragraph | Table)[], model: WhitespaceRepo
   )
   if (model.reviewedCount) {
     children.push(
-      para(`${model.reviewedCount} of ${model.hypotheses.length} have been reviewed.`, { color: MUTED, size: 18 })
+      para(
+        `${model.reviewedCount} of ${model.hypotheses.length} ${
+          model.hypotheses.length === 1 ? 'has' : 'have'
+        } been reviewed.`,
+        { color: MUTED, size: 18 }
+      )
     )
   }
 
@@ -871,8 +878,8 @@ function renderHypothesis(children: (Paragraph | Table)[], hypothesis: ReportHyp
         hypothesis.attacks.map(attack => [
           attack.label,
           attack.query || '—',
-          String(attack.hits),
-          attack.outcome === 'NOT_RUN' ? `NOT RUN — ${attack.reason || 'no reason recorded'}` : attack.outcome,
+          attack.notRun ? '—' : String(attack.hits),
+          attack.notRun ? `${attack.outcome} — ${attack.reason || 'no reason recorded'}` : attack.outcome,
         ]),
         accent,
         [20, 42, 10, 28]

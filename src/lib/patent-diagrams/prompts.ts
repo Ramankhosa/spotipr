@@ -243,6 +243,11 @@ function minimumContent(kind: DiagramKind): string {
  * figure-specific tail is identical across all generation calls of one run, so
  * those calls share one cached prefix. Do not interleave plan-specific values
  * above the FIGURES TO DETAIL marker.
+ *
+ * That boundary is returned as `cacheablePrefixLength` rather than left as a
+ * convention: OpenAI and Gemini find the shared prefix themselves, but Anthropic
+ * caches nothing without an explicit breakpoint, and a breakpoint guessed inside
+ * the provider would silently drift the first time this template is edited.
  */
 export function buildDiagramBatchPrompt(input: {
   plans: FigureSetPlanItem[]
@@ -252,8 +257,8 @@ export function buildDiagramBatchPrompt(input: {
   evidenceCatalog?: Array<{ id: string; value: string }>
   existingDiagrams?: PatentDiagram[]
   instructions?: string
-}): string {
-  return `You are the PatentNest semantic figure detailer. Your JSON becomes a formal patent drawing, so precision beats creativity.
+}): { prompt: string; cacheablePrefixLength: number } {
+  const prefix = `You are the PatentNest semantic figure detailer. Your JSON becomes a formal patent drawing, so precision beats creativity.
 
 OUTPUT
 Return JSON only. Never return PlantUML, reference numerals, styles, colours, layout-only links, markdown, or commentary.
@@ -283,7 +288,8 @@ ${evidenceCatalogBlock(input.evidenceCatalog || [])}
 COMPONENT PLANNER REGISTRY (listed in disclosed order; preserve it):
 ${componentLines(input.components)}
 
-FIGURES TO DETAIL — return exactly ${input.plans.length} diagram(s) in this order:
+`
+  const tail = `FIGURES TO DETAIL — return exactly ${input.plans.length} diagram(s) in this order:
 {"diagrams":[ ${input.plans.map(plan => `<${plan.kind} for key "${plan.key}">`).join(', ')} ]}
 
 ${input.plans.map((plan, index) => `--- FIGURE ${index + 1} of ${input.plans.length} ---
@@ -300,6 +306,7 @@ FIGURE PLAN:
 ${JSON.stringify(plan)}`).join('\n\n')}
 
 ${input.existingDiagrams?.length ? `\nEXISTING MANAGED SEMANTIC MODELS (retain stable keys unless instructed otherwise):\n${JSON.stringify(input.existingDiagrams)}` : ''}`
+  return { prompt: `${prefix}${tail}`, cacheablePrefixLength: prefix.length }
 }
 
 /**
