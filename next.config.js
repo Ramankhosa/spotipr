@@ -1,7 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Use dist directory for build output to avoid caching issues
-  distDir: 'dist',
+  // Use dist directory for build output to avoid caching issues.
+  // NEXT_DIST_DIR lets a deploy build into a staging directory (dist-new) while
+  // the live server keeps serving `dist`, so the outage is the restart, not the
+  // whole build. See scripts/deploy.sh. Never set this in .env — `next start`
+  // reads this config too and would then serve the staging directory.
+  distDir: process.env.NEXT_DIST_DIR || 'dist',
 
   // Minimal config for development
   experimental: {

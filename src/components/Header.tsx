@@ -314,6 +314,14 @@ export default function Header() {
                           <span>🏷️</span>
                           <span>Firm Profile</span>
                         </Link>
+                        <Link
+                          href="/tenant-admin/filing-defaults"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>📄</span>
+                          <span>Filing Defaults</span>
+                        </Link>
                         <button
                           onClick={() => {
                             setViewMode('admin')

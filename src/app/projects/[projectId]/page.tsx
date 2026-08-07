@@ -17,6 +17,7 @@ import {
   PenTool,
   Eye,
   Trash2,
+  FileSignature,
   AlertTriangle,
   X,
   Sparkles,
@@ -252,16 +253,25 @@ export default function ProjectDashboardPage() {
                 <Settings className="w-4 h-4" />
                 <span className="hidden sm:inline">Manage</span>
               </Link>
-              {!project.applicantProfile && (
-                <Link
-                  href={`/projects/${projectId}/applicant`}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all duration-200 shadow-sm"
-                  title="Set up organization details for patent filings"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span className="hidden sm:inline">Add Profile</span>
-                </Link>
-              )}
+              {/* Always reachable — the applicant address, category and the authorised
+                  signatory who signs the filing forms all live behind this link, so it has
+                  to stay available after the profile first exists, not only before. */}
+              <Link
+                href={`/projects/${projectId}/applicant`}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+                  project.applicantProfile
+                    ? 'text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                    : 'text-white bg-ai-blue-600 hover:bg-ai-blue-700 shadow-sm'
+                }`}
+                title={project.applicantProfile
+                  ? 'Edit the applicant, address for service and authorised signatory'
+                  : 'Set up organization details for patent filings'}
+              >
+                <UserPlus className="w-4 h-4" />
+                <span className="hidden sm:inline">
+                  {project.applicantProfile ? 'Applicant & Signatory' : 'Add Profile'}
+                </span>
+              </Link>
             </div>
           </div>
         </div>
@@ -391,6 +401,17 @@ export default function ProjectDashboardPage() {
                           >
                             <Eye className="w-3.5 h-3.5" />
                             View
+                          </Link>
+                          {/* Filing forms live outside the drafting stages, so they need
+                              their own way in — an attorney preparing paperwork for an
+                              already-drafted patent should not have to open the workspace. */}
+                          <Link
+                            href={`/patents/${patent.id}/filing`}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-all"
+                            title="Inventors, filing details and the Form 1 / Form 5 bundle"
+                          >
+                            <FileSignature className="w-3.5 h-3.5" />
+                            Filing
                           </Link>
                           <Link
                             href={`/patents/${patent.id}/draft`}

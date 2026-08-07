@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "deploy": "bash scripts/deploy.sh",
     "start": "next start -p 3005",
     "lint": "next lint",
     "check:routes": "node scripts/check-routes.mjs",

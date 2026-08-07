@@ -22,17 +22,26 @@ const inventorSchema = z.object({
   honorific: z.string().max(20).nullable().optional(),
   nameBody: z.string().min(1, 'Inventor name is required').max(200),
   familyNameFirst: z.boolean().optional(),
-  nationality: z.string().min(1, 'Nationality is required').max(60),
-  countryOfResidence: z.string().min(1, 'Country of residence is required').max(60),
-  addressLine1: z.string().min(1, 'Address is required').max(300),
+  // Everything except the name is optional HERE on purpose. Saving is a work-in-progress
+  // action: the extractor deliberately leaves fields blank rather than inventing them, and
+  // an attorney must be able to save a partially-filled set and come back to it.
+  // Completeness is enforced at GENERATION by validateFiling(), which blocks the bundle on
+  // a missing city/state/PIN — that is the gate that protects the legal document.
+  nationality: z.string().max(60).optional().default(''),
+  countryOfResidence: z.string().max(60).optional().default(''),
+  addressLine1: z.string().max(300).optional().default(''),
   street: z.string().max(200).nullable().optional(),
-  city: z.string().min(1, 'City is required').max(120),
-  state: z.string().min(1, 'State is required').max(120),
-  country: z.string().min(1, 'Country is required').max(60),
-  pinCode: z.string().min(1, 'PIN code is required').max(20),
+  city: z.string().max(120).optional().default(''),
+  state: z.string().max(120).optional().default(''),
+  country: z.string().max(60).optional().default(''),
+  pinCode: z.string().max(20).optional().default(''),
   isAdditionalInventor: z.boolean().optional(),
 }).superRefine((value, ctx) => {
-  if (value.country.trim().toLowerCase() === 'india' && !INDIAN_PIN_RE.test(value.pinCode.trim())) {
+  // A PIN that is present but malformed is still worth rejecting — a wrong six digits is
+  // worse than none, because it looks correct on the form.
+  const pin = (value.pinCode || '').trim()
+  const country = (value.country || '').trim().toLowerCase()
+  if (pin && country === 'india' && !INDIAN_PIN_RE.test(pin)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['pinCode'],
@@ -95,8 +104,16 @@ export async function PUT(request: NextRequest, { params }: { params: { patentId
 
     const parsed = payloadSchema.safeParse(body)
     if (!parsed.success) {
+      // Name the inventor and the field. "Validation failed" on its own leaves the attorney
+      // hunting through the table for what the server objected to.
+      const first = parsed.error.errors[0]
+      const row = typeof first?.path?.[1] === 'number' ? Number(first.path[1]) + 1 : null
+      const field = first?.path?.[2]
+      const message = row
+        ? `Inventor ${row}${field ? ` — ${String(field)}` : ''}: ${first.message}`
+        : (first?.message || 'Validation failed')
       return NextResponse.json(
-        { error: 'Validation failed', details: parsed.error.flatten() },
+        { error: message, details: parsed.error.flatten() },
         { status: 400 }
       )
     }

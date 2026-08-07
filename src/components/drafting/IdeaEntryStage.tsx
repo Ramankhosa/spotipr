@@ -148,7 +148,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [stage0OverlayStatus, setStage0OverlayStatus] = useState<Stage0PatentIntelligenceStatus | null>(null)
   const [stage0StartedAt, setStage0StartedAt] = useState<number | null>(null)
   const [stage0OverlayError, setStage0OverlayError] = useState<string | undefined>(undefined)
-  const [activeTab, setActiveTab] = useState<'core' | 'components' | 'supportData' | 'scope' | 'classification'>('core')
+  const [activeTab, setActiveTab] = useState<'core' | 'components' | 'supportData' | 'scope' | 'classification' | 'inventors'>('core')
   const [expandedComponents, setExpandedComponents] = useState<Set<number>>(new Set())
 
   // Editable fields
@@ -577,54 +577,6 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
             </AnimatePresence>
           </div>
 
-          {/* Inventors — captured here, while the attorney still has the disclosure e-mail
-              open, rather than left until the filing forms are being generated. The same
-              panel appears on the Filing tab and writes to the same records. */}
-          <div className="border border-paper-300 rounded-lg overflow-hidden bg-white shadow-sm">
-            <button
-              onClick={() => setShowInventors(!showInventors)}
-              className="w-full flex justify-between items-center px-5 py-3 bg-paper-100/50 hover:bg-paper-100 transition-colors text-left"
-            >
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-ai-graphite-400" />
-                <span className="text-sm font-medium text-ai-graphite-700">Inventors</span>
-                {inventors.length > 0 && (
-                  <span className="rounded-full bg-lamp-100 px-2 py-0.5 text-[10px] font-semibold text-lamp-700">
-                    {inventors.length}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {inventors.length === 0 && (
-                  <span className="text-xs text-ai-graphite-400">Paste the details — we&apos;ll fill them in</span>
-                )}
-                {showInventors ? <ChevronDown className="w-4 h-4 text-ai-graphite-400" /> : <ChevronRight className="w-4 h-4 text-ai-graphite-400" />}
-              </div>
-            </button>
-            <AnimatePresence>
-              {showInventors && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="overflow-hidden"
-                >
-                  <div className="p-5 border-t border-paper-200">
-                    <InventorCapture
-                      patentId={patent?.id}
-                      value={inventors}
-                      onChange={setInventors}
-                      showAdditionalInventorToggle={false}
-                      onSave={saveInventors}
-                      saving={savingInventors}
-                    />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
           {/* AI-Normalized Results (Collapsible) */}
           {showNormalized && normalizedData && (
             <div className="bg-white rounded-xl border border-paper-300 shadow-sm overflow-hidden">
@@ -688,6 +640,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         { key: 'supportData' as const, label: `Support Data (${supportDataSources.filter(source => source.status !== 'deleted').length})`, icon: FileSearch },
                         { key: 'scope' as const, label: 'Scope', icon: Scale },
                         { key: 'classification' as const, label: 'Classification', icon: Hash },
+                        { key: 'inventors' as const, label: `Inventors${inventors.length ? ` (${inventors.length})` : ''}`, icon: Users },
                       ]).map(tab => (
                         <button
                           key={tab.key}
@@ -1464,8 +1417,32 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
                         </>
                       )}
+
+                      {/* ═══ INVENTORS TAB ═══ */}
+                      {/* Captured here, while the disclosure is still open, rather than left
+                          until the filing forms are generated. Runs on its own LLM task, so
+                          it adds nothing to the normalization the attorney is waiting on. */}
+                      {activeTab === 'inventors' && (
+                        <>
+                          <div className="flex items-center gap-2 px-3 py-2 bg-ai-blue-50 border border-ai-blue-100 rounded-md text-xs text-ai-blue-700">
+                            <Users className="w-3.5 h-3.5 flex-shrink-0" />
+                            <span>
+                              Paste the inventor details you were sent — we read out the names, nationalities and
+                              addresses. They carry through to Form 1 and Form 5 when you generate the filing bundle.
+                            </span>
+                          </div>
+                          <InventorCapture
+                            patentId={patent?.id}
+                            value={inventors}
+                            onChange={setInventors}
+                            showAdditionalInventorToggle={false}
+                            onSave={saveInventors}
+                            saving={savingInventors}
+                          />
+                        </>
+                      )}
                     </div>
-                    
+
                     {/* Edit Actions Footer */}
                     {isEditing && (
                       <div className="px-6 py-3 bg-paper-100 border-t border-paper-300 flex justify-end">
