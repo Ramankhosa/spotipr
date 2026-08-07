@@ -40,7 +40,7 @@ export default function ClosingBand() {
 
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link
-                href={user ? '/patents/draft/new' : '/free-trial'}
+                href={user ? '/login' : '/free-trial'}
                 className="group inline-flex items-center gap-2 rounded-lg bg-white px-6 py-3.5 text-[15px] font-medium text-lamp-700 transition-all duration-150 hover:bg-lamp-50 active:scale-[0.985]"
               >
                 {user ? 'Start with my invention' : 'Request a free trial'}

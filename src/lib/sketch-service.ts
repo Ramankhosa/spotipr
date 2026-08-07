@@ -131,6 +131,12 @@ const SKETCH_RECOMMENDED_MODEL = 'gemini-3-pro-image-preview'
 const EXTERNAL_IMAGE_DETECTION_MODEL = 'gemini-2.5-pro'
 const EXTERNAL_IMAGE_DETECTION_MAX_OUTPUT_TOKENS = 8192
 const SKETCH_OUTPUT_IMAGE_SIZE = '2K'
+// Patent drawing sheets are portrait A4/Letter; portrait output drops onto a
+// sheet without cropping and reads as a filing figure rather than a web image.
+const SKETCH_OUTPUT_ASPECT_RATIO = '3:4'
+// Post-generation vision QA with one bounded repair pass. The repair is a
+// second metered generation, so it can be switched off via SKETCH_AUTO_REPAIR=off.
+const SKETCH_AUTO_REPAIR_ENABLED = process.env.SKETCH_AUTO_REPAIR !== 'off'
 const SKETCH_STAGE_CODE = 'DRAFT_SKETCH_GENERATION'
 const SKETCH_TASK_CODE: TaskCode = 'LLM3_DIAGRAM' // Closest task for vision + drafting limits
 export const EXTERNAL_IMAGE_AI_MAX_SIDE = 1920
@@ -631,31 +637,25 @@ function getLabelingRulesForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL
     case 'STEP_LABEL':
       return `• Reference labels for PROCESS patents use step format: S100, S200, S300, etc.
 • Use the EXACT reference labels provided in the component list (e.g., S100, S200)
-• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
-• NO part names, titles, or descriptors in the drawing
-• NO figure numbers or "FIG." labels in the drawing
+• Draw each label in plain upright characters at a size that stays legible in print — never stylized, outlined, or distorted
+• NO part names, titles, descriptors, or "FIG." numbers in the drawing
 • Each step/component labeled once per view unless clarity requires repetition
-• Labels must NOT overlap geometry — use leader lines to connect labels to components
-• Place labels clearly near their corresponding components`
+• Place each label OUTSIDE the geometry, connected to its component by a short straight leader line; labels and leader lines must never overlap linework or each other`
     case 'CONSTITUENT_LABEL':
       return `• Reference labels for COMPOSITION patents use alphabetical format: (a), (b), (c), etc.
 • Use the EXACT reference labels provided in the component list (e.g., (a), (b), (c))
-• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
-• NO part names, titles, or descriptors in the drawing
-• NO figure numbers or "FIG." labels in the drawing
+• Draw each label in plain upright characters at a size that stays legible in print — never stylized, outlined, or distorted
+• NO part names, titles, descriptors, or "FIG." numbers in the drawing
 • Each constituent/ingredient labeled once per view unless clarity requires repetition
-• Labels must NOT overlap geometry — use leader lines to connect labels to components
-• Place labels clearly near their corresponding components`
+• Place each label OUTSIDE the geometry, connected to its component by a short straight leader line; labels and leader lines must never overlap linework or each other`
     case 'NUMERIC_BUCKET':
     default:
       return `• ONLY the assigned numeric reference labels are allowed
 • Use the EXACT reference labels provided in the component list
-• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
-• NO part names, titles, or descriptors in the drawing
-• NO figure numbers or "FIG." labels in the drawing
+• Draw each numeral in plain upright digits at a size that stays legible in print — never stylized, outlined, or distorted
+• NO part names, titles, descriptors, or "FIG." numbers in the drawing
 • Each component labeled once per view unless clarity requires repetition
-• Labels must NOT overlap geometry — use leader lines to connect labels to components
-• Place labels clearly near their corresponding components`
+• Place each label OUTSIDE the geometry, connected to its component by a short straight leader line; labels and leader lines must never overlap linework or each other`
   }
 }
 
@@ -670,10 +670,10 @@ function getComplianceChecklistForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP
       : 'assigned numeric labels'
   
   return `✔ Only listed components shown (no extras)
-✔ Reference labels only (${labelExample}) — use exactly the labels from the provided list
-✔ Main view provided; secondary view only if explicitly stated internals exist
-✔ Dashed lines used correctly (internal/hidden only)
-✔ No forbidden elements present`
+✔ Reference labels only (${labelExample}) — exactly the labels from the provided list, in plain legible characters
+✔ Pure white background; uniform black line art; no gray, shading, or texture
+✔ Dashed lines used only for disclosed internal/hidden features
+✔ No text other than reference labels (depicted UI screens excepted); no forbidden elements`
 }
 
 /**
@@ -684,18 +684,26 @@ function getComplianceChecklistForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP
 function buildSystemPrompt(numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL' = 'NUMERIC_BUCKET'): string {
   return `SYSTEM ROLE — USPTO/EPO/WIPO Patent Line Drawing Generator
 
-Generate a USPTO/EPO/WIPO-compliant black-and-white line drawing. Follow ALL rules exactly. Do NOT interpret or add detail beyond the invention description.
+Generate a formal utility-patent figure as black-and-white line art. Precision beats creativity: draw ONLY what the invention description discloses.
 
 ═══════════════════════════════════════════════════════════════════════════════
-DRAWING RULES (STRICT COMPLIANCE)
+TARGET STYLE (match this look exactly)
 ═══════════════════════════════════════════════════════════════════════════════
-• Solid lines = visible features
-• Dashed lines = internal/hidden features ONLY where explicitly specified
-• Clean, precise lines suitable for patent filings
-• Professional engineering/technical drawing style
+Render in the style of a figure from a granted USPTO utility patent:
+• Crisp, uniform black technical-pen linework on a PURE WHITE (#FFFFFF) background edge to edge — no cream, ivory, gray tint, paper texture, vignette, or border frame
+• Vector-like edges: no anti-aliasing halos, no gray tones, no pencil or sketch texture, no photorealism, no 3D-render lighting
+• Line-weight hierarchy: slightly heavier outline on the primary structure; lighter lines for internal detail
+• Isometric or orthographic projection — never artistic multi-point perspective
+• Composition centered with generous white margins on every side
+• Reference labels in plain upright characters, large enough to remain legible at print size, placed OUTSIDE the part outline, each connected to its part by a short straight leader line; leader lines never cross one another or pass through other parts
+
+═══════════════════════════════════════════════════════════════════════════════
+DRAWING CONVENTIONS
+═══════════════════════════════════════════════════════════════════════════════
+• Solid lines = visible features; dashed lines = internal/hidden features ONLY where explicitly disclosed
+• CROSS-SECTION views: hatch the cut material with parallel section lines at ~45°; give adjacent parts distinct hatch angles or spacing
+• EXPLODED views: align the separated parts along a single dashed assembly axis
 • Clear component separation with distinct boundaries
-• Background must be PURE WHITE (#FFFFFF) edge to edge — no cream, ivory, gray, paper texture, vignette, or border
-• NO shading, gradients, textures, icons, dimension lines, motion marks, UI elements, or decorative curves
 
 ═══════════════════════════════════════════════════════════════════════════════
 LABELING RULES (STRICT — NO EXCEPTIONS)
@@ -703,81 +711,48 @@ LABELING RULES (STRICT — NO EXCEPTIONS)
 ${getLabelingRulesForStyle(numberingStyle)}
 
 ═══════════════════════════════════════════════════════════════════════════════
-PROHIBITED ELEMENTS (NO EXCEPTIONS)
+TEXT POLICY
 ═══════════════════════════════════════════════════════════════════════════════
-❌ Text descriptions or part names
-❌ Shading, gradients, or textures
-❌ Icons or symbolic representations
-❌ Arrows (except as explicit flow indicators when specified)
+• The ONLY text permitted in the drawing is the reference labels listed in the prompt
+• Exception — user-interface (UI screen) figures: minimal schematic on-screen text that the disclosure describes may appear on the depicted screen
+• Never write part names, titles, figure numbers ("FIG."), dimensions, or commentary into the drawing; figure captions are added outside the image by the drafting system
+
+═══════════════════════════════════════════════════════════════════════════════
+PROHIBITED ELEMENTS
+═══════════════════════════════════════════════════════════════════════════════
+❌ Shading, gradients, gray fills, textures, or photorealistic rendering
+❌ Icons, logos, or symbolic/decorative embellishments
 ❌ Dimension lines or measurements
 ❌ Motion marks or rotation indicators
-❌ UI elements or decorative curves
+❌ Arrows — EXCEPT flow indicators the prompt explicitly specifies, or section-plane / view-direction indicators for a specified cross-section view
 ❌ Extra components not in the invention context
 ❌ Hidden assumptions or inferred mechanical details
-❌ Symbolic embellishments
-❌ Any element not explicitly described in the invention
 
 ═══════════════════════════════════════════════════════════════════════════════
 ANTI-HALLUCINATION CONSTRAINTS
 ═══════════════════════════════════════════════════════════════════════════════
 1. Use ONLY components explicitly provided in the invention context
-2. Use ONLY reference numerals from the provided numeral list
+2. Use ONLY reference labels from the provided label list
 3. Do NOT invent or add components, features, or structures
 4. Do NOT assume internal mechanisms unless explicitly described
 5. If information is ambiguous → use simplified block representation
 6. When in doubt between detailed and simple → choose SIMPLE + TRUTHFUL
 
 ═══════════════════════════════════════════════════════════════════════════════
-OUTPUT REQUIREMENTS
+VIEWS AND ENFORCEMENT
 ═══════════════════════════════════════════════════════════════════════════════
-1. MAIN VIEW: Primary assembled view (orientation based on invention context)
-2. SECONDARY VIEW: Only if it reveals components or physical relationships explicitly stated in the invention.
-   If no internal structure is disclosed or claimed, OMIT the secondary view.
-
-═══════════════════════════════════════════════════════════════════════════════
-ENFORCEMENT
-═══════════════════════════════════════════════════════════════════════════════
+Draw exactly ONE view per image unless the prompt explicitly requests a multi-view sheet.
 If ANY rule would be violated, simplify the drawing until compliant.
-If the invention description is too ambiguous to draw, use simplified block diagram.
-
-═══════════════════════════════════════════════════════════════════════════════
-COMPLIANCE CHECKLIST (Self-verify before output)
-═══════════════════════════════════════════════════════════════════════════════
-${getComplianceChecklistForStyle(numberingStyle)}`
+If the invention description is too ambiguous to draw, use a simplified block diagram.`
 }
 
 /**
  * Builds the user prompt for AUTO mode generation.
  */
 function buildAutoModePrompt(context: SketchContextBundle, viewConfig?: SketchViewConfig): string {
-  // Language labels mapping
-  const languageLabels: Record<string, string> = {
-    en: 'English',
-    hi: 'Hindi',
-    ja: 'Japanese',
-    zh: 'Chinese',
-    ko: 'Korean',
-    de: 'German',
-    fr: 'French',
-    es: 'Spanish',
-    pt: 'Portuguese',
-    ru: 'Russian',
-    ar: 'Arabic',
-    it: 'Italian',
-    nl: 'Dutch',
-    sv: 'Swedish',
-  }
-  const languageLabel = languageLabels[context.language] || context.language.toUpperCase()
-
   let prompt = `Generate a USPTO/EPO/WIPO-compliant patent line drawing for this invention:
 
-═══════════════════════════════════════════════════════════════════════════════
-LANGUAGE REQUIREMENT
-═══════════════════════════════════════════════════════════════════════════════
-PRIMARY LANGUAGE: ${languageLabel} (${context.language})
-All labels, descriptions, and annotations in the drawing MUST be in ${languageLabel}.
-${context.language !== 'en' ? `Use proper ${languageLabel} characters and terminology. Only use English for standard technical terms with no ${languageLabel} equivalent.` : ''}
-
+${buildLanguageRequirementSection(context)}
 ═══════════════════════════════════════════════════════════════════════════════
 INVENTION CONTEXT
 ═══════════════════════════════════════════════════════════════════════════════
@@ -821,24 +796,24 @@ ${context.diagramSummaries.join('\n')}
   // View configuration
   if (viewConfig?.separateViews && viewConfig.separateViews.length > 0) {
     prompt += `═══════════════════════════════════════════════════════════════════════════════
-REQUIRED VIEWS
+REQUIRED VIEWS (user-requested multi-view sheet)
 ═══════════════════════════════════════════════════════════════════════════════
 Generate these specific views: ${viewConfig.separateViews.join(', ')}
+Arrange them as clearly separated sub-views at a consistent scale, and label components identically in every view.
 `
   } else if (viewConfig?.combinedView) {
     prompt += `═══════════════════════════════════════════════════════════════════════════════
-REQUIRED VIEWS
+REQUIRED VIEWS (user-requested multi-view sheet)
 ═══════════════════════════════════════════════════════════════════════════════
-Generate a combined multi-view figure showing multiple perspectives in one drawing.
-Include: Main assembled view + one secondary view (cross-section, exploded, or alternate angle)
+Generate a combined multi-view figure: the main assembled view plus one secondary view (cross-section, exploded, or alternate angle).
+Arrange the views clearly separated at a consistent scale, and label components identically in every view.
 `
   } else {
     prompt += `═══════════════════════════════════════════════════════════════════════════════
-REQUIRED VIEWS
+REQUIRED VIEW
 ═══════════════════════════════════════════════════════════════════════════════
-1. MAIN VIEW: Primary assembled view showing the invention's key components and relationships
-2. SECONDARY VIEW: Only if it reveals components or physical relationships explicitly stated.
-   If no internal structure is disclosed, OMIT the secondary view.
+Generate exactly ONE view: the primary assembled view that best shows the invention's key components and their disclosed relationships.
+Represent explicitly disclosed internal structure with dashed hidden lines inside that view — do NOT add a second view.
 `
   }
 
@@ -847,7 +822,6 @@ REQUIRED VIEWS
 COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
 ${getComplianceChecklistForStyle(context.numberingStyle)}
-✔ Main view provided; secondary view only if explicitly stated internals exist
 
 If ANY rule would be violated, simplify the drawing until compliant.`
 
@@ -885,35 +859,46 @@ EXAMPLES OF WHAT TO IGNORE:
 - User asks for shading/gradients → Use line art only`
 }
 
+const SKETCH_LANGUAGE_LABELS: Record<string, string> = {
+  en: 'English',
+  hi: 'Hindi',
+  ja: 'Japanese',
+  zh: 'Chinese',
+  ko: 'Korean',
+  de: 'German',
+  fr: 'French',
+  es: 'Spanish',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  ar: 'Arabic',
+  it: 'Italian',
+  nl: 'Dutch',
+  sv: 'Swedish',
+}
+
+function languageDisplayName(code: string): string {
+  return SKETCH_LANGUAGE_LABELS[code] || code.toUpperCase()
+}
+
 /**
- * Builds the language requirement section for sketch prompts.
+ * Builds the text-and-language section for sketch prompts.
  * Shared across all prompt modes for consistency.
+ *
+ * Worded to stay consistent with the TEXT POLICY: reference labels are the only
+ * expected text, and the language requirement applies only to text that is
+ * legitimately unavoidable (e.g., a claimed UI screen). An unconditional "all
+ * labels must be in X" line here previously invited the model to add prose
+ * annotations that the labeling rules then prohibited.
  */
 function buildLanguageRequirementSection(context: SketchContextBundle): string {
-  const languageLabels: Record<string, string> = {
-    en: 'English',
-    hi: 'Hindi',
-    ja: 'Japanese',
-    zh: 'Chinese',
-    ko: 'Korean',
-    de: 'German',
-    fr: 'French',
-    es: 'Spanish',
-    pt: 'Portuguese',
-    ru: 'Russian',
-    ar: 'Arabic',
-    it: 'Italian',
-    nl: 'Dutch',
-    sv: 'Swedish',
-  }
-  const languageLabel = languageLabels[context.language] || context.language.toUpperCase()
-  
+  const languageLabel = languageDisplayName(context.language)
+
   return `═══════════════════════════════════════════════════════════════════════════════
-LANGUAGE REQUIREMENT
+TEXT & LANGUAGE POLICY
 ═══════════════════════════════════════════════════════════════════════════════
-PRIMARY LANGUAGE: ${languageLabel} (${context.language})
-All labels, descriptions, and annotations in the drawing MUST be in ${languageLabel}.
-${context.language !== 'en' ? `Use proper ${languageLabel} characters and terminology. Only use English for standard technical terms with no ${languageLabel} equivalent.` : ''}
+The ONLY text normally permitted in the drawing is the reference labels themselves.
+If any other text is unavoidable (e.g., wording on a claimed user-interface screen or a disclosed marking), it MUST be in ${languageLabel} (${context.language}).
+${context.language !== 'en' ? `Use proper ${languageLabel} characters and terminology for such text. Only use English for standard technical terms with no ${languageLabel} equivalent.` : ''}
 `
 }
 
@@ -1203,6 +1188,7 @@ async function recordSketchUsage(
  * @param inputImage - Optional input image for REFINE/MODIFY modes
  * @param gatewayContext - Tenant and user IDs for gateway enforcement
  * @param referenceImages - Optional array of reference sketch images for visual style consistency
+ * @param qaContext - When provided, runs a post-generation vision QA pass with one bounded repair
  */
 export async function generateSketchWithGemini(
   systemPrompt: string,
@@ -1210,7 +1196,8 @@ export async function generateSketchWithGemini(
   modelCandidates: string[],
   inputImage?: { base64: string; mimeType: string },
   gatewayContext?: { tenantId?: string; userId?: string },
-  referenceImages?: Array<{ base64: string; mimeType: string; title?: string }>
+  referenceImages?: Array<{ base64: string; mimeType: string; title?: string }>,
+  qaContext?: SketchContextBundle
 ): Promise<SketchGenerationResponse> {
   // 1. Enforce access through LLM Gateway
   const accessCheck = await enforceSketchAccess(
@@ -1258,6 +1245,7 @@ export async function generateSketchWithGemini(
           responseModalities: ["TEXT", "IMAGE"],
           imageConfig: {
             imageSize: SKETCH_OUTPUT_IMAGE_SIZE,
+            aspectRatio: SKETCH_OUTPUT_ASPECT_RATIO,
           },
         }
 
@@ -1267,10 +1255,15 @@ export async function generateSketchWithGemini(
           { text: fullPrompt }
         ]
 
-        // Add reference sketch images for visual style consistency
+        // Add reference sketch images for visual style consistency. Each image
+        // is preceded by a caption part binding it to its role — without the
+        // caption the model cannot tell a style reference from a source image.
         if (referenceImages && referenceImages.length > 0) {
           console.log(`[SketchService] Including ${referenceImages.length} reference sketch(es) for style consistency`)
           for (const refImg of referenceImages) {
+            parts.push({
+              text: `The next image is an approved reference figure${refImg.title ? ` ("${refImg.title}")` : ''} from this drawing set. Match its line weight, hatching conventions, label style, and overall drawing style.`
+            })
             parts.push({
               inlineData: {
                 mimeType: refImg.mimeType,
@@ -1283,6 +1276,9 @@ export async function generateSketchWithGemini(
         // Add input image for REFINE/MODIFY modes
         if (inputImage) {
           console.log(`[SketchService] Including source image for modification (${inputImage.mimeType})`)
+          parts.push({
+            text: 'The next image is the source sketch to refine or modify according to the instructions above.'
+          })
           parts.push({
             inlineData: {
               mimeType: inputImage.mimeType,
@@ -1327,14 +1323,16 @@ export async function generateSketchWithGemini(
                   modelCode,
                   gatewayContext?.userId
                 )
-                
-                return {
+
+                const generated: SketchGenerationResponse = {
                   success: true,
                   imageBase64: part.inlineData.data,
                   tokensUsed,
                   modelUsed: modelCode,
                   reservationId
                 }
+                // 3. Optional vision QA with one bounded repair pass
+                return finalizeSketchWithQa(generated, qaContext, systemPrompt, gatewayContext)
               }
             }
           }
@@ -1397,6 +1395,133 @@ TROUBLESHOOTING:
 4. Models that do NOT work: gemini-2.0-flash, gemini-2.0-flash-exp, gemini-2.0-flash-lite (these are text-only)
 5. Configure the model in Super Admin → LLM Config → PATENT_DRAFTING → Sketch Generation`
   }
+}
+
+// === POST-GENERATION QUALITY ASSURANCE ===
+
+interface SketchQaVerdict {
+  passed: boolean
+  defects: string[]
+}
+
+/**
+ * Vision QA pass over a generated sketch. Reference-label integrity is the
+ * signature failure mode of image models (garbled, invented, or illegible
+ * labels), so the check focuses on labels plus the hard style rules.
+ * Returns null when QA is unavailable — callers must fail open.
+ */
+async function verifySketchCompliance(
+  imageBase64: string,
+  context: SketchContextBundle
+): Promise<SketchQaVerdict | null> {
+  const apiKey = process.env.GOOGLE_AI_API_KEY
+  if (!apiKey) return null
+
+  try {
+    const { GoogleGenAI } = require('@google/genai')
+    const genAI = new GoogleGenAI({ apiKey })
+    const allowedLabels = Object.entries(context.referenceNumerals || {})
+    const labelBlock = allowedLabels.length > 0
+      ? allowedLabels.map(([label, name]) => `- ${label} (${name})`).join('\n')
+      : 'None provided.'
+
+    const qaPrompt = `You are reviewing a machine-generated patent line drawing for formal defects.
+
+ALLOWED REFERENCE LABELS (a figure may show a subset, but must never show a label outside this list):
+${labelBlock}
+
+Check ONLY for these defect types:
+1. A visible reference label that is garbled, illegible, or not on the allowed list
+2. Words or text other than the allowed reference labels (text on a depicted user-interface screen is acceptable)
+3. Gray fills, shading, gradients, photorealistic rendering, or a non-white background
+4. A border frame drawn around the figure
+5. Dimension lines, measurements, or decorative embellishments
+
+Report a defect ONLY if you are confident it is present. Minor cosmetic imperfections are NOT defects.
+
+Return JSON only, no markdown:
+{"passed": true|false, "defects": ["specific, actionable defect description", "at most 6 items"]}`
+
+    const response = await genAI.models.generateContent({
+      model: EXTERNAL_IMAGE_DETECTION_MODEL,
+      contents: [
+        { text: qaPrompt },
+        { inlineData: { mimeType: 'image/png', data: imageBase64 } }
+      ],
+      config: { temperature: 0 }
+    })
+
+    const cleaned = stripMarkdownCodeFence(response.text || '')
+    const start = cleaned.indexOf('{')
+    const end = cleaned.lastIndexOf('}')
+    if (start < 0 || end <= start) return null
+    const parsed = JSON.parse(cleaned.slice(start, end + 1))
+    const defects: string[] = Array.isArray(parsed.defects)
+      ? parsed.defects
+          .filter((defect: unknown): defect is string => typeof defect === 'string' && defect.trim().length > 0)
+          .slice(0, 6)
+      : []
+    return { passed: Boolean(parsed.passed) && defects.length === 0, defects }
+  } catch (e) {
+    console.warn('[SketchService] QA verification unavailable:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
+/** Repair prompt: regenerate the same drawing, fixing only the listed defects. */
+function buildSketchRepairPrompt(context: SketchContextBundle, defects: string[]): string {
+  const labelLines = Object.entries(context.referenceNumerals || {})
+    .map(([label, name]) => `${label} → ${name}`)
+    .join('\n')
+
+  return `The attached image is a draft patent figure that failed automated compliance review.
+
+Regenerate the SAME drawing — same view, same components, same layout and proportions — correcting ONLY the defects listed below. Change nothing else.
+
+DEFECTS TO CORRECT:
+${defects.map((defect, index) => `${index + 1}. ${defect}`).join('\n')}
+
+${labelLines ? `REFERENCE LABELS (the only text allowed; use exactly these):\n${labelLines}\n\n` : ''}Rules: pure white background edge to edge; uniform black line art; no shading, gray, or gradients; labels in plain upright characters placed outside the geometry with short straight leader lines; no part names, titles, or "FIG." text.`
+}
+
+/**
+ * One bounded verify-and-repair pass. Fails open: the caller always gets a
+ * usable image, and a QA problem never turns a successful generation into a
+ * failure. The repair pass is itself a metered generation. QA outcomes are
+ * logged only — never surfaced to end users.
+ */
+async function finalizeSketchWithQa(
+  generated: SketchGenerationResponse,
+  qaContext: SketchContextBundle | undefined,
+  systemPrompt: string,
+  gatewayContext?: { tenantId?: string; userId?: string }
+): Promise<SketchGenerationResponse> {
+  if (!qaContext || !SKETCH_AUTO_REPAIR_ENABLED || !generated.imageBase64 || !generated.modelUsed) {
+    return generated
+  }
+
+  const verdict = await verifySketchCompliance(generated.imageBase64, qaContext)
+  if (!verdict || verdict.passed) return generated
+  if (verdict.defects.length === 0) {
+    console.warn('[SketchService] QA flagged the sketch without actionable defects; keeping original')
+    return generated
+  }
+
+  console.log(`[SketchService] QA found ${verdict.defects.length} defect(s); running one repair pass: ${verdict.defects.join(' | ')}`)
+  const repaired = await generateSketchWithGemini(
+    systemPrompt,
+    buildSketchRepairPrompt(qaContext, verdict.defects),
+    [generated.modelUsed],
+    { base64: generated.imageBase64, mimeType: 'image/png' },
+    gatewayContext
+    // No referenceImages and no qaContext: exactly one repair pass, never a loop.
+  )
+
+  if (repaired.success && repaired.imageBase64) {
+    return { ...repaired, tokensUsed: (generated.tokensUsed || 0) + (repaired.tokensUsed || 0) }
+  }
+  console.warn('[SketchService] Repair pass failed; keeping the original sketch:', repaired.error)
+  return generated
 }
 
 // === MAIN SKETCH GENERATION FUNCTION ===
@@ -1576,7 +1701,7 @@ export async function generateSketch(
 
 VISUAL STYLE REFERENCES:
 The following ${referenceImages.length} image(s) are provided as VISUAL STYLE REFERENCES.
-Maintain CONSISTENT visual style, line weight, shading technique, and overall aesthetic with these reference sketches${refTitles ? ` (${refTitles})` : ''}.
+Maintain CONSISTENT line weight, hatching conventions, label style, and overall drawing style with these reference sketches${refTitles ? ` (${refTitles})` : ''}.
 The new sketch should look like it belongs to the same set of figures as these references.`
       }
     }
@@ -1584,12 +1709,13 @@ The new sketch should look like it belongs to the same set of figures as these r
     // 8. Generate sketch with gateway enforcement for policy/quota/metering
     // Title and description are already set from suggestion or user input
     const result = await generateSketchWithGemini(
-      systemPrompt, 
-      userPromptFinal, 
-      modelCandidates, 
+      systemPrompt,
+      userPromptFinal,
+      modelCandidates,
       inputImage,
       { tenantId, userId }, // Gateway context for DIAGRAM_GENERATION feature access
-      referenceImages // Pass reference images for visual style consistency
+      referenceImages, // Pass reference images for visual style consistency
+      contextBundle // Enables post-generation vision QA + bounded repair
     )
 
     // 9. Update record based on result
@@ -1988,11 +2114,13 @@ export async function generateFromSuggestion(
 
     // Generate image with gateway enforcement for policy/quota/metering
     const result = await generateSketchWithGemini(
-      systemPrompt, 
-      userPrompt, 
+      systemPrompt,
+      userPrompt,
       modelCandidates,
       undefined, // No input image for suggestions
-      { tenantId, userId } // Gateway context for DIAGRAM_GENERATION feature access
+      { tenantId, userId }, // Gateway context for DIAGRAM_GENERATION feature access
+      undefined, // No reference images for suggestions
+      contextBundle // Enables post-generation vision QA + bounded repair
     )
 
     if (result.success && result.imageBase64) {
@@ -2091,31 +2219,19 @@ function buildPromptFromSuggestion(
   title: string,
   description: string
 ): string {
-  let prompt = `Generate a USPTO/EPO/WIPO-compliant patent line drawing under STRICT patent-drafting conventions.
+  // The figure description leads the prompt: image models weight the opening
+  // heavily, and the scene to draw matters more than any individual constraint.
+  let prompt = `Draw the following formal patent figure.
 
-═══════════════════════════════════════════════════════════════════════════════
-STRICT PATENT-DRAFTING CONSTRAINTS (MANDATORY)
-═══════════════════════════════════════════════════════════════════════════════
-1. DO NOT INVENT: Never add components, sub-components, features, or relationships
-   not explicitly listed in the OFFICIAL COMPONENT REGISTRY below.
-
-2. NO CREATIVE FILL-IN: If physical details are missing or ambiguous, use
-   simplified block/schematic representation. Do NOT guess or extrapolate.
-
-3. INTERNAL CONSISTENCY: This sketch must be fully consistent with any existing
-   PlantUML diagrams. Do not contradict, extend, or reinterpret any defined
-   entity, hierarchy, connection, or interaction.
-
-4. PRESERVE EXACTLY: Every component name, numeral, and relationship must match
-   the authoritative invention facts. No renaming, no re-numbering.
-
-${buildLanguageRequirementSection(context)}
 ═══════════════════════════════════════════════════════════════════════════════
 FIGURE TO GENERATE
 ═══════════════════════════════════════════════════════════════════════════════
 Title: ${title}
-Description: ${description}
+Drawing instructions: ${description}
 
+Draw ONLY the view(s) specified above. If the instructions do not specify a secondary view, produce exactly ONE view.
+
+${buildLanguageRequirementSection(context)}
 ═══════════════════════════════════════════════════════════════════════════════
 AUTHORITATIVE INVENTION CONTEXT (Source of Truth)
 ═══════════════════════════════════════════════════════════════════════════════
@@ -2176,31 +2292,26 @@ Do NOT contradict or extend what is shown.
   }
 
   prompt += `═══════════════════════════════════════════════════════════════════════════════
-DRAWING REQUIREMENTS
+STRICT CONSTRAINTS
 ═══════════════════════════════════════════════════════════════════════════════
-Generate the sketch as described in the title and description above.
-
-VIEW REQUIREMENTS:
-1. MAIN VIEW: Primary view as specified in the description
-2. SECONDARY VIEW: Cross-section, alternate angle, or detail view if appropriate
-   (Only if it reveals components/relationships from the official registry)
-
-REPRESENTATION RULES:
-• Show ONLY components from the Official Component Registry
-• Show ONLY relationships explicitly defined in invention context or diagrams
-• Use simplified/schematic representation for any ambiguous physical details
-• When in doubt between detailed and simple → choose SIMPLE + ACCURATE
+1. DO NOT INVENT: never add components, sub-components, features, or relationships
+   not explicitly listed in the Official Component Registry or invention facts.
+2. NO CREATIVE FILL-IN: if physical details are missing or ambiguous, use
+   simplified block/schematic representation. Do NOT guess or extrapolate.
+3. CONSISTENCY: do not contradict, extend, or reinterpret the controlling
+   diagrams above — every entity, hierarchy, and connection they define is canon.
+4. PRESERVE EXACTLY: every component and reference label must match the lists
+   above. No renaming, no re-numbering.
 
 ═══════════════════════════════════════════════════════════════════════════════
 VALIDATION CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
-✔ Every component shown exists in Official Component Registry
-✔ Every relationship shown is explicitly defined in invention facts
-✔ Numeric labels match exactly the Official Reference Numerals
-✔ No invented components, sub-parts, or internal details added
-✔ Consistent with all existing PlantUML diagrams
-✔ Solid lines for visible features, dashed for internal/hidden only
-✔ No text labels, shading, gradients, or decorative elements
+✔ Drawn view matches the drawing instructions; no extra views added
+✔ Every component shown exists in the Official Component Registry
+✔ Every label matches the Official Reference Labels exactly, in plain legible characters
+✔ Every relationship shown is explicitly defined in invention facts or controlling diagrams
+✔ Solid lines for visible features; dashed only for disclosed internal/hidden features
+✔ Pure white background, uniform black line art, no shading or stray text
 ✔ No flowchart or process diagram elements
 
 If ANY validation fails → simplify until fully compliant.

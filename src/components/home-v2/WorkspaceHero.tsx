@@ -62,7 +62,7 @@ export default function WorkspaceHero() {
 
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link
-                href={user ? '/patents/draft/new' : '/free-trial'}
+                href={user ? '/login' : '/free-trial'}
                 className="group inline-flex items-center gap-2 rounded-lg bg-lamp-600 px-6 py-3.5 text-[15px] font-medium text-white transition-all duration-150 hover:bg-lamp-700 hover:shadow-[0_12px_28px_-12px_rgba(29,78,216,0.7)] active:scale-[0.985]"
               >
                 {user ? 'Start with my invention' : 'Request a free trial'}

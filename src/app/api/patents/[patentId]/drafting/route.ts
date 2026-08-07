@@ -8696,6 +8696,12 @@ function buildSketchSuggestionsPrompt(session: any, existingDiagrams?: string[],
     return parts.join('\n')
   }).join('\n')
 
+  // Key claims (when loaded on the session): claim-recited structure deserves
+  // dedicated detail views, which is where a professional drafter spends figures.
+  const claimsText: string = session.annexureDrafts?.[0]?.claims || ''
+  const claimMatches = claimsText.match(/\d+\.\s+[^.]+\./g)
+  const keyClaims: string[] = claimMatches ? claimMatches.slice(0, 5) : []
+
   // Build reference figures section if provided
   let referenceFiguresSection = ''
   if (referenceFigures && referenceFigures.length > 0) {
@@ -8767,6 +8773,14 @@ STRICT PATENT-DRAFTING CONSTRAINTS (NO EXCEPTIONS)
 5. PATENT NORMS: Output must adhere to USPTO/EPO/WIPO drawing conventions.
    Physical representations only - no flowcharts, process diagrams, or UML.
 
+6. ONE VIEW PER SUGGESTION: every suggestion describes exactly ONE view. If a
+   cross-section, cutaway, or detail view adds value, propose it as its own
+   separate suggestion rather than as a secondary view inside another one.
+
+7. NO TEXT IN DRAWINGS: never propose text annotations, part-name callouts, or
+   titles inside the drawing — the only text is the reference labels. Exception:
+   a UI mockup screen may show the disclosed on-screen text.
+
 ═══════════════════════════════════════════════════════════════════════════════
 SKETCHES vs DIAGRAMS - CRITICAL DISTINCTION
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8798,7 +8812,7 @@ INVENTION TYPE: ${inventionTypeStr}
 
 OFFICIAL COMPONENT REGISTRY (Use ONLY these - no additions):
 ${componentList || 'No components defined yet'}
-${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
+${keyClaims.length > 0 ? `\nKEY CLAIMS (prioritize views that clearly show claim-recited structure):\n${keyClaims.join('\n')}\n` : ''}${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 ${existingDiagramsSection}${existingSketchesSection}${referenceFiguresSection}
 ═══════════════════════════════════════════════════════════════════════════════
 YOUR TASK
@@ -8844,14 +8858,14 @@ FORMAT:
 [
   {
     "title": "Concise title with view type (e.g., 'Device Assembly - Front Isometric View')",
-    "description": "COMPREHENSIVE drawing instructions including: VIEW TYPE AND ANGLE (e.g., front-right isometric at 30° elevation), COMPONENTS TO SHOW (list all numerals), PRIMARY FOCUS (main component), PHYSICAL RELATIONSHIPS (only from invention facts), SECONDARY VIEW (if applicable), DETAIL LEVEL (schematic/simplified/medium). All in one detailed paragraph."
+    "description": "COMPREHENSIVE drawing instructions for EXACTLY ONE view, including: VIEW & PROJECTION (e.g., front orthographic; front-right isometric at 30° elevation), COMPONENTS TO SHOW (list their reference labels), PRIMARY FOCUS (main component), PHYSICAL RELATIONSHIPS (only from invention facts), HIDDEN LINES (which disclosed internal parts to draw dashed, if any), DETAIL LEVEL (schematic/simplified/medium). All in one detailed paragraph."
   }
 ]
 
 EXAMPLE OF GOOD SUGGESTION:
 {
   "title": "Housing Assembly - Front-Right Isometric View",
-  "description": "VIEW: Front-right isometric view at approximately 30° elevation showing the complete assembled device. COMPONENTS: Show housing (100), controller unit (200), sensor array (300), and power module (400). PRIMARY FOCUS: Housing assembly (100) as the main structural element containing all other components. PHYSICAL RELATIONSHIPS: Controller (200) mounted on internal bracket within housing (100); sensor array (300) attached to front panel of housing; power module (400) connected to controller via internal wiring channel. SECONDARY VIEW: Include partial cutaway revealing controller (200) position inside housing. DETAIL LEVEL: Medium - show external features clearly, use dashed lines for internal components visible through cutaway. Use ONLY the listed components, no additional sub-parts or invented details."
+  "description": "VIEW & PROJECTION: Front-right isometric view at approximately 30° elevation showing the complete assembled device as one single view. COMPONENTS: Show housing (100), controller unit (200), sensor array (300), and power module (400). PRIMARY FOCUS: Housing assembly (100) as the main structural element containing all other components. PHYSICAL RELATIONSHIPS: Controller (200) mounted on internal bracket within housing (100); sensor array (300) attached to front panel of housing; power module (400) connected to controller via internal wiring channel. HIDDEN LINES: Draw controller (200) and power module (400) in dashed lines where concealed inside housing (100). DETAIL LEVEL: Medium - show external features clearly. Use ONLY the listed components, no additional sub-parts or invented details."
 }
 
 IF no meaningful sketch is possible (abstract invention):
@@ -8864,6 +8878,8 @@ VALIDATION RULES (Self-check before output)
 ✓ Every physical relationship is explicitly stated in invention facts or approved diagram facts
 ✓ No new components, sub-components, or connections invented
 ✓ View type is a valid physical representation (NOT a flowchart/diagram)
+✓ Each suggestion describes exactly ONE view with a named projection
+✓ No text annotations proposed (reference labels only; UI screens excepted)
 ✓ Suggestion is fully consistent with all existing approved diagrams
 ✓ No speculation or creative interpretation of missing details
 ✓ Description is comprehensive enough for image generation
@@ -9925,6 +9941,10 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
         referenceMap: true,
         figurePlans: true,
         diagramSources: true,
+        annexureDrafts: {
+          orderBy: { version: 'desc' },
+          take: 1
+        },
         sketchRecords: {
           where: { isDeleted: false, status: 'SUCCESS' }
         }

@@ -84,3 +84,6 @@ tsconfig.tsbuildinfo
 
 # EPO BDDS archive staging (transient; deleted after each file loads)
 .epo-cache/
+
+# Scraped patent-agent contact data (personal data — keep out of git)
+/data/sipp/
