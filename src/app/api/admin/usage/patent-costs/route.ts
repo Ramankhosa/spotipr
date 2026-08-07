@@ -65,37 +65,22 @@ export async function GET(request: NextRequest) {
 
     const normalizedRange = normalizeUsageDateRange(parsedDates.startDate, parsedDates.endDate)
 
-    const patentCosts = await computePatentCosts(
+    const runCosts = await computePatentCosts(
       parsed.tenantId,
       normalizedRange.start,
       normalizedRange.endInclusive,
       parsed.userId
     )
 
-    // Calculate totals
-    const totals = patentCosts.reduce((acc, p) => ({
-      totalInputTokens: acc.totalInputTokens + p.totalInputTokens,
-      totalOutputTokens: acc.totalOutputTokens + p.totalOutputTokens,
-      totalApiCalls: acc.totalApiCalls + p.totalApiCalls,
-      actualCost: acc.actualCost + p.actualCost,
-      contingencyCost: acc.contingencyCost + p.contingencyCost,
-      patentCount: acc.patentCount + 1
-    }), {
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalApiCalls: 0,
-      actualCost: 0,
-      contingencyCost: 0,
-      patentCount: 0
-    })
-
     return NextResponse.json({
       startDate: normalizedRange.start,
       endDate: normalizedRange.endInclusive,
       tenantId: parsed.tenantId,
       userId: parsed.userId,
-      totals,
-      patents: patentCosts
+      totals: runCosts.totals,
+      patents: runCosts.patents,
+      unattributed: runCosts.unattributed,
+      pricingWarnings: runCosts.pricingWarnings
     })
   } catch (error) {
     console.error('Patent costs API error:', error)

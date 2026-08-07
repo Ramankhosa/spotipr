@@ -32,6 +32,7 @@ import {
   table,
 } from './filing-docx-kit'
 import { sanitizeField } from './formatting'
+import { measureImage } from './figure-images'
 import type { FilingSignatory } from './types'
 
 export interface DrawingFigure {
@@ -83,14 +84,22 @@ export async function buildDrawingsDocx(opts: DrawingsOptions): Promise<Buffer> 
 
     children.push(blank())
 
-    const { width, height } = fitImage(figure.width, figure.height)
+    // Measure from the bytes if the caller did not supply dimensions, so the aspect ratio
+    // is always the figure's own and never an assumed one.
+    const measured = figure.width && figure.height
+      ? { width: figure.width, height: figure.height }
+      : measureImage(figure.image)
+    const box = fitImage(measured.width ?? undefined, measured.height ?? undefined)
+
     children.push(new Paragraph({
       alignment: AlignmentType.CENTER,
       children: [
         new ImageRun({
           data: figure.image,
           type: figure.imageType,
-          transformation: { width, height },
+          // Last resort only: width-constrained, height derived from the true ratio by
+          // scaling the longest side. Never a hardcoded box.
+          transformation: box ?? { width: MAX_IMAGE_WIDTH_PX, height: MAX_IMAGE_WIDTH_PX },
         }),
       ],
     }))
@@ -121,11 +130,25 @@ export async function buildDrawingsDocx(opts: DrawingsOptions): Promise<Buffer> 
   return Packer.toBuffer(doc)
 }
 
-/** Scale to fit the sheet while preserving aspect ratio. Unknown intrinsic size falls back
- *  to the 3:4 portrait the sketch pipeline produces. */
-function fitImage(width?: number, height?: number): { width: number; height: number } {
-  const w = width && width > 0 ? width : 600
-  const h = height && height > 0 ? height : 800
-  const scale = Math.min(MAX_IMAGE_WIDTH_PX / w, MAX_IMAGE_HEIGHT_PX / h, 1)
-  return { width: Math.round(w * scale), height: Math.round(h * scale) }
+/**
+ * Scale a figure to fit the sheet, preserving its aspect ratio exactly.
+ *
+ * Both dimensions are scaled by the SAME factor, so a drawing can never be stretched. The
+ * factor is capped at 1 — a small figure is left at its native size rather than blown up,
+ * because upscaling a line drawing softens the lines. Scaling down only changes the display
+ * size; Word still embeds the full-resolution original, so print clarity is unaffected.
+ *
+ * If the intrinsic size is genuinely unknown we constrain by WIDTH ALONE and let Word derive
+ * the height. Assuming a ratio here is precisely what distorted figures before: every
+ * drawing was forced into 3:4, so anything landscape or square came out squashed.
+ */
+function fitImage(width?: number, height?: number): { width: number; height: number } | null {
+  if (!width || !height || width <= 0 || height <= 0) return null
+
+  const scale = Math.min(MAX_IMAGE_WIDTH_PX / width, MAX_IMAGE_HEIGHT_PX / height, 1)
+  return {
+    // Round to at least 1px so a very wide, very short strip never collapses to zero.
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  }
 }

@@ -39,7 +39,9 @@ export default function SuperAdminAnalyticsPage() {
       })
       if (response.ok) {
         const tenantData = await response.json()
-        setTenants(tenantData.tenants || [])
+        // /api/tenants responds with a bare array; reading `.tenants` left the
+        // tenant filter permanently empty.
+        setTenants(Array.isArray(tenantData) ? tenantData : tenantData?.tenants || [])
       }
     } catch (error) {
       console.error('Failed to fetch tenants:', error)

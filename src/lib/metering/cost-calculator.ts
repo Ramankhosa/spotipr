@@ -99,7 +99,8 @@ async function getDatabasePricing(): Promise<Map<string, { input: number; output
   // Load fresh pricing
   dbPricingCache = await loadDatabasePricing()
   dbPricingLoadedAt = now
-  
+  warnedUnpricedModels.clear()
+
   return dbPricingCache
 }
 
@@ -109,6 +110,7 @@ async function getDatabasePricing(): Promise<Map<string, { input: number; output
 export async function refreshPricingCache(): Promise<void> {
   dbPricingCache = await loadDatabasePricing()
   dbPricingLoadedAt = Date.now()
+  warnedUnpricedModels.clear()
 }
 
 /**
@@ -156,28 +158,56 @@ export interface CostBreakdown {
 }
 
 /**
+ * Look up a model's configured price without falling back.
+ * Returns null when the model has no pricing row - callers decide what that means.
+ */
+function lookupConfiguredPricing(modelCode: string): { input: number; output: number; thoughtTokenCost?: number } | null {
+  if (!dbPricingCache) return null
+
+  const dbPrice = dbPricingCache.get(modelCode)
+  if (dbPrice) return dbPrice
+
+  // Try case-insensitive match
+  const lowerCode = modelCode.toLowerCase()
+  for (const [code, price] of Array.from(dbPricingCache.entries())) {
+    if (code.toLowerCase() === lowerCode) {
+      return price
+    }
+  }
+
+  return null
+}
+
+/**
+ * True when `modelCode` has a real price configured in the database.
+ *
+ * Callers that report money to an admin need this: an unpriced model is silently
+ * charged at DEFAULT_PRICING, so a cost figure built from unpriced models is a
+ * guess, not a measurement, and has to be labelled as one.
+ */
+export function isModelPriced(modelCode: string | null | undefined): boolean {
+  if (!modelCode) return false
+  return lookupConfiguredPricing(modelCode) !== null
+}
+
+// One warning per unknown model per process. The admin cost reports call
+// getModelPricingSync once per usage log, so an unconditional warn floods the
+// server log with thousands of identical lines on a single page load.
+const warnedUnpricedModels = new Set<string>()
+
+/**
  * Get pricing for a model from cache (sync version for use in calculateCost)
  * Falls back to default pricing if model not found in cache
  */
 export function getModelPricingSync(modelCode: string): { input: number; output: number; thoughtTokenCost?: number } {
-  // Check database cache first
-  if (dbPricingCache) {
-    const dbPrice = dbPricingCache.get(modelCode)
-    if (dbPrice) {
-      return dbPrice
-    }
-    
-    // Try case-insensitive match
-    const lowerCode = modelCode.toLowerCase()
-    for (const [code, price] of Array.from(dbPricingCache.entries())) {
-      if (code.toLowerCase() === lowerCode) {
-        return price
-      }
-    }
-  }
-  
+  const configured = lookupConfiguredPricing(modelCode)
+  if (configured) return configured
+
   // Return default pricing - model not configured
-  console.warn(`[CostCalculator] Model not found in database: ${modelCode}, using default pricing ($1/$4 per 1M)`)
+  if (!warnedUnpricedModels.has(modelCode)) {
+    warnedUnpricedModels.add(modelCode)
+    console.warn(`[CostCalculator] Model not found in database: ${modelCode}, using default pricing ($1/$4 per 1M)`)
+  }
   return DEFAULT_PRICING
 }
 

@@ -208,6 +208,18 @@ interface PatentCostMetrics {
   stageBreakdown: PatentStageBreakdown[]
 }
 
+interface UnattributedCostGroup {
+  taskCode: string
+  label: string
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalApiCalls: number
+  actualCost: number
+  contingencyCost: number
+  logCount: number
+  stageBreakdown: PatentStageBreakdown[]
+}
+
 interface PatentCostsResponse {
   startDate: string
   endDate: string
@@ -220,8 +232,18 @@ interface PatentCostsResponse {
     actualCost: number
     contingencyCost: number
     patentCount: number
+    unattributedInputTokens: number
+    unattributedOutputTokens: number
+    unattributedApiCalls: number
+    unattributedActualCost: number
+    unattributedContingencyCost: number
+    unattributedLogCount: number
+    tenantActualCost: number
+    tenantContingencyCost: number
   }
   patents: PatentCostMetrics[]
+  unattributed: UnattributedCostGroup[]
+  pricingWarnings: { modelClass: string; logCount: number }[]
 }
 
 export default function UserServiceUsagePage() {
@@ -231,6 +253,7 @@ export default function UserServiceUsagePage() {
   const { user, logout } = useAuth()
 
   const [tenants, setTenants] = useState<TenantOption[]>([])
+  const [tenantsError, setTenantsError] = useState<string | null>(null)
   const [selectedTenantId, setSelectedTenantId] = useState<string>('')
   const [mode, setMode] = useState<PeriodMode>('date')
   const [expandedTenant, setExpandedTenant] = useState<string | null>(null)
@@ -259,7 +282,9 @@ export default function UserServiceUsagePage() {
   const [patentCostsLoading, setPatentCostsLoading] = useState<boolean>(false)
   const [patentCostsError, setPatentCostsError] = useState<string | null>(null)
   const [expandedPatentId, setExpandedPatentId] = useState<string | null>(null)
+  const [expandedTaskCode, setExpandedTaskCode] = useState<string | null>(null)
   const [showPatentCosts, setShowPatentCosts] = useState<boolean>(false)
+  const [patentCostsUserId, setPatentCostsUserId] = useState<string | null>(null)
 
   // Monotonic request id. Changing "From" and then "To" fires two overlapping requests,
   // and the unified usage query is heavy (7 table scans), so the wider range often
@@ -268,6 +293,7 @@ export default function UserServiceUsagePage() {
   // are discarded.
   const usageRequestRef = useRef(0)
   const tenantUsersRequestRef = useRef(0)
+  const patentCostsRequestRef = useRef(0)
 
   useEffect(() => {
     if (!user) {
@@ -303,12 +329,21 @@ export default function UserServiceUsagePage() {
           Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`
         }
       })
-      if (response.ok) {
-        const tenantData = await response.json()
-        setTenants(tenantData.tenants || [])
+      if (!response.ok) {
+        throw new Error(`Tenant list request failed (${response.status})`)
       }
+      const tenantData = await response.json()
+      // /api/tenants returns a bare array. Reading `.tenants` off it silently
+      // produced an empty dropdown, which in turn hid the run-cost panel entirely
+      // (it only renders once a tenant is selected). Accept both shapes.
+      const list: TenantOption[] = Array.isArray(tenantData)
+        ? tenantData
+        : tenantData?.tenants || []
+      setTenants(list)
+      setTenantsError(list.length === 0 ? 'No active tenants returned.' : null)
     } catch (err) {
       console.error('Failed to fetch tenants:', err)
+      setTenantsError(err instanceof Error ? err.message : 'Failed to load tenants')
     }
   }
 
@@ -468,6 +503,14 @@ export default function UserServiceUsagePage() {
       setTenantUsers([])
       setTenantUsersTenantId(null)
       setTenantUsersError(null)
+      // Patent costs belong to the previous tenant/date range - keeping them on
+      // screen would show one tenant's spend under another tenant's filters.
+      setPatentCosts(null)
+      setPatentCostsError(null)
+      setPatentCostsUserId(null)
+      setExpandedPatentId(null)
+      setExpandedTaskCode(null)
+      setShowPatentCosts(false)
     } catch (err) {
       if (isStale()) return
       console.error('Failed to fetch service usage data:', err)
@@ -539,9 +582,16 @@ export default function UserServiceUsagePage() {
   }
 
   const fetchPatentCosts = async (tenantId: string, userId?: string) => {
+    const requestId = ++patentCostsRequestRef.current
+    const isStale = () => requestId !== patentCostsRequestRef.current
+
     try {
       setPatentCostsLoading(true)
       setPatentCostsError(null)
+      setShowPatentCosts(true)
+      setPatentCostsUserId(userId || null)
+      setExpandedPatentId(null)
+      setExpandedTaskCode(null)
 
       const resolvedRange = resolveDateRange()
       if ('error' in resolvedRange) {
@@ -571,13 +621,15 @@ export default function UserServiceUsagePage() {
       }
 
       const body: PatentCostsResponse = await response.json()
+      if (isStale()) return
       setPatentCosts(body)
     } catch (err) {
+      if (isStale()) return
       console.error('Failed to fetch patent costs:', err)
       setPatentCostsError(err instanceof Error ? err.message : 'Unknown error')
       setPatentCosts(null)
     } finally {
-      setPatentCostsLoading(false)
+      if (!isStale()) setPatentCostsLoading(false)
     }
   }
 
@@ -1059,6 +1111,9 @@ export default function UserServiceUsagePage() {
                   </option>
                 ))}
               </select>
+              {tenantsError && (
+                <p className="mt-1 text-xs text-red-600">{tenantsError}</p>
+              )}
             </div>
           </div>
 
@@ -1415,6 +1470,15 @@ export default function UserServiceUsagePage() {
                               >
                                 {isExpanded ? 'Hide' : 'View'}
                               </button>
+                              {row.tenantId && (
+                                <button
+                                  onClick={() => fetchPatentCosts(row.tenantId!, row.userId)}
+                                  className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                                  title="Show this user's run costs in the Run Cost Breakdown below"
+                                >
+                                  Run costs
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1496,27 +1560,37 @@ export default function UserServiceUsagePage() {
         <div className="bg-white p-6 rounded-lg shadow border">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-semibold">Patent-wise Cost Breakdown</h2>
+              <h2 className="text-lg font-semibold">Run Cost Breakdown</h2>
               <p className="text-sm text-gray-500">
-                View detailed LLM costs per patent with 10% contingency buffer for billing.
+                Every metered LLM run in the selected period, with a 10% contingency buffer for billing.
+                Drafting work is grouped per patent; novelty searches and other non-patent runs are grouped by service.
               </p>
+              {patentCostsUserId && (
+                <p className="text-xs text-lamp-700 mt-1">
+                  Filtered to a single user.{' '}
+                  <button
+                    type="button"
+                    onClick={() => selectedTenantId && fetchPatentCosts(selectedTenantId)}
+                    className="underline"
+                  >
+                    Show all users
+                  </button>
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-3">
               {selectedTenantId && (
                 <button
-                  onClick={() => {
-                    setShowPatentCosts(true)
-                    fetchPatentCosts(selectedTenantId)
-                  }}
+                  onClick={() => fetchPatentCosts(selectedTenantId)}
                   disabled={patentCostsLoading}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
                 >
-                  {patentCostsLoading ? 'Loading...' : 'Load Patent Costs'}
+                  {patentCostsLoading ? 'Loading...' : 'Load Run Costs'}
                 </button>
               )}
               {!selectedTenantId && (
                 <span className="text-sm text-amber-600">
-                  Warning: Select a tenant to view patent-wise costs
+                  Select a tenant to view run costs
                 </span>
               )}
             </div>
@@ -1530,40 +1604,162 @@ export default function UserServiceUsagePage() {
 
           {showPatentCosts && patentCosts && (
             <>
-              {/* Patent Cost Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+              {/* Run Cost Summary Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
                 <div className="bg-gradient-to-br from-lamp-50 to-lamp-100 p-4 rounded-lg border border-lamp-200">
-                  <h4 className="text-xs font-medium text-lamp-700 mb-1">Total Patents</h4>
+                  <h4 className="text-xs font-medium text-lamp-700 mb-1">Patents</h4>
                   <div className="text-xl font-bold text-lamp-900">
                     {formatNumber(patentCosts.totals.patentCount)}
                   </div>
+                  <p className="text-[10px] text-lamp-600 mt-1">
+                    {formatNumber(patentCosts.totals.unattributedLogCount)} non-patent runs
+                  </p>
                 </div>
                 <div className="bg-gradient-to-br from-lamp-50 to-lamp-100 p-4 rounded-lg border border-lamp-200">
                   <h4 className="text-xs font-medium text-lamp-700 mb-1">Input Tokens</h4>
                   <div className="text-xl font-bold text-lamp-900">
-                    {formatNumber(patentCosts.totals.totalInputTokens)}
+                    {formatNumber(patentCosts.totals.totalInputTokens + patentCosts.totals.unattributedInputTokens)}
                   </div>
+                  <p className="text-[10px] text-lamp-600 mt-1">
+                    {formatNumber(patentCosts.totals.totalInputTokens)} on patents
+                  </p>
                 </div>
                 <div className="bg-gradient-to-br from-lamp-50 to-lamp-100 p-4 rounded-lg border border-lamp-200">
                   <h4 className="text-xs font-medium text-lamp-700 mb-1">Output Tokens</h4>
                   <div className="text-xl font-bold text-lamp-900">
-                    {formatNumber(patentCosts.totals.totalOutputTokens)}
+                    {formatNumber(patentCosts.totals.totalOutputTokens + patentCosts.totals.unattributedOutputTokens)}
                   </div>
+                  <p className="text-[10px] text-lamp-600 mt-1">
+                    {formatNumber(patentCosts.totals.totalOutputTokens)} on patents
+                  </p>
                 </div>
                 <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
-                  <h4 className="text-xs font-medium text-green-700 mb-1">Actual Cost</h4>
+                  <h4 className="text-xs font-medium text-green-700 mb-1">Actual Cost (all runs)</h4>
                   <div className="text-xl font-bold text-green-900">
-                    {formatCurrency(patentCosts.totals.actualCost)}
+                    {formatCurrency(patentCosts.totals.tenantActualCost)}
                   </div>
+                  <p className="text-[10px] text-green-700 mt-1">
+                    {formatCurrency(patentCosts.totals.actualCost)} patents +{' '}
+                    {formatCurrency(patentCosts.totals.unattributedActualCost)} other
+                  </p>
                 </div>
                 <div className="bg-gradient-to-br from-amber-50 to-amber-100 p-4 rounded-lg border border-amber-200">
                   <h4 className="text-xs font-medium text-amber-700 mb-1">With 10% Buffer</h4>
                   <div className="text-xl font-bold text-amber-900">
-                    {formatCurrency(patentCosts.totals.contingencyCost)}
+                    {formatCurrency(patentCosts.totals.tenantContingencyCost)}
                   </div>
                   <p className="text-[10px] text-amber-600 mt-1">Use for billing</p>
                 </div>
               </div>
+
+              {patentCosts.pricingWarnings.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded mb-4 text-xs">
+                  <div className="font-semibold mb-1">
+                    Estimated pricing used for {patentCosts.pricingWarnings.length} model
+                    {patentCosts.pricingWarnings.length === 1 ? '' : 's'}
+                  </div>
+                  <p className="mb-1">
+                    These models have no price configured, so their runs are costed at the
+                    $1.00 / $4.00 per 1M fallback. Set real rates in LLM Config to make these figures exact.
+                  </p>
+                  <ul className="list-disc pl-5">
+                    {patentCosts.pricingWarnings.map(w => (
+                      <li key={w.modelClass}>
+                        <span className="font-mono">{w.modelClass}</span> - {formatNumber(w.logCount)} run
+                        {w.logCount === 1 ? '' : 's'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Non-patent runs (novelty search, reports, ideation, office actions) */}
+              {patentCosts.unattributed.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-2">
+                    Non-patent runs
+                  </h3>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Runs that are not scoped to a single patent - novelty searches, report generation,
+                    ideation and office-action work. Counted in the totals above.
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-gray-50">
+                          <th className="px-4 py-2 text-left">Service</th>
+                          <th className="px-4 py-2 text-right">Runs</th>
+                          <th className="px-4 py-2 text-right">Input Tokens</th>
+                          <th className="px-4 py-2 text-right">Output Tokens</th>
+                          <th className="px-4 py-2 text-right">API Calls</th>
+                          <th className="px-4 py-2 text-right">Actual Cost</th>
+                          <th className="px-4 py-2 text-right">With 10% Buffer</th>
+                          <th className="px-4 py-2 text-right">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {patentCosts.unattributed.map(group => {
+                          const isExpanded = expandedTaskCode === group.taskCode
+                          return (
+                            <Fragment key={group.taskCode}>
+                              <tr className="border-b hover:bg-gray-50">
+                                <td className="px-4 py-2">
+                                  <div className="font-medium text-gray-900">{group.label}</div>
+                                  <div className="text-xs text-gray-500 font-mono">{group.taskCode}</div>
+                                </td>
+                                <td className="px-4 py-2 text-right font-mono">{formatNumber(group.logCount)}</td>
+                                <td className="px-4 py-2 text-right font-mono">{formatNumber(group.totalInputTokens)}</td>
+                                <td className="px-4 py-2 text-right font-mono">{formatNumber(group.totalOutputTokens)}</td>
+                                <td className="px-4 py-2 text-right font-mono">{formatNumber(group.totalApiCalls)}</td>
+                                <td className="px-4 py-2 text-right font-mono text-green-700">
+                                  {formatCurrency(group.actualCost)}
+                                </td>
+                                <td className="px-4 py-2 text-right font-mono font-semibold text-amber-700">
+                                  {formatCurrency(group.contingencyCost)}
+                                </td>
+                                <td className="px-4 py-2 text-right">
+                                  <button
+                                    onClick={() => setExpandedTaskCode(isExpanded ? null : group.taskCode)}
+                                    className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                                  >
+                                    {isExpanded ? 'Hide' : 'Stages'}
+                                  </button>
+                                </td>
+                              </tr>
+                              {isExpanded && group.stageBreakdown.length > 0 && (
+                                <tr className="bg-gray-50">
+                                  <td colSpan={8} className="px-4 py-3">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+                                      {group.stageBreakdown.map(stage => (
+                                        <div key={stage.stage} className="bg-white border rounded p-2">
+                                          <div className="font-medium text-gray-800">{stage.stage}</div>
+                                          <div className="text-[11px] text-gray-600 space-y-0.5 mt-1">
+                                            <div>Input: {formatNumber(stage.inputTokens)} tokens</div>
+                                            <div>Output: {formatNumber(stage.outputTokens)} tokens</div>
+                                            <div>Calls: {formatNumber(stage.callCount)}</div>
+                                            <div className="text-green-700">
+                                              Actual: {formatCurrency(stage.actualCost)}
+                                            </div>
+                                            <div className="text-amber-700 font-semibold">
+                                              +10%: {formatCurrency(stage.contingencyCost)}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <h3 className="text-sm font-semibold text-gray-800 mb-2">Patent runs</h3>
 
               {/* Patent Cost Table */}
               <div className="overflow-x-auto">
@@ -1584,15 +1780,15 @@ export default function UserServiceUsagePage() {
                     {patentCosts.patents.length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                          No patent cost data found for the selected filters.
+                          No patent-scoped runs found for the selected filters.
                         </td>
                       </tr>
                     )}
                     {patentCosts.patents.map((patent) => {
                       const isExpanded = expandedPatentId === patent.patentId
                       return (
-                        <>
-                          <tr key={patent.patentId} className="border-b hover:bg-gray-50">
+                        <Fragment key={patent.patentId}>
+                          <tr className="border-b hover:bg-gray-50">
                             <td className="px-4 py-2">
                               <div className="font-medium text-gray-900 max-w-xs truncate" title={patent.patentTitle}>
                                 {patent.patentTitle}
@@ -1635,13 +1831,13 @@ export default function UserServiceUsagePage() {
                                     Cost breakdown by stage/operation:
                                   </div>
                                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                                    {patent.stageBreakdown.map((stage, idx) => (
-                                      <div key={idx} className="bg-white border rounded p-2">
+                                    {patent.stageBreakdown.map((stage) => (
+                                      <div key={stage.stage} className="bg-white border rounded p-2">
                                         <div className="font-medium text-gray-800">{stage.stage}</div>
                                         <div className="text-[11px] text-gray-600 space-y-0.5 mt-1">
                                           <div>Input: {formatNumber(stage.inputTokens)} tokens</div>
                                           <div>Output: {formatNumber(stage.outputTokens)} tokens</div>
-                                          <div>Calls: {stage.callCount}</div>
+                                          <div>Calls: {formatNumber(stage.callCount)}</div>
                                           <div className="text-green-700">
                                             Actual: {formatCurrency(stage.actualCost)}
                                           </div>
@@ -1656,7 +1852,7 @@ export default function UserServiceUsagePage() {
                               </td>
                             </tr>
                           )}
-                        </>
+                        </Fragment>
                       )
                     })}
                   </tbody>
@@ -1668,8 +1864,9 @@ export default function UserServiceUsagePage() {
                 <button
                   onClick={() => {
                     const header = [
-                      'patentId',
-                      'patentTitle',
+                      'kind',
+                      'id',
+                      'name',
                       'userName',
                       'userEmail',
                       'inputTokens',
@@ -1678,29 +1875,46 @@ export default function UserServiceUsagePage() {
                       'actualCost',
                       'contingencyCost'
                     ]
-                    const rows = patentCosts.patents.map(p => [
-                      p.patentId,
-                      p.patentTitle,
-                      p.userName || '',
-                      p.userEmail,
-                      p.totalInputTokens,
-                      p.totalOutputTokens,
-                      p.totalApiCalls,
-                      p.actualCost.toFixed(6),
-                      p.contingencyCost.toFixed(6)
-                    ])
+                    // Both halves of the report go into the file. Exporting only the
+                    // patent rows understates the tenant's actual spend.
+                    const rows = [
+                      ...patentCosts.patents.map(p => [
+                        'PATENT',
+                        p.patentId,
+                        p.patentTitle,
+                        p.userName || '',
+                        p.userEmail,
+                        p.totalInputTokens,
+                        p.totalOutputTokens,
+                        p.totalApiCalls,
+                        p.actualCost.toFixed(6),
+                        p.contingencyCost.toFixed(6)
+                      ]),
+                      ...patentCosts.unattributed.map(g => [
+                        'NON_PATENT',
+                        g.taskCode,
+                        g.label,
+                        '',
+                        '',
+                        g.totalInputTokens,
+                        g.totalOutputTokens,
+                        g.totalApiCalls,
+                        g.actualCost.toFixed(6),
+                        g.contingencyCost.toFixed(6)
+                      ])
+                    ]
                     const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
                     const url = URL.createObjectURL(blob)
                     const link = document.createElement('a')
                     link.href = url
-                    link.download = 'patent-costs.csv'
+                    link.download = 'run-costs.csv'
                     link.click()
                     URL.revokeObjectURL(url)
                   }}
                   className="inline-flex items-center px-3 py-2 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                 >
-                  Export Patent Costs CSV
+                  Export Run Costs CSV
                 </button>
               </div>
             </>

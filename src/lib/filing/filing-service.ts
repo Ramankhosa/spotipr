@@ -25,6 +25,7 @@ import {
   type ResolvedSettingsWithProvenance,
 } from './settings-resolver'
 import { deriveNationality, renderAddressLine, sanitizeField } from './formatting'
+import { measureImage } from './figure-images'
 import { validateFiling } from './validation'
 import type {
   FilingApplicant,
@@ -221,12 +222,15 @@ export async function loadPatentFigures(patentId: string): Promise<DrawingFigure
     if (!sketch.imagePath) continue
     try {
       const image = await readFile(sketch.imagePath)
+      // Measure the bytes rather than trusting the stored columns, which can be null or
+      // stale after a figure is regenerated. A wrong ratio here distorts the drawing.
+      const measured = measureImage(image)
       figures.push({
         figureNo: sketch.figureNo ?? index + 1,
         image,
         imageType: sketch.imagePath.toLowerCase().endsWith('.jpg') || sketch.imagePath.toLowerCase().endsWith('.jpeg') ? 'jpg' : 'png',
-        width: sketch.imageWidth ?? undefined,
-        height: sketch.imageHeight ?? undefined,
+        width: measured.width ?? sketch.imageWidth ?? undefined,
+        height: measured.height ?? sketch.imageHeight ?? undefined,
       })
     } catch (error) {
       // A missing image file must not take down the whole bundle — the other documents are

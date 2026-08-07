@@ -32,14 +32,16 @@ const prisma = vi.hoisted(() => ({
 
 const costCalculator = vi.hoisted(() => ({
   calculateCost: vi.fn(),
-  ensurePricingLoaded: vi.fn()
+  ensurePricingLoaded: vi.fn(),
+  isModelPriced: vi.fn()
 }))
 
 vi.mock('@/lib/prisma', () => ({ prisma }))
 vi.mock('@/lib/metering/cost-calculator', () => ({
   CONTINGENCY_MULTIPLIER: 1.1,
   calculateCost: costCalculator.calculateCost,
-  ensurePricingLoaded: costCalculator.ensurePricingLoaded
+  ensurePricingLoaded: costCalculator.ensurePricingLoaded,
+  isModelPriced: costCalculator.isModelPriced
 }))
 
 import { computeUnifiedAdminUsage } from '@/lib/admin-usage-service'
@@ -65,6 +67,7 @@ beforeEach(() => {
   prisma.patent.findMany.mockResolvedValue([])
 
   costCalculator.ensurePricingLoaded.mockResolvedValue(true)
+  costCalculator.isModelPriced.mockReturnValue(true)
   costCalculator.calculateCost.mockImplementation((
     modelCode: string,
     inputTokens: number,

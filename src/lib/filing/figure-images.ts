@@ -10,6 +10,7 @@
 
 import { promises as fs } from 'fs'
 import path from 'path'
+import { imageSize } from 'image-size'
 
 export interface FigureRef {
   figureNo: number
@@ -54,24 +55,58 @@ export function figureImageCandidates(
   return candidates.filter(Boolean)
 }
 
+export interface LoadedFigureImage {
+  buffer: Buffer
+  sourcePath: string
+  /** Intrinsic pixel dimensions, measured from the bytes. Never guessed. */
+  width: number | null
+  height: number | null
+}
+
 /**
  * Read the first candidate that exists. Returns null rather than throwing — a missing image
  * must not take down an export that is otherwise valid; the caller reports which figures
  * were skipped.
+ *
+ * Dimensions are measured from the file itself rather than trusting stored metadata, which
+ * can be null or stale after a figure is regenerated. Getting this wrong is what distorts a
+ * drawing: without true dimensions the renderer has to assume a ratio, and any figure that
+ * is not that ratio gets stretched.
  */
 export async function loadFigureImage(
   figure: FigureRef,
   ctx: { patentId: string; projectId?: string | null }
-): Promise<{ buffer: Buffer; sourcePath: string } | null> {
+): Promise<LoadedFigureImage | null> {
   for (const candidatePath of figureImageCandidates(figure, ctx)) {
     try {
       const buffer = await fs.readFile(candidatePath)
-      return { buffer, sourcePath: candidatePath }
+      const { width, height } = measureImage(buffer)
+      return { buffer, sourcePath: candidatePath, width, height }
     } catch {
       // try the next candidate
     }
   }
   return null
+}
+
+/**
+ * Intrinsic pixel size of an image buffer, honouring EXIF orientation.
+ *
+ * A JPEG photographed sideways reports its pre-rotation dimensions; orientations 5-8 mean
+ * the rendered image is rotated a quarter turn, so width and height must swap or the figure
+ * comes out stretched the wrong way round.
+ */
+export function measureImage(buffer: Buffer): { width: number | null; height: number | null } {
+  try {
+    const dims = imageSize(buffer)
+    if (!dims?.width || !dims?.height) return { width: null, height: null }
+    const rotated = typeof dims.orientation === 'number' && dims.orientation >= 5 && dims.orientation <= 8
+    return rotated
+      ? { width: dims.height, height: dims.width }
+      : { width: dims.width, height: dims.height }
+  } catch {
+    return { width: null, height: null }
+  }
 }
 
 export function imageTypeFor(filePath: string): 'png' | 'jpg' {

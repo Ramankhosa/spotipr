@@ -1628,11 +1628,18 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
         const figuresSkipped = res.headers.get('X-Bundle-Figures-Skipped') || ''
         if (formsSkipped) {
           // The specification and drawings are still valid — say plainly what is missing
-          // rather than failing an export the attorney can otherwise use.
+          // rather than failing an export the attorney can otherwise use. The same list is
+          // written into the zip, so it survives the toast being dismissed.
+          const reasons = formsSkipped.split(' | ').filter(Boolean)
           toast({
-            title: 'Bundle downloaded without the forms',
-            description: `Form 1 and Form 5 need attention first: ${formsSkipped.split(' | ')[0]}`,
-            variant: 'warning'
+            title: 'Form 1 and Form 5 are not in this bundle',
+            description: `${reasons.length} item${reasons.length === 1 ? '' : 's'} still needed: ${reasons.slice(0, 2).join('; ')}${reasons.length > 2 ? `; and ${reasons.length - 2} more` : ''}. Open the Filing tab to complete them.`,
+            variant: 'warning',
+            duration: 12000,
+            action: {
+              label: 'Open Filing tab',
+              onClick: () => { window.location.href = `/patents/${patentId}/filing` }
+            }
           })
         } else {
           toast({

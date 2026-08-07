@@ -1,5 +1,5 @@
 import { prisma } from './prisma'
-import { calculateCost, CONTINGENCY_MULTIPLIER, ensurePricingLoaded } from './metering/cost-calculator'
+import { calculateCost, CONTINGENCY_MULTIPLIER, ensurePricingLoaded, isModelPriced } from './metering/cost-calculator'
 import { getBillableOutputTokens, getMetaActualCost, getMetaSeparatelyBilledThoughtTokens } from './usage-log-cost'
 import { normalizeUsageDateRange, toInclusiveDateRange } from './usage-periods'
 
@@ -654,6 +654,15 @@ export async function computeUserCostsByTenant(
 // PATENT-WISE COST TRACKING
 // ============================================================================
 
+export interface CostStageBreakdown {
+  stage: string
+  inputTokens: number
+  outputTokens: number
+  actualCost: number
+  contingencyCost: number
+  callCount: number
+}
+
 export interface PatentCostMetrics {
   patentId: string
   patentTitle: string
@@ -667,14 +676,102 @@ export interface PatentCostMetrics {
   contingencyCost: number  // 10% buffer
   createdAt: Date
   // Cost breakdown by stage/operation
-  stageBreakdown: {
-    stage: string
-    inputTokens: number
-    outputTokens: number
-    actualCost: number
-    contingencyCost: number
-    callCount: number
-  }[]
+  stageBreakdown: CostStageBreakdown[]
+}
+
+/**
+ * LLM spend that could not be tied to a single patent, grouped by the task that
+ * produced it. Novelty search, report generation and office-action work land here:
+ * they are real runs a tenant paid for, they just are not patent-scoped.
+ */
+export interface UnattributedCostGroup {
+  taskCode: string
+  label: string
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalApiCalls: number
+  actualCost: number
+  contingencyCost: number
+  logCount: number
+  stageBreakdown: CostStageBreakdown[]
+}
+
+export interface RunCostTotals {
+  // Patent-attributed
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalApiCalls: number
+  actualCost: number
+  contingencyCost: number
+  patentCount: number
+  // Everything else the tenant was billed for in the same window
+  unattributedInputTokens: number
+  unattributedOutputTokens: number
+  unattributedApiCalls: number
+  unattributedActualCost: number
+  unattributedContingencyCost: number
+  unattributedLogCount: number
+  // Patent + unattributed. Reconciles with the tenant total on the summary cards.
+  tenantActualCost: number
+  tenantContingencyCost: number
+}
+
+export interface RunCostResult {
+  patents: PatentCostMetrics[]
+  unattributed: UnattributedCostGroup[]
+  /** Model codes billed at DEFAULT_PRICING because nothing is configured for them. */
+  pricingWarnings: { modelClass: string; logCount: number }[]
+  totals: RunCostTotals
+}
+
+/**
+ * Human labels for the task codes that show up in the cost panel. Anything not
+ * listed falls back to its raw code, which is still readable for a super admin.
+ */
+const TASK_COST_LABELS: Record<string, string> = {
+  LLM1_PRIOR_ART: 'Prior art search',
+  LLM1_CLAIM_REFINEMENT: 'Claim refinement',
+  LLM2_DRAFT: 'Patent drafting',
+  LLM3_DIAGRAM: 'Diagram / sketch generation',
+  LLM4_NOVELTY_SCREEN: 'Novelty screening',
+  LLM5_NOVELTY_ASSESS: 'Novelty search & assessment',
+  LLM6_REPORT_GENERATION: 'Novelty report generation',
+  LLM7_ADVANCED_MANUAL_SEARCH: 'Advanced manual search',
+  LLM8_OA_RESPONSE: 'Office action response',
+  IDEATION_GENERATE: 'Ideation - generate',
+  IDEATION_EXPAND: 'Ideation - expand',
+  IDEATION_NORMALIZE: 'Ideation - normalize',
+  IDEATION_CLASSIFY: 'Ideation - classify',
+  IDEATION_NOVELTY: 'Ideation - novelty check',
+  FILING_INVENTOR_PARSE: 'Filing - inventor parsing',
+  WS_SCOPE: 'Whitespace - scope',
+  WS_DIMENSIONS: 'Whitespace - dimensions',
+  WS_VALIDATE: 'Whitespace - validate',
+  WS_REDTEAM: 'Whitespace - red team'
+}
+
+export function getTaskCostLabel(taskCode: string | null | undefined): string {
+  if (!taskCode) return 'Other LLM operations'
+  return TASK_COST_LABELS[taskCode] || taskCode
+}
+
+function addToStage(
+  breakdown: CostStageBreakdown[],
+  stage: string,
+  inputTokens: number,
+  outputTokens: number,
+  actualCost: number,
+  callCount: number
+): void {
+  let entry = breakdown.find(s => s.stage === stage)
+  if (!entry) {
+    entry = { stage, inputTokens: 0, outputTokens: 0, actualCost: 0, contingencyCost: 0, callCount: 0 }
+    breakdown.push(entry)
+  }
+  entry.inputTokens += inputTokens
+  entry.outputTokens += outputTokens
+  entry.actualCost += actualCost
+  entry.callCount += callCount
 }
 
 export async function computePatentCosts(
@@ -682,7 +779,7 @@ export async function computePatentCosts(
   startDate: Date,
   endDate: Date,
   userId?: string
-): Promise<PatentCostMetrics[]> {
+): Promise<RunCostResult> {
   const normalizedRange = normalizeUsageDateRange(startDate, endDate)
   const dateRange = toInclusiveDateRange(normalizedRange)
 
@@ -715,17 +812,32 @@ export async function computePatentCosts(
     }
   })
 
+  const readMetaId = (meta: unknown, key: string): string | null => {
+    const value = (meta as any)?.[key]
+    return typeof value === 'string' && value.length > 0 ? value : null
+  }
+
   const patentIdsFromUsage = Array.from(new Set(
     usageLogs
-      .map(log => (log.meta as any)?.patentId)
-      .filter((patentId): patentId is string => typeof patentId === 'string' && patentId.length > 0)
+      .map(log => readMetaId(log.meta, 'patentId'))
+      .filter((patentId): patentId is string => patentId !== null)
+  ))
+
+  // Not every drafting log stamps meta.patentId - a large share only carries
+  // meta.sessionId. Resolving those through the session keeps that spend on the
+  // patent it belongs to instead of dropping it out of the report entirely.
+  const sessionIdsFromUsage = Array.from(new Set(
+    usageLogs
+      .map(log => readMetaId(log.meta, 'sessionId'))
+      .filter((sessionId): sessionId is string => sessionId !== null)
   ))
 
   const sessionWhere: any = {
     tenantId,
     OR: [
       { createdAt: dateRange },
-      ...(patentIdsFromUsage.length ? [{ patentId: { in: patentIdsFromUsage } }] : [])
+      ...(patentIdsFromUsage.length ? [{ patentId: { in: patentIdsFromUsage } }] : []),
+      ...(sessionIdsFromUsage.length ? [{ id: { in: sessionIdsFromUsage } }] : [])
     ]
   }
   if (userId) {
@@ -764,16 +876,23 @@ export async function computePatentCosts(
   ])
 
   const patentTitleMap = new Map(patentRecords.map(p => [p.id, p.title || 'Untitled Patent']))
+  const sessionToPatent = new Map(sessions.map(session => [session.id, session.patentId]))
 
   // Map sessions to metrics
   const patentMap = new Map<string, PatentCostMetrics>()
 
-  // Initialize patents from sessions
-  for (const session of sessions) {
+  // Initialize patents from sessions. A patent can have several sessions, so seed
+  // identity from the earliest one - otherwise the row's owner and creation date
+  // depend on whatever order the database happened to return.
+  const orderedSessions = sessions
+    .slice()
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+
+  for (const session of orderedSessions) {
     if (!patentMap.has(session.patentId)) {
       patentMap.set(session.patentId, {
         patentId: session.patentId,
-        patentTitle: session.patent?.title || 'Untitled Patent',
+        patentTitle: session.patent?.title || patentTitleMap.get(session.patentId) || 'Untitled Patent',
         userId: session.userId,
         userName: session.user?.name ?? null,
         userEmail: session.user?.email || 'unknown@unknown.com',
@@ -788,12 +907,58 @@ export async function computePatentCosts(
     }
   }
 
+  const unattributedMap = new Map<string, UnattributedCostGroup>()
+  const unpricedModels = new Map<string, number>()
+
   // Process usage logs and associate with patents
   for (const log of usageLogs) {
     const meta = log.meta as any
-    const patentId = meta?.patentId
-    
-    if (!patentId) continue
+    const sessionId = readMetaId(log.meta, 'sessionId')
+    const patentId = readMetaId(log.meta, 'patentId')
+      || (sessionId ? sessionToPatent.get(sessionId) ?? null : null)
+
+    // Use ?? (nullish coalescing) to handle 0 as a valid value
+    const input = log.inputTokens ?? 0
+    const output = getBillableOutputTokens(log.outputTokens, log.meta)
+    // Match the tenant-level "API calls" card, which also treats a missing count
+    // as zero. Differing defaults made the same log count once here and not there.
+    const calls = log.apiCalls ?? 0
+    const actualCost = calculateCostForLog(log)
+    const stageCode = meta?.stageCode || log.taskCode || 'OTHER'
+
+    if (log.modelClass && !isModelPriced(log.modelClass)) {
+      unpricedModels.set(log.modelClass, (unpricedModels.get(log.modelClass) || 0) + 1)
+    }
+
+    if (!patentId) {
+      // Novelty runs, report generation, ideation and office-action work never
+      // carry a patent id. Bucketing them by task keeps the report's totals equal
+      // to what the tenant was actually billed.
+      const taskCode = log.taskCode || 'OTHER'
+      let group = unattributedMap.get(taskCode)
+      if (!group) {
+        group = {
+          taskCode,
+          label: getTaskCostLabel(log.taskCode),
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalApiCalls: 0,
+          actualCost: 0,
+          contingencyCost: 0,
+          logCount: 0,
+          stageBreakdown: []
+        }
+        unattributedMap.set(taskCode, group)
+      }
+      group.totalInputTokens += input
+      group.totalOutputTokens += output
+      group.totalApiCalls += calls
+      group.actualCost += actualCost
+      group.logCount += 1
+      addToStage(group.stageBreakdown, stageCode, input, output, actualCost, calls)
+      continue
+    }
+
     if (!patentMap.has(patentId)) {
       patentMap.set(patentId, {
         patentId,
@@ -812,47 +977,78 @@ export async function computePatentCosts(
     }
 
     const metrics = patentMap.get(patentId)!
-    // Use ?? (nullish coalescing) to handle 0 as a valid value
-    const input = log.inputTokens ?? 0
-    const output = getBillableOutputTokens(log.outputTokens, log.meta)
-    const calls = log.apiCalls ?? 1
-
     metrics.totalInputTokens += input
     metrics.totalOutputTokens += output
     metrics.totalApiCalls += calls
-
-    const actualCost = calculateCostForLog(log)
     metrics.actualCost += actualCost
-
-    // Track stage breakdown
-    const stageCode = meta?.stageCode || log.taskCode || 'OTHER'
-    let stageEntry = metrics.stageBreakdown.find(s => s.stage === stageCode)
-    if (!stageEntry) {
-      stageEntry = {
-        stage: stageCode,
-        inputTokens: 0,
-        outputTokens: 0,
-        actualCost: 0,
-        contingencyCost: 0,
-        callCount: 0
-      }
-      metrics.stageBreakdown.push(stageEntry)
-    }
-    stageEntry.inputTokens += input
-    stageEntry.outputTokens += output
-    stageEntry.actualCost += actualCost
-    stageEntry.callCount += calls
+    addToStage(metrics.stageBreakdown, stageCode, input, output, actualCost, calls)
   }
 
   // Calculate contingency costs
-  Array.from(patentMap.values()).forEach(metrics => {
+  const patents = Array.from(patentMap.values())
+  for (const metrics of patents) {
     metrics.contingencyCost = metrics.actualCost * CONTINGENCY_MULTIPLIER
     for (const stage of metrics.stageBreakdown) {
       stage.contingencyCost = stage.actualCost * CONTINGENCY_MULTIPLIER
     }
+    metrics.stageBreakdown.sort((a, b) => b.actualCost - a.actualCost)
+  }
+
+  const unattributed = Array.from(unattributedMap.values())
+  for (const group of unattributed) {
+    group.contingencyCost = group.actualCost * CONTINGENCY_MULTIPLIER
+    for (const stage of group.stageBreakdown) {
+      stage.contingencyCost = stage.actualCost * CONTINGENCY_MULTIPLIER
+    }
+    group.stageBreakdown.sort((a, b) => b.actualCost - a.actualCost)
+  }
+  unattributed.sort((a, b) => b.actualCost - a.actualCost)
+
+  patents.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+
+  const totals = patents.reduce<RunCostTotals>((acc, p) => {
+    acc.totalInputTokens += p.totalInputTokens
+    acc.totalOutputTokens += p.totalOutputTokens
+    acc.totalApiCalls += p.totalApiCalls
+    acc.actualCost += p.actualCost
+    acc.contingencyCost += p.contingencyCost
+    acc.patentCount += 1
+    return acc
+  }, {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalApiCalls: 0,
+    actualCost: 0,
+    contingencyCost: 0,
+    patentCount: 0,
+    unattributedInputTokens: 0,
+    unattributedOutputTokens: 0,
+    unattributedApiCalls: 0,
+    unattributedActualCost: 0,
+    unattributedContingencyCost: 0,
+    unattributedLogCount: 0,
+    tenantActualCost: 0,
+    tenantContingencyCost: 0
   })
 
-  return Array.from(patentMap.values()).sort((a, b) => 
-    b.createdAt.getTime() - a.createdAt.getTime()
-  )
+  for (const group of unattributed) {
+    totals.unattributedInputTokens += group.totalInputTokens
+    totals.unattributedOutputTokens += group.totalOutputTokens
+    totals.unattributedApiCalls += group.totalApiCalls
+    totals.unattributedActualCost += group.actualCost
+    totals.unattributedContingencyCost += group.contingencyCost
+    totals.unattributedLogCount += group.logCount
+  }
+
+  totals.tenantActualCost = totals.actualCost + totals.unattributedActualCost
+  totals.tenantContingencyCost = totals.contingencyCost + totals.unattributedContingencyCost
+
+  return {
+    patents,
+    unattributed,
+    pricingWarnings: Array.from(unpricedModels.entries())
+      .map(([modelClass, logCount]) => ({ modelClass, logCount }))
+      .sort((a, b) => b.logCount - a.logCount),
+    totals
+  }
 }

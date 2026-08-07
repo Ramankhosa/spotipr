@@ -3465,6 +3465,24 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
   const included: string[] = []
   const skipped: string[] = []
 
+  // We know exactly how many figures were lifted out, and each becomes one A4 sheet, so
+  // Form 1 paragraph 13's drawing counts can be filled from fact rather than left for the
+  // attorney to count by hand. Written before assembling so the forms pick them up.
+  if (specResult.figures.length) {
+    await prisma.patentFilingDetail.upsert({
+      where: { patentId },
+      create: {
+        patentId,
+        drawingsCount: specResult.figures.length,
+        drawingsPages: specResult.figures.length
+      },
+      update: {
+        drawingsCount: specResult.figures.length,
+        drawingsPages: specResult.figures.length
+      }
+    }).catch(err => console.warn('[Filing] could not record drawing counts (non-fatal).', err))
+  }
+
   // 2. Assemble the filing context — also gives us the applicant and signatory the drawing
   //    sheets are headed and signed with.
   const assembled = await assembleFiling(patentId)
@@ -3488,6 +3506,10 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
         figureNo: figure.figureNo,
         image: loaded.buffer,
         imageType: imageTypeFor(loaded.sourcePath),
+        // Measured from the file — without these the renderer would have to assume a
+        // ratio, which stretches any figure that is not that shape.
+        width: loaded.width ?? undefined,
+        height: loaded.height ?? undefined,
         caption: figure.title || `Figure ${figure.figureNo}`
       })
     }
@@ -3508,6 +3530,10 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
   // 4. Form 1 and Form 5. A filing that is not ready yet still yields the specification and
   //    drawings — we tell the caller what was left out rather than failing the whole export.
   const filingIssues = assembled.ok ? assembled.data.issues.filter(i => i.severity === 'blocking') : []
+  const skipReasons: string[] = assembled.ok
+    ? filingIssues.map(i => i.message)
+    : [(assembled as { error: string }).error]
+
   if (filingReady && assembled.ok) {
     const { files } = await renderFilingBundle(assembled.data, ['form1', 'form5'])
     for (const file of files) {
@@ -3515,6 +3541,14 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
       included.push(file.filename)
     }
     await snapshotResolvedSettings(patentId, assembled.data)
+  } else {
+    // A missing file with no explanation is the worst possible outcome — the attorney is
+    // left wondering whether the export broke. The reason travels INSIDE the zip, where it
+    // cannot be missed the way a transient toast can.
+    zip.addFile(
+      'READ ME - Form 1 and Form 5 not included.txt',
+      Buffer.from(buildSkipNotice(skipReasons, included), 'utf8')
+    )
   }
 
   const zipBuffer = zip.toBuffer()
@@ -3525,12 +3559,52 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
       'Content-Disposition': `attachment; filename="Filing_${ref}.zip"`,
       'Content-Length': String(zipBuffer.length),
       'X-Bundle-Documents': included.join(','),
-      // Surfaced as a warning in the UI so the attorney knows the forms need attention.
-      'X-Bundle-Forms-Skipped': filingReady ? '' : (filingIssues.map(i => i.message).join(' | ') || (assembled.ok ? '' : (assembled as any).error || 'Filing details incomplete')),
-      'X-Bundle-Figures-Skipped': skipped.join(','),
+      // Header values must be Latin-1; validation messages contain em dashes and curly
+      // quotes, which would otherwise be mangled or rejected.
+      'X-Bundle-Forms-Skipped': filingReady ? '' : toHeaderSafe(skipReasons.join(' | ')),
+      'X-Bundle-Figures-Skipped': toHeaderSafe(skipped.join(', ')),
       'Cache-Control': 'no-store'
     }
   })
+}
+
+/** Strip anything a Latin-1 HTTP header cannot carry. */
+function toHeaderSafe(value: string): string {
+  return value
+    .replace(/[‐-―]/g, '-')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[^\x20-\x7E]/g, '')
+    .slice(0, 900)
+}
+
+/** The note that ships in place of the forms, so the zip explains itself. */
+function buildSkipNotice(reasons: string[], included: string[]): string {
+  return [
+    'FORM 1 AND FORM 5 ARE NOT IN THIS BUNDLE',
+    '========================================',
+    '',
+    'The specification and drawings exported normally and are ready to use:',
+    ...included.map(name => `  - ${name}`),
+    '',
+    'The statutory forms were held back because the filing details are incomplete.',
+    'We do not generate a form with missing particulars, because a defective Form 1',
+    'or Form 5 is worse than no form at all.',
+    '',
+    'Still needed:',
+    ...reasons.map(reason => `  - ${reason}`),
+    '',
+    'How to fix it',
+    '-------------',
+    'Open the patent and go to the Filing tab (or Project > the patent > Filing).',
+    'Fill in the inventors and filing details there, then export the bundle again.',
+    'Everything you enter is remembered, so this is a one-time step per patent.',
+    '',
+    'Applicant and signatory details live on the project:',
+    'Project > Applicant & Signatory.',
+    ''
+  ].join('\r\n')
 }
 
 async function handleExportPDF(user: any, patentId: string, data: any, request?: NextRequest) {
