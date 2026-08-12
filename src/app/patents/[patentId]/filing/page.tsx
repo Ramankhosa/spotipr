@@ -20,6 +20,7 @@ import InventorCapture, {
   toInventorPayload,
   type InventorForm,
 } from '@/components/filing/InventorCapture'
+import IncompleteFilingDialog from '@/components/filing/IncompleteFilingDialog'
 import {
   DeclarationMatrix,
   Field,
@@ -85,6 +86,9 @@ export default function PatentFilingPage() {
   const [groupLabels, setGroupLabels] = useState<Record<string, string>>({})
   const [issues, setIssues] = useState<FilingIssue[]>([])
   const [showStyle, setShowStyle] = useState(false)
+  // Confirmation before downloading a bundle that will print blanks.
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmIssues, setConfirmIssues] = useState<FilingIssue[]>([])
 
   const canGenerate = useMemo(() => !issues.some(i => i.severity === 'blocking'), [issues])
 
@@ -208,26 +212,39 @@ export default function PatentFilingPage() {
     }
   }, [token, patentId, details, settings, inventors, declarations, toast])
 
-  const download = useCallback(async () => {
+  /**
+   * Saving first re-runs validation server-side, so the warning reflects what will actually
+   * print rather than whatever the page last loaded. If anything would come out blank the
+   * attorney confirms before the download starts.
+   */
+  const requestDownload = useCallback(async () => {
+    if (!token) return
+    const saved = await saveAll(true)
+    if (!saved) return
+
+    // saveAll refreshed `issues`; read the latest rather than the closure's copy.
+    const latest = await fetch(`/api/patents/${patentId}/filing`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(r => (r.ok ? r.json() : null)).catch(() => null)
+
+    const pending: FilingIssue[] = latest?.issues ?? issues
+    setIssues(pending)
+
+    if (pending.some(i => i.severity === 'blocking')) {
+      setConfirmIssues(pending)
+      setConfirmOpen(true)
+      return
+    }
+    await runDownload()
+  }, [token, patentId, saveAll, issues]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const runDownload = useCallback(async () => {
     if (!token) return
     setDownloading(true)
     try {
-      const saved = await saveAll(true)
-      if (!saved) return
-
       const res = await fetch(`/api/patents/${patentId}/filing/bundle`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (res.status === 422) {
-        const data = await res.json()
-        setIssues([...(data.blocking || []), ...(data.advisory || [])])
-        toast({
-          title: 'Not ready to generate',
-          description: `${(data.blocking || []).length} item(s) need fixing first.`,
-          variant: 'error',
-        })
-        return
-      }
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Download failed')
 
       const blob = await res.blob()
@@ -243,13 +260,24 @@ export default function PatentFilingPage() {
       URL.revokeObjectURL(url)
 
       const included = res.headers.get('X-Filing-Documents') || ''
-      toast({ title: 'Filing bundle downloaded', description: included.split(',').join('  ·  '), variant: 'success' })
+      // Every form is always in the bundle; blanks are flagged so the attorney knows what
+      // to write in before filing.
+      const blanks = issues.filter(i => i.severity === 'blocking').length
+      toast({
+        title: 'Filing bundle downloaded',
+        description: blanks
+          ? `${included.split(',').filter(Boolean).join('  ·  ')} — ${blanks} detail${blanks === 1 ? '' : 's'} left blank for you to complete. See the READ ME in the zip.`
+          : included.split(',').filter(Boolean).join('  ·  '),
+        variant: blanks ? 'warning' : 'success',
+        duration: blanks ? 10000 : 5000,
+      })
     } catch (err) {
       toast({ title: 'Could not generate the bundle', description: String(err), variant: 'error' })
     } finally {
       setDownloading(false)
+      setConfirmOpen(false)
     }
-  }, [token, patentId, saveAll, toast])
+  }, [token, patentId, toast, issues])
 
   const saveAsProjectDefault = useCallback(async () => {
     if (!token || !projectId || !settings) return
@@ -308,9 +336,11 @@ export default function PatentFilingPage() {
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save
             </button>
             <button
-              onClick={download}
-              disabled={downloading || !canGenerate}
-              title={canGenerate ? undefined : 'Fix the blocking items first'}
+              onClick={requestDownload}
+              disabled={downloading}
+              title={canGenerate
+                ? undefined
+                : 'Downloads now — anything still missing is left blank for you to complete by hand'}
               className="inline-flex items-center gap-2 rounded-lg bg-lamp-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-lamp-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {downloading
@@ -479,11 +509,20 @@ export default function PatentFilingPage() {
           </Section>
 
           {/* Readiness */}
-          <Section icon={<Check className="h-4 w-4" />} title="Before you generate">
+          <Section icon={<Check className="h-4 w-4" />} title="Before you file">
             <IssueList issues={issues} />
           </Section>
         </div>
       </div>
+
+      <IncompleteFilingDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        issues={confirmIssues}
+        busy={downloading}
+        confirmLabel="Download bundle anyway"
+        onConfirm={runDownload}
+      />
     </div>
   )
 }

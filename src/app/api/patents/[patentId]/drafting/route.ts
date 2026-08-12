@@ -3448,7 +3448,7 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
     { default: AdmZip },
     { loadFigureImage, imageTypeFor },
     { buildDrawingsDocx },
-    { assembleFiling, renderFilingBundle, snapshotResolvedSettings, bundleRef }
+    { assembleFiling, renderFilingBundle, snapshotResolvedSettings, bundleRef, buildCompletionNotice, COMPLETION_NOTICE_FILENAME }
   ] = await Promise.all([
     import('adm-zip'),
     import('@/lib/filing/figure-images'),
@@ -3486,7 +3486,6 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
   // 2. Assemble the filing context — also gives us the applicant and signatory the drawing
   //    sheets are headed and signed with.
   const assembled = await assembleFiling(patentId)
-  const filingReady = assembled.ok && !assembled.data.issues.some(i => i.severity === 'blocking')
   const ref = assembled.ok ? bundleRef(assembled.data) : patentId.slice(-6)
 
   const specName = `Specification_${ref}.docx`
@@ -3527,27 +3526,26 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
     }
   }
 
-  // 4. Form 1 and Form 5. A filing that is not ready yet still yields the specification and
-  //    drawings — we tell the caller what was left out rather than failing the whole export.
-  const filingIssues = assembled.ok ? assembled.data.issues.filter(i => i.severity === 'blocking') : []
-  const skipReasons: string[] = assembled.ok
-    ? filingIssues.map(i => i.message)
-    : [(assembled as { error: string }).error]
-
-  if (filingReady && assembled.ok) {
+  // 4. Form 1 and Form 5 — ALWAYS produced, however incomplete the details are. Missing
+  //    particulars come out as blank spaces the attorney completes by hand; a note listing
+  //    them ships in the archive so nothing is silently absent.
+  const outstanding = assembled.ok ? assembled.data.issues : []
+  if (assembled.ok) {
     const { files } = await renderFilingBundle(assembled.data, ['form1', 'form5'])
     for (const file of files) {
       zip.addFile(file.filename, file.buffer)
       included.push(file.filename)
     }
     await snapshotResolvedSettings(patentId, assembled.data)
-  } else {
-    // A missing file with no explanation is the worst possible outcome — the attorney is
-    // left wondering whether the export broke. The reason travels INSIDE the zip, where it
-    // cannot be missed the way a transient toast can.
+  }
+
+  if (outstanding.length || !assembled.ok) {
+    const issues = assembled.ok
+      ? outstanding
+      : [{ severity: 'blocking' as const, field: 'patent', section: 'details' as const, message: (assembled as { error: string }).error }]
     zip.addFile(
-      'READ ME - Form 1 and Form 5 not included.txt',
-      Buffer.from(buildSkipNotice(skipReasons, included), 'utf8')
+      COMPLETION_NOTICE_FILENAME,
+      Buffer.from(buildCompletionNotice(issues, included), 'utf8')
     )
   }
 
@@ -3561,7 +3559,11 @@ async function handleExportBundle(user: any, patentId: string, data: any, reques
       'X-Bundle-Documents': included.join(','),
       // Header values must be Latin-1; validation messages contain em dashes and curly
       // quotes, which would otherwise be mangled or rejected.
-      'X-Bundle-Forms-Skipped': filingReady ? '' : toHeaderSafe(skipReasons.join(' | ')),
+      // Not "skipped" any more — the forms are always present. This reports what the
+      // attorney still has to write in by hand.
+      'X-Bundle-Incomplete': toHeaderSafe(
+        outstanding.filter(i => i.severity === 'blocking').map(i => i.message).join(' | ')
+      ),
       'X-Bundle-Figures-Skipped': toHeaderSafe(skipped.join(', ')),
       'Cache-Control': 'no-store'
     }
@@ -3577,34 +3579,6 @@ function toHeaderSafe(value: string): string {
     // eslint-disable-next-line no-control-regex
     .replace(/[^\x20-\x7E]/g, '')
     .slice(0, 900)
-}
-
-/** The note that ships in place of the forms, so the zip explains itself. */
-function buildSkipNotice(reasons: string[], included: string[]): string {
-  return [
-    'FORM 1 AND FORM 5 ARE NOT IN THIS BUNDLE',
-    '========================================',
-    '',
-    'The specification and drawings exported normally and are ready to use:',
-    ...included.map(name => `  - ${name}`),
-    '',
-    'The statutory forms were held back because the filing details are incomplete.',
-    'We do not generate a form with missing particulars, because a defective Form 1',
-    'or Form 5 is worse than no form at all.',
-    '',
-    'Still needed:',
-    ...reasons.map(reason => `  - ${reason}`),
-    '',
-    'How to fix it',
-    '-------------',
-    'Open the patent and go to the Filing tab (or Project > the patent > Filing).',
-    'Fill in the inventors and filing details there, then export the bundle again.',
-    'Everything you enter is remembered, so this is a one-time step per patent.',
-    '',
-    'Applicant and signatory details live on the project:',
-    'Project > Applicant & Signatory.',
-    ''
-  ].join('\r\n')
 }
 
 async function handleExportPDF(user: any, patentId: string, data: any, request?: NextRequest) {

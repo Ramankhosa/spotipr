@@ -1,4 +1,12 @@
 import { normalizeRerankDecision, type RerankDecision } from './novelty-prior-art-visibility';
+import {
+  kCoverSelect,
+  resolveComplexityBand,
+  REPORT_BAND_CEILING_MAX,
+  type ComplexityBand,
+  type CoverageImportantFeature,
+  type KByType,
+} from './novelty-kcover';
 
 export const REPORT_REFERENCE_SELECTION_VERSION = 1 as const;
 
@@ -9,25 +17,25 @@ export const REPORT_REFERENCE_SELECTION_VERSION = 1 as const;
  * `mergeConfig`, so these values are reachable from a request body. Clamping here
  * protects both the pipeline writer and the report renderer with one change.
  */
-export const MAIN_REFERENCE_CEILING = 20;
-const MIN_MAIN_REFERENCES_CEILING = 10;
+export const MAIN_REFERENCE_CEILING = REPORT_BAND_CEILING_MAX;
 const UNMAPPED_SUPPLEMENTARY_CEILING = 50;
 
 /**
- * How many references `main` holds when the materiality bar admits fewer.
- *
- * Under `materiality_v1` this is the only thing standing between a report and a
- * three-reference prior-art section: `mainReferenceTarget` is not read by that
- * rule, so the floor — not the target — decides the report's baseline width. It
- * was 3, which is a sanity minimum rather than a usable report, and on a typical
- * run nothing clears the bar, so 3 was what attorneys actually got.
- *
- * Set to the ceiling on the floor itself, so a report shows ten detailed
- * references by default and the materiality bar can still promote above that up
- * to MAIN_REFERENCE_CEILING. Raising it further means raising
- * MIN_MAIN_REFERENCES_CEILING too.
+ * Backstop floor: how many references `main` holds when the selection rule
+ * admits fewer. Under `coverage_v2` the report's width comes from the
+ * complexity band and the k-cover closure, so this is a sanity minimum — never
+ * a target. A narrow report under coverage_v2 is a *finding* (the evidence
+ * closed early), not a rendering defect.
  */
-export const DEFAULT_MIN_MAIN_REFERENCES = 10;
+export const DEFAULT_MIN_MAIN_REFERENCES = 3;
+
+/**
+ * The floor the legacy rules were tuned around. Renderer recomputes of
+ * `fixed_target_v1` / `materiality_v1` selections must keep passing this so
+ * reports an attorney already downloaded do not change width when the default
+ * backstop above moves.
+ */
+export const LEGACY_MIN_MAIN_REFERENCES = 10;
 
 /**
  * Which selection rule produced a stored selection.
@@ -40,13 +48,16 @@ export const DEFAULT_MIN_MAIN_REFERENCES = 10;
  *
  * - `fixed_target_v1` — fill `main` to `mainReferenceTarget` (legacy, the default).
  * - `materiality_v1`  — include references that clear the materiality bar.
+ * - `coverage_v2`     — width from the complexity band + k-cover closure over
+ *                       the mapped evidence; varies per invention by design.
  */
-export type ReportReferenceSelectionRule = 'fixed_target_v1' | 'materiality_v1';
+export type ReportReferenceSelectionRule = 'fixed_target_v1' | 'materiality_v1' | 'coverage_v2';
 
 export const DEFAULT_REPORT_REFERENCE_SELECTION_RULE: ReportReferenceSelectionRule = 'fixed_target_v1';
 
 export function normalizeReportReferenceSelectionRule(value: unknown): ReportReferenceSelectionRule {
-  return value === 'materiality_v1' ? 'materiality_v1' : DEFAULT_REPORT_REFERENCE_SELECTION_RULE;
+  if (value === 'materiality_v1' || value === 'coverage_v2') return value;
+  return DEFAULT_REPORT_REFERENCE_SELECTION_RULE;
 }
 
 export type ReportReferencePriority = 'Critical' | 'High' | 'Medium' | 'Low';
@@ -83,6 +94,13 @@ export interface ReportReferenceCandidate {
   desiredPriority?: ReportReferencePriority | string;
   /** Important features (core_technical / novelty_candidate) this reference maps with strong evidence. */
   mappedImportantFeatures?: string[];
+  /**
+   * Important features this reference evidences at ANY strength (Present or
+   * Partial). `coverage_v2`'s k-cover closure reads this instead of the
+   * strong-only list above — with title/abstract evidence, strong cells are
+   * rare (~8% Present) and a strong-only closure would starve.
+   */
+  coveredImportantFeatures?: string[];
   /** True when at least one feature is Present or Partial, i.e. not an all-Unknown degraded map. */
   hasMappedEvidence?: boolean;
   /**
@@ -113,12 +131,32 @@ export interface ReportReferenceSelectionCounts {
   ungatedExcluded: number;
   invalidPublicationNumbersExcluded: number;
   protectedOverflow: number;
-  /** materiality_v1 only: references that cleared the bar but did not fit under the ceiling. */
+  /** materiality_v1 / coverage_v2: references that cleared the bar but did not fit under the ceiling. */
   materialityOverflow?: number;
-  /** materiality_v1 only: references admitted purely to cover an otherwise-uncovered important feature. */
+  /** materiality_v1 / coverage_v2: references admitted purely to cover an otherwise-uncovered important feature. */
   diversityAdmitted?: number;
-  /** materiality_v1 only: references moved to the appendix because a family sibling is already shown. */
+  /** materiality_v1 / coverage_v2: references moved to the appendix because a family sibling is already shown. */
   familyDemoted?: number;
+}
+
+/**
+ * Everything a later render needs to reproduce a coverage_v2 selection without
+ * re-deriving the invention profile: the band and important-feature set are
+ * frozen as-analysed, so a recompute is deterministic against the run, never
+ * against whatever stage 0 looks like at render time.
+ */
+export interface ReportReferenceCoverageContext {
+  band: ComplexityBand;
+  importantFeatures: CoverageImportantFeature[];
+  kByType?: KByType;
+}
+
+export interface ReportReferenceCoverageStats {
+  barCleared: number;
+  coverageAdmitted: number;
+  floorFilled: number;
+  featuresCovered: number;
+  featuresTotal: number;
 }
 
 export interface ReportReferenceSelectionV1 {
@@ -129,16 +167,24 @@ export interface ReportReferenceSelectionV1 {
   mappedSupplementary: SelectedReportReference[];
   unmappedSupplementary: SelectedReportReference[];
   counts: ReportReferenceSelectionCounts;
+  /** coverage_v2 only: the context the selection was computed under, plus its stats. */
+  coverage?: ReportReferenceCoverageContext & { stats: ReportReferenceCoverageStats };
 }
 
 export interface ReportReferenceSelectionOptions {
   /** `fixed_target_v1` only. `materiality_v1` sizes `main` from the bar and the floor. */
   mainReferenceTarget?: number;
-  /** Defaults to DEFAULT_MIN_MAIN_REFERENCES. Clamped to MIN_MAIN_REFERENCES_CEILING. */
+  /** Defaults to DEFAULT_MIN_MAIN_REFERENCES. Clamped to MAIN_REFERENCE_CEILING. */
   minMainReferences?: number;
   maxUnmappedSupplementaryReferences?: number;
   /** Defaults to `fixed_target_v1` so existing call sites are unchanged. */
   rule?: ReportReferenceSelectionRule;
+  /**
+   * `coverage_v2` only: the band and important-feature set that size the
+   * report. Absent → the rule degrades to `materiality_v1` behaviour under a
+   * default simple band, which is the safe floor.
+   */
+  coverageContext?: ReportReferenceCoverageContext;
 }
 
 export interface ReportReferenceSelectionValidation {
@@ -469,6 +515,158 @@ function selectMaterialityMain(
   return { main, reasons, materialityOverflow, diversityAdmitted, familyDemoted: familyDemotedFromMain };
 }
 
+interface CoverageMainSelection extends MaterialityMainSelection {
+  stats: ReportReferenceCoverageStats;
+}
+
+function coveredFeatureKeys(candidate: NormalizedCandidate): string[] {
+  const covered = Array.isArray(candidate.coveredImportantFeatures)
+    ? candidate.coveredImportantFeatures
+    : [];
+  // Strong evidence implies coverage; a writer that only supplies the
+  // strong-only list still participates in closure.
+  return Array.from(new Set(
+    [...covered, ...(Array.isArray(candidate.mappedImportantFeatures) ? candidate.mappedImportantFeatures : [])]
+      .map(feature => String(feature || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+/**
+ * `coverage_v2`: build `main` so it covers the invention, then stop.
+ *
+ * 1. Decisive references, ceiling-exempt (a report must show the references its
+ *    own verdict names).
+ * 2. Family demotion — one detail slot per patent family (as materiality_v1).
+ * 3. The bar: materiality tier, high overlap, or the relative bar
+ *    (priorityScore ≥ 0.6 × the run's own top score). The relative term makes
+ *    the bar fire even on runs whose absolute evidence is weak — each run is
+ *    graded against its own distribution.
+ * 4. k-cover closure: admit references until every important feature has its
+ *    corroboration depth (k per feature type) or nothing left can add one.
+ * 5. Clamp to the band ceiling (decisive exempt), floor-fill to the band floor.
+ *
+ * Width therefore tracks the invention: simple ideas close early, feature-heavy
+ * ideas keep admitting up to the band ceiling.
+ */
+function selectCoverageMain(
+  mapped: NormalizedCandidate[],
+  context: ReportReferenceCoverageContext,
+  floorOverride: number
+): CoverageMainSelection {
+  const band = context.band;
+  const ceiling = Math.max(1, Math.min(REPORT_BAND_CEILING_MAX, Math.trunc(band.ceiling)));
+  const floor = Math.min(ceiling, Math.max(Math.trunc(band.floor), floorOverride));
+  const reasons = new Map<string, ReportReferenceSelectionReason>();
+  const keyOf = (candidate: NormalizedCandidate) => candidate.canonicalPublicationNumber;
+
+  // 1. Decisive.
+  const decisive = mapped.filter(candidate => Boolean(candidate.canonicalDecisive));
+  decisive.forEach(candidate => reasons.set(keyOf(candidate), 'decisive'));
+  const decisiveKeys = new Set(decisive.map(keyOf));
+  const rest = mapped.filter(candidate => !decisiveKeys.has(keyOf(candidate)));
+
+  // 2. Family demotion (same rule as materiality_v1).
+  const familySeen = new Set<string>();
+  decisive.forEach(candidate => {
+    const family = familyKeyOf(candidate);
+    if (family) familySeen.add(family);
+  });
+  const familyDemoted: NormalizedCandidate[] = [];
+  const familyEligible = rest.filter(candidate => {
+    const family = familyKeyOf(candidate);
+    if (!family) return true;
+    if (familySeen.has(family)) {
+      familyDemoted.push(candidate);
+      return false;
+    }
+    familySeen.add(family);
+    return true;
+  });
+
+  // 3. The bar.
+  const topScore = familyEligible.reduce(
+    (top, candidate) => Math.max(top, finiteNumber(candidate.priorityScore)),
+    0
+  );
+  const clearsRelativeBar = (candidate: NormalizedCandidate) =>
+    topScore > 0 && finiteNumber(candidate.priorityScore) >= topScore * 0.6;
+  const qualifying = familyEligible.filter(candidate =>
+    clearsMaterialityBar(candidate) || isHighOverlap(candidate) || clearsRelativeBar(candidate)
+  );
+  const slots = Math.max(0, ceiling - decisive.length);
+  const admitted = qualifying.slice(0, slots);
+  admitted.forEach(candidate => reasons.set(
+    keyOf(candidate),
+    isHighOverlap(candidate) ? 'high_overlap' : 'ranked_fill'
+  ));
+  const materialityOverflow = Math.max(0, qualifying.length - admitted.length);
+
+  const main = [...decisive, ...admitted];
+  const selectedKeys = new Set(main.map(keyOf));
+
+  // 4. k-cover closure over the mapped evidence, seeded with what is already in.
+  const closure = kCoverSelect(
+    [...decisive, ...familyEligible].map(candidate => ({
+      key: keyOf(candidate),
+      coveredFeatures: coveredFeatureKeys(candidate),
+      priorityScore: finiteNumber(candidate.priorityScore),
+      sourceOrder: candidate.sourceOrder,
+    })),
+    context.importantFeatures,
+    { kByType: context.kByType, preselected: main.map(keyOf) }
+  );
+  const byKey = new Map(familyEligible.map(candidate => [keyOf(candidate), candidate]));
+  let diversityAdmitted = 0;
+  for (const key of closure.selectedKeys) {
+    if (main.length >= ceiling) break;
+    if (selectedKeys.has(key)) continue;
+    const candidate = byKey.get(key);
+    if (!candidate) continue;
+    main.push(candidate);
+    selectedKeys.add(key);
+    reasons.set(key, 'coverage_diversity');
+    diversityAdmitted += 1;
+  }
+
+  // 5. Floor. Never fabricates — only promotes references that exist, evidence
+  // first, distinct families before re-admitting a demoted sibling.
+  let floorFilled = 0;
+  if (main.length < floor) {
+    const remaining = [...familyEligible, ...familyDemoted]
+      .filter(candidate => !selectedKeys.has(keyOf(candidate)))
+      .sort((a, b) => Number(hasEvidence(b)) - Number(hasEvidence(a)));
+    for (const candidate of remaining) {
+      if (main.length >= floor) break;
+      main.push(candidate);
+      selectedKeys.add(keyOf(candidate));
+      reasons.set(keyOf(candidate), 'ranked_fill');
+      floorFilled += 1;
+    }
+  }
+
+  const familyDemotedFromMain = familyDemoted.filter(candidate => !selectedKeys.has(keyOf(candidate))).length;
+  return {
+    main: main.sort(compareMapped),
+    reasons,
+    materialityOverflow,
+    diversityAdmitted,
+    familyDemoted: familyDemotedFromMain,
+    stats: {
+      barCleared: qualifying.length,
+      coverageAdmitted: diversityAdmitted,
+      floorFilled,
+      featuresCovered: closure.featuresCovered,
+      featuresTotal: closure.featuresTotal,
+    },
+  };
+}
+
+/** The context coverage_v2 falls back to when a caller supplies none. */
+function defaultCoverageContext(): ReportReferenceCoverageContext {
+  return { band: resolveComplexityBand('simple', 0), importantFeatures: [] };
+}
+
 export function selectNoveltyReportReferences(
   inputCandidates: ReportReferenceCandidate[],
   options: ReportReferenceSelectionOptions = {}
@@ -480,7 +678,7 @@ export function selectNoveltyReportReferences(
     options.minMainReferences,
     DEFAULT_MIN_MAIN_REFERENCES,
     0,
-    MIN_MAIN_REFERENCES_CEILING
+    MAIN_REFERENCE_CEILING
   );
   const maxUnmappedSupplementaryReferences = boundedInteger(
     options.maxUnmappedSupplementaryReferences,
@@ -495,8 +693,16 @@ export function selectNoveltyReportReferences(
   const protectedKeys = new Set(protectedMapped.map(candidate => candidate.canonicalPublicationNumber));
   const rankedFill = mapped.filter(candidate => !protectedKeys.has(candidate.canonicalPublicationNumber));
 
+  const coverageContext = rule === 'coverage_v2'
+    ? (options.coverageContext || defaultCoverageContext())
+    : null;
   const materiality = rule === 'materiality_v1'
     ? selectMaterialityMain(mapped, MAIN_REFERENCE_CEILING, minMainReferences)
+    : rule === 'coverage_v2'
+      ? selectCoverageMain(mapped, coverageContext!, minMainReferences)
+      : null;
+  const coverageStats = materiality && 'stats' in materiality
+    ? (materiality as CoverageMainSelection).stats
     : null;
   const mainCandidates = materiality
     ? materiality.main
@@ -551,6 +757,14 @@ export function selectNoveltyReportReferences(
         familyDemoted: materiality.familyDemoted,
       } : {}),
     },
+    ...(coverageContext && coverageStats ? {
+      coverage: {
+        band: coverageContext.band,
+        importantFeatures: coverageContext.importantFeatures,
+        ...(coverageContext.kByType ? { kByType: coverageContext.kByType } : {}),
+        stats: coverageStats,
+      },
+    } : {}),
   };
 }
 
@@ -578,6 +792,24 @@ export function validateReportReferenceSelection(
   const unmappedSupplementary = selectionKeys(selection.unmappedSupplementary);
   if (!main || !mappedSupplementary || !unmappedSupplementary || !selection.counts) {
     return { valid: false, reason: 'invalid_selection_shape' };
+  }
+  if (selection.rule === 'coverage_v2') {
+    // A coverage selection is only reproducible when the context it was
+    // computed under travels with it; without that, a later recompute would
+    // grade against a different band and silently change the report's width.
+    const coverage = selection.coverage;
+    const band = coverage?.band;
+    if (
+      !coverage ||
+      !band ||
+      !Number.isFinite(Number(band.floor)) ||
+      !Number.isFinite(Number(band.ceiling)) ||
+      Number(band.floor) > Number(band.ceiling) ||
+      Number(band.ceiling) > REPORT_BAND_CEILING_MAX ||
+      !Array.isArray(coverage.importantFeatures)
+    ) {
+      return { valid: false, reason: 'coverage_context_missing_or_malformed' };
+    }
   }
   const allSelected = [...main, ...mappedSupplementary, ...unmappedSupplementary];
   if (new Set(allSelected).size !== allSelected.length) {

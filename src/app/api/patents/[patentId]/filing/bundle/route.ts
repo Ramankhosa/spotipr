@@ -33,17 +33,9 @@ export async function GET(request: NextRequest, { params }: { params: { patentId
       return NextResponse.json({ error: assembled.error }, { status: assembled.status })
     }
 
-    const blocking = assembled.data.issues.filter(i => i.severity === 'blocking')
-    if (blocking.length) {
-      return NextResponse.json(
-        {
-          error: 'This filing is not ready to generate yet.',
-          blocking,
-          advisory: assembled.data.issues.filter(i => i.severity === 'advisory'),
-        },
-        { status: 422 }
-      )
-    }
+    // Forms are ALWAYS generated. Missing particulars render as blank spaces for the
+    // attorney to complete by hand, and the outstanding items ship as a note in the zip.
+    const outstanding = assembled.data.issues
 
     // ?docs= narrows the bundle; otherwise the cascade's includeDocs decides.
     const requested = request.nextUrl.searchParams.get('docs')
@@ -57,7 +49,7 @@ export async function GET(request: NextRequest, { params }: { params: { patentId
     }
 
     const figures = docs.includes('drawings') ? await loadPatentFigures(params.patentId) : []
-    const { zip, files } = await renderFilingBundle(assembled.data, docs, figures)
+    const { zip, files } = await renderFilingBundle(assembled.data, docs, figures, outstanding)
 
     if (!files.length) {
       return NextResponse.json(

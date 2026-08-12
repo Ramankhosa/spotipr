@@ -1044,5 +1044,71 @@ describe('buildNoveltyAttorneyReportModel', () => {
     });
     expect(materiality.mainComparisons).toHaveLength(14);
     expect(materiality.appendixMappedComparisons).toHaveLength(0);
+
+    // A coverage_v2 run recomputes under the band frozen in its own blob — the
+    // simple-band ceiling of 8, not the legacy 10 and not all 14 qualifiers.
+    const band = { complexity: 'simple', floor: 3, ceiling: 8 };
+    const coverage = {
+      band,
+      importantFeatures: [
+        { feature: 'adaptive control', type: 'core_technical' },
+        { feature: 'moisture feedback', type: 'core_technical' },
+      ],
+      stats: { barCleared: 0, coverageAdmitted: 0, floorFilled: 0, featuresCovered: 0, featuresTotal: 2 },
+    };
+    const coverageRecompute = buildNoveltyAttorneyReportModel({
+      ...baseRun,
+      stage4Results: {
+        report_reference_selection: { ...staleSelection('coverage_v2').report_reference_selection, coverage },
+      },
+    });
+    expect(coverageRecompute.mainComparisons).toHaveLength(8);
+    expect(coverageRecompute.appendixMappedComparisons).toHaveLength(6);
+    // The recomputed selection carries the same context forward.
+    expect((coverageRecompute as any).reportReferenceSelection?.coverage?.band).toEqual(band);
+  });
+
+  it('propagates any-strength important-feature coverage onto comparisons', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'covered-features',
+      title: 'Adaptive controller',
+      jurisdiction: 'IN',
+      config: {},
+      stage0Results: {
+        inventionFeatures: ['adaptive control', 'moisture feedback'],
+        featureDetails: [
+          { feature: 'adaptive control', feature_type: 'core_technical' },
+          { feature: 'moisture feedback', feature_type: 'novelty_candidate' },
+        ],
+      },
+      stage1Results: {
+        retrievalCandidates: [{
+          publicationNumber: 'US900A',
+          title: 'US900A',
+          abstract: 'An adaptive control system with partial moisture feedback sensing.',
+        }],
+        aiRelevance: { byPn: {} },
+      },
+      stage35Results: {
+        feature_map: [{
+          pn: 'US900A',
+          title: 'US900A',
+          feature_analysis: [
+            { feature: 'adaptive control', status: 'Present', quote: 'adaptive control', field: 'abstract', confidence: 0.9 },
+            // Weak partial (below the 0.55 extent / 0.65 confidence strong bar):
+            // covered, but NOT strongly mapped.
+            { feature: 'moisture feedback', status: 'Partial', quote: 'moisture feedback', field: 'abstract', confidence: 0.5, extent_score: 0.4 },
+          ],
+        }],
+      },
+      stage4Results: {},
+    });
+
+    const comparison = model.comparisons.find(item => item.publicationNumber === 'US900A');
+    expect(comparison?.coveredImportantFeatures).toEqual(
+      expect.arrayContaining(['adaptive control', 'moisture feedback'])
+    );
+    // The strong-only list excludes the weak partial.
+    expect(comparison?.strongImportantFeatures).toEqual(['adaptive control']);
   });
 });

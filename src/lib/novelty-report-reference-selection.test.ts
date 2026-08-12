@@ -3,8 +3,10 @@ import {
   selectNoveltyReportReferences,
   validateReportReferenceSelection,
   DEFAULT_MIN_MAIN_REFERENCES,
+  LEGACY_MIN_MAIN_REFERENCES,
   MAIN_REFERENCE_CEILING,
   type ReportReferenceCandidate,
+  type ReportReferenceCoverageContext,
 } from './novelty-report-reference-selection';
 
 function pn(index: number) {
@@ -121,7 +123,7 @@ describe('selectNoveltyReportReferences', () => {
   it('clamps caller-supplied option values to their ceilings', () => {
     const candidates = Array.from({ length: 40 }, (_, index) => mapped(index));
     const result = selectNoveltyReportReferences(candidates, { mainReferenceTarget: 10_000 });
-    expect(result.main).toHaveLength(20);
+    expect(result.main).toHaveLength(MAIN_REFERENCE_CEILING);
 
     const unmappedCandidates = Array.from({ length: 80 }, (_, index) => unmapped(index, 'accept', 0.9));
     const unmappedResult = selectNoveltyReportReferences(unmappedCandidates, {
@@ -158,31 +160,39 @@ describe('selectNoveltyReportReferences', () => {
       });
     }
 
-    it('falls back to ten references, not three, when nothing clears the bar', () => {
-      // The regression this guards: materiality_v1 never reads mainReferenceTarget,
-      // so the floor alone sets a report's baseline width. At 3 a typical run —
-      // where the bar admits nobody — produced a three-reference prior-art section.
+    it('reproduces the historical ten-reference width under the legacy floor pin', () => {
+      // Recomputes of stale materiality_v1 blobs pass LEGACY_MIN_MAIN_REFERENCES
+      // explicitly so already-delivered reports keep their width now that the
+      // default backstop is 3 (coverage_v2 sizes new reports from the band).
       const candidates = Array.from({ length: 18 }, (_, index) => immaterial(index));
-      const result = selectNoveltyReportReferences(candidates, materiality);
+      const pinned = selectNoveltyReportReferences(candidates, {
+        ...materiality,
+        minMainReferences: LEGACY_MIN_MAIN_REFERENCES,
+      });
 
-      expect(DEFAULT_MIN_MAIN_REFERENCES).toBe(10);
-      expect(result.main).toHaveLength(10);
-      expect(result.mappedSupplementary).toHaveLength(8);
+      expect(DEFAULT_MIN_MAIN_REFERENCES).toBe(3);
+      expect(LEGACY_MIN_MAIN_REFERENCES).toBe(10);
+      expect(pinned.main).toHaveLength(10);
+      expect(pinned.mappedSupplementary).toHaveLength(8);
       // A raised floor must not start admitting references the bar rejected.
-      expect(result.main.every(item => item.reason === 'ranked_fill')).toBe(true);
+      expect(pinned.main.every(item => item.reason === 'ranked_fill')).toBe(true);
+
+      // Without the pin, the backstop alone applies.
+      const unpinned = selectNoveltyReportReferences(candidates, materiality);
+      expect(unpinned.main).toHaveLength(3);
     });
 
     it('lets the bar promote above the floor, up to the ceiling', () => {
       const admitted = (materialCount: number) => selectNoveltyReportReferences(
         [...Array.from({ length: materialCount }, (_, index) => material(index)),
           ...Array.from({ length: 20 }, (_, index) => immaterial(index + materialCount))],
-        materiality
+        { ...materiality, minMainReferences: LEGACY_MIN_MAIN_REFERENCES }
       ).main.length;
 
       // Below the floor the floor wins; above it the evidence does.
       expect(admitted(4)).toBe(10);
       expect(admitted(15)).toBe(15);
-      expect(admitted(25)).toBe(MAIN_REFERENCE_CEILING);
+      expect(admitted(30)).toBe(MAIN_REFERENCE_CEILING);
     });
 
     it('shows nothing when nothing was mapped', () => {
@@ -219,9 +229,9 @@ describe('selectNoveltyReportReferences', () => {
         Array.from({ length: 30 }, (_, index) => material(index)),
         materiality
       );
-      expect(result.main).toHaveLength(20);
-      expect(result.mappedSupplementary).toHaveLength(10);
-      expect(result.counts.materialityOverflow).toBe(10);
+      expect(result.main).toHaveLength(MAIN_REFERENCE_CEILING);
+      expect(result.mappedSupplementary).toHaveLength(30 - MAIN_REFERENCE_CEILING);
+      expect(result.counts.materialityOverflow).toBe(30 - MAIN_REFERENCE_CEILING);
     });
 
     it('falls back to the floor when nothing clears the bar, in ranked order', () => {
@@ -273,8 +283,8 @@ describe('selectNoveltyReportReferences', () => {
         Array.from({ length: 30 }, (_, index) => material(index, { noveltyThreat: 'high_overlap' })),
         materiality
       );
-      expect(result.main).toHaveLength(20);
-      expect(result.mappedSupplementary).toHaveLength(10);
+      expect(result.main).toHaveLength(MAIN_REFERENCE_CEILING);
+      expect(result.mappedSupplementary).toHaveLength(30 - MAIN_REFERENCE_CEILING);
     });
 
     it('admits a reference that uniquely covers an otherwise-uncovered feature', () => {
@@ -427,6 +437,183 @@ describe('selectNoveltyReportReferences', () => {
       expect(result.counts.mappedTotal).toBe(25);
       expect(result.main.length + result.mappedSupplementary.length).toBe(25);
       expect(validateReportReferenceSelection(result, candidates)).toEqual({ valid: true });
+    });
+  });
+
+  describe('coverage_v2', () => {
+    const simpleBand = { complexity: 'simple' as const, floor: 3, ceiling: 8 };
+    const complexBand = { complexity: 'complex' as const, floor: 7, ceiling: 20 };
+
+    function context(overrides: Partial<ReportReferenceCoverageContext> = {}): ReportReferenceCoverageContext {
+      return { band: simpleBand, importantFeatures: [], ...overrides };
+    }
+
+    function options(ctx: ReportReferenceCoverageContext) {
+      return { rule: 'coverage_v2' as const, coverageContext: ctx };
+    }
+
+    /** A mapped reference that clears no bar on its own: closure and the floor decide. */
+    function quiet(index: number, covered: string[], overrides: Partial<ReportReferenceCandidate> = {}): ReportReferenceCandidate {
+      return mapped(index, {
+        priority: 'Low',
+        desiredPriority: 'Low',
+        priorityScore: 0,
+        mappedImportantFeatures: [],
+        coveredImportantFeatures: covered,
+        hasMappedEvidence: true,
+        ...overrides,
+      });
+    }
+
+    function strong(index: number, overrides: Partial<ReportReferenceCandidate> = {}): ReportReferenceCandidate {
+      return mapped(index, {
+        desiredPriority: 'High',
+        coveredImportantFeatures: ['f1'],
+        hasMappedEvidence: true,
+        ...overrides,
+      });
+    }
+
+    it('sizes the report from the k-cover closure, not a fixed count', () => {
+      const features = [
+        { feature: 'f1', type: 'novelty_candidate' as const },
+        { feature: 'f2', type: 'novelty_candidate' as const },
+        { feature: 'f3', type: 'novelty_candidate' as const },
+      ];
+      // Low redundancy: each reference evidences exactly one feature → k=3 per
+      // feature demands nine distinct references.
+      const sparse = selectNoveltyReportReferences(
+        Array.from({ length: 12 }, (_, index) => quiet(index, [`f${(index % 3) + 1}`])),
+        options(context({ band: complexBand, importantFeatures: features }))
+      );
+      expect(sparse.main).toHaveLength(9);
+      expect(sparse.coverage?.stats.coverageAdmitted).toBe(9);
+
+      // High redundancy: every reference evidences every feature → three close it.
+      const dense = selectNoveltyReportReferences(
+        Array.from({ length: 12 }, (_, index) => quiet(index, ['f1', 'f2', 'f3'])),
+        options(context({ band: complexBand, importantFeatures: features }))
+      );
+      expect(dense.main.length).toBeLessThan(sparse.main.length);
+      expect(dense.coverage?.stats.featuresCovered).toBe(3);
+    });
+
+    it('clamps closure admissions to the band ceiling', () => {
+      const features = Array.from({ length: 10 }, (_, index) => ({
+        feature: `f${index}`,
+        type: 'novelty_candidate' as const,
+      }));
+      const result = selectNoveltyReportReferences(
+        Array.from({ length: 40 }, (_, index) => quiet(index, [`f${index % 10}`])),
+        options(context({ importantFeatures: features }))
+      );
+      expect(result.main).toHaveLength(simpleBand.ceiling);
+    });
+
+    it('keeps decisive references even past the band ceiling', () => {
+      const result = selectNoveltyReportReferences(
+        Array.from({ length: 12 }, (_, index) => strong(index, { canonicalDecisive: index < 10 })),
+        options(context())
+      );
+      expect(result.main.filter(item => item.reason === 'decisive')).toHaveLength(10);
+      expect(result.main.length).toBeGreaterThanOrEqual(10);
+    });
+
+    it('admits via the relative bar, graded against the run’s own top score', () => {
+      const result = selectNoveltyReportReferences([
+        quiet(0, [], { priorityScore: 100 }),
+        quiet(1, [], { priorityScore: 70 }),
+        quiet(2, [], { priorityScore: 50 }),
+        quiet(3, [], { priorityScore: 40 }),
+        quiet(4, [], { priorityScore: 30 }),
+      ], options(context()));
+      // 100 and 70 clear 0.6 × 100; the floor lifts the total to three.
+      expect(result.coverage?.stats.barCleared).toBe(2);
+      expect(result.main).toHaveLength(3);
+    });
+
+    it('disables the relative bar when every score is zero', () => {
+      const result = selectNoveltyReportReferences(
+        Array.from({ length: 6 }, (_, index) => quiet(index, [])),
+        options(context())
+      );
+      expect(result.coverage?.stats.barCleared).toBe(0);
+      // The floor is all that admits.
+      expect(result.main).toHaveLength(3);
+      expect(result.coverage?.stats.floorFilled).toBe(3);
+    });
+
+    it('is monotone: more mapped evidence never narrows the report', () => {
+      const features = [
+        { feature: 'f1', type: 'core_technical' as const },
+        { feature: 'f2', type: 'core_technical' as const },
+      ];
+      const base = Array.from({ length: 6 }, (_, index) => quiet(index, index < 3 ? ['f1'] : []));
+      const before = selectNoveltyReportReferences(base, options(context({ importantFeatures: features })));
+      const after = selectNoveltyReportReferences(
+        base.map((candidate, index) => index >= 3 ? { ...candidate, coveredImportantFeatures: ['f2'] } : candidate),
+        options(context({ importantFeatures: features }))
+      );
+      expect(after.main.length).toBeGreaterThanOrEqual(before.main.length);
+      expect(after.coverage!.stats.featuresCovered).toBeGreaterThanOrEqual(before.coverage!.stats.featuresCovered);
+    });
+
+    it('shows one member per family and lets closure look past siblings', () => {
+      const features = [{ feature: 'f1', type: 'novelty_candidate' as const }];
+      const result = selectNoveltyReportReferences([
+        quiet(0, ['f1'], { familyKey: 'FAM-1' }),
+        quiet(1, ['f1'], { familyKey: 'FAM-1' }),
+        quiet(2, ['f1'], { familyKey: 'FAM-1' }),
+        quiet(3, ['f1'], { familyKey: 'FAM-2' }),
+        quiet(4, ['f1'] ),
+      ], options(context({ importantFeatures: features })));
+      // k=3 wants three supporters, but only three distinct families exist.
+      expect(result.main.map(item => item.publicationNumber)).toEqual([pn(0), pn(3), pn(4)]);
+      expect(result.counts.familyDemoted).toBe(2);
+    });
+
+    it('falls back to a simple band when no context is supplied', () => {
+      const result = selectNoveltyReportReferences(
+        Array.from({ length: 18 }, (_, index) => quiet(index, [])),
+        { rule: 'coverage_v2' }
+      );
+      expect(result.main).toHaveLength(3);
+      expect(result.coverage?.band).toEqual(simpleBand);
+    });
+
+    it('persists the coverage context and validates it on the round-trip', () => {
+      const features = [{ feature: 'f1', type: 'core_technical' as const }];
+      const candidates = Array.from({ length: 6 }, (_, index) => quiet(index, ['f1']));
+      const result = selectNoveltyReportReferences(candidates, options(context({ importantFeatures: features })));
+
+      expect(result.coverage?.band).toEqual(simpleBand);
+      expect(result.coverage?.importantFeatures).toEqual(features);
+      expect(validateReportReferenceSelection(result, candidates)).toEqual({ valid: true });
+
+      // A coverage_v2 blob without its context cannot be reproduced — reject it.
+      const { coverage, ...stripped } = result;
+      expect(validateReportReferenceSelection(stripped, candidates)).toEqual({
+        valid: false,
+        reason: 'coverage_context_missing_or_malformed',
+      });
+      const corrupt = { ...result, coverage: { ...coverage!, band: { ...simpleBand, ceiling: 999 } } };
+      expect(validateReportReferenceSelection(corrupt, candidates)).toMatchObject({ valid: false });
+    });
+
+    it('recomputes identically from the persisted context', () => {
+      const features = [
+        { feature: 'f1', type: 'novelty_candidate' as const },
+        { feature: 'f2', type: 'implementation' as const },
+      ];
+      const candidates = Array.from({ length: 10 }, (_, index) => quiet(index, [`f${(index % 2) + 1}`]));
+      const first = selectNoveltyReportReferences(candidates, options(context({ band: complexBand, importantFeatures: features })));
+      const second = selectNoveltyReportReferences(candidates, options({
+        band: first.coverage!.band,
+        importantFeatures: first.coverage!.importantFeatures,
+        kByType: first.coverage!.kByType,
+      }));
+      expect(second.main).toEqual(first.main);
+      expect(second.coverage).toEqual(first.coverage);
     });
   });
 

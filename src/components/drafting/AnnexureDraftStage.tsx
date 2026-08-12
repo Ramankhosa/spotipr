@@ -14,6 +14,7 @@ import type { ValidationIssue as UnifiedValidationIssue } from '@/types/validati
 import { isDrawingSectionKey } from '@/lib/figure-availability'
 import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
 import { useToast } from '@/components/ui/toast'
+import IncompleteFilingDialog from '@/components/filing/IncompleteFilingDialog'
 
 // ============================================================================
 // AI Review Issue Type
@@ -1550,6 +1551,35 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
   const [exportFormat, setExportFormat] = useState<'docx' | 'pdf'>('docx')
   const [exportScope, setExportScope] = useState<ExportScope>('draft')
   const [showSuccess, setShowSuccess] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmIssues, setConfirmIssues] = useState<any[]>([])
+
+  /**
+   * For the full bundle, check the filing details first so the attorney is warned about
+   * blanks BEFORE a zip lands in their downloads folder. A plain DB read — no LLM, no
+   * document rendering — so it costs nothing noticeable.
+   */
+  const handleExportClick = async () => {
+    if (exportScope !== 'bundle') {
+      await handleExport()
+      return
+    }
+    try {
+      const res = await fetch(`/api/patents/${patentId}/filing`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}` }
+      })
+      const data = res.ok ? await res.json() : null
+      const issues = data?.issues || []
+      if (issues.some((i: any) => i.severity === 'blocking')) {
+        setConfirmIssues(issues)
+        setConfirmOpen(true)
+        return
+      }
+    } catch {
+      // If the check itself fails, fall through and export — never block on the warning.
+    }
+    await handleExport()
+  }
 
   const handleExport = async () => {
     if (!sessionId || !jurisdiction || !patentId) {
@@ -1563,6 +1593,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       return
     }
 
+    setConfirmOpen(false)
     setExporting(true)
     setShowSuccess(false)
     try {
@@ -1684,7 +1715,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       </select>
 
       <button
-        onClick={handleExport}
+        onClick={handleExportClick}
         disabled={disabled || exporting}
         className={`px-6 py-3 rounded-lg font-medium flex items-center gap-2 shadow-lg transition-all ${
           showSuccess
@@ -1709,6 +1740,16 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
           </>
         )}
       </button>
+
+      <IncompleteFilingDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        issues={confirmIssues}
+        busy={exporting}
+        confirmLabel="Export bundle anyway"
+        onConfirm={handleExport}
+        onGoToFiling={() => { window.location.href = `/patents/${patentId}/filing` }}
+      />
     </div>
   )
 }

@@ -38,6 +38,41 @@ import type {
   StructuredAddress,
 } from './types'
 
+/**
+ * Stand-in used when a project has no applicant profile yet. Every field is blank, so the
+ * forms render with empty spaces the attorney can fill in by hand rather than refusing to
+ * generate at all.
+ */
+const EMPTY_APPLICANT_PROFILE = {
+  applicantLegalName: '',
+  applicantCategory: 'others',
+  applicantNationality: null,
+  applicantAddressLine1: '',
+  applicantAddressLine2: null,
+  applicantCity: '',
+  applicantState: '',
+  applicantCountryCode: '',
+  applicantPostalCode: '',
+  correspondenceName: '',
+  correspondenceEmail: '',
+  correspondencePhone: '',
+  correspondenceAddressLine1: '',
+  correspondenceAddressLine2: null,
+  correspondenceCity: '',
+  correspondenceState: '',
+  correspondenceCountryCode: '',
+  correspondencePostalCode: '',
+  signatoryName: null,
+  signatoryDesignation: null,
+  signatoryMobile: null,
+  signatoryEmail: null,
+  filingSettings: null,
+  useAgent: false,
+  agentName: null,
+  agentRegistrationNo: null,
+  agentPhone: null,
+} as const
+
 export interface AssembledFiling {
   context: FilingContext
   issues: FilingIssue[]
@@ -75,14 +110,10 @@ export async function assembleFiling(
 
   if (!patent) return { ok: false, error: 'Patent not found', status: 404 }
 
-  const profile = patent.project?.applicantProfile
-  if (!profile) {
-    return {
-      ok: false,
-      status: 400,
-      error: 'This project has no applicant profile yet. Add the applicant and signatory details before generating filing forms.',
-    }
-  }
+  // A missing applicant profile no longer stops assembly. The forms are always produced
+  // with whatever has been entered and blanks elsewhere, so an attorney can print them and
+  // complete the rest by hand; `issues` still reports everything outstanding.
+  const profile = patent.project?.applicantProfile ?? EMPTY_APPLICANT_PROFILE
 
   const tenantId = patent.project?.user?.tenantId ?? null
 
@@ -171,7 +202,9 @@ export interface BundleFile {
 export async function renderFilingBundle(
   data: AssembledFiling,
   docs: FilingDocKey[],
-  figures: DrawingFigure[] = []
+  figures: DrawingFigure[] = [],
+  /** Outstanding items; when any exist a plain-text note is added to the archive. */
+  outstanding: FilingIssue[] = []
 ): Promise<{ zip: Buffer; files: BundleFile[] }> {
   const { context } = data
   const ref = bundleRef(data)
@@ -197,7 +230,63 @@ export async function renderFilingBundle(
 
   const zip = new AdmZip()
   for (const file of files) zip.addFile(file.filename, file.buffer)
+
+  if (outstanding.length) {
+    zip.addFile(
+      COMPLETION_NOTICE_FILENAME,
+      Buffer.from(buildCompletionNotice(outstanding, files.map(f => f.filename)), 'utf8')
+    )
+  }
+
   return { zip: zip.toBuffer(), files }
+}
+
+export const COMPLETION_NOTICE_FILENAME = 'READ ME - complete these by hand.txt'
+
+/**
+ * The note that ships alongside the forms when something is still missing.
+ *
+ * Forms are ALWAYS generated — the attorney gets whatever has been entered and completes
+ * the rest on paper. This note tells them exactly which spaces are blank and where in the
+ * app to fill them in so the next export comes out complete.
+ */
+export function buildCompletionNotice(
+  issues: FilingIssue[],
+  included: string[]
+): string {
+  const required = issues.filter(i => i.severity === 'blocking').map(i => i.message)
+  const advisory = issues.filter(i => i.severity === 'advisory').map(i => i.message)
+
+  const lines = [
+    'SOME DETAILS ARE STILL BLANK IN THESE FORMS',
+    '===========================================',
+    '',
+    'Included in this bundle:',
+    ...included.map(name => `  - ${name}`),
+    '',
+    'The forms have been generated with everything entered so far. Where a detail was',
+    'missing it has been left blank so you can complete it by hand before filing.',
+    '',
+  ]
+
+  if (required.length) {
+    lines.push('Blank on the forms - please complete:', ...required.map(r => `  - ${r}`), '')
+  }
+  if (advisory.length) {
+    lines.push('Worth checking:', ...advisory.map(r => `  - ${r}`), '')
+  }
+
+  lines.push(
+    'To have these filled in automatically next time',
+    '-----------------------------------------------',
+    'Inventors and filing details:  open the patent > Filing tab',
+    'Applicant and signatory:       open the project > Applicant & Signatory',
+    'Firm house style:              Organization > Filing Defaults',
+    '',
+    'Everything you enter is remembered, so this is a one-time step per patent.',
+    ''
+  )
+  return lines.join('\r\n')
 }
 
 /** Load figure images for the Drawings document from the patent's completed sketches. */

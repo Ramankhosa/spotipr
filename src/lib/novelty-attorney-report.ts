@@ -7,9 +7,12 @@ import {
   selectNoveltyReportReferences,
   validateReportReferenceSelection,
   DEFAULT_MIN_MAIN_REFERENCES,
+  LEGACY_MIN_MAIN_REFERENCES,
   type ReportReferenceCandidate,
+  type ReportReferenceCoverageContext,
   type ReportReferenceSelectionV1,
 } from './novelty-report-reference-selection';
+import { resolveComplexityBand, type CoverageImportantFeature } from './novelty-kcover';
 
 export type AttorneyReportFeatureType = 'core_technical' | 'implementation' | 'novelty_candidate' | 'generic_weak';
 export type AttorneyReportFeatureImportance = 'core_inventive' | 'secondary_implementation' | 'optional_embodiment';
@@ -154,6 +157,8 @@ export interface AttorneyReportPatentComparison extends AttorneyReportCitation {
   /** Priority tier before the Critical/High/Medium display caps are applied. */
   desiredPriority?: AttorneyReportPatentComparison['reviewPriority'];
   strongImportantFeatures?: string[];
+  /** Important features with ANY Present/Partial evidence — coverage_v2's closure input. */
+  coveredImportantFeatures?: string[];
   hasMappedEvidence?: boolean;
   familyKey?: string;
   citationCount: number | null;
@@ -1927,6 +1932,9 @@ function postMappingPriorityMetrics(
     // Named important features, so report selection can tell whether a reference is
     // the only remaining source of coverage for one of them.
     strongImportantFeatures: stronglyMapped.map(feature => feature.feature),
+    coveredImportantFeatures: important
+      .filter(feature => evidenceFactor(rowByFeature.get(feature.feature.toLowerCase())) > 0)
+      .map(feature => feature.feature),
     hasMappedEvidence: comparison.rows.some(row => row.status === 'Present' || row.status === 'Partial'),
   };
 }
@@ -1934,7 +1942,8 @@ function postMappingPriorityMetrics(
 function applySelectivePriorities(
   source: AttorneyReportPatentComparison[],
   stage0: NormalizedIdea,
-  features: AttorneyReportFeatureSummary[]
+  features: AttorneyReportFeatureSummary[],
+  bandCeiling?: number
 ): AttorneyReportPatentComparison[] {
   const ranked = source.map((comparison, originalIndex) => {
     const metrics = postMappingPriorityMetrics(comparison, stage0, features);
@@ -1951,7 +1960,17 @@ function applySelectivePriorities(
     ((b.comparison.relevanceScore ?? -1) - (a.comparison.relevanceScore ?? -1)) ||
     (a.originalIndex - b.originalIndex)
   );
-  const caps = { Critical: 4, High: 8, Medium: 15 } as const;
+  // Fixed caps for legacy renders; scaled with the report's band ceiling under
+  // coverage_v2 so a 20-reference report doesn't show most of its strong
+  // references demoted to "Medium" purely by display arithmetic.
+  const scaleCaps = Number.isFinite(bandCeiling) && Number(bandCeiling) > 0;
+  const caps = scaleCaps
+    ? {
+      Critical: Math.max(4, Math.ceil(Number(bandCeiling) * 0.2)),
+      High: Math.max(8, Math.ceil(Number(bandCeiling) * 0.4)),
+      Medium: 15,
+    }
+    : { Critical: 4, High: 8, Medium: 15 };
   const counts = { Critical: 0, High: 0, Medium: 0 };
   const nextLevel = (level: string) => level === 'Critical' ? 'High' : level === 'High' ? 'Medium' : 'Low';
   return ranked.map(({ comparison, metrics, desired }, index) => {
@@ -1973,9 +1992,30 @@ function applySelectivePriorities(
       // report selection reads, so a cap never bounds how many references qualify.
       desiredPriority: desired,
       strongImportantFeatures: metrics.strongImportantFeatures,
+      coveredImportantFeatures: metrics.coveredImportantFeatures,
       hasMappedEvidence: metrics.hasMappedEvidence,
     };
   });
+}
+
+/**
+ * Last-resort coverage context for a coverage_v2 blob whose `coverage` field is
+ * missing or malformed. Mirrors the unit heuristic of the pipeline's
+ * adaptiveComplexityProfile (minus the map-dependent 'crowded' tier, which the
+ * renderer cannot see) so the recomputed width lands in the same band the
+ * pipeline would have chosen.
+ */
+function fallbackCoverageContext(
+  stage0: NormalizedIdea,
+  features: AttorneyReportFeatureSummary[]
+): ReportReferenceCoverageContext {
+  const importantFeatures: CoverageImportantFeature[] = features
+    .filter(feature => feature.type === 'core_technical' || feature.type === 'novelty_candidate')
+    .map(feature => ({ feature: feature.feature, type: feature.type as CoverageImportantFeature['type'] }));
+  const conceptCount = (stage0.claimConcepts || []).length + (stage0.noveltyFocusInteractions || []).length;
+  const units = importantFeatures.length + conceptCount * 2 + (Number((stage0 as any).confidence || 1) < 0.7 ? 2 : 0);
+  const complexity = units <= 6 ? 'simple' : units <= 12 ? 'moderate' : 'complex';
+  return { band: resolveComplexityBand(complexity, importantFeatures.length), importantFeatures };
 }
 
 function buildPotentialCombinations(
@@ -2228,7 +2268,13 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     };
   });
 
-  const comparisons = applySelectivePriorities(rawComparisons, stage0, featureSummaries);
+  // Display caps scale only for coverage_v2 runs, read from the persisted
+  // selection so legacy reports keep their historical priority distribution.
+  const persistedSelectionForCaps = stage4?.report_reference_selection as ReportReferenceSelectionV1 | undefined;
+  const priorityBandCeiling = persistedSelectionForCaps?.rule === 'coverage_v2'
+    ? Number(persistedSelectionForCaps?.coverage?.band?.ceiling)
+    : undefined;
+  const comparisons = applySelectivePriorities(rawComparisons, stage0, featureSummaries, priorityBandCeiling);
   const compared = new Set(comparisons.map(item => canonicalPatentNumber(item.publicationNumber)));
   const shortlistCandidates = Array.from(patentIndex.values())
     .filter(item => !compared.has(canonicalPatentNumber(getPublicationNumber(item))))
@@ -2256,6 +2302,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
         priorityScore: comparison.priorityScore,
         desiredPriority: comparison.desiredPriority,
         mappedImportantFeatures: comparison.strongImportantFeatures,
+        coveredImportantFeatures: comparison.coveredImportantFeatures,
         hasMappedEvidence: comparison.hasMappedEvidence,
         familyKey: comparison.familyKey,
         featureCoverage: comparison.importantFeatureCoverage ?? comparison.coverage.score,
@@ -2292,11 +2339,26 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
   const recomputeRule = normalizeReportReferenceSelectionRule(
     (persistedReferenceSelection as ReportReferenceSelectionV1 | undefined)?.rule
   );
+  // coverage_v2 recomputes read the context from the blob itself, so the report
+  // reproduces the width the run was analysed under — never a band re-derived
+  // from whatever stage 0 looks like at render time. Only a blob whose coverage
+  // field is missing entirely falls back to a renderer-derived context. Legacy
+  // rules keep the floor they were tuned around: DEFAULT_MIN_MAIN_REFERENCES
+  // dropped to 3 for coverage_v2, and a stale materiality_v1 blob recomputed at
+  // 3 would silently narrow a report an attorney already has.
+  const persistedCoverage = (persistedReferenceSelection as ReportReferenceSelectionV1 | undefined)?.coverage;
+  const recomputeCoverageContext: ReportReferenceCoverageContext | undefined = recomputeRule === 'coverage_v2'
+    ? (persistedCoverage?.band && Array.isArray(persistedCoverage?.importantFeatures)
+      ? { band: persistedCoverage.band, importantFeatures: persistedCoverage.importantFeatures, kByType: persistedCoverage.kByType }
+      : fallbackCoverageContext(stage0, featureSummaries))
+    : undefined;
   const computedReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
     mainReferenceTarget: stage4Config.mainReferenceTarget ?? stage4Config.maxRefsForReportMain ?? 10,
-    minMainReferences: stage4Config.minMainReferences ?? DEFAULT_MIN_MAIN_REFERENCES,
+    minMainReferences: stage4Config.minMainReferences
+      ?? (recomputeRule === 'coverage_v2' ? DEFAULT_MIN_MAIN_REFERENCES : LEGACY_MIN_MAIN_REFERENCES),
     maxUnmappedSupplementaryReferences: stage4Config.maxUnmappedSupplementaryReferences ?? 20,
     rule: recomputeRule,
+    coverageContext: recomputeCoverageContext,
   });
   const reportReferenceSelection: ReportReferenceSelectionV1 = persistedSelectionValidation.valid
     ? persistedReferenceSelection as ReportReferenceSelectionV1

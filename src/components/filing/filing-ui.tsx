@@ -354,7 +354,7 @@ export function IssueList({ issues }: { issues: FilingIssue[] }) {
   if (!issues.length) {
     return (
       <p className="text-sm text-emerald-700 dark:text-emerald-400">
-        Everything needed is present. Ready to generate.
+        Everything needed is present. The forms will generate complete.
       </p>
     )
   }
@@ -362,13 +362,16 @@ export function IssueList({ issues }: { issues: FilingIssue[] }) {
   return (
     <div className="space-y-3">
       {blocking.length > 0 && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900/40 dark:bg-red-900/20">
-          <p className="text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
-            Must be fixed before generating ({blocking.length})
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+            Will print blank ({blocking.length})
+          </p>
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            The bundle still downloads. Fill these in here to have them printed, or complete them by hand on the forms.
           </p>
           <ul className="mt-1.5 space-y-1">
             {blocking.map((issue, i) => (
-              <li key={`${issue.field}-${i}`} className="text-sm text-red-800 dark:text-red-200">• {issue.message}</li>
+              <li key={`${issue.field}-${i}`} className="text-sm text-amber-900 dark:text-amber-200">• {issue.message}</li>
             ))}
           </ul>
         </div>

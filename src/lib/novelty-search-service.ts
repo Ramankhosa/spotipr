@@ -47,17 +47,23 @@ import {
   canonicalReportPublicationNumber,
   selectNoveltyReportReferences,
   DEFAULT_MIN_MAIN_REFERENCES,
+  LEGACY_MIN_MAIN_REFERENCES,
   type ReportReferenceCandidate,
+  type ReportReferenceCoverageContext,
   type ReportReferenceSelectionRule,
   type ReportReferenceSelectionV1,
 } from '@/lib/novelty-report-reference-selection';
+import {
+  resolveComplexityBand,
+  type CoverageImportantFeature,
+} from '@/lib/novelty-kcover';
 
 /**
- * The rule new runs are written with. Flipping this to 'materiality_v1' changes
- * only runs executed afterwards: already-persisted selections carry their own
- * rule and keep rendering under it.
+ * The rule new runs are written with. Flipping this back to 'materiality_v1'
+ * changes only runs executed afterwards: already-persisted selections carry
+ * their own rule and keep rendering under it.
  */
-const NOVELTY_REPORT_SELECTION_RULE: ReportReferenceSelectionRule = 'materiality_v1';
+const NOVELTY_REPORT_SELECTION_RULE: ReportReferenceSelectionRule = 'coverage_v2';
 
 /**
  * Character budget for the Stage 4 report prompt.
@@ -3128,7 +3134,11 @@ export class NoveltySearchService extends BasePatentService {
       const configuredLimit = config.stage35c?.maxPatentsForRemarks && config.stage35c.maxPatentsForRemarks > 0
         ? config.stage35c.maxPatentsForRemarks
         : undefined;
-      const limit = Math.min(configuredLimit || 8, rankedFeatureMaps.length);
+      // Default to the report's band ceiling, not a fixed 8: every reference
+      // the coverage_v2 selection can show needs a remark behind it, or
+      // references 9+ of a wide report render with no commentary.
+      const remarksCeiling = this.buildReportCoverageContext(stage0Data, stage35aData).band.ceiling;
+      const limit = Math.min(configuredLimit || remarksCeiling, rankedFeatureMaps.length);
 
       const perPatentRemarks: PerPatentRemark[] = [];
 
@@ -4896,15 +4906,26 @@ RESPONSE:`;
     const MIN_DEEP_ANALYSIS_TARGET = 8;
     const MAX_DEEP_ANALYSIS_TARGET = 40;
     const MAX_BORDERLINE_FILL = 10;
+    // Complexity-aware clamp bounds: the 0.35 ratio alone sizes the mapped set
+    // from retrieval VOLUME, so a complex invention with a small retrieval got
+    // under-analyzed and a trivial one with a large retrieval got over-analyzed.
+    // The profile's own minimum/maximum (already tuned per complexity for the
+    // adaptive path) supply the bounds — no new magic constants.
+    const profile = stage0Data
+      ? this.adaptiveComplexityProfile(stage0Data, [])
+      : null;
+    const targetFloor = profile
+      ? Math.max(MIN_DEEP_ANALYSIS_TARGET, Math.round(profile.minimum / 2))
+      : MIN_DEEP_ANALYSIS_TARGET;
+    const targetCap = profile
+      ? Math.min(MAX_DEEP_ANALYSIS_TARGET, profile.maximum)
+      : MAX_DEEP_ANALYSIS_TARGET;
     const deepAnalysisTarget = (acceptedCount: number, componentCount: number, borderlineCount: number) => {
       const reviewableCount = Math.max(0, acceptedCount + componentCount + borderlineCount);
       if (reviewableCount === 0 || safeMaxCandidates === 0) return 0;
       if (adaptive) return Math.min(safeMaxCandidates, reviewableCount);
       const relativeTarget = Math.ceil(reviewableCount * BORDERLINE_FILL_RATIO);
-      const boundedTarget = Math.min(
-        MAX_DEEP_ANALYSIS_TARGET,
-        Math.max(MIN_DEEP_ANALYSIS_TARGET, relativeTarget)
-      );
+      const boundedTarget = Math.min(targetCap, Math.max(targetFloor, relativeTarget));
       return Math.min(safeMaxCandidates, boundedTarget);
     };
     const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0, priority?: ReturnType<NoveltySearchService['preMappingPriority']>) => ({
@@ -8597,12 +8618,22 @@ RESPONSE:`;
     map: PatentFeatureMap,
     stage0Data: NormalizedIdea | undefined,
     featureTypes: Map<string, InventionFeatureDetail['feature_type']>
-  ): { desiredPriority: 'Critical' | 'High' | 'Medium' | 'Low'; strongImportantFeatures: string[]; hasMappedEvidence: boolean } {
+  ): {
+    desiredPriority: 'Critical' | 'High' | 'Medium' | 'Low';
+    strongImportantFeatures: string[];
+    coveredImportantFeatures: string[];
+    hasMappedEvidence: boolean;
+  } {
     const cells = Array.isArray(map.feature_analysis) ? map.feature_analysis : [];
     const hasMappedEvidence = cells.some(cell => cell.status === 'Present' || cell.status === 'Partial');
     const importantCells = cells.filter(cell => this.isImportantFeature(cell.feature, featureTypes));
     const strongImportant = importantCells.filter(cell => this.isStrongMappedCell(cell));
     const strongImportantFeatures = strongImportant.map(cell => cell.feature);
+    // Any Present/Partial counts as coverage: the coverage_v2 closure reads
+    // this wider list because strong cells are rare on title/abstract evidence.
+    const coveredImportantFeatures = importantCells
+      .filter(cell => this.isMappedCell(cell))
+      .map(cell => cell.feature);
     const strongNoveltyCount = strongImportant.filter(
       cell => featureTypes.get(cell.feature) === 'novelty_candidate'
     ).length;
@@ -8629,7 +8660,31 @@ RESPONSE:`;
         ? 'High'
         : hasMappedEvidence ? 'Medium' : 'Low';
 
-    return { desiredPriority, strongImportantFeatures, hasMappedEvidence };
+    return { desiredPriority, strongImportantFeatures, coveredImportantFeatures, hasMappedEvidence };
+  }
+
+  /**
+   * The context coverage_v2 sizes a report under: the invention's complexity
+   * band plus its important-feature set. Persisted inside the selection blob so
+   * a later render reproduces the same width without re-deriving the profile.
+   */
+  private buildReportCoverageContext(
+    stage0Data: NormalizedIdea,
+    featureMapData: FeatureMapBatchResult | null
+  ): ReportReferenceCoverageContext {
+    const inventionFeatures = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    const featureTypes = this.buildFeatureTypeMap(stage0Data || ({} as NormalizedIdea), inventionFeatures);
+    const importantFeatures: CoverageImportantFeature[] = inventionFeatures
+      .filter(feature => this.isImportantFeature(feature, featureTypes))
+      .map(feature => ({
+        feature,
+        type: featureTypes.get(feature) === 'novelty_candidate' ? 'novelty_candidate' : 'core_technical',
+      }));
+    const profile = this.adaptiveComplexityProfile(stage0Data, featureMapData?.feature_map || []);
+    return {
+      band: resolveComplexityBand(profile.complexity, importantFeatures.length),
+      importantFeatures,
+    };
   }
 
   /**
@@ -8682,10 +8737,26 @@ RESPONSE:`;
     prompt = build(withShortRemarks);
     if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'professional_remark', remarks.length);
 
-    // 3. Last resort: drop the lowest-ranked references. `remarks` follows the
+    // 3. Per-row disclosure text. A wide (20-25 reference) coverage_v2 report
+    // must shed payload before it sheds references — dropping a reference here
+    // silently undoes the adaptive width the selection just computed.
+    const withShortDisclosures = withShortRemarks.map(remark => ({
+      ...remark,
+      comparison_rows: Array.isArray(remark?.comparison_rows)
+        ? remark.comparison_rows.map((row: any) => ({
+          ...row,
+          patent_disclosure: String(row?.patent_disclosure || '').slice(0, 300),
+          user_invention_disclosure: String(row?.user_invention_disclosure || '').slice(0, 300),
+        }))
+        : remark?.comparison_rows,
+    }));
+    prompt = build(withShortDisclosures);
+    if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'patent_disclosure', remarks.length);
+
+    // 4. Last resort: drop the lowest-ranked references. `remarks` follows the
     // ranked main order, so the tail is shed first.
-    for (let count = withShortRemarks.length - 1; count >= 1; count -= 1) {
-      prompt = build(withShortRemarks.slice(0, count));
+    for (let count = withShortDisclosures.length - 1; count >= 1; count -= 1) {
+      prompt = build(withShortDisclosures.slice(0, count));
       if (prompt.length <= STAGE4_PROMPT_CHAR_BUDGET) return result(prompt, 'reference_count', count);
     }
     return result(prompt, 'reference_count', 1);
@@ -8805,6 +8876,7 @@ RESPONSE:`;
         priority,
         desiredPriority: highOverlap ? 'Critical' : tier.desiredPriority,
         mappedImportantFeatures: tier.strongImportantFeatures,
+        coveredImportantFeatures: tier.coveredImportantFeatures,
         hasMappedEvidence: tier.hasMappedEvidence,
         familyKey: familyKeysByPn?.get(key),
         priorityScore: featureCoverage * 100 + present * 2 + partial + gateScore,
@@ -10122,7 +10194,9 @@ OUTPUT JSON:
         const fallbackRemarks = this.buildDeterministicPerPatentRemarks(
           stage0Data,
           featureMapData,
-          config.stage35c?.maxPatentsForRemarks || 8
+          // Same ceiling as the report width, so no shown reference lacks a remark.
+          config.stage35c?.maxPatentsForRemarks
+            || this.buildReportCoverageContext(stage0Data, featureMapData).band.ceiling
         );
         aggRes = {
           ...(aggRes as any),
@@ -10152,11 +10226,13 @@ OUTPUT JSON:
         stage0Data,
         familyKeysByPn
       );
+      const coverageContext = this.buildReportCoverageContext(stage0Data, featureMapData);
       const reportReferenceSelection = selectNoveltyReportReferences(reportReferenceCandidates, {
         mainReferenceTarget: config.stage4.mainReferenceTarget ?? config.stage4.maxRefsForReportMain ?? 10,
         minMainReferences: config.stage4.minMainReferences ?? DEFAULT_MIN_MAIN_REFERENCES,
         maxUnmappedSupplementaryReferences: config.stage4.maxUnmappedSupplementaryReferences ?? 20,
         rule: NOVELTY_REPORT_SELECTION_RULE,
+        coverageContext,
       });
       const selectedPatents = this.buildStage4SelectedPatentDetails(
         reportReferenceSelection,
@@ -10168,6 +10244,9 @@ OUTPUT JSON:
         event: 'selection_created',
         searchId: searchRun.id,
         version: reportReferenceSelection.version,
+        rule: reportReferenceSelection.rule,
+        band: reportReferenceSelection.coverage?.band,
+        stats: reportReferenceSelection.coverage?.stats,
         counts: reportReferenceSelection.counts,
       }));
 
