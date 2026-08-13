@@ -30,6 +30,12 @@ import { kCoverSelect, type CoverageImportantFeature } from '@/lib/novelty-kcove
 
 const LIMIT_ARG = process.argv.indexOf('--limit')
 const RUN_LIMIT = LIMIT_ARG >= 0 ? Math.max(1, Number(process.argv[LIMIT_ARG + 1]) || 0) : 0
+// --since YYYY-MM-DD: only grade runs created on/after this date. Use it to
+// restrict calibration to the current retrieval era (Voyage + merged corpus) —
+// older runs' pools were retrieved under a different embedding model and
+// corpus, so their noise distribution is not what future runs will see.
+const SINCE_ARG = process.argv.indexOf('--since')
+const SINCE = SINCE_ARG >= 0 ? new Date(`${process.argv[SINCE_ARG + 1]}T00:00:00Z`) : null
 const POOL_CAP = 300
 
 type LlmStatus = 'Present' | 'Partial' | 'Absent'
@@ -63,10 +69,14 @@ function distLine(label: string, values: number[]): string {
 
 async function main() {
   const runs = await (prisma as any).noveltySearchRun.findMany({
-    where: { stage35Results: { not: null } },
+    where: {
+      stage35Results: { not: null },
+      ...(SINCE && !isNaN(SINCE.getTime()) ? { createdAt: { gte: SINCE } } : {}),
+    },
     select: { id: true, createdAt: true, stage0Results: true, stage1Results: true, stage35Results: true },
     orderBy: { createdAt: 'desc' },
   })
+  if (SINCE) console.log(`Filtering to runs created on/after ${SINCE.toISOString().slice(0, 10)}`)
 
   // Aggregates across runs
   const confusion: Record<LlmStatus, Record<PrescreenVerdict, number>> = {
