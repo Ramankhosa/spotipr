@@ -88,4 +88,32 @@ describe('novelty report contract', () => {
       decisiveReferences: ['US1'],
     });
   });
+
+  test('carries Stage 1.7 absence evidence with an evidence-limited framing rule', () => {
+    const withAbsence = buildStage4ReportPromptFromRemarksV3({
+      inventionFeatures: ['feature A'],
+      perPatentRemarks: [],
+      searchMetadata: {
+        search_id: 'search-1',
+        feature_prescreen: { scored_count: 287, unavailable_count: 4, absent_features: ['quantum flux dampener'] },
+      },
+      metrics: {},
+    });
+    // The rule line is STATIC template text (prompt-cache stable) and demands
+    // evidence-limited phrasing, never a novelty conclusion.
+    expect(withAbsence).toContain('search_metadata.feature_prescreen lists absent_features');
+    expect(withAbsence).toContain('never as a novelty conclusion');
+    expect(withAbsence).toContain('"absent_features":["quantum flux dampener"]');
+
+    // Ineligible runs simply omit the DATA key — the static rule line stays in
+    // the template (byte-stable prefix) but is inert without it.
+    const withoutAbsence = buildStage4ReportPromptFromRemarksV3({
+      inventionFeatures: ['feature A'],
+      perPatentRemarks: [],
+      searchMetadata: { search_id: 'search-1' },
+      metrics: {},
+    });
+    expect(withoutAbsence).not.toContain('"feature_prescreen":');
+    expect(withoutAbsence).toContain('search_metadata.feature_prescreen lists absent_features');
+  });
 });

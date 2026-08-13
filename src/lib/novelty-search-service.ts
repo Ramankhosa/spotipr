@@ -54,9 +54,18 @@ import {
   type ReportReferenceSelectionV1,
 } from '@/lib/novelty-report-reference-selection';
 import {
+  kCoverSelect,
   resolveComplexityBand,
   type CoverageImportantFeature,
 } from '@/lib/novelty-kcover';
+import {
+  canonicalPrescreenPn,
+  prescreenCoverCandidates,
+  prescreenFeatureKey,
+  prescreenStrongImportantPns,
+  runNoveltyFeaturePrescreen,
+  type FeaturePrescreenResult,
+} from '@/lib/novelty-feature-prescreen';
 
 /**
  * The rule new runs are written with. Flipping this back to 'materiality_v1'
@@ -1251,7 +1260,8 @@ export function buildStage4ReportPromptFromRemarksV3(input: {
     + '\n- A reference belongs to exactly one of these three report categories; do not duplicate it across sections.'
     + '\n- Distributed component coverage is not single-reference anticipation.'
     + '\n- Use verified evidence_source metadata internally, but do not identify claims availability or source-field type in public narrative.'
-    + '\n- Processing degradation or incomplete cluster coverage requires a cautious, incomplete assessment.';
+    + '\n- Processing degradation or incomplete cluster coverage requires a cautious, incomplete assessment.'
+    + '\n- If search_metadata.feature_prescreen lists absent_features, you may state that no candidate among its scored_count evidenced those features at the embedding level; phrase it as an evidence-limited signal supporting differentiation, never as a novelty conclusion.';
 }
 
 export interface NoveltySearchConfig {
@@ -1297,6 +1307,23 @@ export interface NoveltySearchConfig {
     minYieldToContinue?: number;
     yieldDecayFactor?: number;
     yieldConfirmationWaves?: number;
+  };
+  /**
+   * Stage 1.7 feature prescreen: embedding-based feature × candidate scoring
+   * between retrieval and the AI relevance gate. 'observe' computes, persists,
+   * and logs but influences nothing — it is the rollback position. 'enforce'
+   * additionally orders the gate queue, sizes deep analysis (k-cover demand ×
+   * attrition), promotes ungated STRONG candidates, and adds pool-level absence
+   * evidence to the report.
+   */
+  stage17?: {
+    enabled: boolean;
+    mode: 'observe' | 'enforce';
+    maxCandidates: number;
+    timeoutMs: number;
+    /** Deep-analysis over-provision multiplier; 1.5 calibrated on 45 production runs. */
+    attrition: number;
+    kByType?: Record<string, number>;
   };
   stage0: {
     customPrompt?: string;
@@ -1935,6 +1962,13 @@ export class NoveltySearchService extends BasePatentService {
       yieldDecayFactor: 0.25,
       yieldConfirmationWaves: 1
     },
+    stage17: {
+      enabled: true,
+      mode: 'enforce',
+      maxCandidates: 300,
+      timeoutMs: 30000,
+      attrition: 1.5
+    },
     stage0: {},
     stage1: {
       maxPatents: DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
@@ -2025,6 +2059,7 @@ export class NoveltySearchService extends BasePatentService {
         ...(requestConfig.stage1 || {}),
       },
       stage15: { ...this.defaultConfig.stage15, ...(requestConfig.stage15 || {}) },
+      stage17: { ...this.defaultConfig.stage17, ...(requestConfig.stage17 || {}) },
       stage35a: { ...this.defaultConfig.stage35a, ...(requestConfig.stage35a || {}) },
       stage35b: { ...this.defaultConfig.stage35b, ...(requestConfig.stage35b || {}) },
       stage35c: { ...this.defaultConfig.stage35c, ...(requestConfig.stage35c || {}) },
@@ -2539,10 +2574,21 @@ export class NoveltySearchService extends BasePatentService {
 
       const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
-      const stage1Data = searchRun.stage1Results as unknown as any;
+      let stage1Data = searchRun.stage1Results as unknown as any;
       const candidatePool = this.getStage1CandidatePool(stage1Data);
       if (!stage1Data || candidatePool.length === 0) {
         return { success: false, error: 'Stage 1 results are required before Stage 1.5' };
+      }
+
+      // Stage 1.7: prescreen before the gate. ensureFeaturePrescreen persists a
+      // fresh blob itself — the cache-hit persist below is guarded and would
+      // silently drop it on warm resumes. Queue reordering is enforce-only;
+      // observe mode must leave candidate order bit-identical.
+      if (config.stage17?.enabled) {
+        stage1Data = await this.ensureFeaturePrescreen(searchId, userId, stage0Data, stage1Data, candidatePool, config);
+        if (config.stage17.mode === 'enforce' && stage1Data?.featurePrescreen?.status === 'ok') {
+          stage1Data = this.applyPrescreenQueueOrder(stage1Data, stage0Data);
+        }
       }
 
       if (!options?.appendNextBatch && stage1Data.aiRelevance?.byPn) {
@@ -4757,6 +4803,273 @@ RESPONSE:`;
     }));
   }
 
+  /**
+   * Important features (novelty_candidate | core_technical) with their types —
+   * the single derivation shared by every Stage 1.7 consumer and by the
+   * coverage_v2 report width, so "important" always means the same set.
+   */
+  private noveltyImportantFeatures(stage0Data: NormalizedIdea): CoverageImportantFeature[] {
+    const inventionFeatures = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    const featureTypes = this.buildFeatureTypeMap(stage0Data || ({} as NormalizedIdea), inventionFeatures);
+    return inventionFeatures
+      .filter(feature => this.isImportantFeature(feature, featureTypes))
+      .map(feature => ({
+        feature,
+        type: featureTypes.get(feature) === 'novelty_candidate' ? 'novelty_candidate' : 'core_technical',
+      }));
+  }
+
+  /**
+   * Compute (or reuse) the Stage 1.7 prescreen and attach it to stage1Results.
+   *
+   * A fresh 'ok' blob is persisted HERE, not left to the caller's writes: the
+   * stage-1.5 cache-hit branch persists conditionally, and a warm resume would
+   * otherwise drop the blob on the floor. 'unavailable' results stay in-memory
+   * only, so a transient failure is retried on the next resume. Runs in observe
+   * mode too — observe computes, persists, and logs; it just influences nothing.
+   */
+  private async ensureFeaturePrescreen(
+    searchId: string,
+    userId: string,
+    stage0Data: NormalizedIdea,
+    stage1Data: any,
+    candidatePool: any[],
+    config: NoveltySearchConfig
+  ): Promise<any> {
+    const stage17 = config.stage17!;
+    const existing = stage1Data?.featurePrescreen as FeaturePrescreenResult | undefined;
+    const currentFeatures = (Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [])
+      .map((feature: unknown) => String(feature || '').trim())
+      .filter(Boolean);
+    if (
+      existing?.version === 1 &&
+      existing.status === 'ok' &&
+      Array.isArray(existing.featureTexts) &&
+      existing.featureTexts.length === currentFeatures.length &&
+      existing.featureTexts.every((text, index) => text === currentFeatures[index])
+    ) {
+      return stage1Data;
+    }
+
+    let tenantId: string | undefined;
+    try {
+      tenantId = (await prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true } }))?.tenantId || undefined;
+    } catch {
+      // Metering context only — its absence never blocks the prescreen.
+    }
+
+    const prescreen = await runNoveltyFeaturePrescreen({
+      stage0Data,
+      candidatePool,
+      searchId,
+      tenantId,
+      userId,
+      timeoutMs: stage17.timeoutMs,
+      maxCandidates: stage17.maxCandidates,
+    });
+    const attached = { ...(stage1Data || {}), featurePrescreen: prescreen };
+    if (prescreen.status === 'ok') {
+      try {
+        await prisma.noveltySearchRun.update({ where: { id: searchId }, data: { stage1Results: attached as any } });
+      } catch (error) {
+        console.warn('[NoveltyFeaturePrescreen] persist failed:', error);
+      }
+    }
+
+    const importantFeatures = this.noveltyImportantFeatures(stage0Data);
+    const predictedKCoverDemand = kCoverSelect(
+      prescreenCoverCandidates(prescreen, importantFeatures),
+      importantFeatures,
+      { kByType: stage17.kByType }
+    ).selectedKeys.length;
+    console.info('[NoveltyFeaturePrescreen]', JSON.stringify({
+      searchId,
+      status: prescreen.status,
+      reason: prescreen.reason,
+      semanticAvailable: prescreen.semanticAvailable,
+      scoredCount: prescreen.scoredCount,
+      unavailableCount: prescreen.unavailableCount,
+      elapsedMs: prescreen.elapsedMs,
+      predictedKCoverDemand,
+      mode: stage17.mode,
+    }));
+    return attached;
+  }
+
+  /**
+   * Enforce-only: order the ungated tail of the pool by predicted feature
+   * coverage, so the gate's LLM budget lands on the most relevant candidates
+   * first. The gated prefix [0, nextBatchCursor) is NEVER touched —
+   * createStage15CacheKey hashes it, and reordering it would silently re-gate
+   * every resumed run.
+   */
+  private applyPrescreenQueueOrder(stage1Data: any, stage0Data: NormalizedIdea): any {
+    const prescreen = stage1Data?.featurePrescreen as FeaturePrescreenResult | undefined;
+    if (!prescreen || prescreen.status !== 'ok') return stage1Data;
+    const pool = this.getStage1CandidatePool(stage1Data);
+    if (!Array.isArray(pool) || pool.length === 0) return stage1Data;
+    const tailStart = Math.max(0, Math.min(pool.length, Number(stage1Data?.aiRelevance?.nextBatchCursor ?? 0)));
+    if (tailStart >= pool.length) return stage1Data;
+
+    const importantKeys = new Set(
+      this.noveltyImportantFeatures(stage0Data).map(feature => prescreenFeatureKey(feature.feature))
+    );
+    const coverageScore = (candidate: any): number => {
+      const cells = prescreen.cells[canonicalPrescreenPn(getPriorArtPublicationNumber(candidate))];
+      if (!cells) return -1; // papers / UNAVAILABLE keep their relative order at the back
+      let score = 0;
+      for (const [featureKey, cell] of Object.entries(cells)) {
+        if (!importantKeys.has(featureKey)) continue;
+        if (cell.v === 'S') score += 2;
+        else if (cell.v === 'P') score += 1;
+      }
+      return score;
+    };
+    const tail = pool.slice(tailStart)
+      .map((candidate: any, index: number) => ({ candidate, index, score: coverageScore(candidate) }))
+      .sort((a: any, b: any) => (b.score - a.score) || (a.index - b.index))
+      .map((entry: any) => entry.candidate);
+    return {
+      ...stage1Data,
+      retrievalCandidates: [...pool.slice(0, tailStart), ...tail],
+      prescreenOrdering: { applied: true, tailStart, at: new Date().toISOString() },
+    };
+  }
+
+  /**
+   * Recall net (enforce only): ungated candidates whose prescreen shows STRONG
+   * on an important feature — STRONG only, 86% measured precision; PART's 54%
+   * never promotes — get gated through the existing appendNextBatch wave so
+   * they earn REAL gate records. Promote-only by construction: the wave merge
+   * spreads existing byPn records, no gated candidate is demoted or filtered,
+   * and any failure returns stage1Data unchanged.
+   */
+  private async applyPrescreenRecallNet(
+    searchId: string,
+    stage0Data: NormalizedIdea,
+    stage1Data: any,
+    config: NoveltySearchConfig,
+    requestHeaders?: Record<string, string>
+  ): Promise<any> {
+    const RECALL_NET_CAP = 10;
+    try {
+      const prescreen = stage1Data?.featurePrescreen as FeaturePrescreenResult | undefined;
+      if (!prescreen || prescreen.status !== 'ok') return stage1Data;
+      const pool = this.getStage1CandidatePool(stage1Data);
+      const cursor = Math.max(0, Math.min(pool.length, Number(stage1Data?.aiRelevance?.nextBatchCursor ?? 0)));
+      if (cursor >= pool.length) return stage1Data;
+      const byPn = stage1Data?.aiRelevance?.byPn || {};
+      const strongByPn = prescreenStrongImportantPns(prescreen, this.noveltyImportantFeatures(stage0Data));
+      if (strongByPn.size === 0) return stage1Data;
+
+      // One detail slot per family: skip candidates whose family is already
+      // represented among the gated prefix or earlier picks.
+      const familyByPn = prescreen.familyByPn || {};
+      const gatedFamilies = new Set<string>();
+      for (const candidate of pool.slice(0, cursor)) {
+        const family = familyByPn[canonicalPrescreenPn(getPriorArtPublicationNumber(candidate))];
+        if (family) gatedFamilies.add(family);
+      }
+      const tail = pool.slice(cursor);
+      const ranked = tail
+        .map((candidate, index) => {
+          const pn = getPriorArtPublicationNumber(candidate);
+          return {
+            candidate,
+            index,
+            canonical: canonicalPrescreenPn(pn),
+            strong: strongByPn.get(canonicalPrescreenPn(pn)) || 0,
+            hasRecord: Boolean(this.getGateRecordForPublication(byPn, pn)),
+          };
+        })
+        .filter(item => !item.hasRecord && item.strong > 0)
+        .sort((a, b) => (b.strong - a.strong) || (a.index - b.index));
+      const picks: typeof ranked = [];
+      const pickedFamilies = new Set<string>();
+      for (const item of ranked) {
+        if (picks.length >= RECALL_NET_CAP) break;
+        const family = familyByPn[item.canonical];
+        if (family && (gatedFamilies.has(family) || pickedFamilies.has(family))) continue;
+        if (family) pickedFamilies.add(family);
+        picks.push(item);
+      }
+      if (picks.length === 0) return stage1Data;
+
+      const pickedSet = new Set(picks.map(item => item.candidate));
+      const reordered = {
+        ...stage1Data,
+        retrievalCandidates: [
+          ...pool.slice(0, cursor),
+          ...picks.map(item => item.candidate),
+          ...tail.filter(candidate => !pickedSet.has(candidate)),
+        ],
+        prescreenRecallNet: {
+          promotedCount: picks.length,
+          pns: picks.map(item => item.canonical),
+          at: new Date().toISOString(),
+        },
+      };
+      // Narrowed config bounds the wave to EXACTLY the recall set: the first
+      // wave is pool.slice(cursor, cursor + picks) and the total ceiling stops
+      // any continuation at candidate_ceiling.
+      const narrowedConfig: NoveltySearchConfig = {
+        ...config,
+        stage15: {
+          ...config.stage15,
+          maxCandidates: picks.length,
+          maxTotalCandidates: cursor + picks.length,
+        },
+      };
+      const nextGate = await this.performStage15(searchId, stage0Data, reordered, narrowedConfig, requestHeaders, { appendNextBatch: true });
+      if (!nextGate.success || !nextGate.data) {
+        console.warn('[NoveltyFeaturePrescreen]', JSON.stringify({
+          event: 'recall_net_gate_failed', searchId, promotedCount: picks.length, error: nextGate.error,
+        }));
+        return stage1Data;
+      }
+      console.info('[NoveltyFeaturePrescreen]', JSON.stringify({
+        event: 'recall_net_gated', searchId, promotedCount: picks.length, pns: reordered.prescreenRecallNet.pns,
+      }));
+      // Merge under the ORIGINAL config so visibility policy is unchanged.
+      return this.mergeStage15Visibility(reordered, nextGate.data, config);
+    } catch (error) {
+      console.warn('[NoveltyFeaturePrescreen] recall_net_failed:', error);
+      return stage1Data;
+    }
+  }
+
+  /**
+   * Pool-level absence evidence for the report: important features that NO
+   * scored candidate evidenced even at PART strength. Asserted only when the
+   * prescreen is enforce-mode, semantic, and saw ≥90% of the pool — a claim
+   * about the corpus is only as good as the fraction of it that was scoreable.
+   * Capped at 5 features to bound the prompt payload.
+   */
+  private buildPrescreenAbsenceEvidence(
+    stage0Data: NormalizedIdea,
+    stage1Data: any,
+    config: NoveltySearchConfig
+  ): { scored_count: number; unavailable_count: number; absent_features: string[] } | null {
+    if (!config.stage17?.enabled || config.stage17.mode !== 'enforce') return null;
+    const prescreen = stage1Data?.featurePrescreen as FeaturePrescreenResult | undefined;
+    if (!prescreen || prescreen.status !== 'ok' || !prescreen.semanticAvailable) return null;
+    const total = prescreen.scoredCount + prescreen.unavailableCount;
+    if (total === 0 || prescreen.unavailableCount / total >= 0.1) return null;
+    const absent = this.noveltyImportantFeatures(stage0Data)
+      .map(entry => entry.feature)
+      .filter(feature => {
+        const coverage = prescreen.coverageByFeature[prescreenFeatureKey(feature)];
+        return coverage && coverage.strong === 0 && coverage.part === 0;
+      })
+      .slice(0, 5);
+    if (absent.length === 0) return null;
+    return {
+      scored_count: prescreen.scoredCount,
+      unavailable_count: prescreen.unavailableCount,
+      absent_features: absent,
+    };
+  }
+
   private mergeStage15Visibility(stage1Data: any, gateData: any, config: NoveltySearchConfig) {
     const candidatePool = this.getStage1CandidatePool(stage1Data);
     const visibleLimit = Math.max(
@@ -4894,7 +5207,13 @@ RESPONSE:`;
     stage1Data: any,
     maxCandidates = 20,
     stage0Data?: NormalizedIdea,
-    adaptive = false
+    adaptive = false,
+    /**
+     * Stage 1.7 policy. Passed ONLY by the consolidated-analysis call site when
+     * stage17 is enforce — every other caller stays structurally legacy, which
+     * is what makes observe mode and the fallback path bit-identical.
+     */
+    prescreenPolicy?: { enforce: boolean; attrition: number; kByType?: Record<string, number> }
   ): any[] {
     const gate = stage1Data?.aiRelevance;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
@@ -4920,12 +5239,32 @@ RESPONSE:`;
     const targetCap = profile
       ? Math.min(MAX_DEEP_ANALYSIS_TARGET, profile.maximum)
       : MAX_DEEP_ANALYSIS_TARGET;
+    // Stage 1.7 sizing: how many references the prescreen predicts are needed to
+    // cover the invention, over-provisioned by the calibrated attrition (the LLM
+    // consistently confirms ~1/1.5 of predicted-relevant references).
+    const prescreen = stage1Data?.featurePrescreen as FeaturePrescreenResult | undefined;
+    const prescreenActive = Boolean(prescreenPolicy?.enforce && prescreen?.status === 'ok' && stage0Data);
+    const prescreenImportant = prescreenActive ? this.noveltyImportantFeatures(stage0Data!) : [];
+    const prescreenTarget = prescreenActive
+      ? (() => {
+        const demand = kCoverSelect(
+          prescreenCoverCandidates(prescreen, prescreenImportant),
+          prescreenImportant,
+          { kByType: prescreenPolicy!.kByType }
+        ).selectedKeys.length;
+        return Math.min(targetCap, Math.max(targetFloor, Math.ceil(demand * Math.max(1, prescreenPolicy!.attrition))));
+      })()
+      : null;
     const deepAnalysisTarget = (acceptedCount: number, componentCount: number, borderlineCount: number) => {
       const reviewableCount = Math.max(0, acceptedCount + componentCount + borderlineCount);
       if (reviewableCount === 0 || safeMaxCandidates === 0) return 0;
-      if (adaptive) return Math.min(safeMaxCandidates, reviewableCount);
+      if (adaptive) {
+        // Enforce mode is where the prescreen actually saves LLM batches: the
+        // adaptive path otherwise analyzes the whole reviewable pool.
+        return Math.min(safeMaxCandidates, reviewableCount, prescreenTarget ?? reviewableCount);
+      }
       const relativeTarget = Math.ceil(reviewableCount * BORDERLINE_FILL_RATIO);
-      const boundedTarget = Math.min(targetCap, Math.max(targetFloor, relativeTarget));
+      const boundedTarget = prescreenTarget ?? Math.min(targetCap, Math.max(targetFloor, relativeTarget));
       return Math.min(safeMaxCandidates, boundedTarget);
     };
     const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0, priority?: ReturnType<NoveltySearchService['preMappingPriority']>) => ({
@@ -5014,11 +5353,66 @@ RESPONSE:`;
     }, 0);
     const targetCount = deepAnalysisTarget(gateAcceptedCount, gateComponentCount, gateBorderlineCount);
     const borderlineNeeded = Math.max(0, targetCount - promoted.length - accepted.length - component.length);
-    const borderline = selectByDecision(
-      'borderline',
-      adaptive ? Math.min(safeMaxCandidates - promoted.length - accepted.length - component.length, borderlineNeeded) : Math.min(MAX_BORDERLINE_FILL, borderlineNeeded)
-    );
-    const categorySelected = [...promoted, ...accepted, ...component, ...borderline].slice(0, safeMaxCandidates);
+    const borderlineLimit = adaptive
+      ? Math.min(safeMaxCandidates - promoted.length - accepted.length - component.length, borderlineNeeded)
+      : Math.min(MAX_BORDERLINE_FILL, borderlineNeeded);
+    // Coverage-greedy borderline fill (enforce only): spend borderline slots on
+    // candidates that close uncovered feature demand, not merely on the highest
+    // gate scores. Legacy score order remains both the fallback and the top-up.
+    const borderline = prescreenActive
+      ? (() => {
+        const limit = Math.max(0, Math.min(borderlineLimit, safeMaxCandidates - selectedKeys.size));
+        if (limit <= 0 || !(candidatePool.length > 0 && gate?.byPn && gate?.gateStatus !== 'failed')) return [] as any[];
+        const eligible = candidatePool
+          .map((candidate, index) => {
+            const pn = getPriorArtPublicationNumber(candidate);
+            const record = pn ? this.getGateRecordForPublication(gate.byPn, pn) : undefined;
+            const score = Number(record?.rerankScore ?? record?.score ?? 0);
+            const key = this.canonicalPatentNumber(pn) || String(pn || '').toUpperCase();
+            return { candidate, index, record, score, key };
+          })
+          .filter(item => {
+            if (!item.record) return false;
+            if (normalizeRerankDecision(item.record.rerankDecision || item.record.decision) !== 'borderline') return false;
+            return Boolean(item.key && !selectedKeys.has(item.key));
+          });
+        const byKey = new Map(eligible.map(item => [item.key, item]));
+        // Seed with everything already selected so closure only chases demand
+        // the accepted/component/high-signal picks leave unmet.
+        const greedyKeys = kCoverSelect(
+          prescreenCoverCandidates(prescreen, prescreenImportant),
+          prescreenImportant,
+          { kByType: prescreenPolicy!.kByType, preselected: Array.from(selectedKeys) }
+        ).selectedKeys.filter(key => byKey.has(key) && !selectedKeys.has(key));
+        const picks: any[] = [];
+        for (const key of greedyKeys) {
+          if (picks.length >= limit) break;
+          const item = byKey.get(key)!;
+          selectedKeys.add(key);
+          picks.push(annotate(item.candidate, item.record, item.score));
+        }
+        if (picks.length < limit) {
+          const leftovers = eligible
+            .filter(item => !selectedKeys.has(item.key))
+            .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+          for (const item of leftovers) {
+            if (picks.length >= limit) break;
+            selectedKeys.add(item.key);
+            picks.push(annotate(item.candidate, item.record, item.score));
+          }
+        }
+        return picks;
+      })()
+      : selectByDecision('borderline', borderlineLimit);
+    // Adaptive mode's accepted/component selection is target-blind by design
+    // (analyze everything reviewable, early-stop on saturation) — so the
+    // prescreen cap must bind at the final cut. High-signal promotions are
+    // never trimmed.
+    const adaptiveCap = adaptive && prescreenActive && prescreenTarget !== null
+      ? Math.max(prescreenTarget, promoted.length)
+      : safeMaxCandidates;
+    const categorySelected = [...promoted, ...accepted, ...component, ...borderline]
+      .slice(0, Math.min(safeMaxCandidates, adaptiveCap));
     if (categorySelected.length > 0) return categorySelected;
 
     const visibleResults = Array.isArray(stage1Data?.visiblePriorArtResults)
@@ -6043,6 +6437,11 @@ RESPONSE:`;
         if (nextCursor <= previousCursor || !stage1Data?.hasMoreCandidates) break;
       }
     }
+    // Stage 1.7 recall net: ungated candidates the prescreen scored STRONG on an
+    // important feature get one shot at a real gate record before deep analysis.
+    if (config.stage17?.enabled && config.stage17.mode === 'enforce' && stage1Data?.featurePrescreen?.status === 'ok') {
+      stage1Data = await this.applyPrescreenRecallNet(searchId, stage0Data, stage1Data, config, requestHeaders);
+    }
     const configuredMax = Number(config.consolidatedAnalysis?.maxPatentsForAttorneyReport || config.consolidatedAnalysis?.maxCandidates || 60);
     const legacyMaxCandidates = Math.min(Math.max(Number.isFinite(configuredMax) ? configuredMax : 60, 1), 60);
     const maxCandidates = adaptiveMode === 'enforce'
@@ -6052,7 +6451,10 @@ RESPONSE:`;
       stage1Data,
       maxCandidates,
       stage0Data,
-      adaptiveMode === 'enforce'
+      adaptiveMode === 'enforce',
+      config.stage17?.enabled && config.stage17.mode === 'enforce'
+        ? { enforce: true, attrition: config.stage17.attrition, kByType: config.stage17.kByType }
+        : undefined
     );
     if (selected.length === 0) return { success: false, error: 'No relevant candidates available for consolidated analysis.' };
 
@@ -8299,6 +8701,13 @@ RESPONSE:`;
       topDifferentiatorNames, integrationLine, decision, score, aggregationResult.confidence
     );
 
+    // Stage 1.7 absence evidence: renders even when the LLM narrative failed,
+    // and is phrased as an evidence-limited signal, never a novelty conclusion.
+    const prescreenAbsence = reportInputs?.feature_prescreen_absence;
+    const absenceSentence = prescreenAbsence?.absent_features?.length
+      ? ` An embedding-level prescreen of ${prescreenAbsence.scored_count} scored candidates found none evidencing: ${prescreenAbsence.absent_features.join('; ')} (evidence-limited signal).`
+      : '';
+
     const existingExec = llmReport?.executive_summary || {};
     const existingCards = existingExec.visual_cards && typeof existingExec.visual_cards === 'object'
       ? { ...existingExec.visual_cards }
@@ -8309,7 +8718,7 @@ RESPONSE:`;
     delete existingCards["Unique Features"];
     const finalExec = {
       ...existingExec,
-      summary: `${canonicalVerdict.summary} ${deterministicSummary}`.trim(),
+      summary: `${canonicalVerdict.summary} ${deterministicSummary}${absenceSentence}`.trim(),
       novelty_score: (score * 100).toFixed(1) + "%",
       confidence: aggregationResult.confidence,
       visual_cards: {
@@ -8672,14 +9081,7 @@ RESPONSE:`;
     stage0Data: NormalizedIdea,
     featureMapData: FeatureMapBatchResult | null
   ): ReportReferenceCoverageContext {
-    const inventionFeatures = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
-    const featureTypes = this.buildFeatureTypeMap(stage0Data || ({} as NormalizedIdea), inventionFeatures);
-    const importantFeatures: CoverageImportantFeature[] = inventionFeatures
-      .filter(feature => this.isImportantFeature(feature, featureTypes))
-      .map(feature => ({
-        feature,
-        type: featureTypes.get(feature) === 'novelty_candidate' ? 'novelty_candidate' : 'core_technical',
-      }));
+    const importantFeatures = this.noveltyImportantFeatures(stage0Data);
     const profile = this.adaptiveComplexityProfile(stage0Data, featureMapData?.feature_map || []);
     return {
       band: resolveComplexityBand(profile.complexity, importantFeatures.length),
@@ -10262,6 +10664,12 @@ OUTPUT JSON:
       );
       reportInputs.analysis_degraded = Boolean(featureMapData?.degraded || featureMapData?.adaptiveScreening?.completeness === 'degraded');
 
+      // Stage 1.7 absence evidence: pool-level "no scored candidate teaches
+      // feature F" — far stronger than "absent in the few we mapped", but only
+      // asserted when the prescreen actually saw the pool.
+      const prescreenAbsence = this.buildPrescreenAbsenceEvidence(stage0Data, stage1Data, config);
+      if (prescreenAbsence) reportInputs.feature_prescreen_absence = prescreenAbsence;
+
       // Prepare enhanced report inputs with selected patents
       const selectedPatentsSummary = selectedPatents.map(p => {
         const present = Array.isArray(p.mappings) ? p.mappings.filter((m: any) => (m.status || '').toString() === 'Present').length : 0;
@@ -10289,7 +10697,8 @@ OUTPUT JSON:
           pqai_initial_count: stage1CandidatePool.length,
           ai_relevance_accepted: Array.isArray(stage1Data?.aiRelevance?.accepted) ? stage1Data.aiRelevance.accepted.length : undefined,
           ai_relevance_component: Array.isArray(stage1Data?.aiRelevance?.component) ? stage1Data.aiRelevance.component.length : undefined,
-          ai_relevance_borderline: Array.isArray(stage1Data?.aiRelevance?.borderline) ? stage1Data.aiRelevance.borderline.length : undefined
+          ai_relevance_borderline: Array.isArray(stage1Data?.aiRelevance?.borderline) ? stage1Data.aiRelevance.borderline.length : undefined,
+          ...(prescreenAbsence ? { feature_prescreen: prescreenAbsence } : {})
         },
         patent_details: selectedPatents.map(patent => ({
           patent_number: patent.patentNumber,

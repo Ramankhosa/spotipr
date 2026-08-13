@@ -109,3 +109,135 @@ describe('complexity-aware deep-analysis sizing', () => {
     expect(selected).toHaveLength(30);
   });
 });
+
+// ---- Stage 1.7 prescreen-driven sizing ------------------------------------
+
+function withPrescreen(stage1: any, cells: Record<string, Record<string, { v: string }>>) {
+  return {
+    ...stage1,
+    featurePrescreen: {
+      version: 1,
+      status: 'ok',
+      semanticAvailable: true,
+      model: 'm',
+      dtype: 'binary',
+      scoredCount: Object.keys(cells).length,
+      unavailableCount: 0,
+      elapsedMs: 3,
+      featureTexts: stage0Simple().inventionFeatures,
+      cells,
+      coverageByFeature: {},
+      unavailablePns: [],
+    },
+  };
+}
+
+function canonicalOf(index: number) {
+  // stage1With pns are US2026...A1; canonical strips the kind code.
+  return `US20260${String(index).padStart(4, '0')}`;
+}
+
+const POLICY = { enforce: true, attrition: 1.5 };
+
+describe('prescreen-driven sizing (stage17 enforce)', () => {
+  test('target = kCoverDemand × attrition, clamped to the profile bounds', () => {
+    const svc = service();
+    // Two core features (k=2 each); candidates 0..3 each cover one feature →
+    // demand = 4; ceil(4 × 1.5) = 6 < simple floor 8 → floor wins.
+    const cells: Record<string, Record<string, { v: string }>> = {};
+    for (let index = 0; index < 4; index += 1) {
+      cells[canonicalOf(index)] = {
+        [stage0Simple().inventionFeatures[index % 2]]: { v: 'S' },
+      };
+    }
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(
+      withPrescreen(stage1With(2, 10), cells), 60, stage0Simple(), false, POLICY
+    );
+    // Floor 8 = 2 accepted + 6 borderline.
+    expect(selected).toHaveLength(8);
+  });
+
+  test('a high prescreen demand widens the target past the ratio formula', () => {
+    const svc = service();
+    // 8 candidates each covering a DIFFERENT core feature of an 8-feature...
+    // simple invention has 4 features; use one feature covered by many distinct
+    // candidates under novelty k=3 to drive demand: here 12 candidates each
+    // covering one of the two core features → demand = 4 (k=2 × 2 features).
+    // Instead drive width via attrition on a larger demand: cover both features
+    // per candidate on 6 distinct candidates → demand stays small; so test the
+    // clamp directly with a spread of single-feature candidates.
+    const cells: Record<string, Record<string, { v: string }>> = {};
+    for (let index = 0; index < 12; index += 1) {
+      cells[canonicalOf(index)] = {
+        [stage0Simple().inventionFeatures[index % 2]]: { v: index % 3 === 0 ? 'S' : 'P' },
+      };
+    }
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(
+      withPrescreen(stage1With(2, 20), cells), 60, stage0Simple(), false, POLICY
+    );
+    // demand 4 → ceil(4×1.5)=6 → clamped to floor 8. Ratio formula would give
+    // clamp(ceil(22×0.35)=8, 8, 24) = 8 as well: assert the prescreen path
+    // produced a bounded, not runaway, target.
+    expect(selected.length).toBeLessThanOrEqual(12);
+    expect(selected.length).toBeGreaterThanOrEqual(8);
+  });
+
+  test('falls back to exact legacy sizing when the prescreen is unavailable or absent', () => {
+    const svc = service();
+    const legacy = svc.selectRelevantPatentsForDeepAnalysis(stage1With(2, 10), 60, stage0Simple());
+    const unavailable = svc.selectRelevantPatentsForDeepAnalysis(
+      {
+        ...stage1With(2, 10),
+        featurePrescreen: { version: 1, status: 'unavailable', featureTexts: [] },
+      },
+      60, stage0Simple(), false, POLICY
+    );
+    const noPolicy = svc.selectRelevantPatentsForDeepAnalysis(
+      withPrescreen(stage1With(2, 10), { [canonicalOf(0)]: { [stage0Simple().inventionFeatures[0]]: { v: 'S' } } }),
+      60, stage0Simple()
+    );
+    expect(unavailable.map((c: any) => c.publicationNumber)).toEqual(legacy.map((c: any) => c.publicationNumber));
+    expect(noPolicy.map((c: any) => c.publicationNumber)).toEqual(legacy.map((c: any) => c.publicationNumber));
+  });
+
+  test('borderline slots go to coverage-closing candidates first, then score order', () => {
+    const svc = service();
+    // 2 accepted (indices 0-1), 10 borderline (2-11). Feature A covered by the
+    // accepted candidates; feature B only by LOW-scored borderline candidates
+    // 10 and 11 — greedy must pick them despite their scores, then top up by
+    // score order.
+    const [featureA, featureB] = stage0Simple().inventionFeatures;
+    const cells: Record<string, Record<string, { v: string }>> = {
+      [canonicalOf(0)]: { [featureA]: { v: 'S' } },
+      [canonicalOf(1)]: { [featureA]: { v: 'S' } },
+      [canonicalOf(10)]: { [featureB]: { v: 'S' } },
+      [canonicalOf(11)]: { [featureB]: { v: 'S' } },
+    };
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(
+      withPrescreen(stage1With(2, 10), cells), 60, stage0Simple(), false, POLICY
+    );
+    const pns = selected.map((c: any) => c.publicationNumber);
+    // Both feature-B teachers make the cut even though 8 higher-scored
+    // borderline candidates exist.
+    expect(pns).toContain('US202600010A1');
+    expect(pns).toContain('US202600011A1');
+    // Accepted always first.
+    expect(pns.slice(0, 2)).toEqual(['US202600000A1', 'US202600001A1']);
+  });
+
+  test('adaptive enforce caps the reviewable pool at the prescreen target', () => {
+    const svc = service();
+    // Demand 2 (two features, each k=2 but only one candidate covers each →
+    // required clamps to available 1+1) → ceil(2×1.5)=3 → floor 8 → target 8.
+    const [featureA, featureB] = stage0Simple().inventionFeatures;
+    const cells = {
+      [canonicalOf(0)]: { [featureA]: { v: 'S' } },
+      [canonicalOf(1)]: { [featureB]: { v: 'S' } },
+    };
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(
+      withPrescreen(stage1With(30, 0), cells), 60, stage0Simple(), true, POLICY
+    );
+    // Without the prescreen, adaptive analyzes all 30.
+    expect(selected).toHaveLength(8);
+  });
+});

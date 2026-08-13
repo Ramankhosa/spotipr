@@ -25,7 +25,9 @@
 // ============================================================================
 import 'dotenv/config'
 import { prisma } from '@/lib/prisma'
-import { scoreElements } from '@/lib/prior-art-studio/element-scoring'
+// The shared scorer is the calibration source of truth — the same module the
+// Stage 1.7 pipeline path calls.
+import { scoreElements } from '@/lib/element-scoring/scorer'
 import { kCoverSelect, type CoverageImportantFeature } from '@/lib/novelty-kcover'
 
 const LIMIT_ARG = process.argv.indexOf('--limit')
@@ -187,7 +189,7 @@ async function main() {
     }
 
     // Similarity mass of pool docs the LLM never mapped (mostly irrelevant art).
-    for (const [key, poolPn] of canonicalToPoolPn) {
+    for (const [key, poolPn] of Array.from(canonicalToPoolPn.entries())) {
       if (mappedCanonicals.has(key)) continue
       for (const feature of features) {
         const graded = verdictFor(poolPn, feature)
