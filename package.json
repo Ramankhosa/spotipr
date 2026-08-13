@@ -42,6 +42,7 @@
     "patent-drafting:worker:once": "tsx scripts/patent-drafting-worker.ts --once",
     "diagram-image-analysis:worker": "tsx scripts/diagram-image-analysis-worker.ts",
     "diagram-image-analysis:worker:once": "tsx scripts/diagram-image-analysis-worker.ts --once",
+    "novelty:prescreen-harness": "tsx scripts/novelty-prescreen-harness.ts",
     "novelty-search:worker": "tsx scripts/novelty-search-worker.ts",
     "novelty-search:worker:once": "tsx scripts/novelty-search-worker.ts --once",
     "patent-corpus:worker": "tsx scripts/patent-corpus-worker.ts",
