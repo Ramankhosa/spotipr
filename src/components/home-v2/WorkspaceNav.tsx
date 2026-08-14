@@ -38,6 +38,7 @@ const MENUS: { label: string; items: { label: string; href: string }[] }[] = [
     items: [
       { label: 'Journal', href: '/blog' },
       { label: 'Pricing', href: '/pricing' },
+      { label: 'Patent Intelligence API', href: '/features/patent-api' },
       { label: 'Contact us', href: '/contact' },
     ],
   },

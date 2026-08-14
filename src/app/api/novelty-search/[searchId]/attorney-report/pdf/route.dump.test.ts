@@ -10,7 +10,10 @@ import { GET } from './route'
 vi.mock('@/lib/auth', () => ({ verifyJWT: vi.fn() }))
 vi.mock('@/lib/prisma', () => ({ prisma: { noveltySearchRun: { findFirst: vi.fn() } } }))
 vi.mock('@/lib/novelty-report-metadata', () => ({ hydrateNoveltyReportPatentMetadata: vi.fn() }))
-vi.mock('@/lib/novelty-attorney-report', () => ({ buildNoveltyAttorneyReportModel: vi.fn() }))
+vi.mock('@/lib/novelty-attorney-report', async importActual => ({
+  ...(await importActual<typeof import('@/lib/novelty-attorney-report')>()),
+  buildNoveltyAttorneyReportModel: vi.fn(),
+}))
 
 const OUT = process.env.PDF_DUMP_PATH || ''
 
@@ -45,8 +48,16 @@ function featureRow(index: number, refIndex: number) {
 
 function citation(refIndex: number) {
   const rows = Array.from({ length: 8 }, (_, i) => featureRow(i, refIndex))
+  const publicationNumber = `IN2026${String(refIndex + 1).padStart(5, '0')}`
+  const examinerCategory = refIndex === 0 ? 'X' : refIndex % 5 === 1 ? 'Y' : 'A'
   return {
-    publicationNumber: `IN2026${String(refIndex + 1).padStart(5, '0')}`,
+    publicationNumber,
+    googlePatentsUrl: `https://patents.google.com/patent/${publicationNumber}`,
+    citationNo: `D${refIndex + 1}`,
+    examinerCategory,
+    examinerCategoryLabel: examinerCategory === 'X'
+      ? 'Particularly relevant on its own'
+      : examinerCategory === 'Y' ? 'Particularly relevant if combined' : 'Technological background',
     applicationNumber: `2026${String(refIndex + 1).padStart(8, '0')}`,
     title: `Battery reference ${refIndex + 1}: electrochemical impedance spectroscopy measurement apparatus and method for battery health state estimation`,
     publicationDate: '2026-01-10',
@@ -103,7 +114,32 @@ function reportModel() {
       { label: 'Component / feature-level mapped citations', value: 48 },
       { label: 'Citations selected for detailed feature mapping', value: 48 },
     ],
+    searchScope: {
+      sources: [
+        { label: 'Indian patent corpus', status: 'Searched', retrieved: '120', note: '' },
+        { label: 'EPO DOCDB', status: 'Searched', retrieved: '60', note: '' },
+        { label: 'Scholarly papers - Crossref', status: 'Requested but unavailable', retrieved: '-', note: 'Source did not return results in this run: upstream request timed out.' },
+        { label: 'USPTO PatentsView', status: 'Not searched', retrieved: '-', note: 'Not selected for this run.' },
+      ],
+      coverage: [
+        { label: 'Candidate records retrieved and ranked', value: '180' },
+        { label: 'Records screened for relevance', value: '120 of 180' },
+        { label: 'Citations passing the relevance gate', value: '59' },
+        { label: 'Citations mapped feature by feature', value: '48' },
+        { label: 'Candidates scored by the embedding feature prescreen', value: '180' },
+      ],
+      dateCoverage: 'Mapped citations carry publication dates from 2016 to 2026. Coverage is stated by publication date because several source corpora record a publication date only; a record may therefore have an earlier priority or filing date than this range suggests, and recently filed applications not yet published cannot appear in any search.',
+      limitations: [
+        'Screening and mapping used the retrieved record text available to the system - typically title, abstract and bibliographic metadata. Full patent text, claims, drawings, family members, legal status and prosecution history were not read.',
+        'Relevance screening reached its configured limit for this run: 120 of 180 retrieved records were screened for relevance.',
+        'The following configured source returned no results in this run and its coverage is therefore missing from this report: Scholarly papers - Crossref.',
+        'No searching of non-patent literature beyond the listed scholarly sources, standards documents, product literature or public disclosures was performed.',
+      ],
+    },
     scoringLegend: [
+      { label: 'X - Particularly relevant alone', meaning: 'Taken on its own, this reference maps the core inventive combination and is the primary constraint on claim scope.' },
+      { label: 'Y - Particularly relevant if combined', meaning: 'This reference becomes a constraint only when read with another cited reference; see the inventive-step combinations section.' },
+      { label: 'A - Technological background', meaning: 'This reference defines the general state of the art without mapping the core inventive combination alone or in the identified combinations.' },
       { label: 'D - Directly Mapped', meaning: 'The reviewed record explicitly states the mapped mechanism for this feature.' },
       { label: 'P - Partially Mapped', meaning: 'The citation discloses a related mechanism; at least one required element remains distinct.' },
       { label: 'N - Not Found', meaning: 'The feature was not found in the reviewed preliminary record.' },
@@ -126,6 +162,7 @@ function reportModel() {
     otherShortlistedCitations: Array.from({ length: 12 }, (_, i) => ({
       citationNo: `S${i + 1}`,
       publicationNumber: `CN2026${String(i + 1).padStart(5, '0')}`,
+      googlePatentsUrl: `https://patents.google.com/patent/CN2026${String(i + 1).padStart(5, '0')}`,
       title: `Shortlisted battery diagnostics reference ${i + 1} that cleared the relevance gate`,
       referenceType: 'patent',
       relevanceScore: 0.6 - i * 0.01,

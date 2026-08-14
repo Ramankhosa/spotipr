@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { buildNoveltyAttorneyReportModel, formatFirmAddressLines, type AttorneyReportCitation, type AttorneyReportFeatureRow } from '@/lib/novelty-attorney-report';
+import { buildNoveltyAttorneyReportModel, citationDisplayNumber, formatFirmAddressLines, type AttorneyReportCitation, type AttorneyReportFeatureRow } from '@/lib/novelty-attorney-report';
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
 import { canonicalReportPublicationNumber } from '@/lib/novelty-report-reference-selection';
 import { loadFirmBranding } from '@/lib/firm-profile-service';
@@ -315,6 +315,7 @@ function plannedTocLevels(patentCount: number, paperCount: number, hasCombinatio
   if (hasMappedAppendix) levels.push(1); // Appendix A
   levels.push(2); // List of Other Shortlisted Citations
   for (let i = 0; i < 5; i++) levels.push(1); // Sections 3-7
+  levels.push(1); // Annexure I: Search Scope and Coverage Record
   return levels;
 }
 
@@ -871,8 +872,15 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     .text('Closest Mapped Citation', PAGE.left + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
   doc.rect(PAGE.left + SPACE.md, detailY + 31, 28, 2).fill(COLORS.blue);
   if (strongest) {
-    doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
-      .text(strongest.publicationNumber, PAGE.left + SPACE.md, detailY + 42, { width: detailWidth - 24, lineGap: 1 });
+    if (strongest.googlePatentsUrl) {
+      drawExternalLink(doc, strongest.googlePatentsUrl, strongest.publicationNumber, PAGE.left + SPACE.md, detailY + 42, detailWidth - 24, {
+        fontSize: TYPE.h3,
+        font: FONTS.bold,
+      });
+    } else {
+      doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
+        .text(strongest.publicationNumber, PAGE.left + SPACE.md, detailY + 42, { width: detailWidth - 24, lineGap: 1 });
+    }
     doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
       .text(strongest.title, PAGE.left + SPACE.md, detailY + 42 + strongestPnHeight + 6, { width: detailWidth - 24, lineGap: 2 });
     const roleY = detailY + 42 + strongestPnHeight + 6 + strongestTitleHeight + 10;
@@ -1008,7 +1016,42 @@ function drawFlowBulletList(doc: PdfDoc, label: string, items: string[]) {
   doc.y += SPACE.sm;
 }
 
-function drawMetadataGrid(doc: PdfDoc, items: Array<[string, string]>) {
+// Human-facing form of an external record URL: the scheme is noise on the page and
+// the host+path still identifies the record when the report is read on paper.
+function linkDisplayText(url: string): string {
+  return cleanText(url, '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
+}
+
+// External hyperlink. pdfkit's own `link` + `underline` text options are used rather
+// than a hand-drawn rule and doc.link() rectangle, because they follow the text when
+// it wraps across lines — a manual rectangle only ever covers the first line.
+function drawExternalLink(
+  doc: PdfDoc,
+  url: string,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  options: { fontSize?: number; font?: string; height?: number; lineGap?: number } = {},
+) {
+  doc.fillColor(COLORS.blue2)
+    .font(options.font ?? FONTS.regular)
+    .fontSize(options.fontSize ?? TYPE.small)
+    .text(text, x, y, {
+      width,
+      height: options.height,
+      lineGap: options.lineGap ?? 1.5,
+      link: url,
+      underline: true,
+      ellipsis: '...',
+    });
+}
+
+// Rows are [label, value] or [label, value, url]; a url turns the value into a
+// clickable link (used for the Google Patents record of each citation).
+type MetadataGridItem = [string, string] | [string, string, string];
+
+function drawMetadataGrid(doc: PdfDoc, items: MetadataGridItem[]) {
   for (let index = 0; index < items.length; index += 2) {
     const pair = items.slice(index, index + 2);
     const cellWidth = contentWidth(doc) / 2;
@@ -1025,12 +1068,18 @@ function drawMetadataGrid(doc: PdfDoc, items: Array<[string, string]>) {
     ensureSpace(doc, rowHeight + 2);
     const y = doc.y;
     doc.rect(PAGE.left, y, contentWidth(doc), rowHeight).fill(index % 4 === 2 ? COLORS.surface : COLORS.white);
-    pair.forEach(([label, value], i) => {
+    pair.forEach(([label, value, url], i) => {
       const x = PAGE.left + i * cellWidth;
       doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.caption)
         .text(cleanText(label), x + padding, y + padding, { width: labelWidth - padding, height: rowHeight - padding * 2, lineGap: 1 });
-      doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.small)
-        .text(truncate(value, 240) || '-', x + labelWidth, y + padding, { width: cellWidth - labelWidth - padding, height: rowHeight - padding * 2, ellipsis: '...', lineGap: 1.5 });
+      if (url) {
+        drawExternalLink(doc, url, truncate(value, 240) || '-', x + labelWidth, y + padding, cellWidth - labelWidth - padding, {
+          height: rowHeight - padding * 2,
+        });
+      } else {
+        doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.small)
+          .text(truncate(value, 240) || '-', x + labelWidth, y + padding, { width: cellWidth - labelWidth - padding, height: rowHeight - padding * 2, ellipsis: '...', lineGap: 1.5 });
+      }
     });
     doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + contentWidth(doc), y + rowHeight)
       .lineWidth(0.45).strokeColor(COLORS.border).stroke();
@@ -1050,6 +1099,8 @@ function drawTableRow(
     aligns?: PdfTextAlign[];
     verticalAligns?: Array<'top' | 'center'>;
     boldCells?: number[];
+    /** Per-column external URLs; a cell with a url is drawn as a clickable link. */
+    links?: Array<string | undefined>;
     repeatHeader?: { cells: string[]; widths: number[] };
   } = {}
 ) {
@@ -1082,15 +1133,22 @@ function drawTableRow(
         const textY = opts.verticalAligns?.[index] === 'center' && !continuation
           ? y + Math.max(padding, (rowHeight - textHeight) / 2)
           : y + padding;
-        doc.fillColor(opts.header ? COLORS.white : (opts.textColors?.[index] || COLORS.text))
-          .font(font)
-          .fontSize(fontSize)
-          .text(text, x + padding, textY, {
-            width: textWidth,
-            height: rowHeight - padding * 2,
-            align,
-            lineGap: 1.5,
-          });
+        // A split row repeats the link on the continuation chunk only if that chunk
+        // still carries the cell text, which `continuation` already tells us.
+        const url = opts.header ? undefined : opts.links?.[index];
+        if (url) {
+          drawExternalLink(doc, url, text, x + padding, textY, textWidth, { fontSize, font, height: rowHeight - padding * 2 });
+        } else {
+          doc.fillColor(opts.header ? COLORS.white : (opts.textColors?.[index] || COLORS.text))
+            .font(font)
+            .fontSize(fontSize)
+            .text(text, x + padding, textY, {
+              width: textWidth,
+              height: rowHeight - padding * 2,
+              align,
+              lineGap: 1.5,
+            });
+        }
       }
       x += widths[index];
     });
@@ -1496,18 +1554,54 @@ function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, inde
 }
 
 function drawCitationTable(doc: PdfDoc, citations: AttorneyReportCitation[]) {
-  const widths = [34, 90, contentWidth(doc) - 304, 110, 70];
-  const headers = ['S.No.', 'Citation No.', 'Title', 'Reference Role', 'Claim Impact'];
+  // The examiner category column only appears for feature-mapped citations. The
+  // shortlisted-but-unmapped appendix carries no letters, so it keeps the
+  // narrower five-column layout rather than a column of dashes.
+  const categorized = citations.some(citation => citation.examinerCategory);
+  // The category column is paid for out of the two right-hand columns, so the
+  // title keeps exactly the width it had before the column existed.
+  const widths = categorized
+    ? [34, 30, 84, contentWidth(doc) - 304, 96, 60]
+    : [34, 90, contentWidth(doc) - 304, 110, 70];
+  const headers = categorized
+    ? ['S.No.', 'Cat.', 'Citation No.', 'Title', 'Reference Role', 'Claim Impact']
+    : ['S.No.', 'Citation No.', 'Title', 'Reference Role', 'Claim Impact'];
+  const linkColumn = categorized ? 2 : 1;
+  const aligns: PdfTextAlign[] | undefined = categorized
+    ? ['left', 'center', 'left', 'left', 'left', 'left']
+    : undefined;
   drawTableRow(doc, headers, widths, { header: true });
   citations.forEach((citation, index) => {
-    drawTableRow(doc, [
+    const cells = [
       String(index + 1),
+      ...(categorized ? [citation.examinerCategory || '-'] : []),
       citation.publicationNumber,
       citation.title,
       citation.referenceRole,
       citation.reviewPriority,
-    ], widths, { fills: index % 2 ? widths.map(() => COLORS.tableAlt) : undefined, repeatHeader: { cells: headers, widths } });
+    ];
+    const links: Array<string | undefined> = [];
+    links[linkColumn] = citation.googlePatentsUrl || undefined;
+    drawTableRow(doc, cells, widths, {
+      fills: index % 2 ? widths.map(() => COLORS.tableAlt) : undefined,
+      links,
+      aligns,
+      boldCells: categorized ? [1] : undefined,
+      repeatHeader: { cells: headers, widths },
+    });
   });
+  const notes = [
+    categorized ? 'Cat.: X - relevant alone; Y - relevant in combination; A - technological background.' : '',
+    citations.some(citation => citation.googlePatentsUrl)
+      ? 'Citation numbers link to the full-text record on Google Patents.'
+      : '',
+  ].filter(Boolean);
+  if (notes.length) {
+    doc.y += SPACE.xs;
+    doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.caption)
+      .text(notes.join(' '), PAGE.left, doc.y, { width: contentWidth(doc) });
+    doc.y += SPACE.xs;
+  }
 }
 
 function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
@@ -1758,6 +1852,20 @@ function drawEvidenceBadge(doc: PdfDoc, label: string, x: number, y: number) {
   return width;
 }
 
+// X / Y / A category chip for a reference card. X reads as the constraint, Y as
+// conditional, A as background, so the palette runs warm to neutral.
+function drawExaminerCategoryChip(doc: PdfDoc, category: string, meaning: string, x: number, y: number) {
+  const palette = category === 'X'
+    ? { fill: '#FEF2F2', stroke: '#FECACA', text: '#B91C1C' }
+    : category === 'Y'
+      ? { fill: '#FFFBEB', stroke: '#FDE68A', text: '#A16207' }
+      : { fill: '#F8FAFC', stroke: '#CBD5E1', text: '#475569' };
+  const label = `${category} - ${meaning.replace(/^Particularly relevant /i, '').replace(/^Technological /i, '')}`.toUpperCase();
+  doc.roundedRect(x, y, 88, 23, 5).fillAndStroke(palette.fill, palette.stroke);
+  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text(label, x + 5, y + 8, { width: 78, height: 8, align: 'center', lineBreak: false, ellipsis: '...' });
+}
+
 function drawCitationCardHeader(
   doc: PdfDoc,
   item: ReturnType<typeof buildNoveltyAttorneyReportModel>['comparisons'][number],
@@ -1781,6 +1889,9 @@ function drawCitationCardHeader(
 
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(`REFERENCE ${index + 1} OF ${total}`, x + 18, y + 13, { width: 110, height: 9, lineBreak: false });
+  if (item.examinerCategory) {
+    drawExaminerCategoryChip(doc, item.examinerCategory, item.examinerCategoryLabel || '', x + 130, y + 9);
+  }
   doc.roundedRect(x + width - 252, y + 9, 122, 23, 5).fillAndStroke(riskPalette.fill, riskPalette.stroke);
   doc.fillColor(riskPalette.text).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(truncate(item.noveltyThreat || item.overlapRiskLevel, 34), x + width - 244, y + 16, { width: 106, height: 8, align: 'center', lineBreak: false, ellipsis: '...' });
@@ -1788,8 +1899,28 @@ function drawCitationCardHeader(
   doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(item.reviewPriority, x + width - 112, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false, ellipsis: '...' });
 
+  const heading = `${citationDisplayNumber(item) || `D${index + 1}`}  ${item.publicationNumber}`;
   doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
-    .text(`${cleanText(item.citationNo, `D${index + 1}`)}  ${item.publicationNumber}`, x + 18, y + 38, { width: width - 36, height: 16, lineBreak: false, ellipsis: '...' });
+    .text(heading, x + 18, y + 38, {
+      width: width - 36,
+      height: 16,
+      lineBreak: false,
+      ellipsis: '...',
+      // The heading opens the public record; a trailing cue below tells a reader
+      // who has not hovered it (or is holding a printout) that it is a link.
+      ...(item.googlePatentsUrl ? { link: item.googlePatentsUrl, underline: true } : {}),
+    });
+  if (item.googlePatentsUrl) {
+    const cueX = x + 18 + Math.min(width - 36, doc.widthOfString(heading)) + 9;
+    doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
+      .text('OPEN ON GOOGLE PATENTS', cueX, y + 45, {
+        width: Math.max(0, x + width - 18 - cueX),
+        height: 9,
+        lineBreak: false,
+        ellipsis: '...',
+        link: item.googlePatentsUrl,
+      });
+  }
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
     .text(cleanText(item.title), x + 18, y + 59, { width: width - 36, lineGap: 1.5 });
 
@@ -1818,6 +1949,58 @@ function drawCitationCardHeader(
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
     .text(`${item.rows.filter(row => row.status === 'Present').length} directly mapped / ${item.rows.filter(row => row.status === 'Partial').length} partially mapped / ${item.rows.filter(row => row.status === 'Unknown').length} not established`, x + 94, evidenceY + 3, { width: 360, height: 10, lineBreak: false, ellipsis: '...' });
   doc.y = y + height + SPACE.md;
+}
+
+/**
+ * Annexure I - the record of what was actually searched. A search report is only
+ * worth what its coverage statement is worth, so this page states sources that
+ * failed as plainly as sources that worked, and every count comes from run
+ * telemetry rather than from a description of what the pipeline normally does.
+ */
+function drawSearchScopeAnnexure(
+  doc: PdfDoc,
+  scope: ReturnType<typeof buildNoveltyAttorneyReportModel>['searchScope'] | undefined,
+  startSection: (number: string, title: string, level?: 1 | 2) => void,
+) {
+  // A report model without the block (an older stored shape) simply omits the
+  // annexure rather than losing the whole document to a render error.
+  if (!scope || !Array.isArray(scope.coverage)) return;
+  startSection('Annexure I:', 'Search Scope and Coverage Record', 1);
+  drawParagraph(
+    doc,
+    'This annexure records the sources searched, the volume screened at each stage, and the coverage limits of this run, so the findings above can be weighed against what was actually examined.'
+  );
+
+  drawFlowLabel(doc, 'Sources Searched');
+  if (Array.isArray(scope.sources) && scope.sources.length > 0) {
+    const sourceWidths = [contentWidth(doc) - 302, 116, 52, 134];
+    const sourceHeader = ['Source', 'Status', 'Records', 'Note'];
+    drawTableRow(doc, sourceHeader, sourceWidths, { header: true });
+    scope.sources.forEach((source, index) => {
+      drawTableRow(doc, [source.label, source.status, source.retrieved, source.note || '-'], sourceWidths, {
+        fills: index % 2 ? sourceWidths.map(() => COLORS.tableAlt) : undefined,
+        repeatHeader: { cells: sourceHeader, widths: sourceWidths },
+      });
+    });
+  } else {
+    drawParagraph(doc, 'Per-source retrieval statistics were not recorded for this run.');
+  }
+
+  doc.y += SPACE.sm;
+  drawFlowLabel(doc, 'Volume at Each Stage');
+  const coverageWidths = [contentWidth(doc) - 130, 130];
+  const coverageHeader = ['Stage', 'Records'];
+  drawTableRow(doc, coverageHeader, coverageWidths, { header: true });
+  scope.coverage.forEach((entry, index) => {
+    drawTableRow(doc, [entry.label, entry.value], coverageWidths, {
+      fills: index % 2 ? coverageWidths.map(() => COLORS.tableAlt) : undefined,
+      repeatHeader: { cells: coverageHeader, widths: coverageWidths },
+    });
+  });
+
+  doc.y += SPACE.sm;
+  drawFlowTextBlock(doc, 'Date Coverage', scope.dateCoverage);
+  drawFlowBulletList(doc, 'What This Search Did Not Cover', scope.limitations || []);
 }
 
 function drawNameList(doc: PdfDoc, names: string[], emptyText: string) {
@@ -2064,31 +2247,39 @@ export async function GET(
           destination,
           level: 3,
         });
+        // Reference role, review priority and publication authority are deliberately
+        // absent below: the card header directly above already carries all three, and
+        // repeating them costs a grid row per citation across the whole report.
         drawMetadataGrid(doc, item.referenceType === 'paper' ? [
           ['Reference Type', 'Scholarly paper'],
           ['Authors', item.authors],
           ['Year / Venue', `${item.publicationDate} / ${item.venue}`],
           ['DOI', item.doi],
           ['Citation Count', item.citationCount === null ? '-' : String(item.citationCount)],
-          ['Reference Role', item.referenceRole],
           ['Academic Source', item.sourceProviders],
           // Only show a link row when there is a usable link.
-          ...(cleanText(item.link, '') ? [['Record URL', item.link] as [string, string]] : []),
+          ...(cleanText(item.link, '')
+            ? [['Record URL', linkDisplayText(item.link), item.link] as MetadataGridItem]
+            : []),
         ] : [
           ['Application No.', item.applicationNumber],
           ['Filing Date', item.filingDate],
           ['Priority Date', item.priorityDate],
-          ['Reference Role', item.referenceRole],
-          ['Review Priority', item.reviewPriority],
-          ['Publication Authority', item.publicationJurisdiction || 'Not available'],
           ['Search Authority Scope', item.searchAuthorityScope || 'Worldwide'],
           ['Source Corpus / Provider', item.sourceCorpus || item.sourceProviders || 'Not available'],
           ['Filing Country / Office', item.filingCountry || 'Not available'],
           ['Target Legal Jurisdiction', item.targetLegalJurisdiction || report.jurisdiction],
           ['Inventor(s)', item.inventors],
           ['CPC / IPC', `${item.cpcCodes} / ${item.ipcCodes}`],
-          // Patent links are omitted (see report builder); no Source row when blank.
-          ...(cleanText(item.link, '') ? [['Source', item.link] as [string, string]] : []),
+          // Full-text record, so a reviewer can open the citation straight from the
+          // report. Blank for records whose publication number is a placeholder.
+          ...(item.googlePatentsUrl
+            ? [['Full-Text Record', linkDisplayText(item.googlePatentsUrl), item.googlePatentsUrl] as MetadataGridItem]
+            : []),
+          // Corpus-supplied source link, when the provider gave a usable one.
+          ...(cleanText(item.link, '')
+            ? [['Source', linkDisplayText(item.link), item.link] as MetadataGridItem]
+            : []),
         ]);
         doc.y += SPACE.sm;
         drawFlowingLabeledText(doc, item.referenceType === 'paper' ? 'Paper Abstract' : 'Patent Abstract', item.abstract);
@@ -2256,6 +2447,8 @@ export async function GET(
     if (Array.isArray(report.nextSteps) && report.nextSteps.length > 0) {
       drawFlowBulletList(doc, 'What To Do Next', report.nextSteps);
     }
+
+    drawSearchScopeAnnexure(doc, report.searchScope, startSection);
 
     fillTableOfContents(doc, sectionPages, tocPageIndexes);
 

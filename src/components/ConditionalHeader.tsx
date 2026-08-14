@@ -16,7 +16,7 @@ import Header from '@/components/Header'
 // layout, so it opts out here too. (/home-v2 needs no entry — it redirects to
 // '/'.)
 // /features/* pages render WorkspaceNav themselves, same as the homepage.
-const HEADERLESS_ROUTES = ['/', '/patentnest', '/blog', '/features']
+const HEADERLESS_ROUTES = ['/', '/patentnest', '/blog', '/features', '/developers']
 
 export default function ConditionalHeader() {
   const pathname = usePathname()

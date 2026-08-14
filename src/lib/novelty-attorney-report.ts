@@ -1,7 +1,8 @@
 import type { ClaimConcept, ClaimConceptMapping, FeatureMapCell, NormalizedIdea, PatentFeatureMap, PerPatentRemark } from './novelty-search-service';
-import { buildNoveltyReportCountSummary } from './novelty-report-counts';
+import { buildNoveltyReportCountSummary, type NoveltyReportCountSummary } from './novelty-report-counts';
 import { classifyScreeningStopReason, matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
 import { canonicalStudioFamilyKey } from './prior-art-studio/family-key';
+import { googlePatentsUrl as buildGooglePatentsUrl } from './prior-art-studio/patent-links';
 import {
   normalizeReportReferenceSelectionRule,
   selectNoveltyReportReferences,
@@ -72,7 +73,25 @@ export interface AttorneyReportCitation {
   matchCategory: 'direct' | 'component' | 'borderline' | 'rejected';
   matchCategoryLabel: string;
   referenceType: 'patent' | 'paper';
+  /**
+   * Public full-text record on patents.google.com so a reviewer can open the
+   * citation from the report. Empty for scholarly papers (they carry `link`/`doi`
+   * instead) and for records whose publication number is a placeholder.
+   */
+  googlePatentsUrl?: string;
+  /** Examiner-style category. Absent on citations that were never feature-mapped. */
+  examinerCategory?: ExaminerCategory;
+  examinerCategoryLabel?: string;
 }
+
+/**
+ * The X/Y/A convention every search report uses (PCT ISR, EPO search opinion,
+ * Indian FER), so an attorney can read this report the way they read those.
+ *   X - relevant on its own against novelty / inventive step
+ *   Y - relevant only in combination with another cited document
+ *   A - general technological background
+ */
+export type ExaminerCategory = 'X' | 'Y' | 'A';
 
 export interface AttorneyReportEntityGroup {
   label: string;
@@ -186,6 +205,27 @@ export interface AttorneyReportMethodology {
   preliminaryStatus: string;
 }
 
+export interface AttorneyReportSearchScopeSource {
+  label: string;
+  /** What actually happened to this source in this run — never an aspiration. */
+  status: 'Searched' | 'Requested but unavailable' | 'Not searched';
+  retrieved: string;
+  note: string;
+}
+
+/**
+ * The record of what this run actually searched, screened and mapped — the
+ * annexure a professional search report carries so a reader can judge how much
+ * weight the findings deserve. Every number here comes from run telemetry; a
+ * value the run did not record is reported as unavailable rather than guessed.
+ */
+export interface AttorneyReportSearchScope {
+  sources: AttorneyReportSearchScopeSource[];
+  coverage: Array<{ label: string; value: string }>;
+  dateCoverage: string;
+  limitations: string[];
+}
+
 export interface AttorneyReportCombination {
   referenceA: { publicationNumber: string; title: string; teaches: string[] };
   referenceB: { publicationNumber: string; title: string; adds: string[] };
@@ -258,6 +298,7 @@ export interface AttorneyReportModel {
     analyzed: number;
   };
   countLabels: Array<{ label: string; value: number }>;
+  searchScope: AttorneyReportSearchScope;
   scoringLegend: Array<{ label: string; meaning: string }>;
   tableOfContents: Array<{ number: string; title: string }>;
   featureSummaries: AttorneyReportFeatureSummary[];
@@ -344,6 +385,15 @@ function canonicalPublicationDisplay(value: unknown): string {
   const raw = cleanText(value);
   if (/^PAPER:/i.test(raw)) return raw;
   return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Google Patents record for a citation. Only emitted for values that actually look
+// like a publication number (two-letter authority + digits) — placeholders such as
+// "Unknown" would otherwise print a link that 404s. buildGooglePatentsUrl handles
+// the US pre-grant zero-padding that a plain string concat gets wrong.
+function publicRecordUrl(publicationNumber: string): string {
+  const compact = canonicalPublicationDisplay(publicationNumber);
+  return /^[A-Z]{2}\d/.test(compact) ? buildGooglePatentsUrl(compact) : '';
 }
 
 function normalizedAuthority(value: unknown): string {
@@ -1825,6 +1875,150 @@ function buildScreeningCoverageNote(stopReason: string, coverage?: any): string 
   return '';
 }
 
+const EXAMINER_CATEGORY_MEANING: Record<ExaminerCategory, string> = {
+  X: 'Particularly relevant on its own',
+  Y: 'Particularly relevant if combined',
+  A: 'Technological background',
+};
+
+/**
+ * Tag each mapped citation X / Y / A the way a search report does. Nothing new is
+ * computed: X follows the single-reference overlap verdict already shown on the
+ * card, Y follows the inventive-step pairs already listed in section 1.8, and
+ * everything else is background.
+ *
+ * Citations that were never feature-mapped deliberately keep no letter. A
+ * category asserts that a document was read against the claims, and the
+ * shortlisted-but-unmapped appendix was not.
+ */
+function assignExaminerCategories(
+  comparisons: AttorneyReportPatentComparison[],
+  combinations: AttorneyReportCombination[]
+): void {
+  const combinationMembers = new Set<string>();
+  for (const pair of combinations) {
+    combinationMembers.add(canonicalPatentNumber(pair.referenceA.publicationNumber));
+    combinationMembers.add(canonicalPatentNumber(pair.referenceB.publicationNumber));
+  }
+  for (const comparison of comparisons) {
+    // 'direct' is the gate's invention-level verdict; 'High' is the mapping's
+    // single-reference overlap verdict. Either one alone is an X.
+    const standsAlone = comparison.overlapRiskLevel === 'High' || comparison.matchCategory === 'direct';
+    const category: ExaminerCategory = standsAlone
+      ? 'X'
+      : combinationMembers.has(canonicalPatentNumber(comparison.publicationNumber))
+        ? 'Y'
+        : 'A';
+    comparison.examinerCategory = category;
+    comparison.examinerCategoryLabel = EXAMINER_CATEGORY_MEANING[category];
+  }
+}
+
+/** "D1-X", or just "D1" for a citation that was never mapped. */
+export function citationDisplayNumber(citation: Pick<AttorneyReportCitation, 'citationNo' | 'examinerCategory'>): string {
+  const base = cleanText(citation.citationNo, '');
+  if (!base) return '';
+  return citation.examinerCategory ? `${base}-${citation.examinerCategory}` : base;
+}
+
+function publicationYear(value: unknown): number | null {
+  const year = Number(String(value ?? '').match(/(19|20)\d{2}/)?.[0]);
+  return Number.isFinite(year) && year > 1900 ? year : null;
+}
+
+/**
+ * The search-scope annexure. Everything here is read back from what the run
+ * recorded — provider outcomes, screening telemetry, the embedding prescreen —
+ * so the page states coverage that can be checked rather than implied rigour.
+ */
+function buildSearchScope(input: {
+  stage1: any;
+  counts: NoveltyReportCountSummary;
+  comparisons: AttorneyReportPatentComparison[];
+  paperComparisonCount: number;
+  screeningCoverage: any;
+  screeningCoverageNote: string;
+  patentCount: number;
+  paperCount: number;
+}): AttorneyReportSearchScope {
+  const { stage1, counts, comparisons, paperComparisonCount, screeningCoverage, screeningCoverageNote } = input;
+  const rawStats = Array.isArray(stage1?.providerStats) ? stage1.providerStats : [];
+
+  const sources: AttorneyReportSearchScopeSource[] = rawStats.map((stat: any) => {
+    const error = cleanText(stat?.error);
+    const requested = stat?.requested !== false;
+    const enabled = stat?.enabled !== false;
+    const resultCount = Number(stat?.resultCount);
+    const status: AttorneyReportSearchScopeSource['status'] = error
+      ? 'Requested but unavailable'
+      : requested && enabled
+        ? 'Searched'
+        : 'Not searched';
+    return {
+      label: firstText(stat?.label, stat?.providerId, 'Unnamed source'),
+      status,
+      retrieved: status === 'Searched' && Number.isFinite(resultCount) ? String(Math.max(0, Math.trunc(resultCount))) : '-',
+      // Provider errors are surfaced, not hidden: a source that failed is a gap
+      // in coverage the reader has to know about before relying on the result.
+      note: error
+        ? `Source did not return results in this run: ${error.length > 160 ? `${error.slice(0, 157)}...` : error}`
+        : status === 'Not searched'
+          ? 'Not selected for this run.'
+          : '',
+    };
+  });
+
+  const reviewedCount = Number(screeningCoverage?.reviewedCount);
+  const poolSize = Number(screeningCoverage?.poolSize);
+  const prescreen = stage1?.featurePrescreen;
+  const prescreenScored = Number(prescreen?.scoredCount);
+
+  const coverage: Array<{ label: string; value: string }> = [
+    { label: 'Candidate records retrieved and ranked', value: String(counts.patentsSearched) },
+    ...(input.patentCount ? [{ label: 'Patent records retrieved', value: String(input.patentCount) }] : []),
+    ...(input.paperCount ? [{ label: 'Scholarly papers retrieved', value: String(input.paperCount) }] : []),
+    {
+      label: 'Records screened for relevance',
+      value: Number.isFinite(reviewedCount) && Number.isFinite(poolSize) && poolSize > 0
+        ? `${reviewedCount} of ${poolSize}`
+        : String(counts.screened),
+    },
+    { label: 'Citations passing the relevance gate', value: String(counts.patentsFound) },
+    { label: 'Citations mapped feature by feature', value: String(counts.detailedCitations) },
+    ...(paperComparisonCount ? [{ label: 'Scholarly papers mapped feature by feature', value: String(paperComparisonCount) }] : []),
+    ...(prescreen?.status === 'ok' && Number.isFinite(prescreenScored)
+      ? [{ label: 'Candidates scored by the embedding feature prescreen', value: String(prescreenScored) }]
+      : []),
+  ];
+
+  const years = comparisons
+    .map(comparison => publicationYear(comparison.publicationDate))
+    .filter((year): year is number => year !== null);
+  // Publication dates, never filing dates: several bulk-imported corpora store a
+  // publication date only, so a filing-date range would silently exclude them.
+  const dateCoverage = years.length
+    ? `Mapped citations carry publication dates from ${Math.min(...years)} to ${Math.max(...years)}. Coverage is stated by publication date because several source corpora record a publication date only; a record may therefore have an earlier priority or filing date than this range suggests, and recently filed applications not yet published cannot appear in any search.`
+    : 'No publication dates were recorded on the mapped citations, so no date range can be stated for this run. Recently filed applications that are not yet published cannot appear in any search.';
+
+  const failedSources = sources.filter(source => source.status === 'Requested but unavailable').map(source => source.label);
+  const limitations = [
+    'Screening and mapping used the retrieved record text available to the system - typically title, abstract and bibliographic metadata. Full patent text, claims, drawings, family members, legal status and prosecution history were not read.',
+    ...(paperComparisonCount
+      ? ['Scholarly publications were mapped from their bibliographic records and abstracts, not from full articles.']
+      : []),
+    ...(screeningCoverageNote ? [screeningCoverageNote] : []),
+    ...(failedSources.length
+      ? [`The following configured source${failedSources.length === 1 ? '' : 's'} returned no results in this run and its coverage is therefore missing from this report: ${failedSources.join(', ')}.`]
+      : []),
+    ...(prescreen && prescreen.status !== 'ok'
+      ? ['The embedding feature prescreen did not run for this search, so gate ordering used retrieval rank alone.']
+      : []),
+    'No searching of non-patent literature beyond the listed scholarly sources, standards documents, product literature or public disclosures was performed.',
+  ];
+
+  return { sources, coverage, dateCoverage, limitations };
+}
+
 function confidenceFromCounts(counts: AttorneyReportModel['counts'], quality = 'medium'): string {
   if (counts.analyzed >= HIGH_CONFIDENCE_ANALYZED_MINIMUM && counts.reviewed >= 20 && !/low/i.test(quality)) return 'High';
   if (counts.analyzed > 0 && counts.reviewed > 0) return 'Medium';
@@ -2226,9 +2420,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
       matchCategoryLabel: matchCategoryLabel(gateDecision),
       referenceRole: referenceRoleFor(category, score, rows),
       reviewPriority: reviewPriorityFor(category, score, relevanceScore),
-      // Patent record links (incl. the fabricated Google Patents fallback) are not
-      // reliable, so they are omitted; scholarly-paper links/DOIs are kept when present.
+      // Corpus-supplied patent record links are not reliable, so they are omitted;
+      // scholarly-paper links/DOIs are kept when present. Patents instead get a
+      // deterministic Google Patents record link (see googlePatentsUrl below).
       link: referenceType === 'paper' ? firstText(map.link, meta.link, meta.sourceUrl, meta.url, '') : '',
+      googlePatentsUrl: referenceType === 'paper' ? '' : publicRecordUrl(pn),
       abstract: firstText(
         ...sourceAbstractFields(meta),
         ...sourceAbstractFields(rawMeta),
@@ -2373,6 +2569,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     }));
   }
 
+  // Combinations are needed here, before citations are derived, because the Y
+  // category is defined by membership in an inventive-step pair.
+  const potentialCombinations = buildPotentialCombinations(comparisons, stage0, featureSummaries);
+  assignExaminerCategories(comparisons, potentialCombinations);
+
   const comparisonByPn = new Map(comparisons.map(comparison => [
     canonicalPatentNumber(comparison.publicationNumber),
     comparison,
@@ -2384,7 +2585,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     .map(reference => comparisonByPn.get(reference.canonicalPublicationNumber))
     .filter((comparison): comparison is AttorneyReportPatentComparison => Boolean(comparison));
 
-  const citations = comparisons.map(({ citationNo, publicationNumber, originalPublicationNumber, publicationJurisdiction, searchAuthorityScope: citationSearchScope, sourceCorpus, filingCountry, targetLegalJurisdiction: citationTargetJurisdiction, title, relevanceScore, evidenceQuality, referenceRole, reviewPriority, matchCategory, matchCategoryLabel, referenceType }) => ({
+  const citations = comparisons.map(({ citationNo, publicationNumber, originalPublicationNumber, publicationJurisdiction, searchAuthorityScope: citationSearchScope, sourceCorpus, filingCountry, targetLegalJurisdiction: citationTargetJurisdiction, title, relevanceScore, evidenceQuality, referenceRole, reviewPriority, matchCategory, matchCategoryLabel, referenceType, googlePatentsUrl, examinerCategory, examinerCategoryLabel }) => ({
     citationNo,
     publicationNumber,
     originalPublicationNumber,
@@ -2401,6 +2602,9 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
     matchCategory,
     matchCategoryLabel,
     referenceType,
+    googlePatentsUrl,
+    examinerCategory,
+    examinerCategoryLabel,
   }));
   const mainCitationKeys = new Set(mainComparisons.map(item => canonicalPatentNumber(item.publicationNumber)));
   const mainCitations = citations.filter(citation => mainCitationKeys.has(canonicalPatentNumber(citation.publicationNumber)));
@@ -2460,6 +2664,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
         reviewPriority,
         matchCategory: category,
         matchCategoryLabel: `${matchCategoryLabel(decision)} / not mapped`,
+        googlePatentsUrl: referenceType === 'paper' ? '' : publicRecordUrl(publicationNumber),
       };
     })
     .filter(Boolean) as AttorneyReportCitation[];
@@ -2487,7 +2692,6 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
   const paperCount = Number(stage1?.paperCount || 0);
   const genericFeatures = featureSummaries.filter(feature => feature.type === 'generic_weak').map(feature => feature.feature);
   const claimConcepts = normalizeClaimConcepts(stage0);
-  const potentialCombinations = buildPotentialCombinations(comparisons, stage0, featureSummaries);
   const claimConceptMapping = Array.isArray(stage4?.claimConceptMapping) && stage4.claimConceptMapping.length
     ? stage4.claimConceptMapping as ClaimConceptMapping[]
     : buildFallbackConceptMapping(claimConcepts, comparisons, featureSummaries);
@@ -2568,7 +2772,20 @@ export function buildNoveltyAttorneyReportModel(searchRun: any, firm?: FirmBrand
       { label: 'Component / feature-level mapped citations', value: counts.componentMatches },
       { label: 'Citations selected for detailed feature mapping', value: counts.detailedCitations },
     ],
+    searchScope: buildSearchScope({
+      stage1,
+      counts,
+      comparisons,
+      paperComparisonCount: paperComparisons.length,
+      screeningCoverage,
+      screeningCoverageNote,
+      patentCount,
+      paperCount,
+    }),
     scoringLegend: [
+      { label: 'X - Particularly relevant alone', meaning: 'Taken on its own, this reference maps the core inventive combination and is the primary constraint on claim scope.' },
+      { label: 'Y - Particularly relevant if combined', meaning: 'This reference becomes a constraint only when read with another cited reference; see the inventive-step combinations section.' },
+      { label: 'A - Technological background', meaning: 'This reference defines the general state of the art without mapping the core inventive combination alone or in the identified combinations.' },
       { label: 'D - Directly Mapped', meaning: 'The reviewed record explicitly states the mapped mechanism for this feature.' },
       { label: 'P - Partially Mapped', meaning: 'The citation discloses a related mechanism; at least one required element remains distinct.' },
       { label: 'N - Not Found', meaning: 'The feature was not found in the reviewed preliminary record.' },

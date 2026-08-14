@@ -60,6 +60,9 @@ interface CitationView {
   publicationNumber: string;
   title: string;
   link: string;
+  googlePatentsUrl: string;
+  examinerCategory?: 'X' | 'Y' | 'A';
+  examinerCategoryLabel?: string;
   abstract: string;
   publicationDate: string;
   applicationNumber: string;
@@ -511,6 +514,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [isGeneratingShare, setIsGeneratingShare] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
 
   const stage0 = searchData?.stage0Results || searchData?.stage0 || {};
@@ -538,6 +542,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       publicationNumber: item.publicationNumber,
       title: item.title,
       link: item.link,
+      googlePatentsUrl: item.googlePatentsUrl || '',
+      examinerCategory: item.examinerCategory,
+      examinerCategoryLabel: item.examinerCategoryLabel,
       abstract: item.technicalDisclosure,
       publicationDate: item.publicationDate,
       applicationNumber: item.applicationNumber,
@@ -609,26 +616,34 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
     };
   }, [searchId, searchData, stage0, stage1, stage35, stage4, firm]);
 
-  const handleDownloadProfessionalPDF = async () => {
+  // Both formats render the same report model server-side; only the extension and
+  // the busy flag differ. DOCX exists so the report can be annotated and adapted
+  // into an opinion letter rather than only read.
+  const handleDownloadReport = async (format: 'pdf' | 'docx') => {
     if (readOnly) return;
+    const setBusy = format === 'pdf' ? setIsDownloadingPdf : setIsDownloadingDocx;
     try {
-      setIsDownloadingPdf(true);
-      const response = await authFetch(`/api/novelty-search/${searchId}/attorney-report/pdf`);
-      if (!response.ok) throw new Error('Failed to generate professional PDF');
+      setBusy(true);
+      const response = await authFetch(`/api/novelty-search/${searchId}/attorney-report/${format}`);
+      if (!response.ok) throw new Error(`Failed to generate professional ${format.toUpperCase()}`);
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `patentnest-novelty-report-${(searchId ?? '').slice(0, 8)}.pdf`;
+      link.download = `patentnest-novelty-report-${(searchId ?? '').slice(0, 8)}.${format}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('Professional PDF download error:', err);
-      toast({ title: 'Professional PDF generation failed', description: 'Please try again.', variant: 'error' });
+      console.error(`Professional ${format.toUpperCase()} download error:`, err);
+      toast({
+        title: `${format === 'pdf' ? 'PDF' : 'Word'} report generation failed`,
+        description: 'Please try again.',
+        variant: 'error',
+      });
     } finally {
-      setIsDownloadingPdf(false);
+      setBusy(false);
     }
   };
 
@@ -716,12 +731,22 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             </button>
             <button
               type="button"
-              onClick={handleDownloadProfessionalPDF}
+              onClick={() => handleDownloadReport('pdf')}
               disabled={isDownloadingPdf}
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-70 sm:shadow-lg"
             >
               <Download className="h-4 w-4" />
-              {isDownloadingPdf ? 'Preparing PDF...' : 'Download Report'}
+              {isDownloadingPdf ? 'Preparing PDF...' : 'Download PDF'}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDownloadReport('docx')}
+              disabled={isDownloadingDocx}
+              title="Editable Word version for annotation or reuse in an opinion letter"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50 disabled:opacity-70 sm:shadow-lg"
+            >
+              <FileText className="h-4 w-4" />
+              {isDownloadingDocx ? 'Preparing Word...' : 'Download Word'}
             </button>
             {/* Carries the assessment forward: refines the idea against these findings, then seeds
                 a new draft with the prior art already analysed here. */}
@@ -902,6 +927,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
               <thead>
                 <tr>
                   <HeaderCell className="w-16">S.No.</HeaderCell>
+                  <HeaderCell className="w-16">Cat.</HeaderCell>
                   <HeaderCell className="w-40">Citation No.</HeaderCell>
                   <HeaderCell>Title</HeaderCell>
                   <HeaderCell className="w-56">Reference Role</HeaderCell>
@@ -912,6 +938,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 {reportData.citations.map((citation, index) => (
                   <tr className="print-row" key={citation.publicationNumber}>
                     <Cell>{index + 1}</Cell>
+                    <Cell className="font-semibold">{citation.examinerCategory || '-'}</Cell>
                     <Cell><a className="font-semibold text-ai-blue-700 underline" href={`#citation-${index + 1}`}>{citation.publicationNumber}</a></Cell>
                     <Cell>{citation.title}</Cell>
                     <Cell>{citation.referenceRole}</Cell>
@@ -920,6 +947,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 ))}
               </tbody>
             </DenseTable>
+            <p className="mt-2 text-xs text-slate-500">
+              Cat.: X - relevant alone; Y - relevant in combination; A - technological background.
+            </p>
           </Section>
 
           <Section id="section-1-6" title="1.6 Component / Feature-Level Prior Art">
@@ -1019,8 +1049,16 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             <div className="space-y-10">
               {reportData.patentCitations.map((citation, index) => (
                 <article id={`citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} key={citation.publicationNumber}>
-                  <div className="mb-0 bg-ai-blue-700 px-4 py-3 text-lg font-bold text-white">
-                    Reference {index + 1}: {citation.publicationNumber}
+                  <div className="mb-0 flex flex-wrap items-center justify-between gap-2 bg-ai-blue-700 px-4 py-3 text-lg font-bold text-white">
+                    <span>
+                      Reference {index + 1}: {citation.citationNo ? `${citation.citationNo}${citation.examinerCategory ? `-${citation.examinerCategory}` : ''} ` : ''}
+                      {citation.publicationNumber}
+                    </span>
+                    {citation.examinerCategory && (
+                      <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide">
+                        {citation.examinerCategory} - {citation.examinerCategoryLabel}
+                      </span>
+                    )}
                   </div>
                   <DenseTable>
                     <tbody>
@@ -1036,6 +1074,11 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                       <tr><Cell className="font-semibold">Title:</Cell><Cell colSpan={3}>{citation.title}</Cell></tr>
                       <tr><Cell className="font-semibold">Technical Disclosure:</Cell><Cell colSpan={3}>{reportSafeText(citation.abstract)}</Cell></tr>
                       <tr><Cell className="font-semibold">Source Corpus / Provider:</Cell><Cell colSpan={3}>{citation.sourceCorpus || citation.sourceProviders || '-'}</Cell></tr>
+                      {citation.googlePatentsUrl && (
+                        <tr><Cell className="font-semibold">Full-Text Record:</Cell><Cell colSpan={3}>
+                          <a className="text-ai-blue-700 underline" href={citation.googlePatentsUrl} target="_blank" rel="noreferrer">{citation.googlePatentsUrl.replace(/^https?:\/\//, '')}</a>
+                        </Cell></tr>
+                      )}
                     </tbody>
                   </DenseTable>
 
@@ -1166,10 +1209,15 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 <tbody>
                   {reportData.otherShortlisted.map((item: any, index: number) => {
                     const pn = firstText(item?.publicationNumber, item?.publication_number, item?.pn, item?.id, item?.patent_number, 'Unknown');
+                    // The report model carries the record URL; a hand-built one drops the
+                    // US pre-grant zero-padding that patents.google.com requires.
+                    const recordUrl: string = item?.googlePatentsUrl || '';
                     return (
                       <tr className="print-row" key={`${pn}-${index}`}>
                         <Cell>{index + 1}</Cell>
-                        <Cell><a className="text-ai-blue-700 underline" href={`https://patents.google.com/patent/${pn}`} target="_blank" rel="noreferrer">{pn}</a></Cell>
+                        <Cell>{recordUrl
+                          ? <a className="text-ai-blue-700 underline" href={recordUrl} target="_blank" rel="noreferrer">{pn}</a>
+                          : pn}</Cell>
                         <Cell>{firstText(item?.title, item?.invention_title, 'Untitled Patent')}</Cell>
                       </tr>
                     );
@@ -1363,6 +1411,38 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             </div>
             <ListBlock title="What To Do Next" items={reportData.nextSteps} />
           </Section>
+
+          {reportData.searchScope && (
+            <Section id="annexure-i" title="Annexure I: Search Scope and Coverage Record" breakBefore>
+              <p className="mb-5 max-w-4xl text-sm leading-6 text-slate-700">
+                This annexure records the sources searched, the volume screened at each stage, and the coverage limits of this run,
+                so the findings above can be weighed against what was actually examined.
+              </p>
+              {reportData.searchScope.sources.length > 0 && (
+                <>
+                  <h3 className="mb-2 text-sm font-semibold text-slate-950">Sources Searched</h3>
+                  <DenseTable>
+                    <thead><tr><HeaderCell>Source</HeaderCell><HeaderCell className="w-48">Status</HeaderCell><HeaderCell className="w-24">Records</HeaderCell><HeaderCell className="w-64">Note</HeaderCell></tr></thead>
+                    <tbody>{reportData.searchScope.sources.map(source => (
+                      <tr className="print-row" key={source.label}>
+                        <Cell>{source.label}</Cell><Cell>{source.status}</Cell><Cell>{source.retrieved}</Cell><Cell>{source.note || '-'}</Cell>
+                      </tr>
+                    ))}</tbody>
+                  </DenseTable>
+                </>
+              )}
+              <h3 className="mb-2 mt-6 text-sm font-semibold text-slate-950">Volume at Each Stage</h3>
+              <DenseTable>
+                <thead><tr><HeaderCell>Stage</HeaderCell><HeaderCell className="w-40">Records</HeaderCell></tr></thead>
+                <tbody>{reportData.searchScope.coverage.map(entry => (
+                  <tr className="print-row" key={entry.label}><Cell>{entry.label}</Cell><Cell>{entry.value}</Cell></tr>
+                ))}</tbody>
+              </DenseTable>
+              <h3 className="mb-2 mt-6 text-sm font-semibold text-slate-950">Date Coverage</h3>
+              <p className="max-w-4xl text-sm leading-6 text-slate-700">{reportData.searchScope.dateCoverage}</p>
+              <ListBlock title="What This Search Did Not Cover" items={reportData.searchScope.limitations} />
+            </Section>
+          )}
 
           <footer className="mt-12 border-t border-slate-300 pt-6 text-center text-xs leading-5 text-slate-500">
             {firm ? (

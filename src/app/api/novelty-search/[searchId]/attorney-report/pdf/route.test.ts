@@ -11,7 +11,12 @@ vi.mock('@/lib/prisma', () => ({
   prisma: { noveltySearchRun: { findFirst: vi.fn() } },
 }))
 vi.mock('@/lib/novelty-report-metadata', () => ({ hydrateNoveltyReportPatentMetadata: vi.fn() }))
-vi.mock('@/lib/novelty-attorney-report', () => ({ buildNoveltyAttorneyReportModel: vi.fn() }))
+// Only the model builder is stubbed; the module's pure formatting helpers stay real
+// so the route renders them exactly as it does in production.
+vi.mock('@/lib/novelty-attorney-report', async importActual => ({
+  ...(await importActual<typeof import('@/lib/novelty-attorney-report')>()),
+  buildNoveltyAttorneyReportModel: vi.fn(),
+}))
 
 const pdfParse = require('pdf-parse-fork') as (buffer: Buffer) => Promise<{ text: string; numpages: number }>
 const mockedVerifyJWT = vi.mocked(verifyJWT)
@@ -349,6 +354,51 @@ describe('GET attorney report PDF', () => {
     expect(normalizedText).toContain('Mapping assessment: Directly Mapped')
     expect(parsed.text).toContain('No explicitly gate-approved unmapped citations remained')
     expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
+  }, 20_000)
+
+  test('links citations to their Google Patents record', async () => {
+    const rows = [featureRow(0)]
+    const recordUrl = 'https://patents.google.com/patent/US20260000001A1'
+    const comparison = citation(rows, { googlePatentsUrl: recordUrl })
+    const shortlisted = {
+      citationNo: 'S1',
+      publicationNumber: 'IN202600009A',
+      title: 'Shortlisted but unmapped battery monitor',
+      referenceType: 'patent',
+      referenceRole: 'Gate accepted / not mapped',
+      reviewPriority: 'High',
+      matchCategory: 'direct',
+      matchCategoryLabel: 'Direct match / not mapped',
+      relevanceScore: 0.6,
+      evidenceQuality: 'not mapped',
+      googlePatentsUrl: 'https://patents.google.com/patent/IN202600009A',
+    }
+    mockedBuildReport.mockReturnValue(reportModel({
+      inventionFeatures: [rows[0].userFeature],
+      citations: [comparison],
+      directCitations: [comparison],
+      comparisons: [comparison],
+      otherShortlistedCitations: [shortlisted],
+    }) as any)
+
+    const response = await GET(request(), { params: { searchId: 'search-1' } })
+    const buffer = await responseBuffer(response)
+    const raw = buffer.toString('latin1')
+    const parsed = await pdfParse(buffer)
+    const normalizedText = parsed.text.replace(/\s+/g, ' ')
+
+    // Clickable URI annotations for the card heading, the metadata row, the summary
+    // citation table, and the shortlisted-citation appendix.
+    expect(raw).toContain(`/URI (${recordUrl})`)
+    expect(raw).toContain(`/URI (${shortlisted.googlePatentsUrl})`)
+    // Printed form: the row and the cue stay readable without a clickable viewer.
+    // The URL wraps inside its grid cell, so it is matched against compacted text.
+    expect(normalizedText).toContain('Full-Text Record')
+    expect(parsed.text.replace(/\s+/g, '')).toContain('patents.google.com/patent/US20260000001A1')
+    expect(normalizedText).toContain('OPEN ON GOOGLE PATENTS')
+    expect(normalizedText).toContain('Citation numbers link to the full-text record on Google Patents.')
+    // The card header already carries these, so the metadata grid no longer repeats them.
+    expect(normalizedText).not.toContain('Review Priority Publication Authority')
   }, 20_000)
 
   test('renders scholarly publications separately and indexes paper titles', async () => {

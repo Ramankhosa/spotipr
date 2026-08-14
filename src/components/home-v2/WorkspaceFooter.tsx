@@ -36,6 +36,8 @@ const COLUMNS: { heading: string; links: { label: string; href: string }[] }[] =
     heading: 'Resources',
     links: [
       { label: 'Journal', href: '/blog' },
+      { label: 'API access', href: '/features/patent-api' },
+      { label: 'API documentation', href: '/developers/patent-api' },
       { label: 'Request a trial', href: '/free-trial' },
       { label: 'Contact us', href: '/contact' },
     ],

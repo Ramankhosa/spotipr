@@ -854,6 +854,58 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.otherShortlistedExcludedCount).toBe(3);
   });
 
+  it('gives every patent citation a Google Patents record link and papers none', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'recordlink1',
+      title: 'Battery healing controller',
+      jurisdiction: 'IN',
+      stage0Results: {
+        searchQuery: 'battery healing',
+        inventionFeatures: ['acoustic defect localization'],
+      },
+      stage1Results: {
+        retrievalCandidates: [
+          { publicationNumber: 'US-2025178928-A1', title: 'US pre-grant battery monitor', abstract: 'Battery monitor.', relevanceScore: 0.9 },
+          { publicationNumber: 'IN-100-A', title: 'Indian battery reference', abstract: 'Battery reference.', relevanceScore: 0.85 },
+          { publicationNumber: 'PAPER:acoustic-battery', title: 'Acoustic battery diagnostics', abstract: 'Paper abstract.', referenceType: 'paper', relevanceScore: 0.8 },
+          { publicationNumber: 'Unknown', title: 'Record without a publication number', abstract: 'Battery record.', relevanceScore: 0.7 },
+          { publicationNumber: 'IN-900-A', title: 'Gate-accepted but unmapped battery monitor', abstract: 'Battery monitor.', relevanceScore: 0.6 },
+        ],
+        aiRelevance: {
+          byPn: {
+            'US2025178928': { decision: 'accept', score: 0.9, evidence_quality: 'high' },
+            IN100: { decision: 'accept', score: 0.85, evidence_quality: 'high' },
+            'PAPER:ACOUSTICBATTERY': { decision: 'accept', score: 0.8, evidence_quality: 'high' },
+            UNKNOWN: { decision: 'accept', score: 0.7, evidence_quality: 'medium' },
+            IN900: { decision: 'accept', score: 0.6, evidence_quality: 'medium' },
+          },
+        },
+      },
+      stage35Results: {
+        feature_map: ['US-2025178928-A1', 'IN-100-A', 'PAPER:acoustic-battery', 'Unknown'].map(pn => ({
+          pn,
+          title: pn,
+          feature_analysis: [{ feature: 'acoustic defect localization', status: 'Present', quote: 'battery', field: 'abstract' }],
+        })),
+      },
+      stage4Results: {},
+    });
+
+    const linkByPn = new Map(model.comparisons.map(item => [item.publicationNumber, item.googlePatentsUrl]));
+    // The DOCDB US pre-grant serial is zero-padded to seven digits; the plain
+    // dash-stripped number 404s on patents.google.com.
+    expect(linkByPn.get('US2025178928A1')).toBe('https://patents.google.com/patent/US20250178928A1');
+    expect(linkByPn.get('IN100A')).toBe('https://patents.google.com/patent/IN100A');
+    // Papers carry link/doi instead, and a placeholder number must not become a link.
+    expect(linkByPn.get('PAPER:acoustic-battery')).toBe('');
+    expect(linkByPn.get('UNKNOWN')).toBe('');
+    // Unmapped shortlisted citations are linked the same way.
+    expect(model.otherShortlistedCitations.map(item => item.googlePatentsUrl))
+      .toEqual(['https://patents.google.com/patent/IN900A']);
+    expect(model.citations.find(item => item.publicationNumber === 'IN100A')?.googlePatentsUrl)
+      .toBe('https://patents.google.com/patent/IN100A');
+  });
+
   it('uses a valid persisted reference partition and recomputes an invalid one', () => {
     const publications = ['US100A', 'US200A', 'US300A', 'US400A'];
     const featureMap = publications.map(publicationNumber => ({
