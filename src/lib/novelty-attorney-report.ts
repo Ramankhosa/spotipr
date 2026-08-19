@@ -1883,9 +1883,16 @@ const EXAMINER_CATEGORY_MEANING: Record<ExaminerCategory, string> = {
 
 /**
  * Tag each mapped citation X / Y / A the way a search report does. Nothing new is
- * computed: X follows the single-reference overlap verdict already shown on the
+ * computed: X follows the single-reference overlap verdict already printed on the
  * card, Y follows the inventive-step pairs already listed in section 1.8, and
  * everything else is background.
+ *
+ * X is keyed on `overlapRiskLevel === 'High'` ALONE — deliberately not on
+ * `matchCategory === 'direct'`. That field carries the relevance gate's decision
+ * to map a reference at all, and a gate that accepts every shortlisted candidate
+ * (the normal case) would turn every citation into an X. The letter has to agree
+ * with the risk badge printed beside it: a card reading "Related / moderate-
+ * overlap" must not also claim the reference anticipates on its own.
  *
  * Citations that were never feature-mapped deliberately keep no letter. A
  * category asserts that a document was read against the claims, and the
@@ -1901,10 +1908,7 @@ function assignExaminerCategories(
     combinationMembers.add(canonicalPatentNumber(pair.referenceB.publicationNumber));
   }
   for (const comparison of comparisons) {
-    // 'direct' is the gate's invention-level verdict; 'High' is the mapping's
-    // single-reference overlap verdict. Either one alone is an X.
-    const standsAlone = comparison.overlapRiskLevel === 'High' || comparison.matchCategory === 'direct';
-    const category: ExaminerCategory = standsAlone
+    const category: ExaminerCategory = comparison.overlapRiskLevel === 'High'
       ? 'X'
       : combinationMembers.has(canonicalPatentNumber(comparison.publicationNumber))
         ? 'Y'

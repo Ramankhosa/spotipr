@@ -14,6 +14,7 @@ import { CORPUS_FIRST_YEAR, emptyWhitespaceScope } from '@/lib/whitespace/types'
 import type { FieldMapResult, WhitespaceScope } from '@/lib/whitespace/types'
 import { authHeaders, wsApi } from './api'
 import { ClustersPanel } from './ClustersPanel'
+import { FieldRuleLadder, MatchRuleControl } from './FieldRulePanel'
 import { HypothesesPanel } from './HypothesesPanel'
 
 interface StudyRow {
@@ -560,11 +561,20 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                             })
                           }
                         />
-                        Must appear (unchecked widens the search)
+                        Must appear in every document (unchecked: counts toward the match rule below)
                       </label>
                     </li>
                   ))}
                 </ul>
+              )}
+              {scope.concepts.length > 0 && (
+                <div className="mt-4 rounded-md border border-dashed border-border p-3">
+                  <MatchRuleControl
+                    scope={scope}
+                    disabled={running}
+                    onChange={matching => patchScope(d => ({ ...d, matching }))}
+                  />
+                </div>
               )}
             </div>
 
@@ -810,6 +820,8 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                   </div>
                 ))}
               </div>
+
+              {results.fieldRule && <FieldRuleLadder rule={results.fieldRule} />}
 
               {/* Only measured steps are rendered. `corpus` and `afterFilters`
                   are null because the census evaluates the whole scope predicate

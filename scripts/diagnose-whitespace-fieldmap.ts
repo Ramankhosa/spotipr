@@ -18,8 +18,10 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../src/lib/prisma'
 import { buildScopeFilter, buildConceptQuery, runFieldMap } from '../src/lib/whitespace/field-map'
 import { candidateCoverageNote, resolveFieldCandidates } from '../src/lib/whitespace/candidates'
+import { resolveFieldDefinition } from '../src/lib/whitespace/field-definition'
+import { fieldRuleNote, rungLabel } from '../src/lib/whitespace/field-rule'
 import { readScope } from '../src/lib/whitespace/service'
-import { emptyWhitespaceScope } from '../src/lib/whitespace/types'
+import { emptyWhitespaceScope, scopeMatching } from '../src/lib/whitespace/types'
 import type { WhitespaceScope } from '../src/lib/whitespace/types'
 
 const PROBE_CAP = 200_000
@@ -32,6 +34,11 @@ async function withTimeout<T>(ms: number, query: Prisma.Sql): Promise<T[]> {
   return rows
 }
 
+/**
+ * Ad-hoc scope from a comma-separated list. Terms are OPTIONAL by default so
+ * the match-rule ladder has rungs to show; prefix a term with `*` to make it
+ * must-appear ("*irrigation, soil moisture, weather forecast").
+ */
 function scopeFromConcepts(raw: string): WhitespaceScope {
   const scope = emptyWhitespaceScope()
   scope.title = `ad-hoc: ${raw}`
@@ -39,7 +46,13 @@ function scopeFromConcepts(raw: string): WhitespaceScope {
     .split(',')
     .map(term => term.trim())
     .filter(Boolean)
-    .map((label, index) => ({ id: `c${index}`, label, synonyms: [], required: true, origin: 'user' as const }))
+    .map((term, index) => ({
+      id: `c${index}`,
+      label: term.replace(/^\*/, '').trim(),
+      synonyms: [],
+      required: term.startsWith('*'),
+      origin: 'user' as const,
+    }))
   return scope
 }
 
@@ -108,8 +121,10 @@ async function main() {
   console.log(`  jurisdictions:   ${scope.filters.jurisdictions.join(', ') || '(all)'}`)
   const conceptPlan = buildConceptQuery(scope)
   if (conceptPlan) {
-    conceptPlan.groups.forEach((group, index) => console.log(`  tsquery group ${index + 1}: ${group.slice(0, 200)}`))
+    conceptPlan.required.forEach((group, index) => console.log(`  must-appear group ${index + 1}: ${group.slice(0, 200)}`))
+    conceptPlan.optional.forEach((group, index) => console.log(`  optional group ${index + 1}:    ${group.slice(0, 200)}`))
     if (conceptPlan.exclusions) console.log(`  tsquery NOT:     ${conceptPlan.exclusions.slice(0, 200)}`)
+    console.log(`  match rule:      ${JSON.stringify(scopeMatching(scope))}`)
   } else {
     console.log('  tsquery:         (none — classification only)')
   }
@@ -145,8 +160,20 @@ async function main() {
     )
   }
 
-  const lexicalOnly = buildScopeFilter(scope)
-  const where = buildScopeFilter(scope, candidates.ids)
+  // --- the match rule: every rung, tightest first -----------------------------
+  // The line that answers "why is this field too big / too small": it prints
+  // what each "at least k of the optional concepts" rung matches and which one
+  // the fit chose (or would choose — the fit is what the census runs with).
+  console.log('\n--- Match rule ladder (auto fit) ---')
+  const fitStart = Date.now()
+  const field = await resolveFieldDefinition(scope, { reuse: false })
+  console.log(`  band: ${field.rule.band.minFamilies.toLocaleString()} families .. ${field.rule.band.maxPublications.toLocaleString()} publications`)
+  console.log(`  ${field.rule.requiredCount} must-appear, ${field.rule.optionalCount} optional; mode ${field.rule.mode}, fit ${field.rule.fit}, k=${field.rule.minimumOptional} (${Date.now() - fitStart}ms)`)
+  for (const rung of field.rule.ladder) console.log(`  ${rungLabel(rung, field.rule)}${rung.minimumOptional === field.rule.minimumOptional ? '   <== used' : ''}`)
+  console.log(`  ${fieldRuleNote(field.rule)}`)
+
+  const lexicalOnly = buildScopeFilter(scope, undefined, field.rule.minimumOptional)
+  const where = field.where
 
   // --- lexical vs hybrid, side by side --------------------------------------
   console.log('\n--- Lexical-only vs hybrid match counts ---')
@@ -212,6 +239,7 @@ async function main() {
       ...(censusTimeoutMs ? { censusTimeoutMs } : {}),
       candidateIds: candidates.ids,
       candidateNote: candidateCoverageNote(candidates),
+      fieldRule: field.rule,
     })
     const elapsed = Date.now() - start
     console.log(

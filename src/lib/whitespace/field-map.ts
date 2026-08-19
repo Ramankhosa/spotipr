@@ -28,9 +28,10 @@
 
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import type { FieldMapResult, LabelledCount, TextCoverage, WhitespaceScope, YearCount } from './types'
+import type { FieldMapResult, FieldRule, LabelledCount, TextCoverage, WhitespaceScope, YearCount } from './types'
 import { CORPUS_FIRST_YEAR } from './types'
 import { WhitespacePermanentError } from './run-lease'
+import { fieldRuleNote, ladderSummary, minimumRungFor, narrowingAdviceFor, rungPhrase } from './field-rule'
 
 /**
  * Ceiling for the staging pass — the only statement that touches the corpus.
@@ -48,7 +49,7 @@ const ASSIGNEE_SAMPLE_CAP = 25_000
  * until the statement timeout. ~250k publications is far beyond any field a
  * study can usefully hypothesise over.
  */
-const CENSUS_ROW_CAP = Math.max(10_000, Number(process.env.WHITESPACE_CENSUS_ROW_CAP) || 250_000)
+export const CENSUS_ROW_CAP = Math.max(10_000, Number(process.env.WHITESPACE_CENSUS_ROW_CAP) || 250_000)
 export const PUBLICATION_LAG_MONTHS = 18
 
 /**
@@ -143,17 +144,32 @@ export async function facet<T>(tx: Tx, label: string, query: Prisma.Sql, gaps: s
  * operator and exclusions negated with !!, which parse exactly as intended.
  *
  * Group semantics follow the scope contract: REQUIRED concepts must appear, so
- * each becomes an AND group. Optional concepts must never narrow the field —
- * with at least one required concept they add no predicate (they inform later
- * stages); with none, the field is the union of all concepts, as one OR group.
+ * each is an AND group. Of the OPTIONAL concepts, at least `minimumOptional`
+ * must appear — the ladder between "optional concepts never narrow" (0) and
+ * "every concept must appear" (all of them). See ScopeMatching in types.ts for
+ * why that ladder exists; the short version is that the required flag alone
+ * gave one required concept a sector and two an empty intersection, with no
+ * rung in between.
  */
 export interface ConceptQueryPlan {
-  /** One websearch string per AND group: '"term" OR "term" OR ...'. */
-  groups: string[]
-  /** Concept labels behind each group, index-aligned, for error messages. */
+  /** One websearch string per required concept: '"term" OR "term" OR ...'. Every one must match. */
+  required: string[]
+  /** One websearch string per optional concept. */
+  optional: string[]
+  /** How many of `optional` must match, 0..optional.length. */
+  minimumOptional: number
+  /** Concept labels behind each group — required first, then optional — for error messages. */
   groupLabels: string[][]
   /** Exclusion terms as one OR group for the negated arm, or null. */
   exclusions: string | null
+}
+
+/**
+ * The websearch strings this plan actually searches with, one per AND group.
+ * Kept for callers that only need the term lists (the stopword check, tests).
+ */
+export function conceptQueryGroups(plan: ConceptQueryPlan): string[] {
+  return [...plan.required, ...plan.optional]
 }
 
 /** Phrase quoting for websearch_to_tsquery. Shared so every text lane quotes identically. */
@@ -173,58 +189,112 @@ function conceptTerms(concept: { label: string; synonyms: string[] }): string[] 
   return terms
 }
 
-export function buildConceptQuery(scope: WhitespaceScope): ConceptQueryPlan | null {
+/**
+ * The loosest and tightest k the scope's concept list can express. With no
+ * required concept the loosest rung is 1 — the union of the concepts — because
+ * k = 0 would remove the concept gate entirely and count the whole slice.
+ */
+export function minimumOptionalBounds(scope: WhitespaceScope): { min: number; max: number } {
+  const usable = scope.concepts.filter(concept => conceptTerms(concept).length > 0)
+  const required = usable.filter(concept => concept.required).length
+  const optional = usable.length - required
+  return { min: required > 0 ? 0 : Math.min(1, optional), max: optional }
+}
+
+/**
+ * The plan for the scope, with `minimumOptional` clamped into the expressible
+ * range. Callers pass the k in force (a pinned value, or the fitted one from
+ * resolveFieldDefinition); with none given the LOOSEST rung is used, which is
+ * exactly the pre-ladder behaviour — required concepts intersect, optional
+ * concepts never narrow, and with nothing required the field is the union.
+ */
+export function buildConceptQuery(scope: WhitespaceScope, minimumOptional?: number): ConceptQueryPlan | null {
   const usable = scope.concepts
     .map(concept => ({ label: concept.label.trim(), required: concept.required, terms: conceptTerms(concept) }))
     .filter(concept => concept.terms.length > 0)
   if (!usable.length) return null
 
   const required = usable.filter(concept => concept.required)
-  const groups: string[] = []
-  const groupLabels: string[][] = []
-  if (required.length) {
-    for (const concept of required) {
-      groups.push(concept.terms.map(quotePhrase).join(' OR '))
-      groupLabels.push([concept.label])
-    }
-  } else {
-    // No required concept: the field is the union of every concept.
-    groups.push(usable.flatMap(concept => concept.terms).map(quotePhrase).join(' OR '))
-    groupLabels.push(usable.map(concept => concept.label))
-  }
+  const optional = usable.filter(concept => !concept.required)
+  const bounds = minimumOptionalBounds(scope)
+  const k = Math.min(bounds.max, Math.max(bounds.min, Math.floor(minimumOptional ?? bounds.min)))
 
   const exclusionTerms = scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)
   return {
-    groups,
-    groupLabels,
+    required: required.map(concept => concept.terms.map(quotePhrase).join(' OR ')),
+    optional: optional.map(concept => concept.terms.map(quotePhrase).join(' OR ')),
+    minimumOptional: k,
+    groupLabels: [...required, ...optional].map(concept => [concept.label]),
     exclusions: exclusionTerms.length ? exclusionTerms.map(quotePhrase).join(' OR ') : null,
   }
 }
 
-/** groups && groups && !!exclusions, as a single tsquery expression. */
-function composedTsquery(plan: ConceptQueryPlan): Prisma.Sql {
-  let query = plan.groups
-    .map(group => Prisma.sql`websearch_to_tsquery('english'::regconfig, ${group})`)
-    .reduce((acc, part) => Prisma.sql`${acc} && ${part}`)
-  if (plan.exclusions) {
-    query = Prisma.sql`${query} && !!websearch_to_tsquery('english'::regconfig, ${plan.exclusions})`
+/** Every k-subset of `items`, in a stable order. */
+export function combinations<T>(items: readonly T[], k: number): T[][] {
+  if (k <= 0) return [[]]
+  if (items.length < k) return []
+  const [head, ...rest] = items
+  return [...combinations(rest, k - 1).map(combo => [head, ...combo]), ...combinations(rest, k)]
+}
+
+const tsquery = (group: string) => Prisma.sql`websearch_to_tsquery('english'::regconfig, ${group})`
+
+/**
+ * The tsqueries a plan searches with — ONE PER CONCEPT COMBINATION, not one
+ * expression. Each is `required && optionalSubset && !!exclusions`.
+ *
+ * "At least k of n" could be written as a single tsquery, an OR over every
+ * k-subset of AND groups. It must not be. Measured on the corpus: the planner
+ * mis-costs a GIN scan for a tsquery that large and falls back to a sequential
+ * scan that recomputes to_tsvector over the text of every row — 95 s against
+ * 8 s for the same rung expressed as separate small queries OR'd in SQL, and on
+ * a 45M-row corpus the sequential plan does not finish at all. Emitting one
+ * predicate arm per combination lets Postgres run each as its own bitmap index
+ * scan (an AND of ORs, which GIN serves from its smallest posting lists) and OR
+ * the bitmaps — one heap pass, no seq scan, no giant tree.
+ *
+ * k = 0 yields the required conjunction alone (or nothing at all when there is
+ * none — the caller then applies no concept gate, which only happens for a
+ * scope with no concepts). Combination count is bounded by rungIsCompilable.
+ */
+export function conceptQueryArms(plan: ConceptQueryPlan): Prisma.Sql[] {
+  const requiredParts = plan.required.map(tsquery)
+  const optionalParts = plan.optional.map(tsquery)
+  const k = Math.min(optionalParts.length, Math.max(0, plan.minimumOptional))
+  const subsets = k > 0 ? combinations(optionalParts, k) : [[]]
+  const exclusion = plan.exclusions ? Prisma.sql`!!${tsquery(plan.exclusions)}` : null
+
+  const arms: Prisma.Sql[] = []
+  for (const subset of subsets) {
+    const gate = [...requiredParts, ...subset]
+    // A lone exclusion is not a concept gate; it only rides along with one.
+    if (!gate.length) continue
+    const parts = exclusion ? [...gate, exclusion] : gate
+    arms.push(Prisma.sql`(${parts.reduce((acc, part) => Prisma.sql`${acc} && ${part}`)})`)
   }
-  return Prisma.sql`(${query})`
+  return arms
 }
 
 /**
- * The text-match predicate: one arm per readable corpus, OR'd.
+ * The text-match predicate: one arm per (concept combination × readable
+ * corpus), OR'd — see conceptQueryArms for why the combinations are separate.
  *
  * Each arm repeats the tsvector match AND carries its corpus tag as a LITERAL
  * `@>` test — a bind parameter here would stop the planner proving the partial
  * index predicates (the exact trap FIXED-6 removed from the search providers).
+ *
+ * Returns null when the plan gates on nothing (no required concept and k = 0),
+ * so the caller can leave the concept clause out rather than emit `()`.
  */
-export function textMatchPredicate(plan: ConceptQueryPlan): Prisma.Sql {
-  const query = composedTsquery(plan)
-  const arms = TEXT_CORPORA.map(
-    tag =>
-      Prisma.sql`(${SEARCH_TSVECTOR} @@ ${query}
+export function textMatchPredicate(plan: ConceptQueryPlan): Prisma.Sql | null {
+  const queries = conceptQueryArms(plan)
+  if (!queries.length) return null
+  const arms = queries.flatMap(query =>
+    TEXT_CORPORA.map(
+      tag =>
+        Prisma.sql`(${SEARCH_TSVECTOR} @@ ${query}
         AND lp."corpusSources" @> ${Prisma.raw(`ARRAY['${tag}']::TEXT[]`)})`
+    )
   )
   return Prisma.sql`(${Prisma.join(arms, ' OR ')})`
 }
@@ -256,10 +326,24 @@ export function corpusMembershipPredicate(): Prisma.Sql {
  * the lexical one it widens.
  */
 export function exclusionPredicate(scope: WhitespaceScope): Prisma.Sql | null {
+  const match = exclusionMatchPredicate(scope)
+  return match ? Prisma.sql`NOT ${match}` : null
+}
+
+/**
+ * The POSITIVE form: true for a row that matches an excluded term. For callers
+ * that already hold a bounded candidate set — the semantic lane — testing
+ * "which of these ids match an exclusion" and subtracting is index-backed and
+ * bounded by the candidate count, whereas the negated form above can never use
+ * the text index and, joined against the corpus, made the planner filter every
+ * row of local_patents through to_tsvector (34 s on the 38k-row dev corpus,
+ * 2 s without it) — which is what kept timing the semantic arm out.
+ */
+export function exclusionMatchPredicate(scope: WhitespaceScope): Prisma.Sql | null {
   const terms = scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)
   if (!terms.length) return null
   const query = terms.map(quotePhrase).join(' OR ')
-  return Prisma.sql`NOT (${SEARCH_TSVECTOR} @@ websearch_to_tsquery('english'::regconfig, ${query}))`
+  return Prisma.sql`(${SEARCH_TSVECTOR} @@ websearch_to_tsquery('english'::regconfig, ${query}))`
 }
 
 /**
@@ -270,9 +354,11 @@ export function exclusionPredicate(scope: WhitespaceScope): Prisma.Sql | null {
  * states. Refusing loudly is the honest behaviour.
  */
 export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<void> {
+  const groups = conceptQueryGroups(plan)
+  if (!groups.length) return
   const checks = await prisma.$queryRaw<Array<{ idx: number; nodes: number }>>(Prisma.sql`
     SELECT idx::int AS idx, numnode(websearch_to_tsquery('english'::regconfig, q))::int AS nodes
-    FROM unnest(${plan.groups}::text[]) WITH ORDINALITY AS t(q, idx)`)
+    FROM unnest(${groups}::text[]) WITH ORDINALITY AS t(q, idx)`)
   const dead = checks.filter(check => check.nodes === 0)
   if (dead.length) {
     const labels = dead.flatMap(check => plan.groupLabels[check.idx - 1] ?? [])
@@ -305,7 +391,12 @@ function normalizeClassificationCode(code: string): string {
  * expression this reproduces exactly, including the corpusSources predicate the
  * planner needs in order to choose it.
  */
-export function buildScopeFilter(scope: WhitespaceScope, candidateIds?: readonly number[]): Prisma.Sql {
+export function buildScopeFilter(
+  scope: WhitespaceScope,
+  candidateIds?: readonly number[],
+  /** The k in force. Omitted → the loosest rung (pre-ladder behaviour). */
+  minimumOptional?: number
+): Prisma.Sql {
   const clauses: Prisma.Sql[] = [Prisma.sql`lp."filingDate" IS NOT NULL`]
 
   const yearFrom = Math.max(CORPUS_FIRST_YEAR, scope.filters.yearFrom)
@@ -343,9 +434,9 @@ export function buildScopeFilter(scope: WhitespaceScope, candidateIds?: readonly
   // families were returning zero. The OR only ever widens: nothing the lexical
   // arm found is lost, and the structural filters (years, CPC, jurisdiction,
   // assignee) still apply to the ANN ids because they are separate AND clauses.
-  const conceptQuery = buildConceptQuery(scope)
-  if (conceptQuery) {
-    const lexical = textMatchPredicate(conceptQuery)
+  const conceptQuery = buildConceptQuery(scope, minimumOptional)
+  const lexical = conceptQuery ? textMatchPredicate(conceptQuery) : null
+  if (lexical) {
     clauses.push(
       candidateIds?.length
         ? Prisma.sql`(${lexical} OR lp."id" = ANY(${candidateIds as number[]}::int[]))`
@@ -436,6 +527,12 @@ export interface FieldMapOptions {
   candidateIds?: readonly number[]
   /** How the field was assembled, recorded in the census coverage notes. */
   candidateNote?: string
+  /**
+   * The resolved match rule (resolveFieldDefinition). Its `minimumOptional` is
+   * the k the predicate is built with; the rule itself is stored on the result
+   * and stated in the coverage notes. Omitted → the loosest rung, no note.
+   */
+  fieldRule?: FieldRule | null
 }
 
 /**
@@ -467,17 +564,12 @@ function stageCensus(where: Prisma.Sql, rowCap: number): Prisma.Sql {
     LIMIT ${rowCap + 1}`
 }
 
-/** Shared advice for a scope that must be narrowed before it can be counted. */
-export function narrowingAdvice(scope: WhitespaceScope): string {
-  const plan = buildConceptQuery(scope)
-  if (!plan && acceptedCpc(scope).length > 0) {
-    return 'This scope matches on classification alone, which cannot use the text index and so reads the whole corpus. Add a concept — even one — and the search becomes index-backed.'
-  }
-  const hasRequired = scope.concepts.some(c => c.required && c.label.trim())
-  const requiredHint = hasRequired
-    ? 'mark more concepts as required'
-    : 'mark a concept as required (required concepts intersect; with none marked, the field is the union of every concept)'
-  return `Narrow it: ${requiredHint}, tighten the filing years, restrict jurisdictions, or add exclusions.`
+/**
+ * Shared advice for a scope that must be narrowed before it can be counted.
+ * With a resolved rule it names the measured rung to pin; see field-rule.ts.
+ */
+export function narrowingAdvice(scope: WhitespaceScope, rule?: FieldRule | null): string {
+  return narrowingAdviceFor(scope, rule)
 }
 
 /**
@@ -490,7 +582,7 @@ export function narrowingAdvice(scope: WhitespaceScope): string {
  * first thing to suspect; when the semantic arm could not run, that is the
  * likeliest cause and is named first.
  */
-export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string): string {
+export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string, rule?: FieldRule | null): string {
   const parts: string[] = ['No publication in the readable corpus matches this scope.']
   // Keyword match over every did-not-run reason the candidate resolver emits:
   // unconfigured key, embed/retrieval failure, no vector, the deliberate kill
@@ -518,8 +610,23 @@ export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string):
     parts.push('Remove the assignee restriction and re-run to see whether the field exists at all.')
   }
   parts.push(
-    `Widen the filing years (currently ${Math.max(CORPUS_FIRST_YEAR, scope.filters.yearFrom)}–${scope.filters.yearTo}), or mark fewer concepts as required — every required concept must be present.`
+    `Widen the filing years (currently ${Math.max(CORPUS_FIRST_YEAR, scope.filters.yearFrom)}–${scope.filters.yearTo}).`
   )
+  // The match rule, when there is one to loosen: a pinned minimum, or
+  // must-appear concepts that intersect to nothing.
+  const required = scope.concepts.filter(c => c.required && c.label.trim())
+  if (rule && rule.mode === 'pinned' && rule.optionalCount > 0 && rule.minimumOptional > minimumRungFor(rule)) {
+    parts.push(
+      `The match rule is pinned at ${rungPhrase(rule, rule.minimumOptional)} — lower it or set it to auto.`
+    )
+  }
+  if (required.length) {
+    parts.push(
+      `${required.length === 1 ? 'The must-appear concept' : `All ${required.length} must-appear concepts`} must be present in every document counted — make ${
+        required.length === 1 ? 'it' : 'some of them'
+      } optional if the field should be wider than that.`
+    )
+  }
   return parts.join(' ')
 }
 
@@ -527,31 +634,35 @@ export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string):
  * The message the user sees when the census cannot finish. It has to say what to
  * do about it — "statement timeout" is true and useless.
  */
-function tooBroadMessage(scope: WhitespaceScope, timeoutMs: number): string {
-  return `This field is too broad to count within ${Math.max(1, Math.round(timeoutMs / 1000))}s. ${narrowingAdvice(scope)}`
+function tooBroadMessage(scope: WhitespaceScope, timeoutMs: number, rule?: FieldRule | null): string {
+  return `This field is too broad to count within ${Math.max(1, Math.round(timeoutMs / 1000))}s.${ladderSummary(rule)} ${narrowingAdvice(scope, rule)}`
 }
 
 /** The field is countable but bigger than the exact-census ceiling. */
-function overCapMessage(scope: WhitespaceScope, rowCap: number): string {
-  return `This field matches more than ${rowCap.toLocaleString()} publications — bigger than the census will count exactly. ${narrowingAdvice(
-    scope
-  )}`
+function overCapMessage(scope: WhitespaceScope, rowCap: number, rule?: FieldRule | null): string {
+  return `This field matches more than ${rowCap.toLocaleString()} publications — bigger than the census will count exactly.${ladderSummary(
+    rule
+  )} ${narrowingAdvice(scope, rule)}`
 }
 
 export async function runFieldMap(
   scope: WhitespaceScope,
   options: FieldMapOptions = {}
 ): Promise<FieldMapResult> {
-  const conceptQuery = buildConceptQuery(scope)
+  const rule = options.fieldRule ?? null
+  const conceptQuery = buildConceptQuery(scope, rule?.minimumOptional)
   // Outside the transaction: a scope whose concepts stem away to nothing must
   // fail with the concept named, not count a silently different field.
   if (conceptQuery) await assertConceptQueryUsable(conceptQuery)
 
-  const where = buildScopeFilter(scope, options.candidateIds)
+  const where = buildScopeFilter(scope, options.candidateIds, rule?.minimumOptional)
   const sampleCap = options.assigneeSampleCap ?? ASSIGNEE_SAMPLE_CAP
   const censusTimeoutMs = options.censusTimeoutMs ?? CENSUS_TIMEOUT_MS
   const rowCap = options.censusRowCap ?? CENSUS_ROW_CAP
   const coverageNotes: string[] = []
+  // The rule first: it says what was counted, and everything after it is a
+  // property of that count.
+  if (rule) coverageNotes.push(fieldRuleNote(rule))
   if (options.candidateNote) coverageNotes.push(options.candidateNote)
   const gaps: string[] = []
 
@@ -564,7 +675,7 @@ export async function runFieldMap(
   try {
     await tx.$executeRaw(stageCensus(where, rowCap))
   } catch (error) {
-    if (isStatementTimeout(error)) throw new WhitespacePermanentError(tooBroadMessage(scope, censusTimeoutMs))
+    if (isStatementTimeout(error)) throw new WhitespacePermanentError(tooBroadMessage(scope, censusTimeoutMs, rule))
     throw error
   }
   await setStatementTimeout(tx, FACET_TIMEOUT_MS)
@@ -583,7 +694,7 @@ export async function runFieldMap(
   } catch (error) {
     if (isStatementTimeout(error)) {
       throw new WhitespacePermanentError(
-        `The field staged but could not be counted within ${Math.round(FACET_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
+        `The field staged but could not be counted within ${Math.round(FACET_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope, rule)}`
       )
     }
     throw error
@@ -595,14 +706,14 @@ export async function runFieldMap(
   // facets over an arbitrary subset would be quietly biased. Refuse with the
   // real number rather than publish proportions of an unknown population.
   if (publicationCount > rowCap) {
-    throw new WhitespacePermanentError(overCapMessage(scope, rowCap))
+    throw new WhitespacePermanentError(overCapMessage(scope, rowCap, rule))
   }
 
   // An empty census is not an error — the map renders, with zeros — but shipping
   // it without saying why reads as "this field does not exist", which is a
   // conclusion the census has not earned. Say what to change instead.
   if (publicationCount === 0) {
-    coverageNotes.push(emptyFieldAdvice(scope, options.candidateNote))
+    coverageNotes.push(emptyFieldAdvice(scope, options.candidateNote, rule))
   }
 
   // --- Facet 2: filing trend ----------------------------------------------
@@ -803,15 +914,20 @@ export async function runFieldMap(
     coverageNotes.push(
       'Concept matching reads the Google Patents and Indian corpora, which include European (EP/WO) publications. Publications added by the EPO bulk import carry no filing date and are not counted in this filing-year census; that import contributes claim text to families already counted, which is reflected in the claims-readable figure.'
     )
-    const optionalCount = scope.concepts.filter(c => !c.required && c.label.trim()).length
-    if (scope.concepts.some(c => c.required && c.label.trim()) && optionalCount > 0) {
-      coverageNotes.push(
-        `${optionalCount} optional concept${optionalCount === 1 ? '' : 's'} did not restrict this count — only required concepts define the field. Optional concepts inform clustering and validation.`
-      )
-    } else if (!scope.concepts.some(c => c.required && c.label.trim())) {
-      coverageNotes.push(
-        'No concept is marked required, so this field is the union of every concept. Mark concepts as required to intersect them.'
-      )
+    // Without a resolved rule (a caller on the pre-ladder path) the loosest
+    // rung was used; say so in the old words. With one, fieldRuleNote above
+    // already stated exactly what was counted.
+    if (!rule) {
+      const optionalCount = scope.concepts.filter(c => !c.required && c.label.trim()).length
+      if (scope.concepts.some(c => c.required && c.label.trim()) && optionalCount > 0) {
+        coverageNotes.push(
+          `${optionalCount} optional concept${optionalCount === 1 ? '' : 's'} did not restrict this count — only must-appear concepts define the field. Optional concepts inform clustering and validation.`
+        )
+      } else if (!scope.concepts.some(c => c.required && c.label.trim())) {
+        coverageNotes.push(
+          'No concept is marked must-appear, so this field is the union of every concept.'
+        )
+      }
     }
   }
   if (scope.filters.assignees.length) {
@@ -869,6 +985,7 @@ export async function runFieldMap(
       families: familyCount,
     },
     coverageNotes,
+    ...(rule ? { fieldRule: rule } : {}),
     generatedAt: new Date().toISOString(),
   }
     },

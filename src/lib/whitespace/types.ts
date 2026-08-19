@@ -71,6 +71,25 @@ export interface ScopeAssumption {
   kind: 'interpretation' | 'corpus'
 }
 
+/**
+ * How the concept list turns into a field.
+ *
+ * A document is in the field when it matches EVERY required concept AND at least
+ * `minimumOptionalConcepts` of the optional ones. This is the knob that was
+ * missing: the required flag alone gave a step function — one required concept
+ * matched a whole sector, two intersected to a reading list — and nothing in
+ * between could be asked for. "At least k of the others" is the ladder between
+ * those two extremes, and `'auto'` (the default) climbs it at run time to the
+ * tightest rung that still yields a field the study can analyse, then reports
+ * every rung it measured so the choice is reviewable rather than hidden.
+ *
+ * With no required concept, k = 1 is the loosest rung (the union of the
+ * concepts) — k = 0 would delete the concept gate altogether.
+ */
+export interface ScopeMatching {
+  minimumOptionalConcepts: number | 'auto'
+}
+
 export interface WhitespaceScope {
   title: string
   /** One-paragraph restatement of the field, for the user to confirm or correct. */
@@ -88,6 +107,57 @@ export interface WhitespaceScope {
     /** Canonicalised assignee names to restrict to. Empty means all. */
     assignees: string[]
   }
+  /** Absent on scopes saved before the rule existed; read as `'auto'`. */
+  matching?: ScopeMatching
+}
+
+/** The matching rule with its default applied. */
+export function scopeMatching(scope: Pick<WhitespaceScope, 'matching'>): ScopeMatching {
+  return scope.matching ?? { minimumOptionalConcepts: 'auto' }
+}
+
+// ---------------------------------------------------------------------------
+// The resolved field rule (what a run actually counted)
+// ---------------------------------------------------------------------------
+
+/** One rung of the "at least k of the optional concepts" ladder, as measured. */
+export interface FieldRuleRung {
+  minimumOptional: number
+  /** Exact when `overCap` is false; a floor (the cap) when it is. Null when unmeasured. */
+  publications: number | null
+  families: number | null
+  /** The rung matched more than the band's publication ceiling — never staged in full. */
+  overCap: boolean
+  /** The rung could not even be sized within the budget; treated as over the cap. */
+  timedOut: boolean
+  /** Not measured: too many concept combinations to compile, or the fit stopped early. */
+  skipped: boolean
+}
+
+export type FieldRuleFit =
+  /** A rung landed inside the band. */
+  | 'in-band'
+  /** Even the loosest rung is below the family floor. */
+  | 'too-narrow'
+  /** Even the tightest rung is above the publication ceiling. */
+  | 'too-broad'
+  /** Adjacent rungs jump from below the floor to above the ceiling. */
+  | 'cliff'
+  /** The user pinned k; nothing was fitted. */
+  | 'pinned'
+  /** Nothing to fit: no optional concepts, or the scope has no concepts at all. */
+  | 'none'
+
+export interface FieldRule {
+  mode: 'auto' | 'pinned'
+  requiredCount: number
+  optionalCount: number
+  /** The k in force for this run. */
+  minimumOptional: number
+  fit: FieldRuleFit
+  /** The rungs considered, tightest first. */
+  ladder: FieldRuleRung[]
+  band: { minFamilies: number; maxPublications: number }
 }
 
 /** The corpus cannot see behind this year. Stamped on every visual. */
@@ -469,6 +539,8 @@ export interface DimensionMapResult {
   coverageNotes: string[]
   /** Harder than notes: what this result cannot answer at all. */
   limitations: string[]
+  /** How the concept list was turned into this field. Absent on runs before the rule existed. */
+  fieldRule?: FieldRule
   generatedAt: string
 }
 
@@ -598,5 +670,7 @@ export interface FieldMapResult {
   }
   /** Data-quality caveats computed at run time and carried into every hypothesis. */
   coverageNotes: string[]
+  /** How the concept list was turned into this field. Absent on runs before the rule existed. */
+  fieldRule?: FieldRule
   generatedAt: string
 }

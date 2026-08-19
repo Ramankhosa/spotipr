@@ -250,7 +250,14 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
     // arms the census uses — so the two lanes disagree only in vocabulary,
     // never in which corpus slice they were allowed to see.
     const tsquery = terms.map(term => `"${term.replace(/["\\]/g, ' ').trim()}"`).join(' OR ')
-    const textPredicate = textMatchPredicate({ groups: [tsquery], groupLabels: [[concept.label]], exclusions: null })
+    // One required group, no optional ones: never null.
+    const textPredicate = textMatchPredicate({
+      required: [tsquery],
+      optional: [],
+      minimumOptional: 0,
+      groupLabels: [[concept.label]],
+      exclusions: null,
+    })!
 
     // How much of the field this concept's wording reaches at all. Bounded by a
     // subquery LIMIT so a broad concept cannot turn a diagnostic into a full

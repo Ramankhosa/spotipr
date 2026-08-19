@@ -89,6 +89,35 @@ export function semanticLaneConfigured(): boolean {
   return hasSearchEmbeddingApiKey()
 }
 
+/**
+ * A database or provider error as one sentence a reader can act on.
+ *
+ * The lane's `reason` travels verbatim into the study's coverage notes and the
+ * report, and a raw driver message ("Invalid `prisma.$queryRaw()` invocation …
+ * Code: `57014`") told an attorney nothing except that something broke. The
+ * full error still goes to the log; this is the sentence for the page.
+ */
+export function describeLaneError(error: unknown, budgetMs?: number): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = (error as { meta?: { code?: string } })?.meta?.code
+  if (code === '57014' || /57014|statement timeout|canceling statement/i.test(message)) {
+    return budgetMs
+      ? `the corpus did not answer within the ${Math.round(budgetMs / 1000)}s budget`
+      : 'the corpus did not answer within the time budget'
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|fetch failed|socket hang up/i.test(message)) {
+    return 'the embedding service could not be reached'
+  }
+  if (/429|rate limit/i.test(message)) return 'the embedding service rate-limited the request'
+  if (/401|403|invalid api key|unauthori[sz]ed/i.test(message)) return 'the embedding service rejected the API key'
+  // Anything else: the first line, without the driver's decoration.
+  const firstLine = message
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line && !/^Invalid `prisma/.test(line) && !/^Raw query failed/.test(line))
+  return (firstLine ?? 'unknown error').replace(/^Message:\s*/i, '').slice(0, 200)
+}
+
 /** Embeds query text into a pgvector literal, or null when unconfigured. */
 export async function embedQueryText(text: string): Promise<string | null> {
   if (!semanticLaneConfigured()) return null
@@ -154,6 +183,31 @@ export function semanticMatchSql(literalExpr: Prisma.Sql, maxDistance: number | 
 /** The rows semanticMatchSql may legally read (alias `e`): current model, COMPLETED, vector present. */
 export function comparableVectorSql(): Prisma.Sql {
   return COMPARABLE_VECTOR
+}
+
+/**
+ * A text literal cast to the corpus vector type — for set-valued callers that
+ * unnest literals into a CTE and want the parse done ONCE per literal rather
+ * than once per joined row. The result can be handed to semanticMatchSql as the
+ * literal expression: its own cast then becomes a no-op on an already-typed
+ * column.
+ */
+export function literalVectorSql(textExpr: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`(${textExpr})${EMBEDDING_CAST_SQL}`
+}
+
+/**
+ * A bound vector literal, parsed ONCE per statement execution.
+ *
+ * `$1::vector` in a WHERE or ORDER BY is a coercion of a parameter, and under a
+ * generic plan (which Postgres may switch a repeated statement to after five
+ * runs) that coercion is evaluated per row — a ~17 KB text literal re-parsed
+ * for every candidate. Wrapping it in an uncorrelated scalar subquery makes it
+ * an InitPlan: computed once, referenced by every row. The ANN index still
+ * orders by it (pgvector's own examples use `ORDER BY v <-> (SELECT …)`).
+ */
+export function vectorParamSql(literal: string): Prisma.Sql {
+  return Prisma.sql`(SELECT ${literal}${EMBEDDING_CAST_SQL})`
 }
 
 /**
@@ -246,8 +300,14 @@ export async function semanticBackground(input: {
 
   const percent = (await backgroundSamplePercent()).toFixed(4)
   const SAMPLE_CLAUSE = Prisma.raw(`TABLESAMPLE SYSTEM (${percent})`)
-  const DISTANCE = Prisma.sql`(bg.v ${EMBEDDING_DISTANCE_OP_SQL} q.lit${EMBEDDING_CAST_SQL})::float8`
+  const DISTANCE = Prisma.sql`(bg.v ${EMBEDDING_DISTANCE_OP_SQL} q.v)::float8`
 
+  // The literals are parsed into vectors ONCE, in their own materialised CTE.
+  // Casting `q.lit` inside the distance expression re-parsed a ~17 KB text
+  // literal for every one of the 20,000 background rows it was joined against —
+  // measured at ~22 s on the dev corpus for a query whose distances take
+  // milliseconds — which is what pushed the estimate past its budget and
+  // silently switched the semantic arm off.
   const [, rows] = await prisma.$transaction([
     prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(input.timeoutMs ?? 20_000)}, true)`,
     prisma.$queryRaw<Array<{ idx: number; sampled: number; mean: number; sd: number }>>(Prisma.sql`
@@ -256,14 +316,18 @@ export async function semanticBackground(input: {
         FROM "local_patent_embeddings" e ${SAMPLE_CLAUSE}
         WHERE ${COMPARABLE_VECTOR}
         LIMIT ${BACKGROUND_TARGET_ROWS}
+      ),
+      q AS MATERIALIZED (
+        SELECT t.idx::int AS idx, t.lit${EMBEDDING_CAST_SQL} AS v
+        FROM unnest(${padded}::text[]) WITH ORDINALITY AS t(lit, idx)
+        WHERE t.lit <> ''
       )
-      SELECT q.idx::int                                     AS idx,
+      SELECT q.idx                                          AS idx,
              count(*)::int                                  AS sampled,
              avg(${DISTANCE})::float8                       AS mean,
              COALESCE(stddev_samp(${DISTANCE}), 0)::float8  AS sd
-      FROM unnest(${padded}::text[]) WITH ORDINALITY AS q(lit, idx)
+      FROM q
       CROSS JOIN bg
-      WHERE q.lit <> ''
       GROUP BY q.idx`),
   ])
 
@@ -323,7 +387,7 @@ export async function calibrationDistanceProfile(input: {
                COALESCE(stddev_samp(s.d), 0)::float8           AS sd,
                ARRAY[${buckets}]                               AS counts
         FROM (
-          SELECT (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${input.literal}${EMBEDDING_CAST_SQL})::float8 AS d
+          SELECT (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorParamSql(input.literal)})::float8 AS d
           FROM "local_patent_embeddings" e
           WHERE ${COMPARABLE_VECTOR}
         ) s`),
@@ -372,9 +436,10 @@ export async function semanticNeighbors(input: {
   try {
     literal = await embedQueryText(input.queryText)
   } catch (error) {
+    console.error('[Whitespace] Query embedding failed:', error instanceof Error ? error.message : error)
     return {
       available: false,
-      reason: `Query embedding failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      reason: `Query embedding failed: ${describeLaneError(error)}.`,
     }
   }
   if (!literal) return { available: false, reason: 'Query embedding returned no vector.' }
@@ -400,12 +465,14 @@ export async function semanticNeighbors(input: {
   }
 
   const where = input.scopeFilter ? Prisma.sql`AND ${input.scopeFilter}` : Prisma.empty
+  // Parsed once per execution (InitPlan), not once per candidate row.
+  const query = vectorParamSql(literal)
   // Applied in the raw metric the operator returns, so the comparison stays on
   // the same scale the index orders by.
   const distanceCeiling =
     appliedMaxDistance === null
       ? Prisma.empty
-      : Prisma.sql`AND (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${literal}${EMBEDDING_CAST_SQL}) <= ${
+      : Prisma.sql`AND (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${query}) <= ${
           appliedMaxDistance * DISTANCE_DENOMINATOR
         }`
 
@@ -452,13 +519,13 @@ export async function semanticNeighbors(input: {
                COALESCE(lp."familyId", lp."publicationNumber") AS "familyKey",
                lp."title",
                lp."abstract",
-               (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${literal}${EMBEDDING_CAST_SQL})::float AS distance
+               (${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${query})::float AS distance
         FROM "local_patent_embeddings" e
         JOIN "local_patents" lp ON lp."id" = e."localPatentId"
         WHERE ${COMPARABLE_VECTOR}
         ${where}
         ${distanceCeiling}
-        ORDER BY ${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${literal}${EMBEDDING_CAST_SQL}
+        ORDER BY ${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${query}
         LIMIT ${input.limit}`),
     ])
     return {
@@ -468,9 +535,10 @@ export async function semanticNeighbors(input: {
       background,
     }
   } catch (error) {
+    console.error('[Whitespace] Semantic retrieval failed:', error instanceof Error ? error.message : error)
     return {
       available: false,
-      reason: `Semantic retrieval failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      reason: `Semantic retrieval failed: ${describeLaneError(error, input.timeoutMs ?? 20_000)}.`,
     }
   }
 }

@@ -113,7 +113,29 @@ export interface DimensionMapResult {
   unclassifiedShare: number
   coverageNotes: string[]
   limitations: string[]
+  /** How the concept list was turned into this field; absent on runs before the rule existed. */
+  fieldRule?: FieldRule
   generatedAt: string
+}
+
+/** Client mirror of FieldRule / FieldRuleRung (src/lib/whitespace/types.ts). */
+export interface FieldRuleRung {
+  minimumOptional: number
+  publications: number | null
+  families: number | null
+  overCap: boolean
+  timedOut: boolean
+  skipped: boolean
+}
+
+export interface FieldRule {
+  mode: 'auto' | 'pinned'
+  requiredCount: number
+  optionalCount: number
+  minimumOptional: number
+  fit: 'in-band' | 'too-narrow' | 'too-broad' | 'cliff' | 'pinned' | 'none'
+  ladder: FieldRuleRung[]
+  band: { minFamilies: number; maxPublications: number }
 }
 
 /**

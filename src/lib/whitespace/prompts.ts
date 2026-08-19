@@ -44,7 +44,7 @@ THE BRIEF DESCRIBES A SPECIFIC INVENTION, NOT A FIELD. Define the scope as the t
 
 MARK AT MOST ONE CONCEPT AS REQUIRED, AND OFTEN NONE. This is the single most common way an invention scope fails.
 Required concepts INTERSECT: a document must contain EVERY required concept to be counted. An invention brief names several elements that work together, and it is tempting to mark them all required — but the documents in the surrounding field solve the same problem in other ways, and almost none of them contain every element of YOUR design. Four required concepts routinely reduce a 30-million-document corpus to nothing.
-So: mark required only the single concept that names the problem domain the invention lives in, if any concept does. Leave every component, mechanism and constraint concept optional. Optional concepts still steer the later analysis; they simply do not shrink the field.
+So: mark required only the single concept that names the problem domain the invention lives in, if any concept does. Leave every component, mechanism and constraint concept optional. Optional concepts are not ignored: the study measures how many documents match at least 1, 2, 3 … of them and picks the tightest count that still yields a field it can analyse — so several well-worded optional concepts give it a ladder to climb, while several required ones give it an empty intersection.
 `
       : ''
   return `You are a patent search strategist preparing the scope for a technology landscape study.
@@ -58,7 +58,7 @@ ${input.brief.slice(0, 12000)}
 ${input.existingTitle ? `\nWorking title: ${input.existingTitle}\n` : ''}
 WHAT TO PRODUCE
 
-1. concepts — the 3 to 6 core technical concepts. For each, give the alternative phrasings that actually appear in patent text: functional language, scientific terminology, industry jargon, common acronyms, and the phrasing a patent attorney would use to broaden a claim. This vocabulary determines what the search can see, so be generous and concrete rather than abstract. Mark a concept "required" only if a document that lacks it is certainly irrelevant.
+1. concepts — the 3 to 6 core technical concepts. For each, give the alternative phrasings that actually appear in patent text: functional language, scientific terminology, industry jargon, common acronyms, and the phrasing a patent attorney would use to broaden a claim. This vocabulary determines what the search can see, so be generous and concrete rather than abstract. Mark a concept "required" only if a document that lacks it is certainly irrelevant. Documents are counted when they match every required concept and at least some number of the others — the study measures how many match at least 1, 2, 3 … of the optional concepts and takes the tightest count that still yields a field it can analyse — so prefer several specific optional concepts over one broad one.
 
 2. classifications — 3 to 8 candidate CPC codes, each with a plain-language definition a non-specialist can check. Where a code is broad enough to pull in an adjacent unrelated field, say so in "caution". Prefer subclass or main-group level over very specific subgroups.
 

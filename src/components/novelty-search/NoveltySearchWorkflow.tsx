@@ -542,6 +542,7 @@ export default function NoveltySearchWorkflow({
   const [newEpoTitleKeyword, setNewEpoTitleKeyword] = useState('');
   const [newEpoAbstractKeyword, setNewEpoAbstractKeyword] = useState('');
   const [autoMode, setAutoMode] = useState(false);
+  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
   const [stage0Approved, setStage0Approved] = useState(false);
   const [isAutoRunning, setIsAutoRunning] = useState(false);
   const [queryPlanningStageIndex, setQueryPlanningStageIndex] = useState(0);
@@ -828,6 +829,38 @@ export default function NoveltySearchWorkflow({
       ...(Array.isArray(aiRel.borderline) ? aiRel.borderline : []),
     ]);
   }, [searchState.results]);
+
+  // The editable Word rendering of the final report. Same endpoint the consolidated
+  // report and the PDF viewer use, exposed here so it is reachable the moment a
+  // search finishes rather than only from the report page.
+  const downloadNoveltyReportDocx = useCallback(async (searchId: string) => {
+    if (!searchId || isDownloadingDocx) return;
+    setIsDownloadingDocx(true);
+    try {
+      const response = await fetch(`/api/novelty-search/${searchId}/attorney-report/docx`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` },
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || 'Failed to build the Word report.');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `patentnest-novelty-report-${searchId.slice(0, 8)}.docx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast({
+        title: 'Word report generation failed',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'error',
+      });
+    } finally {
+      setIsDownloadingDocx(false);
+    }
+  }, [isDownloadingDocx, toast]);
 
   const openIpIndiaForPatentNumbers = useCallback(async (patentNumbers: string[]) => {
     const searchUrl = buildIpIndiaSearchUrl(patentNumbers);
@@ -4254,16 +4287,28 @@ export default function NoveltySearchWorkflow({
           <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-900">Report actions</div>
-              <div className="text-xs text-slate-500">Open the consolidated report for sharing, printing, or saving as PDF.</div>
+              <div className="text-xs text-slate-500">Open the consolidated report for sharing and printing, or take the editable Word copy straight into an opinion letter.</div>
             </div>
-            <Link
-              href={`/novelty-search/${searchState.searchId}/consolidated`}
-              target="_blank"
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:w-auto"
-            >
-              <Eye className="h-4 w-4" />
-              View Full Report
-            </Link>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+              <Link
+                href={`/novelty-search/${searchState.searchId}/consolidated`}
+                target="_blank"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:w-auto"
+              >
+                <Eye className="h-4 w-4" />
+                View Full Report
+              </Link>
+              <button
+                type="button"
+                onClick={() => downloadNoveltyReportDocx(searchState.searchId as string)}
+                disabled={isDownloadingDocx}
+                title="Editable Word version for annotation or reuse in an opinion letter"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:w-auto"
+              >
+                <FileText className="h-4 w-4" />
+                {isDownloadingDocx ? 'Preparing Word...' : 'Download Word'}
+              </button>
+            </div>
           </CardContent>
         </Card>
       </div>

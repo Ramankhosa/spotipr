@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { CORPUS_FIRST_YEAR, type WhitespaceScope } from './types'
+import { CORPUS_FIRST_YEAR, scopeMatching, type WhitespaceScope } from './types'
 
 export const WHITESPACE_SCOPE_MAX_BYTES = 256 * 1024
 
@@ -92,6 +92,17 @@ const filtersSchema = z
     }
   })
 
+/**
+ * "At least k of the optional concepts". `'auto'` fits k at run time; a number
+ * pins it. Optional on the wire so scopes saved before the rule existed keep
+ * validating — they read as `'auto'` (see scopeMatching in types.ts).
+ */
+const matchingSchema = z
+  .object({
+    minimumOptionalConcepts: z.union([z.literal('auto'), z.number().int().min(0).max(24)]),
+  })
+  .strict()
+
 const scopeSchema = z
   .object({
     title: boundedText(200),
@@ -101,6 +112,7 @@ const scopeSchema = z
     exclusions: z.array(exclusionSchema).max(40),
     assumptions: z.array(assumptionSchema).max(30),
     filters: filtersSchema,
+    matching: matchingSchema.optional(),
   })
   .strict()
 
@@ -147,7 +159,52 @@ export function scopeIsRunnable(scope: WhitespaceScope): { runnable: boolean; re
   if (!hasConcept && !hasClassification) {
     return { runnable: false, reason: 'Add at least one concept or accept one classification before running.' }
   }
+  // A pinned minimum that no rung can express is refused here, where the user
+  // can still change it, rather than at run time as a bare failure.
+  const pinned = scopeMatching(scope).minimumOptionalConcepts
+  if (pinned !== 'auto') {
+    const optional = scope.concepts.filter(c => !c.required && c.label.trim()).length
+    if (pinned > optional) {
+      return {
+        runnable: false,
+        reason: `The match rule asks for at least ${pinned} of the optional concepts, but only ${optional} ${
+          optional === 1 ? 'is' : 'are'
+        } optional. Lower it or add concepts.`,
+      }
+    }
+    if (!rungIsCompilable(optional, pinned)) {
+      return {
+        runnable: false,
+        reason: `"At least ${pinned} of ${optional}" is too many concept combinations to search (${combinationCount(
+          optional,
+          pinned
+        ).toLocaleString()}; the limit is ${MAX_RUNG_COMBINATIONS}). Pick a minimum nearer 1 or nearer ${optional}, or merge some concepts.`,
+      }
+    }
+  }
   return { runnable: true }
+}
+
+/**
+ * Ceiling on the concept combinations one rung may expand to. "At least k of n"
+ * is searched as an OR over every k-subset of the optional concepts (each
+ * subset an index-backed AND), so C(n, k) is the number of index scans a rung
+ * costs. 70 = C(8, 4): every rung is expressible up to eight optional concepts,
+ * and past that only the ends of the ladder are — the middle rungs of a
+ * ten-concept scope would each be hundreds of scans for little extra insight.
+ */
+export const MAX_RUNG_COMBINATIONS = 70
+
+export function combinationCount(n: number, k: number): number {
+  if (k < 0 || k > n) return 0
+  let result = 1
+  for (let i = 1; i <= Math.min(k, n - k); i++) result = (result * (n - i + 1)) / i
+  return Math.round(result)
+}
+
+export function rungIsCompilable(optionalCount: number, minimumOptional: number): boolean {
+  if (minimumOptional <= 0) return true
+  return combinationCount(optionalCount, minimumOptional) <= MAX_RUNG_COMBINATIONS
 }
 
 /**
@@ -212,5 +269,8 @@ export function normalizeScope(scope: WhitespaceScope): WhitespaceScope {
       jurisdictions: dedupe(scope.filters.jurisdictions.map(j => j.toUpperCase())),
       assignees: dedupe(scope.filters.assignees),
     },
+    // Stored explicitly so a saved scope states its own rule instead of
+    // inheriting whatever the default happens to be when it is next read.
+    matching: scopeMatching(scope),
   }
 }

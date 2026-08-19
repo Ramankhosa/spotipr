@@ -301,6 +301,9 @@ export async function buildWhitespaceReportDocx(model: WhitespaceReportModel): P
         children.push(para(`also matched as: ${concept.synonyms.join('; ')}`, { color: MUTED, size: 18, indent: 360, after: 40 }))
       }
     }
+    if (model.scope.matchRule) {
+      children.push(para(model.scope.matchRule, { italics: true, color: MUTED }))
+    }
     if (model.scope.intersectionWarning) {
       children.push(para(model.scope.intersectionWarning, { italics: true, color: MUTED }))
     }

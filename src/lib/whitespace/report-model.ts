@@ -34,10 +34,12 @@ import {
   TYPE_LABEL,
 } from './labels'
 import {
+  scopeMatching,
   type AttackRecord,
   type DimensionGap,
   type DimensionMapResult,
   type FieldMapResult,
+  type FieldRule,
   type GateOutcome,
   type HumanReview,
   type HypothesisScores,
@@ -47,6 +49,7 @@ import {
   type ValidationRecord,
   type WhitespaceScope,
 } from './types'
+import { fieldRuleNote, rungPhrase } from './field-rule'
 
 // ---------------------------------------------------------------------------
 // Input — the already-loaded rows
@@ -188,6 +191,12 @@ export interface ReportScopeBlock {
   filterLine: string
   /** Concepts marked required intersect; stated when more than one is. */
   intersectionWarning: string | null
+  /**
+   * How the concept list was turned into the field: the rule the newest census
+   * ran with (with every rung it measured), or, before any census, the rule the
+   * scope asks for. Null when the scope has no concepts.
+   */
+  matchRule: string | null
 }
 
 export interface ReportRunDiagnostic {
@@ -391,6 +400,33 @@ function anonymiseActor(actor: string): string {
   return 'system'
 }
 
+/**
+ * The match rule for the premise page. Prefers a rule a census actually ran
+ * with (it carries the measured ladder); before any census, states what the
+ * scope asks for so the reader knows the field will be fitted or pinned.
+ */
+function describeMatchRule(scope: WhitespaceScope, candidates: unknown[]): string | null {
+  const optional = scope.concepts.filter(concept => !concept.required && concept.label.trim()).length
+  const required = scope.concepts.filter(concept => concept.required && concept.label.trim()).length
+  if (!optional && !required) return null
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'object' && typeof (candidate as FieldRule).minimumOptional === 'number') {
+      return fieldRuleNote(candidate as FieldRule)
+    }
+  }
+  const matching = scopeMatching(scope)
+  if (!optional) return null
+  const counts = { requiredCount: required, optionalCount: optional }
+  return matching.minimumOptionalConcepts === 'auto'
+    ? `Match rule: a document counts when it matches ${required ? 'every must-appear concept and ' : ''}as many of the ${
+        required ? 'other ' : ''
+      }concepts as the study fits automatically — every rung from all ${optional} down is measured and the tightest one that still yields a workable field is used. The rung actually used is stated with the census.`
+    : `Match rule: a document counts when it matches ${required ? 'every must-appear concept and ' : ''}${rungPhrase(
+        counts,
+        matching.minimumOptionalConcepts
+      )} (pinned in the scope).`
+}
+
 /** Case-insensitive dedup that keeps first-seen wording. */
 function dedupe(lines: string[]): string[] {
   const seen = new Set<string>()
@@ -482,6 +518,10 @@ export function buildWhitespaceReportModel(input: WhitespaceReportInput): Whites
             .map(concept => concept.label)
             .join(', ')}), so only documents matching ALL of them were counted. Intersecting required concepts is the most common cause of an under-sized field.`
         : null,
+    matchRule: describeMatchRule(scope, [
+      (input.stageResults.fieldMap?.results as { fieldRule?: unknown } | undefined)?.fieldRule,
+      (input.stageResults.dimensionMap?.results as { fieldRule?: unknown } | undefined)?.fieldRule,
+    ]),
   }
 
   // ---- run diagnostics ----------------------------------------------------

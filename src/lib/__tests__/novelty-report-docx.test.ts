@@ -101,5 +101,57 @@ describe('buildNoveltyReportDocx', () => {
     // Unmapped shortlisted citations are never categorized: they were not read
     // against the claims.
     expect(model.otherShortlistedCitations.every(item => !item.examinerCategory)).toBe(true)
+    // The letter must agree with the overlap verdict printed beside it.
+    for (const item of model.comparisons) {
+      if (item.examinerCategory === 'X') expect(item.overlapRiskLevel).toBe('High')
+      else expect(item.overlapRiskLevel).not.toBe('High')
+    }
+  })
+
+  test('does not make every gate-accepted reference an X', () => {
+    // The relevance gate accepting a candidate means "worth mapping", not "maps
+    // the invention alone". A run where the gate accepted everything but the
+    // mapping found only moderate overlap must produce no X at all, or the letter
+    // contradicts the moderate-overlap badge on the same card.
+    const publications = ['IN-100-A', 'IN-200-A', 'IN-300-A']
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'gate-accept-all',
+      title: 'Drip irrigation controller',
+      jurisdiction: 'IN',
+      stage0Results: {
+        searchQuery: 'soil moisture driven irrigation control',
+        inventionFeatures: ['soil moisture sensing', 'valve actuation schedule', 'remote crop model update'],
+      },
+      stage1Results: {
+        aiRelevance: {
+          byPn: Object.fromEntries(publications.map(pn => [
+            pn.replace(/[^A-Z0-9]/g, '').replace(/A$/, ''),
+            { decision: 'accept', score: 0.8, evidence_quality: 'medium' },
+          ])),
+        },
+        retrievalCandidates: publications.map((publicationNumber, index) => ({
+          publicationNumber,
+          title: `Irrigation reference ${index + 1}`,
+          abstract: 'A controller reads a soil moisture sensor and opens a valve.',
+          relevanceScore: 0.8 - index * 0.05,
+        })),
+      },
+      stage35Results: {
+        feature_map: publications.map((pn, index) => ({
+          pn,
+          title: `Irrigation reference ${index + 1}`,
+          decision: 'adjacent',
+          feature_analysis: [
+            { feature: 'soil moisture sensing', status: index === 0 ? 'Present' : 'Partial', quote: 'moisture probe', field: 'abstract' },
+            { feature: 'valve actuation schedule', status: 'Partial', quote: 'valve opens', field: 'abstract' },
+            { feature: 'remote crop model update', status: 'Absent', quote: '', field: 'none' },
+          ],
+        })),
+      },
+      stage4Results: {},
+    })
+
+    expect(model.comparisons.every(item => item.matchCategory === 'direct')).toBe(true)
+    expect(model.comparisons.some(item => item.examinerCategory === 'X')).toBe(false)
   })
 })

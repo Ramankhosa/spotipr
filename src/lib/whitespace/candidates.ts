@@ -22,14 +22,16 @@
  */
 
 import { Prisma } from '@prisma/client'
+import { prisma } from '@/lib/prisma'
 import {
   PATENT_CORPUS_EMBEDDING_DTYPE,
   PATENT_CORPUS_EMBEDDING_MODEL,
 } from '@/lib/patent-corpus-service'
 import type { WhitespaceScope } from './types'
-import { buildScopeFilter, corpusMembershipPredicate, exclusionPredicate } from './field-map'
+import { buildScopeFilter, corpusMembershipPredicate, exclusionMatchPredicate } from './field-map'
 import {
   corpusVectorRowEstimate,
+  describeLaneError,
   semanticLaneConfigured,
   semanticNeighbors,
   type SemanticBackground,
@@ -303,19 +305,46 @@ function cacheKey(scope: WhitespaceScope, cap: number, ceiling: SemanticCeiling)
 const cache = new Map<string, { at: number; value: FieldCandidates }>()
 
 /**
- * The structural half of the scope: everything except the concept text.
+ * The structural half of the scope: everything except the concept text and the
+ * exclusions.
  *
  * Built by asking buildScopeFilter for a concept-free scope, so the year, CPC,
  * jurisdiction and assignee semantics stay defined in exactly one place. The
- * corpus-membership and exclusion predicates are then added explicitly, because
- * both normally ride inside the concept text predicate this variant omits.
+ * corpus-membership predicate is added explicitly, because it normally rides
+ * inside the concept text predicate this variant omits.
+ *
+ * Exclusions are deliberately NOT here. They are applied to the retrieved
+ * candidates afterwards (withoutExcluded): a `NOT (tsvector @@ q)` clause can
+ * never use the text index, and inside the ANN statement it made the planner
+ * filter the whole of local_patents through to_tsvector before joining —
+ * 34 s against 2 s on the dev corpus — which timed the lane out and silently
+ * demoted every field to lexical-only.
  */
 function structuralFilter(scope: WhitespaceScope): Prisma.Sql {
   const conceptFree: WhitespaceScope = { ...scope, concepts: [], exclusions: [] }
-  const clauses = [buildScopeFilter(conceptFree), corpusMembershipPredicate()]
-  const exclusions = exclusionPredicate(scope)
-  if (exclusions) clauses.push(exclusions)
-  return Prisma.join(clauses, ' AND ')
+  return Prisma.join([buildScopeFilter(conceptFree), corpusMembershipPredicate()], ' AND ')
+}
+
+/**
+ * The candidate ids minus those matching an excluded term. Index-backed and
+ * bounded by the candidate count — the id list narrows the heap to the
+ * candidates, and the exclusion tsquery is a positive match the GIN index can
+ * serve — so it costs milliseconds where the negated in-statement form cost the
+ * whole corpus.
+ */
+async function withoutExcluded(scope: WhitespaceScope, ids: number[], timeoutMs: number): Promise<number[]> {
+  const match = exclusionMatchPredicate(scope)
+  if (!match || !ids.length) return ids
+  const [, rows] = await prisma.$transaction([
+    prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`,
+    prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+      SELECT lp."id" AS id
+      FROM "local_patents" lp
+      WHERE lp."id" = ANY(${ids}::int[])
+        AND ${match}`),
+  ])
+  const excluded = new Set(rows.map(row => Number(row.id)))
+  return excluded.size ? ids.filter(id => !excluded.has(id)) : ids
 }
 
 export async function resolveFieldCandidates(
@@ -341,33 +370,47 @@ export async function resolveFieldCandidates(
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value
 
+  const timeoutMs = options.timeoutMs ?? CANDIDATE_TIMEOUT_MS
   const result = await semanticNeighbors({
     queryText,
     limit: cap,
     maxDistance: ceiling.mode === 'absolute' ? ceiling.maxDistance : undefined,
     adaptive: ceiling.mode === 'adaptive' ? { z: ceiling.z } : undefined,
     scopeFilter: structuralFilter(scope),
-    timeoutMs: options.timeoutMs ?? CANDIDATE_TIMEOUT_MS,
+    timeoutMs,
   })
 
   // An adaptive run whose background could not be estimated comes back with no
   // ceiling at all — that is a bare top-K, which is a RANKING and not a field
   // definition. Admitting it would silently reinstate the "5,000 nearest however
   // far" behaviour the ceiling exists to prevent, so it degrades to lexical-only.
-  const value: FieldCandidates =
-    result.available && result.appliedMaxDistance === null
-      ? UNAVAILABLE(UNCALIBRATED_REASON)
-      : result.available
-      ? {
-          ids: result.neighbors.map(neighbor => neighbor.id),
-          available: true,
-          saturated: result.neighbors.length >= cap,
-          cap,
-          maxDistance: result.appliedMaxDistance ?? 0,
-          mode: ceiling.mode,
-          background: result.background,
-        }
-      : UNAVAILABLE(result.reason)
+  let value: FieldCandidates
+  if (result.available && result.appliedMaxDistance === null) {
+    value = UNAVAILABLE(UNCALIBRATED_REASON)
+  } else if (result.available) {
+    let ids = result.neighbors.map(neighbor => neighbor.id)
+    try {
+      ids = await withoutExcluded(scope, ids, timeoutMs)
+    } catch (error) {
+      // The exclusions could not be applied, so the arm cannot be trusted to
+      // honour the scope — better lexical-only than a field that readmits what
+      // the user excluded.
+      console.error('[Whitespace] Applying exclusions to semantic candidates failed:', error instanceof Error ? error.message : error)
+      return UNAVAILABLE(`The scope's exclusions could not be applied to the semantic candidates: ${describeLaneError(error, timeoutMs)}.`)
+    }
+    value = {
+      ids,
+      available: true,
+      // Saturation is a property of the retrieval, before exclusions are subtracted.
+      saturated: result.neighbors.length >= cap,
+      cap,
+      maxDistance: result.appliedMaxDistance ?? 0,
+      mode: ceiling.mode,
+      background: result.background,
+    }
+  } else {
+    value = UNAVAILABLE(result.reason)
+  }
 
   // Only successful resolutions are memoised. An unavailable result here is a
   // TRANSIENT failure (embed API hiccup, ANN timeout) — the configuration

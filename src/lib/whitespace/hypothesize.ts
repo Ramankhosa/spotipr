@@ -19,8 +19,7 @@ import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { hamming, hexToWords, WORDS, mulberry32 } from './binary-kmeans'
 import { normalizeElement } from './deep-dive-stage'
-import { buildScopeFilter } from './field-map'
-import { resolveFieldCandidates } from './candidates'
+import { resolveFieldDefinition } from './field-definition'
 import { semanticNeighbors, semanticNoveltyScore } from './embedding'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
 import { buildHypothesizePrompt, WS_HYPOTHESIZE_STAGE_CODE } from './prompts'
@@ -146,10 +145,12 @@ export async function generateHypotheses(input: {
   // a different field than the percentiles were calibrated on is not a novelty
   // score, it is noise. Guarded on percentiles: without them no novelty can be
   // scored, and resolving candidates costs a query-embedding call.
-  let fieldFilter: ReturnType<typeof buildScopeFilter> | null = null
+  let fieldFilter: Prisma.Sql | null = null
   if (percentiles) {
-    const candidates = await resolveFieldCandidates(input.scope)
-    fieldFilter = buildScopeFilter(input.scope, candidates.ids)
+    // Consumer: the census's own rule (reuse), so the field is the one the
+    // percentiles were calibrated on.
+    const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
+    fieldFilter = field.where
   }
 
   const created: GeneratedHypothesis[] = []

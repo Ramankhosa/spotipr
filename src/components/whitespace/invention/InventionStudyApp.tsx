@@ -15,6 +15,8 @@ import { RoundsTimeline } from './RoundsTimeline'
 import { TrailPanel } from './TrailPanel'
 import { ViewpointRegistry, type RegistryEdit } from './ViewpointRegistry'
 import { SETTLED_LABEL, type DimensionMapResult } from './types'
+import { FieldRuleLadder, MatchRuleControl } from '../FieldRulePanel'
+import type { ScopeMatching } from '@/lib/whitespace/types'
 
 interface ScopeConcept {
   id: string
@@ -31,6 +33,8 @@ interface Scope {
   classifications: Array<{ code: string; definition?: string; caution?: string; accepted: boolean }>
   assumptions: Array<{ id: string; text: string; kind: string }>
   filters: { yearFrom: number; yearTo: number; jurisdictions: string[]; assignees: string[] }
+  /** "At least k of the optional concepts"; absent reads as auto. */
+  matching?: ScopeMatching
 }
 
 interface Study {
@@ -222,7 +226,38 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
     [load, study, studyId, toast]
   )
 
+  /**
+   * Sets the match rule ("at least k of the optional concepts", or auto) and
+   * saves. Same guard as toggleRequired: the two edit the same scope row.
+   */
+  const setMatching = useCallback(
+    async (matching: ScopeMatching) => {
+      if (!study || scopeSaveInFlight.current) return
+      scopeSaveInFlight.current = true
+      setSavingScope(true)
+      try {
+        await wsApi(`/api/whitespace/studies/${studyId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ scope: { ...study.scope, matching } }),
+        })
+        await load()
+      } catch (error) {
+        toast({
+          variant: 'error',
+          title: 'Could not update the match rule',
+          description: error instanceof Error ? error.message : 'Try again.',
+        })
+      } finally {
+        scopeSaveInFlight.current = false
+        setSavingScope(false)
+      }
+    },
+    [load, study, studyId, toast]
+  )
+
   const requiredCount = study?.scope?.concepts?.filter(concept => concept.required).length ?? 0
+  const optionalCount = (study?.scope?.concepts?.length ?? 0) - requiredCount
+  const matchingMode = study?.scope?.matching?.minimumOptionalConcepts ?? 'auto'
   const dirty = edit.removedDimensions.size > 0 || edit.removedValues.size > 0
 
   const recount = useCallback(() => {
@@ -492,11 +527,23 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                 </div>
                 <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
                   {requiredCount === 0
-                    ? 'No concept is required, so the field is everything matching any of them. Click a concept to require it.'
+                    ? 'No concept is must-appear. Click a concept to require it in every document counted.'
                     : requiredCount === 1
                       ? 'One concept must appear in every document counted. Click a concept to change that.'
                       : `${requiredCount} concepts must ALL appear in the same document — they intersect, so each one shrinks the field sharply. Click any "must" to make it optional.`}
+                  {optionalCount > 0 &&
+                    (matchingMode === 'auto'
+                      ? ' How many of the other concepts a document also needs is fitted automatically: every rung is measured and the tightest one that still yields a workable field is used.'
+                      : ' The number of other concepts a document also needs is pinned below.')}
                 </p>
+                <div className="mt-2 rounded-md border border-dashed border-border px-2.5 py-2">
+                  <MatchRuleControl
+                    compact
+                    scope={study.scope}
+                    disabled={savingScope || running}
+                    onChange={matching => void setMatching(matching)}
+                  />
+                </div>
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Filing years {study.scope.filters.yearFrom}–{study.scope.filters.yearTo}
                   {study.scope.filters.jurisdictions.length
@@ -559,6 +606,7 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                   Viewpoints
                 </h2>
                 <FieldStats result={result} />
+                {result.fieldRule && <FieldRuleLadder rule={result.fieldRule} className="bg-card" />}
                 <RoundsTimeline result={result} />
                 <ViewpointRegistry
                   result={result}

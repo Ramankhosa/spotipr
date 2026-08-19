@@ -729,11 +729,15 @@ async function executeRun(input: {
 
   switch (input.stage) {
     case 'FIELD_MAP': {
-      const { resolveFieldCandidates, candidateCoverageNote } = await import('./candidates')
-      const candidates = await resolveFieldCandidates(input.scope)
+      // A producer: fits the match rule fresh and persists it on the result,
+      // where every later stage of this scope reads it back.
+      const { resolveFieldDefinition } = await import('./field-definition')
+      const { candidateCoverageNote } = await import('./candidates')
+      const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: false })
       const result = await runFieldMap(input.scope, {
-        candidateIds: candidates.ids,
-        candidateNote: candidateCoverageNote(candidates),
+        candidateIds: field.candidates.ids,
+        candidateNote: candidateCoverageNote(field.candidates),
+        fieldRule: field.rule,
       })
       const narrative = await narrateField({
         scope: input.scope,

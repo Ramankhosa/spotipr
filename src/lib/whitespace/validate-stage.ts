@@ -409,7 +409,8 @@ export async function runValidateStage(input: {
 
 /** Text-arm predicate for a single freeform websearch query, all readable corpora. */
 function attackTextPredicate(query: string): Prisma.Sql {
-  return textMatchPredicate({ groups: [query], groupLabels: [[]], exclusions: null })
+  // One required group, no optional ones: never null.
+  return textMatchPredicate({ required: [query], optional: [], minimumOptional: 0, groupLabels: [[]], exclusions: null })!
 }
 
 /**

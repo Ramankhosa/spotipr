@@ -31,8 +31,9 @@ import {
   PATENT_CORPUS_EMBEDDING_DTYPE,
   PATENT_CORPUS_EMBEDDING_MODEL,
 } from '@/lib/patent-corpus-service'
-import { buildScopeFilter, canonicaliseAssignee, extractApplicantNames } from './field-map'
-import { candidateCoverageNote, resolveFieldCandidates } from './candidates'
+import { canonicaliseAssignee, extractApplicantNames, narrowingAdvice } from './field-map'
+import { resolveFieldDefinition } from './field-definition'
+import { ladderSummary, wideningAdviceFor } from './field-rule'
 import { comparableVectorSql } from './embedding'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
 import { heartbeatRun, WhitespacePermanentError } from './run-lease'
@@ -86,13 +87,13 @@ export async function runClusterStage(input: {
     )
   }
 
-  // The same hybrid field the census counted. Resolving it here rather than
-  // threading it from the census run matters: each stage is its own run, and an
-  // area map drawn over a narrower field than the census reported would make
-  // every area's share of the field wrong.
-  const candidates = await resolveFieldCandidates(input.scope)
-  const where = buildScopeFilter(input.scope, candidates.ids)
-  const coverageNotes: string[] = [candidateCoverageNote(candidates)]
+  // The same hybrid field the census counted — same semantic candidates AND the
+  // same match rule the census fitted (reuse: true reads it off the census run).
+  // Each stage is its own run, and an area map drawn over a narrower field than
+  // the census reported would make every area's share of the field wrong.
+  const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
+  const where = field.where
+  const coverageNotes: string[] = [...field.coverageNotes]
 
   // --- field size + sample ---------------------------------------------------
   // Field size comes from the completed census when one exists — re-counting the
@@ -126,8 +127,11 @@ export async function runClusterStage(input: {
     )
   } catch (error) {
     if (isStatementTimeout(error)) {
-      throw new Error(
-        `Sampling this field timed out after ${Math.round(STAGE_TIMEOUT_MS / 1000)}s — the scope matches too many families to draw a uniform sample from. Narrow the scope (mark concepts as required, tighten years or jurisdictions) and re-run.`
+      throw new WhitespacePermanentError(
+        `Sampling this field timed out after ${Math.round(STAGE_TIMEOUT_MS / 1000)}s — the scope matches too many families to draw a uniform sample from. ${narrowingAdvice(
+          input.scope,
+          field.rule
+        )}`
       )
     }
     throw error
@@ -166,7 +170,9 @@ export async function runClusterStage(input: {
           : 'This scope matches no families at all, so there is nothing to cluster. Widen the scope.'
         : coverageIsTheProblem
         ? `Only ${n} of the ${fieldFamilies.toLocaleString()} families in this scope carry a comparable embedding vector — too few to break into areas. Wait for embedding coverage to catch up on this slice.`
-        : `This field is only ${fieldFamilies.toLocaleString()} families, which is too small to break into areas — an area map needs at least 20. Widen the scope: relax a required concept, add jurisdictions, or broaden the filing years.`
+        : `This field is only ${fieldFamilies.toLocaleString()} families, which is too small to break into areas — an area map needs at least 20.${ladderSummary(
+            field.rule
+          )} ${wideningAdviceFor(input.scope, field.rule)}`
     )
   }
 

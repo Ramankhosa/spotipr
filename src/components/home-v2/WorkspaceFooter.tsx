@@ -47,6 +47,7 @@ const COLUMNS: { heading: string; links: { label: string; href: string }[] }[] =
     heading: 'Company',
     links: [
       { label: 'Contact us', href: '/contact' },
+      { label: 'Developers', href: '/developers' },
       { label: 'Privacy policy', href: '/privacy' },
       { label: 'Terms of service', href: '/terms' },
     ],

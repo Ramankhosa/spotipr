@@ -31,7 +31,6 @@ import { prisma } from '@/lib/prisma'
 import {
   assertConceptQueryUsable,
   buildConceptQuery,
-  buildScopeFilter,
   emptyFieldAdvice,
   facet,
   isStatementTimeout,
@@ -39,20 +38,19 @@ import {
   quotePhrase,
   setStatementTimeout,
 } from './field-map'
-import {
-  candidateCoverageNote,
-  resolveFieldCandidates,
-  resolveSemanticCeiling,
-  semanticArmUnavailableReason,
-  type SemanticCeiling,
-} from './candidates'
+import { DIMENSION_ROW_CAP, resolveFieldDefinition } from './field-definition'
+import { ladderSummary, minimumRungFor, wideningAdviceFor } from './field-rule'
+import { resolveSemanticCeiling, semanticArmUnavailableReason, type SemanticCeiling } from './candidates'
 import {
   backgroundCeiling,
   comparableVectorSql,
+  describeLaneError,
   embedQueryTexts,
+  literalVectorSql,
   semanticBackground,
   semanticLaneConfigured,
   semanticMatchSql,
+  vectorParamSql,
 } from './embedding'
 import { rarePairFromCounts } from './rarity'
 import { parseModelJson, runWhitespaceLLM, type WhitespaceLLMContext } from './llm'
@@ -73,6 +71,7 @@ import type {
   DimensionRound,
   DimensionSettledReason,
   DimensionValue,
+  FieldRule,
   WhitespaceScope,
 } from './types'
 
@@ -80,11 +79,9 @@ import type {
 // Budgets and thresholds
 // ---------------------------------------------------------------------------
 
-/**
- * Half the field-map cap: this census stages a tsvector per row and builds a
- * GIN index over it, and hit extraction reads the staged set once per value.
- */
-const DIMENSION_ROW_CAP = Math.max(10_000, Number(process.env.WHITESPACE_DIMENSION_ROW_CAP) || 120_000)
+// DIMENSION_ROW_CAP (half the field-map cap — this census stages a tsvector per
+// row and builds a GIN index over it) lives in field-definition.ts, where the
+// fit band's ceiling is derived from it.
 const CENSUS_TIMEOUT_MS = Math.max(10_000, Number(process.env.WHITESPACE_DIMENSION_TIMEOUT_MS) || 90_000)
 const FACET_TIMEOUT_MS = 25_000
 const PRECHECK_TIMEOUT_MS = 45_000
@@ -348,8 +345,8 @@ async function laneLiterals(lane: ValueSemanticLane, texts: string[]): Promise<A
     } catch (error) {
       lane.enabled = false
       lane.degraded = true
-      lane.reason = `Embedding the value vocabularies failed mid-run: ${error instanceof Error ? error.message : 'unknown error'}`
-      console.error('[Whitespace] Value semantic lane disabled:', lane.reason)
+      console.error('[Whitespace] Value semantic lane disabled:', error instanceof Error ? error.message : error)
+      lane.reason = `Embedding the value vocabularies failed mid-run: ${describeLaneError(error)}.`
       return texts.map(() => null)
     }
   }
@@ -447,10 +444,13 @@ async function assignSample(
       const padded = vectors.map(vector => vector?.literal ?? '')
       const ceilings = vectors.map(vector => vector?.ceiling ?? 0)
       try {
+        // The literals are parsed into vectors once, in the CTE (q.v), not once
+        // per (sample row × value) inside the distance test — see
+        // semanticBackground for the measurement behind this.
         const semanticRows = await withTimeout<{ id: number; value_idx: number }>(
           Prisma.sql`
-            WITH q AS (
-              SELECT t.idx::int AS value_idx, t.lit AS lit, t.cutoff AS cutoff
+            WITH q AS MATERIALIZED (
+              SELECT t.idx::int AS value_idx, ${literalVectorSql(Prisma.sql`t.lit`)} AS v, t.cutoff AS cutoff
               FROM unnest(${padded}::text[], ${ceilings}::float8[]) WITH ORDINALITY AS t(lit, cutoff, idx)
               WHERE t.lit <> ''
             )
@@ -459,7 +459,7 @@ async function assignSample(
             CROSS JOIN q
             WHERE e."localPatentId" = ANY(${sampleIds}::int[])
               AND ${comparableVectorSql()}
-              AND ${semanticMatchSql(Prisma.sql`q.lit`, Prisma.sql`q.cutoff`)}`,
+              AND ${semanticMatchSql(Prisma.sql`q.v`, Prisma.sql`q.cutoff`)}`,
           PRECHECK_TIMEOUT_MS
         )
         for (const row of semanticRows) {
@@ -472,8 +472,8 @@ async function assignSample(
         // here on, and the stage says so instead of publishing the mismatch.
         semantic.lane.enabled = false
         semantic.lane.degraded = true
-        semantic.lane.reason = `Semantic value matching failed mid-run: ${error instanceof Error ? error.message : 'unknown error'}`
-        console.error('[Whitespace] Value semantic lane disabled:', semantic.lane.reason)
+        console.error('[Whitespace] Value semantic lane disabled:', error instanceof Error ? error.message : error)
+        semantic.lane.reason = `Semantic value matching failed mid-run: ${describeLaneError(error, PRECHECK_TIMEOUT_MS)}.`
       }
     }
   }
@@ -494,35 +494,49 @@ function totalValues(registry: WorkingDimension[]): number {
   return registry.reduce((sum, dimension) => sum + dimension.values.length, 0)
 }
 
-function tooNarrowMessage(familyCount: number, scope: WhitespaceScope, semanticNote?: string): string {
+function tooNarrowMessage(
+  familyCount: number,
+  scope: WhitespaceScope,
+  semanticNote?: string,
+  rule?: FieldRule | null
+): string {
   const required = scope.concepts.filter(concept => concept.required && concept.label.trim())
 
   // Nothing at all is a different diagnosis from "a few": the scope missed on
   // both wording and meaning, so the structural filters are the first suspect
   // and the intersecting-concepts advice below would be a guess.
-  if (familyCount === 0) return emptyFieldAdvice(scope, semanticNote)
+  if (familyCount === 0) return emptyFieldAdvice(scope, semanticNote, rule)
 
-  // Intersecting required concepts is by far the most common cause, and the
+  const head =
+    `This field has ${familyCount.toLocaleString()} families — too few to grid by viewpoint. ` +
+    `Below ~${MIN_FIELD_FAMILIES} families the average cell holds fewer than two families whatever the technology looks like, ` +
+    `so empty cells would be arithmetic rather than absence.${ladderSummary(rule)} `
+
+  // A pinned rule above the loosest rung is the first thing to name: the study
+  // was told not to look wider.
+  if (rule && rule.mode === 'pinned' && rule.optionalCount > 0 && rule.minimumOptional > minimumRungFor(rule)) {
+    // wideningAdviceFor names the pinned rung and what to do about it.
+    return head + wideningAdviceFor(scope, rule)
+  }
+
+  // Intersecting must-appear concepts is by far the most common cause, and the
   // generic "widen the scope" advice sends people to the wrong dial. When two
   // or more are marked, name them and say what to do.
   if (required.length >= 2) {
     return (
-      `This field has ${familyCount.toLocaleString()} families — too few to grid by viewpoint. ` +
+      head +
       `${required.length} concepts are marked as must-appear (${required
         .map(concept => `"${concept.label}"`)
-        .join(', ')}), and required concepts INTERSECT: a document has to contain every one of them to be counted. ` +
+        .join(', ')}), and must-appear concepts INTERSECT: a document has to contain every one of them to be counted. ` +
       `Documents in the field around your invention solve the same problem in other ways and rarely contain all of its elements at once, ` +
-      `which is what empties the field. Make all but one optional — optional concepts still steer the analysis, they just stop shrinking it — then run this again.`
+      `which is what empties the field. Make all but one optional — the match rule then decides how many of the others a document needs, and auto picks the tightest number that still yields a field — then run this again.`
     )
   }
 
   return (
-    `This field has ${familyCount.toLocaleString()} families — too few to grid by viewpoint. ` +
-    `Below ~${MIN_FIELD_FAMILIES} families the average cell holds fewer than two families whatever the technology looks like, ` +
-    `so empty cells would be arithmetic rather than absence. Widen the scope — ${
-      required.length === 1 ? 'make the required concept optional, ' : ''
-    }broaden the concept wording, extend the filing years, or add jurisdictions — ` +
-    `or read the field directly with the landscape pipeline: at this size it fits inside one deep dive.`
+    head +
+    `${wideningAdviceFor(scope, rule)} ` +
+    `Or read the field directly with the landscape pipeline: at this size it fits inside one deep dive.`
   )
 }
 
@@ -538,49 +552,69 @@ export async function runDimensionMapStage(input: {
   suppliedRegistry?: SuppliedDimensionRegistry | null
 }): Promise<DimensionMapResult> {
   const { runId, studyId, scope } = input
-  const conceptQuery = buildConceptQuery(scope)
   // Outside any transaction: a scope whose concepts stem away must fail with
-  // the concept named, not census a silently different field.
+  // the concept named, not census a silently different field. Checked on the
+  // loosest plan — every rung searches the same groups.
+  const conceptQuery = buildConceptQuery(scope)
   if (conceptQuery) await assertConceptQueryUsable(conceptQuery)
-  const candidates = await resolveFieldCandidates(scope)
-  const where = buildScopeFilter(scope, candidates.ids)
-  const coverageNotes: string[] = [candidateCoverageNote(candidates)]
+
+  // The field: semantic candidates + the match rule. A discovery run is a
+  // PRODUCER and fits the rule fresh; a re-census over a user-edited registry
+  // reuses the rule the discovery run persisted, so the user's edit recounts
+  // the same field rather than a re-fitted one.
+  await progress(runId, 'precheck', 'Sizing the field')
+  const field = await resolveFieldDefinition(scope, { studyId, reuse: Boolean(input.suppliedRegistry) })
+  const { candidates, rule } = field
+  const where = field.where
+  const coverageNotes: string[] = [...field.coverageNotes]
   // One lane for the whole run: discovery, refresh and census share its literal
   // cache, which is what keeps the semantic arm to one embedding per value text.
   const valueLane = await createValueLane()
 
   // --- Pre-check: size the field, refuse too broad AND too narrow -----------
-  await progress(runId, 'precheck', 'Sizing the field')
+  // The fit already measured the chosen rung exactly when it was under the
+  // ceiling; only a pinned or reused rule needs sizing here — and then as a
+  // BOUNDED count (LIMIT cap + 1), so a broad field answers "more than the cap"
+  // in seconds instead of running an unbounded COUNT into the timeout.
   let familyCount = 0
   let publicationCount = 0
-  try {
-    const totals = await withTimeout<{ families: bigint; publications: bigint }>(
-      Prisma.sql`
-        SELECT COUNT(DISTINCT COALESCE(lp."familyId", lp."publicationNumber"))::bigint AS families,
-               COUNT(*)::bigint AS publications
-        FROM "local_patents" lp
-        WHERE ${where}`,
-      PRECHECK_TIMEOUT_MS
-    )
-    familyCount = Number(totals[0]?.families ?? 0)
-    publicationCount = Number(totals[0]?.publications ?? 0)
-  } catch (error) {
-    if (isStatementTimeout(error)) {
-      throw new WhitespacePermanentError(
-        `This field is too broad to size within ${Math.round(PRECHECK_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
+  if (field.measured) {
+    familyCount = field.measured.families
+    publicationCount = field.measured.publications
+  } else {
+    try {
+      const totals = await withTimeout<{ families: bigint; publications: bigint }>(
+        Prisma.sql`
+          SELECT COUNT(DISTINCT t.family_key)::bigint AS families,
+                 COUNT(*)::bigint                    AS publications
+          FROM (
+            SELECT COALESCE(lp."familyId", lp."publicationNumber") AS family_key
+            FROM "local_patents" lp
+            WHERE ${where}
+            LIMIT ${DIMENSION_ROW_CAP + 1}
+          ) t`,
+        PRECHECK_TIMEOUT_MS
       )
+      familyCount = Number(totals[0]?.families ?? 0)
+      publicationCount = Number(totals[0]?.publications ?? 0)
+    } catch (error) {
+      if (isStatementTimeout(error)) {
+        throw new WhitespacePermanentError(
+          `This field is too broad to size within ${Math.round(PRECHECK_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope, rule)}`
+        )
+      }
+      throw error
     }
-    throw error
   }
   if (publicationCount > DIMENSION_ROW_CAP) {
     throw new WhitespacePermanentError(
-      `This field matches ${publicationCount.toLocaleString()} publications — more than the dimension census will read exactly ` +
-        `(${DIMENSION_ROW_CAP.toLocaleString()}). A dimension map matches every viewpoint value against every document, so it ` +
-        `reads a smaller field than the landscape census does. ${narrowingAdvice(scope)}`
+      `This field matches more than ${DIMENSION_ROW_CAP.toLocaleString()} publications — more than the dimension census will read exactly. ` +
+        `A dimension map matches every viewpoint value against every document, so it ` +
+        `reads a smaller field than the landscape census does. ${narrowingAdvice(scope, rule)}`
     )
   }
   if (familyCount < MIN_FIELD_FAMILIES) {
-    throw new WhitespacePermanentError(tooNarrowMessage(familyCount, scope, candidates.reason))
+    throw new WhitespacePermanentError(tooNarrowMessage(familyCount, scope, candidates.reason, rule))
   }
 
   // --- Deterministic sample --------------------------------------------------
@@ -690,7 +724,7 @@ export async function runDimensionMapStage(input: {
       } catch (error) {
         if (isStatementTimeout(error)) {
           throw new WhitespacePermanentError(
-            `This field is too broad to stage within ${Math.round(CENSUS_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope)}`
+            `This field is too broad to stage within ${Math.round(CENSUS_TIMEOUT_MS / 1000)}s. ${narrowingAdvice(scope, rule)}`
           )
         }
         throw error
@@ -705,7 +739,7 @@ export async function runDimensionMapStage(input: {
       const censusPublications = Number(totals[0]?.publications ?? 0)
       if (censusPublications > DIMENSION_ROW_CAP) {
         throw new WhitespacePermanentError(
-          `This field matches more than ${DIMENSION_ROW_CAP.toLocaleString()} publications — bigger than the dimension census will count exactly. ${narrowingAdvice(scope)}`
+          `This field matches more than ${DIMENSION_ROW_CAP.toLocaleString()} publications — bigger than the dimension census will count exactly. ${narrowingAdvice(scope, rule)}`
         )
       }
 
@@ -761,7 +795,7 @@ export async function runDimensionMapStage(input: {
                 FROM ws_dim_census c
                 JOIN "local_patent_embeddings" e ON e."localPatentId" = c.id
                 WHERE ${comparableVectorSql()}
-                  AND ${semanticMatchSql(Prisma.sql`${vector.literal}`, vector.ceiling)}
+                  AND ${semanticMatchSql(vectorParamSql(vector.literal), vector.ceiling)}
               ) u`)
           } else {
             await tx.$executeRaw(Prisma.sql`
@@ -1019,6 +1053,7 @@ export async function runDimensionMapStage(input: {
     unclassifiedShare: census.familyCount ? unclassifiedFamilies / census.familyCount : 1,
     coverageNotes,
     limitations,
+    fieldRule: rule,
     generatedAt: new Date().toISOString(),
   }
 }
