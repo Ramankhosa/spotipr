@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import BackendActivityPanel from './BackendActivityPanel'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -1547,6 +1548,9 @@ type ExportScope = 'draft' | 'bundle'
 
 function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportButtonProps) {
   const { toast } = useToast()
+  // A client-side push, not a document load: the workspace stays mounted underneath, so the
+  // browser's Back button returns to the exact drafting stage the attorney left.
+  const router = useRouter()
   const [exporting, setExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState<'docx' | 'pdf'>('docx')
   const [exportScope, setExportScope] = useState<ExportScope>('draft')
@@ -1669,7 +1673,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
             duration: 12000,
             action: {
               label: 'Open Filing tab',
-              onClick: () => { window.location.href = `/patents/${patentId}/filing` }
+              onClick: () => router.push(`/patents/${patentId}/filing`)
             }
           })
         } else {
@@ -1748,7 +1752,8 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
         busy={exporting}
         confirmLabel="Export bundle anyway"
         onConfirm={handleExport}
-        onGoToFiling={() => { window.location.href = `/patents/${patentId}/filing` }}
+        fixLabel="Open the Filing tab"
+        onGoToFiling={() => router.push(`/patents/${patentId}/filing`)}
       />
     </div>
   )

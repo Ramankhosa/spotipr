@@ -13,7 +13,7 @@
 
 import { AlertTriangle, Download, PenLine } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { FilingIssue } from './filing-ui'
+import { FILING_SECTION_LABELS, sortFilingIssues, type FilingIssue } from './filing-ui'
 
 export interface IncompleteFilingDialogProps {
   open: boolean
@@ -25,6 +25,8 @@ export interface IncompleteFilingDialogProps {
   onGoToFiling?: () => void
   /** Label for the confirm button, e.g. "Download bundle anyway". */
   confirmLabel?: string
+  /** Label for the "take me there" action. */
+  fixLabel?: string
   busy?: boolean
 }
 
@@ -35,9 +37,12 @@ export default function IncompleteFilingDialog({
   onConfirm,
   onGoToFiling,
   confirmLabel = 'Download anyway',
+  fixLabel = 'Complete them first',
   busy = false,
 }: IncompleteFilingDialogProps) {
-  const blanks = issues.filter(i => i.severity === 'blocking')
+  // Ordered the way an attorney works through them, and labelled with the part of the
+  // filing each belongs to — the list is otherwise a flat wall of unrelated particulars.
+  const blanks = sortFilingIssues(issues.filter(i => i.severity === 'blocking'))
   const advisory = issues.filter(i => i.severity === 'advisory')
 
   return (
@@ -62,7 +67,8 @@ export default function IncompleteFilingDialog({
             <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto pr-1">
               {blanks.map((issue, i) => (
                 <li key={`${issue.field}-${i}`} className="text-sm text-amber-900 dark:text-amber-200">
-                  • {issue.message}
+                  <span className="font-medium">{FILING_SECTION_LABELS[issue.section] || issue.section}</span>
+                  {' — '}{issue.message}
                 </li>
               ))}
             </ul>
@@ -105,7 +111,7 @@ export default function IncompleteFilingDialog({
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
             >
               <PenLine className="h-4 w-4" />
-              Complete them first
+              {fixLabel}
             </button>
           )}
           <button

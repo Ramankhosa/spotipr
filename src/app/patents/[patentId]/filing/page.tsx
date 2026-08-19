@@ -28,11 +28,28 @@ import {
   IssueList,
   Section,
   inputClass,
+  sortFilingIssues,
   type DeclarationState,
   type FilingIssue,
   type ResolvedFilingSettings,
   type SettingSource,
 } from '@/components/filing/filing-ui'
+
+/**
+ * Where each part of the filing is actually edited. The applicant, the person authorised to
+ * sign and the address for service are project-level — they belong to every patent in the
+ * project, so they live on the applicant profile. Everything else is edited on this page.
+ */
+const APPLICANT_PROFILE_SECTIONS = new Set(['applicant', 'signatory', 'correspondence'])
+
+const FIX_LABELS: Record<string, string> = {
+  applicant: 'Open applicant profile',
+  signatory: 'Open applicant profile',
+  correspondence: 'Open applicant profile',
+  inventors: 'Go to inventors',
+  details: 'Go to filing details',
+  declarations: 'Go to declarations',
+}
 
 interface FilingDetailsForm {
   applicationType: 'ordinary' | 'convention' | 'pct_np'
@@ -91,6 +108,13 @@ export default function PatentFilingPage() {
   const [confirmIssues, setConfirmIssues] = useState<FilingIssue[]>([])
 
   const canGenerate = useMemo(() => !issues.some(i => i.severity === 'blocking'), [issues])
+
+  // The dialog's "fix" action opens whichever part of the filing the first blank belongs to,
+  // taken in the order an attorney works through them rather than the order they were found.
+  const firstBlockingSection = useMemo(
+    () => sortFilingIssues(confirmIssues.filter(i => i.severity === 'blocking'))[0]?.section ?? null,
+    [confirmIssues]
+  )
 
   const load = useCallback(async () => {
     if (!token || !patentId) return
@@ -211,6 +235,35 @@ export default function PatentFilingPage() {
       setSaving(false)
     }
   }, [token, patentId, details, settings, inventors, declarations, toast])
+
+  /**
+   * One deliberate step per outstanding item.
+   *
+   * Most of the checklist is fixed on this page, so it scrolls. The applicant, signatory and
+   * address for service live on the project's applicant profile, so those leave the page —
+   * but only after this page has been saved, and with a `returnTo` that brings the attorney
+   * straight back here once the profile is saved. Nothing lands them somewhere they did not
+   * ask to be, and nothing they typed is lost on the way.
+   */
+  const goToSection = useCallback(async (section: string) => {
+    setConfirmOpen(false)
+
+    if (!APPLICANT_PROFILE_SECTIONS.has(section)) {
+      document.getElementById(`filing-${section}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    if (!projectId) {
+      toast({ title: 'Still loading the project', description: 'Try again in a moment.', variant: 'warning' })
+      return
+    }
+    // A failed save is the one case where leaving would lose work — stay put and let the
+    // error toast explain rather than navigating on top of it.
+    if (!(await saveAll(true))) return
+
+    const returnTo = encodeURIComponent(`/patents/${patentId}/filing`)
+    router.push(`/projects/${projectId}/applicant?returnTo=${returnTo}`)
+  }, [projectId, patentId, router, saveAll, toast])
 
   /**
    * Saving first re-runs validation server-side, so the warning reflects what will actually
@@ -355,27 +408,31 @@ export default function PatentFilingPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <span className="text-xs font-medium uppercase tracking-wide text-gray-400">Applicant</span>
-              <p className="truncate font-medium text-gray-900 dark:text-white">{applicantName || '—'}</p>
+              <p className="truncate font-medium text-gray-900 dark:text-white">
+                {applicantName || <span className="text-red-600 dark:text-red-400">Not set up yet</span>}
+              </p>
               <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                {signatory
-                  ? <>Signed by <span className="font-medium text-gray-700 dark:text-gray-300">{signatory.name}</span>, {signatory.designation}</>
-                  : <span className="text-red-600 dark:text-red-400">No authorised signatory set</span>}
+                {applicantName
+                  ? (signatory
+                      ? <>Signed by <span className="font-medium text-gray-700 dark:text-gray-300">{signatory.name}</span>, {signatory.designation}</>
+                      : <span className="text-red-600 dark:text-red-400">No authorised signatory set</span>)
+                  : 'The whole project shares one applicant profile — set it up once and every filing inherits it.'}
               </p>
             </div>
-            {projectId && (
-              <button
-                onClick={() => router.push(`/projects/${projectId}/applicant`)}
-                className="shrink-0 text-xs font-medium text-lamp-600 hover:text-lamp-700"
-              >
-                Edit applicant &amp; signatory →
-              </button>
-            )}
+            <button
+              onClick={() => goToSection('applicant')}
+              disabled={!projectId || saving}
+              className="shrink-0 rounded-lg border border-lamp-200 px-3 py-1.5 text-xs font-medium text-lamp-600 transition hover:bg-lamp-50 disabled:opacity-50 dark:border-lamp-900/50 dark:hover:bg-lamp-900/20"
+            >
+              {applicantName ? 'Edit applicant & signatory' : 'Set up applicant & signatory'} →
+            </button>
           </div>
         </div>
 
         <div className="mt-6 space-y-6">
           {/* Inventors */}
           <Section
+            id="filing-inventors"
             icon={<Users className="h-4 w-4" />}
             title="Inventors"
             subtitle="Specific to this patent. They appear on Form 1 paragraph 4, sign paragraph 12(i), and are declared on Form 5."
@@ -391,7 +448,7 @@ export default function PatentFilingPage() {
           </Section>
 
           {/* Filing details */}
-          <Section icon={<FileText className="h-4 w-4" />} title="Filing details" subtitle="Drives the tick boxes on Form 1 and the attachment table in paragraph 13.">
+          <Section id="filing-details" icon={<FileText className="h-4 w-4" />} title="Filing details" subtitle="Drives the tick boxes on Form 1 and the attachment table in paragraph 13.">
             <div className="grid gap-4 sm:grid-cols-4">
               <Field label="Application type" className="sm:col-span-2">
                 <select value={details.applicationType} onChange={e => setDetails({ ...details, applicationType: e.target.value as FilingDetailsForm['applicationType'] })} className={inputClass}>
@@ -460,6 +517,7 @@ export default function PatentFilingPage() {
 
           {/* Declarations */}
           <Section
+            id="filing-declarations"
             icon={<Check className="h-4 w-4" />}
             title="Declarations"
             subtitle="Most of these follow from the application type above. Change one only when your filing genuinely differs. ☑ keeps a clause, ☒ marks it inapplicable, S̶ strikes the whole block out."
@@ -509,8 +567,8 @@ export default function PatentFilingPage() {
           </Section>
 
           {/* Readiness */}
-          <Section icon={<Check className="h-4 w-4" />} title="Before you file">
-            <IssueList issues={issues} />
+          <Section id="filing-readiness" icon={<Check className="h-4 w-4" />} title="Before you file">
+            <IssueList issues={issues} onFix={goToSection} fixLabels={FIX_LABELS} />
           </Section>
         </div>
       </div>
@@ -519,9 +577,11 @@ export default function PatentFilingPage() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         issues={confirmIssues}
-        busy={downloading}
+        busy={downloading || saving}
         confirmLabel="Download bundle anyway"
+        fixLabel={firstBlockingSection ? FIX_LABELS[firstBlockingSection] : undefined}
         onConfirm={runDownload}
+        onGoToFiling={firstBlockingSection ? () => goToSection(firstBlockingSection) : undefined}
       />
     </div>
   )

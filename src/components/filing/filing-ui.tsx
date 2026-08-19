@@ -32,7 +32,9 @@ export const OFFICE_BRANCHES = ['Delhi', 'New Delhi', 'Mumbai', 'Chennai', 'Kolk
 export const inputClass =
   'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition placeholder:text-gray-400 focus:border-lamp-500 focus:outline-none focus:ring-2 focus:ring-lamp-500/30 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800'
 
-export function Section({ icon, title, subtitle, children, actions }: {
+export function Section({ id, icon, title, subtitle, children, actions }: {
+  /** Anchor the pre-generation checklist scrolls to. */
+  id?: string
   icon?: ReactNode
   title: string
   subtitle?: string
@@ -40,7 +42,7 @@ export function Section({ icon, title, subtitle, children, actions }: {
   actions?: ReactNode
 }) {
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:p-6">
+    <section id={id} className="scroll-mt-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:p-6">
       <div className="mb-5 flex items-start gap-2.5">
         {icon && (
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-lamp-50 text-lamp-600 dark:bg-lamp-900/30 dark:text-lamp-300">
@@ -346,8 +348,49 @@ export interface FilingIssue {
   section: string
 }
 
-/** The pre-generation checklist. Blocking issues stop the download; advisory ones do not. */
-export function IssueList({ issues }: { issues: FilingIssue[] }) {
+export const FILING_SECTION_LABELS: Record<string, string> = {
+  applicant: 'Applicant',
+  signatory: 'Authorised signatory',
+  correspondence: 'Address for service in India',
+  inventors: 'Inventors',
+  details: 'Filing details',
+  declarations: 'Declarations',
+}
+
+/** Issues in the order the attorney would work through them. */
+const SECTION_ORDER = ['applicant', 'signatory', 'correspondence', 'inventors', 'details', 'declarations']
+
+export function sortFilingIssues(issues: FilingIssue[]): FilingIssue[] {
+  const rank = (section: string) => {
+    const i = SECTION_ORDER.indexOf(section)
+    return i === -1 ? SECTION_ORDER.length : i
+  }
+  return [...issues].sort((a, b) => rank(a.section) - rank(b.section))
+}
+
+function groupBySection(issues: FilingIssue[]): Array<{ section: string; issues: FilingIssue[] }> {
+  const groups = new Map<string, FilingIssue[]>()
+  for (const issue of sortFilingIssues(issues)) {
+    const bucket = groups.get(issue.section)
+    if (bucket) bucket.push(issue)
+    else groups.set(issue.section, [issue])
+  }
+  return Array.from(groups, ([section, list]) => ({ section, issues: list }))
+}
+
+/**
+ * The pre-generation checklist. Blocking issues stop the download; advisory ones do not.
+ *
+ * Blockers are grouped by the part of the filing they belong to, because that is where they
+ * get fixed — some on this page, some on the project's applicant profile. `onFix` turns each
+ * group into one deliberate step so nothing sends the attorney somewhere unexpected.
+ */
+export function IssueList({ issues, onFix, fixLabels }: {
+  issues: FilingIssue[]
+  onFix?: (section: string) => void
+  /** Per-section wording for the fix action, e.g. "Open applicant profile". */
+  fixLabels?: Record<string, string>
+}) {
   const blocking = issues.filter(i => i.severity === 'blocking')
   const advisory = issues.filter(i => i.severity === 'advisory')
 
@@ -367,13 +410,33 @@ export function IssueList({ issues }: { issues: FilingIssue[] }) {
             Will print blank ({blocking.length})
           </p>
           <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-            The bundle still downloads. Fill these in here to have them printed, or complete them by hand on the forms.
+            The bundle still downloads. Fill these in to have them printed, or complete them by hand on the forms.
           </p>
-          <ul className="mt-1.5 space-y-1">
-            {blocking.map((issue, i) => (
-              <li key={`${issue.field}-${i}`} className="text-sm text-amber-900 dark:text-amber-200">• {issue.message}</li>
+          <div className="mt-2.5 space-y-2.5">
+            {groupBySection(blocking).map(group => (
+              <div key={group.section}>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+                    {FILING_SECTION_LABELS[group.section] || group.section}
+                  </span>
+                  {onFix && (
+                    <button
+                      type="button"
+                      onClick={() => onFix(group.section)}
+                      className="rounded border border-amber-400 px-1.5 py-0.5 text-[11px] font-medium text-amber-900 transition hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40"
+                    >
+                      {fixLabels?.[group.section] || 'Fix this'} →
+                    </button>
+                  )}
+                </div>
+                <ul className="mt-1 space-y-1">
+                  {group.issues.map((issue, i) => (
+                    <li key={`${issue.field}-${i}`} className="text-sm text-amber-900 dark:text-amber-200">• {issue.message}</li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
       {advisory.length > 0 && (

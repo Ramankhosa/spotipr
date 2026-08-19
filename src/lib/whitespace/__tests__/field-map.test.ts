@@ -7,10 +7,51 @@ import {
   conceptQueryGroups,
   emptyFieldAdvice,
   minimumOptionalBounds,
+  searchableTerms,
   textMatchPredicate,
 } from '../field-map'
 import { DISABLED_REASON, UNCALIBRATED_REASON } from '../candidates'
 import { emptyWhitespaceScope } from '../types'
+
+describe('concept term hygiene in buildConceptQuery', () => {
+  it('searches the sanitised terms, not the compiler prose', () => {
+    const scope = emptyWhitespaceScope()
+    scope.concepts = [
+      {
+        id: 'c1',
+        label: 'Use of weather data and/or forecast for irrigation decisions',
+        synonyms: ['reference evapotranspiration (ET0)', 'rain shutoff / rain delay'],
+        required: false,
+        origin: 'copilot',
+      },
+    ]
+
+    const group = buildConceptQuery(scope, 1)!.optional[0]
+
+    // The sentence label is gone; the annotated synonym became two usable terms.
+    expect(group).not.toContain('Use of weather data')
+    expect(group).toContain('"ET0"')
+    expect(group).toContain('"rain shutoff"')
+    expect(group).toContain('"rain delay"')
+  })
+
+  it('keeps a concept searchable even when every term reads as prose', () => {
+    const scope = emptyWhitespaceScope()
+    scope.concepts = [
+      {
+        id: 'c1',
+        label: 'Some very long descriptive label that no patent would ever contain verbatim',
+        synonyms: [],
+        required: false,
+        origin: 'copilot',
+      },
+    ]
+
+    // Falling back to the head of the label keeps the required/optional split
+    // the rule is fitted against unchanged.
+    expect(buildConceptQuery(scope, 1)?.optional).toHaveLength(1)
+  })
+})
 
 describe('buildScopeFilter', () => {
   it('normalises stored CPC spacing when matching accepted classification prefixes', () => {
@@ -27,6 +68,41 @@ describe('buildScopeFilter', () => {
 
     expect(filter.strings.join('')).toContain("regexp_replace(upper(c), '[[:space:]]+', '', 'g') LIKE")
     expect(filter.values).toContain('A01G25/16%')
+  })
+})
+
+describe('searchableTerms', () => {
+  it('drops a parenthetical note but keeps an acronym inside it as its own term', () => {
+    expect(searchableTerms('model predictive control (MPC) for irrigation (broadening term)')).toEqual([
+      'MPC',
+      'model predictive control for irrigation',
+    ])
+  })
+
+  it('splits alternatives joined by a slash, spaced or not', () => {
+    expect(searchableTerms('rain shutoff / rain delay')).toEqual(['rain shutoff', 'rain delay'])
+    expect(searchableTerms('swellable/gel-forming polymer matrix')).toEqual([
+      'swellable',
+      'gel-forming polymer matrix',
+    ])
+    expect(searchableTerms('Oral solid controlled/extended release dosage form')).toEqual([
+      'Oral solid controlled',
+      'extended release dosage form',
+    ])
+  })
+
+  it('does not split a slash that joins function words, so prose stays prose', () => {
+    // "…data and/or forecast…" would otherwise break into two fragments short
+    // enough to pass the phrase-length cap.
+    expect(searchableTerms('Use of weather data and/or forecast for irrigation decisions')).toEqual([])
+  })
+
+  it('discards a term that is prose rather than a phrase', () => {
+    expect(searchableTerms('Use of weather data and forecasts for making irrigation decisions')).toEqual([])
+  })
+
+  it('passes an ordinary phrase through unchanged', () => {
+    expect(searchableTerms('soil moisture sensor')).toEqual(['soil moisture sensor'])
   })
 })
 

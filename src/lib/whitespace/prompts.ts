@@ -58,7 +58,13 @@ ${input.brief.slice(0, 12000)}
 ${input.existingTitle ? `\nWorking title: ${input.existingTitle}\n` : ''}
 WHAT TO PRODUCE
 
-1. concepts — the 3 to 6 core technical concepts. For each, give the alternative phrasings that actually appear in patent text: functional language, scientific terminology, industry jargon, common acronyms, and the phrasing a patent attorney would use to broaden a claim. This vocabulary determines what the search can see, so be generous and concrete rather than abstract. Mark a concept "required" only if a document that lacks it is certainly irrelevant. Documents are counted when they match every required concept and at least some number of the others — the study measures how many match at least 1, 2, 3 … of the optional concepts and takes the tightest count that still yields a field it can analyse — so prefer several specific optional concepts over one broad one.
+1. concepts — the 3 to 6 core technical concepts. For each, give the alternative phrasings that actually appear in patent text: functional language, scientific terminology, industry jargon, common acronyms, and the phrasing a patent attorney would use to broaden a claim. This vocabulary determines what the search can see, so be generous and concrete rather than abstract. Mark a concept "required" only if a document that lacks it is certainly irrelevant.
+
+   EVERY LABEL AND SYNONYM IS SEARCHED AS A LITERAL PHRASE. This is the second most common way a scope fails, after marking too many concepts required. A phrase matches only where those words appear together, in that order, in the patent text — so:
+   - Keep "label" to at most 6 words. It is searched too, not just displayed. "Soil moisture sensing" works; "Use of weather data and/or forecast for irrigation decisions" matches nothing.
+   - Every synonym must be a phrase a patent would literally contain. No explanations, no annotations, no parenthetical asides: write "model predictive control", never "model predictive control (MPC) for irrigation (broadening term)". Give the acronym as its own separate synonym if it is worth searching.
+   - Prefer 2 to 4 word phrases. A 7-word synonym is a description, and descriptions match nothing.
+   - No slashes joining alternatives — "rain shutoff / rain delay" is two synonyms, not one. Documents are counted when they match every required concept and at least some number of the others — the study measures how many match at least 1, 2, 3 … of the optional concepts and takes the tightest count that still yields a field it can analyse — so prefer several specific optional concepts over one broad one.
 
 2. classifications — 3 to 8 candidate CPC codes, each with a plain-language definition a non-specialist can check. Where a code is broad enough to pull in an adjacent unrelated field, say so in "caution". Prefer subclass or main-group level over very specific subgroups.
 

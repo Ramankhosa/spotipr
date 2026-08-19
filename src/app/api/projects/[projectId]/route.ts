@@ -42,7 +42,15 @@ export async function GET(
         }
       },
       include: {
-        applicantProfile: true
+        applicantProfile: true,
+        // The workspace manages the project team in place, so the collaborator list has to
+        // survive a reload — not only appear right after one is added.
+        collaborators: {
+          include: {
+            user: { select: { id: true, name: true, email: true } }
+          },
+          orderBy: { createdAt: 'asc' }
+        }
       }
     })
 

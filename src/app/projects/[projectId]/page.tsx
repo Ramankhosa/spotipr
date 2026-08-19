@@ -9,7 +9,7 @@ import { motion } from 'framer-motion'
 import { PageLoadingBird } from '@/components/ui/loading-bird'
 import {
   FileText,
-  Settings,
+  Users,
   UserPlus,
   Plus,
   ChevronRight,
@@ -75,6 +75,11 @@ export default function ProjectDashboardPage() {
   const [deleteDialog, setDeleteDialog] = useState<{ patentId: string; patentTitle: string; hasDrafts: boolean } | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
+  // Team management used to live on a separate "project created" page. It belongs here,
+  // beside the patents it governs, so nobody has to leave the workspace to grant access.
+  const [teamOpen, setTeamOpen] = useState(false)
+  const [collaboratorInput, setCollaboratorInput] = useState('')
+  const [isAddingCollaborator, setIsAddingCollaborator] = useState(false)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -151,6 +156,66 @@ export default function ProjectDashboardPage() {
       fetchPatents()
     }
   }, [authLoading, user, router, projectId])
+
+  const addCollaborator = async () => {
+    const entry = collaboratorInput.trim()
+    if (!entry || !project) return
+
+    setIsAddingCollaborator(true)
+    try {
+      const response = await fetch(`/api/projects/${project.id}/collaborators`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({ userId: entry }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (response.ok) {
+        setProject(prev => prev ? { ...prev, collaborators: data.project?.collaborators || prev.collaborators } : prev)
+        setCollaboratorInput('')
+        toast({ title: 'Collaborator added', variant: 'success' })
+      } else {
+        toast({
+          title: 'Could not add collaborator',
+          description: data.error || 'Check the user ID or email address.',
+          variant: 'error'
+        })
+      }
+    } catch (error) {
+      console.error('Failed to add collaborator:', error)
+      toast({ title: 'Could not add collaborator', variant: 'error' })
+    } finally {
+      setIsAddingCollaborator(false)
+    }
+  }
+
+  const removeCollaborator = async (collaboratorId: string) => {
+    if (!project) return
+
+    try {
+      const response = await fetch(`/api/projects/${project.id}/collaborators/${collaboratorId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (response.ok) {
+        setProject(prev => prev
+          ? { ...prev, collaborators: data.project?.collaborators ?? (prev.collaborators || []).filter(c => c.id !== collaboratorId) }
+          : prev)
+      } else {
+        toast({ title: 'Could not remove collaborator', description: data.error, variant: 'error' })
+      }
+    } catch (error) {
+      console.error('Failed to remove collaborator:', error)
+      toast({ title: 'Could not remove collaborator', variant: 'error' })
+    }
+  }
 
   const handleDeletePatent = async () => {
     if (!deleteDialog) return
@@ -246,13 +311,16 @@ export default function ProjectDashboardPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <Link
-                href={`/projects/${projectId}/setup`}
+              <button
+                onClick={() => setTeamOpen(true)}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-all duration-200"
+                title="Give colleagues access to this project"
               >
-                <Settings className="w-4 h-4" />
-                <span className="hidden sm:inline">Manage</span>
-              </Link>
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">
+                  Team{project.collaborators?.length ? ` (${project.collaborators.length})` : ''}
+                </span>
+              </button>
               {/* Always reachable — the applicant address, category and the authorised
                   signatory who signs the filing forms all live behind this link, so it has
                   to stay available after the profile first exists, not only before. */}
@@ -449,6 +517,93 @@ export default function ProjectDashboardPage() {
           </Link>
         </div>
       </main>
+
+      {/* Team / collaborators */}
+      {teamOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-1">
+                <div className="p-2.5 bg-ai-blue-50 rounded-xl">
+                  <Users className="w-6 h-6 text-ai-blue-600" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-slate-900">Project team</h3>
+                  <p className="text-sm text-slate-500">Collaborators can open and edit every patent in {project.name}</p>
+                </div>
+                <button
+                  onClick={() => { setTeamOpen(false); setCollaboratorInput('') }}
+                  className="ml-auto self-start p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="mt-5 flex gap-2">
+                <input
+                  type="text"
+                  value={collaboratorInput}
+                  onChange={(e) => setCollaboratorInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addCollaborator() }}
+                  placeholder="Email address or user ID"
+                  className="flex-1 px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500/20 focus:border-ai-blue-400 transition-all"
+                />
+                <button
+                  onClick={addCollaborator}
+                  disabled={!collaboratorInput.trim() || isAddingCollaborator}
+                  className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isAddingCollaborator
+                    ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    : <UserPlus className="w-4 h-4" />}
+                  Add
+                </button>
+              </div>
+
+              <div className="mt-5">
+                {project.collaborators && project.collaborators.length > 0 ? (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {project.collaborators.map((collaborator) => (
+                      <div
+                        key={collaborator.id}
+                        className="flex items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 shrink-0 bg-ai-blue-600 rounded-full flex items-center justify-center text-white text-sm font-medium">
+                            {(collaborator.user.name || collaborator.user.email || 'U').charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-slate-900 truncate">
+                              {collaborator.user.name || collaborator.user.email}
+                            </p>
+                            <p className="text-xs text-slate-500 truncate">
+                              {collaborator.user.name ? `${collaborator.user.email} · ` : ''}{collaborator.role}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeCollaborator(collaborator.id)}
+                          className="shrink-0 px-3 py-1.5 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-all"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500 text-center py-6">
+                    No collaborators yet. Only you can see this project.
+                  </p>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       {/* Delete Confirmation Dialog */}
       {deleteDialog && (

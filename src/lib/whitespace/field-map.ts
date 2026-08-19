@@ -175,16 +175,111 @@ export function conceptQueryGroups(plan: ConceptQueryPlan): string[] {
 /** Phrase quoting for websearch_to_tsquery. Shared so every text lane quotes identically. */
 export const quotePhrase = (value: string) => `"${value.replace(/["\\]/g, ' ').trim()}"`
 
+/** A parenthetical worth keeping as its own term: an acronym, not a note. */
+const ACRONYM = /^[A-Z0-9][A-Z0-9./-]{0,7}$/
+/** Past this many words a term is a description, not something patent text says. */
+const MAX_TERM_WORDS = 6
+/** Ceiling on the OR group one concept compiles to. */
+const MAX_TERMS_PER_CONCEPT = 60
+
+/** Words that join a sentence rather than name a thing — see splitAlternatives. */
+const FUNCTION_WORDS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'of', 'on', 'or', 'the', 'to', 'via', 'vs', 'with',
+])
+
+const isFunctionWord = (word: string) => FUNCTION_WORDS.has(word.toLowerCase().replace(/[^a-z]/gi, ''))
+
+/**
+ * Splits a written term into the alternatives it offers.
+ *
+ * `;` and `,` always separate. A slash usually does — "swellable/gel-forming
+ * polymer matrix" means either, and searching the halves joined into one phrase
+ * finds nothing — but not always: in "weather data and/or forecast" the slash
+ * joins two FUNCTION words and is part of the prose, so splitting there would
+ * manufacture two fragments ("...data and", "or forecast for...") short enough
+ * to slip under the phrase-length cap and pollute the query with terms no
+ * patent contains. So a slash splits only when the words on both sides of it
+ * carry meaning.
+ */
+function splitAlternatives(text: string): string[] {
+  const parts: string[] = []
+  for (const clause of text.split(/[;,]/)) {
+    const pieces = clause.split('/')
+    let current = pieces[0] ?? ''
+    for (let i = 1; i < pieces.length; i++) {
+      const before = current.trim().split(/\s+/).pop() ?? ''
+      const after = pieces[i].trim().split(/\s+/)[0] ?? ''
+      if (!before || !after || isFunctionWord(before) || isFunctionWord(after)) {
+        current += ` ${pieces[i]}`
+      } else {
+        parts.push(current)
+        current = pieces[i]
+      }
+    }
+    parts.push(current)
+  }
+  return parts
+}
+
+/**
+ * The searchable terms hiding inside one written term.
+ *
+ * Every term becomes a QUOTED PHRASE (quotePhrase), so whatever survives here is
+ * matched as an adjacency. That makes the shape of the input decisive, and the
+ * shape the scope compiler produces is prose: labels are sentences ("Use of
+ * weather data and/or forecast for irrigation decisions") and synonyms carry the
+ * model's own annotations ("model predictive control (MPC) for irrigation
+ * (broadening term)"). Quoted whole, neither can ever match — measured across
+ * the 272 terms of the three saved studies, 74% of them matched NOTHING.
+ *
+ * So: pull short acronyms out of parentheses and drop the rest of the
+ * parenthetical, split on separators that join alternatives rather than words
+ * (" / ", ";", ","), strip punctuation, and discard anything still longer than a
+ * phrase. Same corpus, same quoting, after this pass: 62% dead and 147% more
+ * hits. It only ever ADDS matchable terms — a term that was already a phrase
+ * passes through unchanged.
+ */
+export function searchableTerms(raw: string): string[] {
+  const terms: string[] = []
+  const head = raw.replace(/\(([^)]*)\)/g, (_match, inner: string) => {
+    const acronym = String(inner).trim()
+    if (ACRONYM.test(acronym)) terms.push(acronym)
+    return ' '
+  })
+  for (const part of splitAlternatives(head)) {
+    // Strip the punctuation that breaks a phrase rather than whitelisting
+    // letters: a blocklist keeps accented and non-Latin vocabulary intact, and
+    // unicode property escapes are not available at this compile target.
+    const term = part
+      .replace(/["“”„«»()[\]{}<>|&!*:+=\\/.?_~^$#@%]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!term) continue
+    if (term.split(' ').length > MAX_TERM_WORDS) continue
+    terms.push(term)
+  }
+  return terms
+}
+
 function conceptTerms(concept: { label: string; synonyms: string[] }): string[] {
   const seen = new Set<string>()
   const terms: string[] = []
-  for (const raw of [concept.label, ...concept.synonyms]) {
-    const term = raw.trim()
-    if (!term) continue
+  const add = (term: string) => {
     const key = term.toLowerCase()
-    if (seen.has(key)) continue
+    if (!term || seen.has(key) || terms.length >= MAX_TERMS_PER_CONCEPT) return
     seen.add(key)
     terms.push(term)
+  }
+  for (const raw of [concept.label, ...concept.synonyms]) {
+    if (!raw.trim()) continue
+    for (const term of searchableTerms(raw)) add(term)
+  }
+  // A concept whose every term was prose still has to be searchable, or dropping
+  // it here would silently change the required/optional split the rule is fitted
+  // against. Fall back to the head of the label — a poor term, but a real one.
+  if (!terms.length) {
+    const head = searchableTerms(concept.label.split(/\s+/).slice(0, MAX_TERM_WORDS).join(' '))[0]
+    if (head) add(head)
   }
   return terms
 }

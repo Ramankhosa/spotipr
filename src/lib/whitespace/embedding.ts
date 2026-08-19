@@ -245,6 +245,14 @@ const BACKGROUND_TARGET_ROWS = Math.max(
   Number(process.env.WHITESPACE_BACKGROUND_SAMPLE_ROWS) || 20_000
 )
 
+/**
+ * TABLESAMPLE seed for the background draw. Fixed so the same corpus yields the
+ * same background — and so the same scope yields the same field — across runs,
+ * processes and stages. Change it only to deliberately redraw the sample (after
+ * a large ingest, say); changing it moves every adaptive ceiling.
+ */
+const BACKGROUND_SAMPLE_SEED = Math.trunc(Number(process.env.WHITESPACE_BACKGROUND_SAMPLE_SEED) || 20260819)
+
 /** reltuples for the embeddings table; -1/0 means never analysed. Cached per process. */
 let rowEstimate: number | null = null
 export async function corpusVectorRowEstimate(): Promise<number> {
@@ -299,7 +307,16 @@ export async function semanticBackground(input: {
   if (!padded.some(Boolean)) return results
 
   const percent = (await backgroundSamplePercent()).toFixed(4)
-  const SAMPLE_CLAUSE = Prisma.raw(`TABLESAMPLE SYSTEM (${percent})`)
+  // REPEATABLE, or the background — and therefore the adaptive ceiling, and
+  // therefore the whole semantic arm — is redrawn on every call. On a corpus
+  // small enough for `percent` to clamp to 100 that is invisible (the sample is
+  // the table). At production scale `percent` is a fraction of one percent and
+  // SYSTEM samples BLOCKS, whose rows are correlated by load order, so mean and
+  // sd wander between runs and two runs of one scope define different fields.
+  // The seed is a constant rather than a scope hash on purpose: the background
+  // is a property of the CORPUS, not of the query being placed against it, so
+  // every query must be measured against the same sample of it.
+  const SAMPLE_CLAUSE = Prisma.raw(`TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${BACKGROUND_SAMPLE_SEED})`)
   const DISTANCE = Prisma.sql`(bg.v ${EMBEDDING_DISTANCE_OP_SQL} q.v)::float8`
 
   // The literals are parsed into vectors ONCE, in their own materialised CTE.

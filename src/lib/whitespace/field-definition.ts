@@ -76,15 +76,25 @@ export function resolveFieldBand(): FieldBand {
 }
 
 /**
- * Per-rung sizing budget. Sizing a rung costs about what staging it costs (same
- * predicate, same rows fetched), so a rung that cannot be sized inside the
- * census budget could not be counted inside it either — hence the default is
- * the census timeout, and a timeout is read as "over the ceiling".
+ * Per-rung sizing budget.
+ *
+ * This used to default to the CENSUS timeout (90s), on the reasoning that a rung
+ * which cannot be sized inside the census budget could not be counted inside it
+ * either. True, but it made the ladder itself the slowest thing in the module: a
+ * seven-rung ladder could spend 10.5 minutes sizing a scope it then refuses, and
+ * the user watches a spinner for all of it. A rung count is a bounded COUNT with
+ * a LIMIT — measured at 76–970ms on the dev corpus — so the honest budget is
+ * seconds, and a rung that blows it is over the ceiling by definition.
  */
-const FIT_TIMEOUT_MS = Math.max(
-  5_000,
-  Number(process.env.WHITESPACE_FIT_TIMEOUT_MS) || Number(process.env.WHITESPACE_CENSUS_TIMEOUT_MS) || 90_000
-)
+const FIT_TIMEOUT_MS = Math.max(5_000, Number(process.env.WHITESPACE_FIT_TIMEOUT_MS) || 15_000)
+
+/**
+ * Ceiling on the WHOLE ladder walk, not one rung. Without it the per-rung budget
+ * still multiplies by the number of rungs; with it the fit degrades to "the
+ * tightest rungs I could measure in time", which chooseRung already handles —
+ * unmeasured rungs read as skipped.
+ */
+const FIT_BUDGET_MS = Math.max(FIT_TIMEOUT_MS, Number(process.env.WHITESPACE_FIT_BUDGET_MS) || 60_000)
 
 /** Memo TTL — consecutive stages of one study reuse the definition. */
 const CACHE_TTL_MS = 10 * 60 * 1000
@@ -98,10 +108,20 @@ export interface FieldDefinition {
   /** How the field was assembled — the rule first, then the semantic lane. */
   coverageNotes: string[]
   /**
-   * The chosen rung's own measurement, when the fit took one and it was under
-   * the ceiling (then it is exact). Null for pinned, trivial and reused rules.
+   * The WHOLE field's own measurement — the chosen rung OR'd with the semantic
+   * candidates, i.e. exactly what `where` selects — when the fit took one and it
+   * was under the ceiling. Null for pinned, trivial and reused rules.
+   *
+   * Consumers use this as the field size (dimension-stage skips its own
+   * pre-count when it is present), so it MUST describe the composed predicate.
    */
   measured: { publications: number; families: number } | null
+  /**
+   * The same rung measured on the lexical arm alone. The gap between this and
+   * `measured` is how much of the field only the semantic arm can see — the
+   * number that says whether the concept wording is doing any work at all.
+   */
+  measuredLexical: { publications: number; families: number } | null
 }
 
 export interface ResolveFieldOptions {
@@ -199,6 +219,37 @@ async function measureRung(
   }
 }
 
+/**
+ * How the field split between wording and meaning, stated plainly.
+ *
+ * The rule note says a document counts when it matches the concepts. That
+ * sentence was, until the fit was corrected, describing a field where NO
+ * document had matched them — every row came in through the semantic OR. A
+ * reader cannot judge a landscape without knowing which arm built it, so the
+ * split travels with every result that measured both.
+ */
+function splitNote(
+  field: FieldDefinition['measured'],
+  lexical: FieldDefinition['measuredLexical']
+): string | null {
+  if (!field || !lexical) return null
+  const n = (value: number) => value.toLocaleString()
+  if (field.families <= 0) return null
+  const share = Math.round((100 * lexical.families) / field.families)
+  if (lexical.families === 0) {
+    return (
+      `Wording vs meaning: NO document in this field matched the concept wording — all ${n(field.families)} ` +
+      `were admitted by semantic similarity. Treat the concept list as unverified: reword the concepts using ` +
+      `phrases patent text actually contains, or read this field as "documents near this subject" rather than ` +
+      `"documents matching this scope".`
+    )
+  }
+  return (
+    `Wording vs meaning: ${n(lexical.families)} of ${n(field.families)} families (${share}%) matched the concept ` +
+    `wording; the rest were admitted by semantic similarity.`
+  )
+}
+
 export async function resolveFieldDefinition(
   scope: WhitespaceScope,
   options: ResolveFieldOptions = {}
@@ -212,13 +263,23 @@ export async function resolveFieldDefinition(
   const counts = { requiredCount: plan?.required.length ?? 0, optionalCount: plan?.optional.length ?? 0 }
   const bounds = minimumOptionalBounds(scope)
 
-  const finish = (rule: FieldRule, candidates: FieldCandidates, measured: FieldDefinition['measured']): FieldDefinition => {
+  const finish = (
+    rule: FieldRule,
+    candidates: FieldCandidates,
+    measured: FieldDefinition['measured'],
+    measuredLexical: FieldDefinition['measuredLexical'] = null
+  ): FieldDefinition => {
     const value: FieldDefinition = {
       candidates,
       rule,
       where: buildScopeFilter(scope, candidates.ids, rule.minimumOptional),
-      coverageNotes: [fieldRuleNote(rule), candidateCoverageNote(candidates)],
+      coverageNotes: [
+        fieldRuleNote(rule),
+        candidateCoverageNote(candidates),
+        ...(splitNote(measured, measuredLexical) ? [splitNote(measured, measuredLexical)!] : []),
+      ],
       measured,
+      measuredLexical,
     }
     remember(key, value)
     return value
@@ -244,14 +305,31 @@ export async function resolveFieldDefinition(
 
   // 3. The fit. Tightest first; stop at the first in-band rung or the first
   //    over the ceiling.
+  //
+  //    Sized on the LEXICAL ARM ALONE — no candidate ids. The rungs used to be
+  //    measured through the same `lexical OR candidates` predicate the field
+  //    finally uses, which made the fit a no-op: the candidate set is targeted
+  //    at a fixed share of the corpus (5,000 documents or 1%, whichever is
+  //    smaller) and is therefore ALWAYS larger than band.minFamilies, so the
+  //    first rung tried always cleared the floor, the walk stopped after one
+  //    measurement, and k was pinned at its maximum whatever the wording
+  //    matched. Measured on the three saved studies before this change: the
+  //    fitted rung matched 0 documents lexically and the field was 100%
+  //    semantic candidates, while the coverage note claimed every concept had
+  //    matched. The ladder can only mean anything if it measures the thing it
+  //    is a ladder of.
   const rungs = ladderRungs(bounds.min, bounds.max, k => rungIsCompilable(counts.optionalCount, k))
   const measured: RungMeasurement[] = []
   const timeoutMs = options.timeoutMs ?? FIT_TIMEOUT_MS
+  const deadline = Date.now() + FIT_BUDGET_MS
   for (const k of rungs) {
-    const rung = await measureRung(scope, candidates.ids, k, band, timeoutMs)
+    const rung = await measureRung(scope, [], k, band, timeoutMs)
     measured.push(rung)
     if (rung.overCap || rung.timedOut) break
     if (rung.families >= band.minFamilies) break
+    // Out of budget: keep what was measured rather than walk the rest. Every
+    // remaining rung is looser, so the ladder stays a valid prefix.
+    if (Date.now() >= deadline) break
   }
   const decision = chooseRung(measured, band)
 
@@ -281,13 +359,26 @@ export async function resolveFieldDefinition(
     ladder,
     band,
   }
-  return finish(
-    rule,
-    candidates,
+  const lexical =
     chosen && !chosen.overCap && !chosen.timedOut
       ? { publications: chosen.publications, families: chosen.families }
       : null
-  )
+
+  // The rungs above sized the lexical arm; `where` is that arm OR'd with the
+  // semantic candidates. One more bounded count gives the size of what the
+  // field ACTUALLY is, which is the number every consumer reads. Skipped when
+  // there are no candidates (the two are then the same set) or when the rung
+  // could not be sized at all.
+  let field = lexical
+  if (lexical && candidates.ids.length) {
+    const composed = await measureRung(scope, candidates.ids, decision.minimumOptional, band, timeoutMs)
+    field =
+      composed.overCap || composed.timedOut
+        ? null
+        : { publications: composed.publications, families: composed.families }
+  }
+
+  return finish(rule, candidates, field, lexical)
 }
 
 /** True when the scope asks the fit to run (as opposed to pinning k). */

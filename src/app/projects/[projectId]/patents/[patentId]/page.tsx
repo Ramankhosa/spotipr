@@ -46,12 +46,10 @@ export default function PatentDetailPage() {
       })
 
       if (!patentResponse.ok) {
-        if (patentResponse.status === 404) {
-          router.push(`/projects/${projectId}/setup`)
-        } else {
-          console.error('Failed to fetch patent')
-          router.push(`/projects/${projectId}/setup`)
-        }
+        // Either way the patent is unreachable — land back on the project workspace, which
+        // lists what does exist, rather than on a dead-end page.
+        if (patentResponse.status !== 404) console.error('Failed to fetch patent')
+        router.replace(`/projects/${projectId}`)
         return
       }
 
