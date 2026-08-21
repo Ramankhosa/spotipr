@@ -99,7 +99,7 @@ export default function WorkspaceMockup() {
         {/* body */}
         <div className="grid flex-1 grid-cols-1 gap-2.5 bg-[#f8fafd] p-2.5 md:grid-cols-2">
           <Panel title="Novelty overview">
-            <p className="mb-2 text-[9.5px] text-paper-500">Searched across 30M+ patent documents</p>
+            <p className="mb-2 text-[9.5px] text-paper-500">Searched across 55M+ patent documents</p>
             <div className="flex items-center gap-3">
               <div className="relative flex-none">
                 <svg viewBox="0 0 36 36" className="h-[52px] w-[52px] -rotate-90">

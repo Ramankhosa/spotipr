@@ -129,6 +129,31 @@ module.exports = {
           900: '#1d2939',
           950: '#101828',
         },
+        // Vellum — the warm paper ground for MARKETING surfaces only (the
+        // homepage). The app keeps the cool 'paper' ramp above; this ramp
+        // exists so the landing page reads as a document rather than a
+        // dashboard. 200 is the ground, 400 draws sheet rules, 800 is the
+        // graphite used for patent-figure line work, 900 is the ink.
+        vellum: {
+          50: '#fdfdfc',
+          100: '#faf9f7',
+          200: '#f6f5f2',
+          300: '#eceae4',
+          400: '#d8d5ce',
+          500: '#a8a49b',
+          600: '#6b6c66',
+          700: '#55585d',
+          800: '#3d4148',
+          900: '#14161a',
+        },
+        // Semantic inks for the marketing figures. Cobalt (lamp-600) is what
+        // PatentNest adds; these three are the other three voices — the
+        // examiner, a verified result, and a weakening one.
+        ink: {
+          examiner: '#b91c1c',
+          verified: '#096c45',
+          weakening: '#b45309',
+        },
         'ai-graphite': {
           50: '#f8fafc',
           100: '#f1f5f9',

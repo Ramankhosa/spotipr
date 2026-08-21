@@ -38,14 +38,14 @@ export default function AudienceStrip() {
       </Reveal>
 
       <Reveal delay={0.08}>
-        <div className="grid gap-px overflow-hidden rounded-2xl border border-paper-300 bg-paper-300 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-px overflow-hidden border border-vellum-900 bg-vellum-900 sm:grid-cols-2 lg:grid-cols-4">
           {SEGMENTS.map(({ title, copy, icon: Icon }) => (
-            <div key={title} className="bg-white p-6 transition-colors duration-200 hover:bg-paper-50">
+            <div key={title} className="bg-vellum-100 p-6 transition-colors duration-200 hover:bg-vellum-200">
               <span className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-lamp-50">
                 <Icon className="h-[18px] w-[18px] text-lamp-600" strokeWidth={1.7} />
               </span>
-              <h3 className="text-[15px] font-medium text-ai-graphite-900">{title}</h3>
-              <p className="mt-1.5 text-[13px] leading-[1.6] text-paper-600">{copy}</p>
+              <h3 className="text-[15px] font-medium text-vellum-900">{title}</h3>
+              <p className="mt-1.5 text-[13px] leading-[1.6] text-vellum-600">{copy}</p>
             </div>
           ))}
         </div>

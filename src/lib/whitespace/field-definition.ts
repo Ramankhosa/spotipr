@@ -78,23 +78,29 @@ export function resolveFieldBand(): FieldBand {
 /**
  * Per-rung sizing budget.
  *
- * This used to default to the CENSUS timeout (90s), on the reasoning that a rung
- * which cannot be sized inside the census budget could not be counted inside it
- * either. True, but it made the ladder itself the slowest thing in the module: a
- * seven-rung ladder could spend 10.5 minutes sizing a scope it then refuses, and
- * the user watches a spinner for all of it. A rung count is a bounded COUNT with
- * a LIMIT — measured at 76–970ms on the dev corpus — so the honest budget is
- * seconds, and a rung that blows it is over the ceiling by definition.
+ * MUST be sized against the production corpus, not a dev slice. Rung counts on
+ * the 38k dev corpus take 76–970ms, and a 15s budget derived from those numbers
+ * looked generous; on the 29M-row production corpus the same counts were
+ * measured at 15.8s, 61s, 70.8s, 86.4s and 106.3s. A TIGHT rung is the expensive
+ * one — proving a match set EMPTY means exhausting the posting-list
+ * intersection, while a loose rung stops early on the LIMIT — so the rungs the
+ * fit visits first are exactly the ones that blow a short budget.
+ *
+ * That matters more than the wasted time, because measureRung reads a timeout as
+ * "over the ceiling". Under a 15s budget the tightest rung of a genuinely EMPTY
+ * field timed out, the walk stopped on the first measurement, and the fit
+ * reported `too-broad` for a field of 0 documents — the opposite diagnosis, on
+ * the study that prompted this.
  */
-const FIT_TIMEOUT_MS = Math.max(5_000, Number(process.env.WHITESPACE_FIT_TIMEOUT_MS) || 15_000)
+const FIT_TIMEOUT_MS = Math.max(5_000, Number(process.env.WHITESPACE_FIT_TIMEOUT_MS) || 90_000)
 
 /**
- * Ceiling on the WHOLE ladder walk, not one rung. Without it the per-rung budget
- * still multiplies by the number of rungs; with it the fit degrades to "the
- * tightest rungs I could measure in time", which chooseRung already handles —
- * unmeasured rungs read as skipped.
+ * Ceiling on the WHOLE ladder walk, not one rung. The per-rung timeout alone
+ * multiplies by the number of rungs — seven rungs of 90s is 10.5 minutes of
+ * spinner — so this is what actually bounds the wait. Rungs measured before it
+ * expires are kept; chooseRung reads the rest as skipped.
  */
-const FIT_BUDGET_MS = Math.max(FIT_TIMEOUT_MS, Number(process.env.WHITESPACE_FIT_BUDGET_MS) || 60_000)
+const FIT_BUDGET_MS = Math.max(FIT_TIMEOUT_MS, Number(process.env.WHITESPACE_FIT_BUDGET_MS) || 300_000)
 
 /** Memo TTL — consecutive stages of one study reuse the definition. */
 const CACHE_TTL_MS = 10 * 60 * 1000
@@ -318,19 +324,42 @@ export async function resolveFieldDefinition(
   //    semantic candidates, while the coverage note claimed every concept had
   //    matched. The ladder can only mean anything if it measures the thing it
   //    is a ladder of.
+  //
+  //    The LOOSEST rung is probed first, before the tightest-first walk.
+  //    "At least k" is monotonic — a document matching k+1 concepts matches k
+  //    too — so the loosest rung is an UPPER BOUND on every other one. When it
+  //    is already under the family floor, no tighter rung can clear it and the
+  //    remaining measurements are pure waste: on production that waste was
+  //    minutes of the tight, empty, slowest rungs before an answer the first
+  //    cheap measurement already contained. Probing it first also fixes the
+  //    outcome, not just the latency — a walk that runs out of budget partway
+  //    down reports the tightest rungs it managed, which for a field whose only
+  //    viable rung is the loosest means reporting `too-narrow` at 1 family
+  //    while k = 0 held 1,406.
   const rungs = ladderRungs(bounds.min, bounds.max, k => rungIsCompilable(counts.optionalCount, k))
   const measured: RungMeasurement[] = []
   const timeoutMs = options.timeoutMs ?? FIT_TIMEOUT_MS
   const deadline = Date.now() + FIT_BUDGET_MS
-  for (const k of rungs) {
-    const rung = await measureRung(scope, [], k, band, timeoutMs)
-    measured.push(rung)
-    if (rung.overCap || rung.timedOut) break
-    if (rung.families >= band.minFamilies) break
-    // Out of budget: keep what was measured rather than walk the rest. Every
-    // remaining rung is looser, so the ladder stays a valid prefix.
-    if (Date.now() >= deadline) break
+
+  const loosest = rungs.length > 1 ? await measureRung(scope, [], rungs[rungs.length - 1], band, timeoutMs) : null
+  // Under the ceiling but under the floor too: this is as far as the concepts
+  // reach, and every tighter rung is a subset of it. Answer now.
+  const loosestIsTheCeiling = loosest && !loosest.overCap && !loosest.timedOut && loosest.families < band.minFamilies
+
+  if (!loosestIsTheCeiling) {
+    for (const k of rungs) {
+      // Already measured as the probe.
+      if (loosest && k === loosest.minimumOptional) break
+      const rung = await measureRung(scope, [], k, band, timeoutMs)
+      measured.push(rung)
+      if (rung.overCap || rung.timedOut) break
+      if (rung.families >= band.minFamilies) break
+      // Out of budget: keep what was measured rather than walk the rest.
+      if (Date.now() >= deadline) break
+    }
   }
+  // Tightest-first order is chooseRung's contract, and the probe is the loosest.
+  if (loosest) measured.push(loosest)
   const decision = chooseRung(measured, band)
 
   const measuredByK = new Map(measured.map(rung => [rung.minimumOptional, rung]))

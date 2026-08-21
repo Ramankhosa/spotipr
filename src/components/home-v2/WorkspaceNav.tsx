@@ -1,7 +1,9 @@
 'use client'
 
-// Marketing-site nav for the /home-v2 exploration: white bar, hairline rule,
-// hover/focus dropdowns (CSS-only, no JS state), cobalt "Start free" CTA.
+// Marketing-site nav, "Paper and Ink" treatment: warm vellum bar on a hairline
+// rule, mono uppercase labels (the drafter's voice), squared corners, and a
+// bordered rather than filled CTA so the hero's solid cobalt button stays the
+// single loudest thing on the page. Dropdowns are CSS-only, no JS state.
 
 import Link from 'next/link'
 import { ChevronDown } from 'lucide-react'
@@ -48,12 +50,12 @@ export default function WorkspaceNav() {
   const { user } = useAuth()
 
   return (
-    <header className="sticky top-0 z-50 border-b border-paper-300/70 bg-white/85 backdrop-blur-md">
+    <header className="sticky top-0 z-50 border-b border-vellum-400 bg-vellum-200/90 backdrop-blur-md">
       <nav className="mx-auto flex h-[68px] max-w-[1240px] items-center justify-between gap-6 px-5 sm:px-8">
         <Link href="/" className="flex flex-none items-center gap-2 text-lamp-600">
           <NestMark />
-          <span className="text-[21px] font-semibold tracking-[-0.02em] text-ai-graphite-900">
-            Patent<span className="text-lamp-600">Nest</span>
+          <span className="font-mono text-[14px] font-medium tracking-[0.1em] text-vellum-900">
+            PATENTNEST
           </span>
         </Link>
 
@@ -62,17 +64,17 @@ export default function WorkspaceNav() {
             <div key={menu.label} className="group relative">
               <button
                 type="button"
-                className="flex items-center gap-1 rounded-md px-3 py-2 text-[14.5px] text-ai-graphite-700 transition-colors hover:text-ai-graphite-900 group-focus-within:text-ai-graphite-900"
+                className="flex items-center gap-1 px-3 py-2 font-mono text-[10px] tracking-[0.12em] text-vellum-600 transition-colors hover:text-vellum-900 group-focus-within:text-vellum-900"
               >
-                {menu.label}
-                <ChevronDown className="h-3.5 w-3.5 text-paper-500 transition-transform duration-200 group-hover:rotate-180 group-focus-within:rotate-180" />
+                {menu.label.toUpperCase()}
+                <ChevronDown className="h-3 w-3 transition-transform duration-200 group-hover:rotate-180 group-focus-within:rotate-180" />
               </button>
-              <div className="invisible absolute left-0 top-full w-[236px] translate-y-1 rounded-xl border border-paper-300 bg-white p-1.5 opacity-0 shadow-[0_16px_40px_-16px_rgba(16,24,40,0.22)] transition-all duration-150 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100">
+              <div className="invisible absolute left-0 top-full w-[236px] translate-y-1 border border-vellum-900 bg-vellum-100 p-1 opacity-0 transition-all duration-150 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100">
                 {menu.items.map((item) => (
                   <Link
                     key={item.label}
                     href={item.href}
-                    className="block rounded-lg px-3 py-2 text-[13.5px] text-ai-graphite-700 transition-colors hover:bg-[#f6f8fd] hover:text-lamp-600"
+                    className="block px-3 py-2 text-[13.5px] text-vellum-700 transition-colors hover:bg-vellum-200 hover:text-lamp-600"
                   >
                     {item.label}
                   </Link>
@@ -82,15 +84,15 @@ export default function WorkspaceNav() {
           ))}
           <Link
             href="/pricing"
-            className="rounded-md px-3 py-2 text-[14.5px] text-ai-graphite-700 transition-colors hover:text-ai-graphite-900"
+            className="px-3 py-2 font-mono text-[10px] tracking-[0.12em] text-vellum-600 transition-colors hover:text-vellum-900"
           >
-            Pricing
+            PRICING
           </Link>
           <Link
             href="/contact"
-            className="rounded-md px-3 py-2 text-[14.5px] text-ai-graphite-700 transition-colors hover:text-ai-graphite-900"
+            className="px-3 py-2 font-mono text-[10px] tracking-[0.12em] text-vellum-600 transition-colors hover:text-vellum-900"
           >
-            Enterprise
+            ENTERPRISE
           </Link>
         </div>
 
@@ -98,23 +100,23 @@ export default function WorkspaceNav() {
           {user ? (
             <Link
               href="/dashboard"
-              className="rounded-lg bg-lamp-600 px-5 py-2.5 text-[14px] font-medium text-white transition-all duration-150 hover:bg-lamp-700 hover:shadow-[0_8px_20px_-10px_rgba(29,78,216,0.65)] active:scale-[0.98]"
+              className="border border-vellum-900 px-4 py-2 font-mono text-[10px] tracking-[0.12em] text-vellum-900 transition-colors duration-150 hover:bg-vellum-900 hover:text-vellum-100"
             >
-              Open workspace
+              OPEN WORKSPACE
             </Link>
           ) : (
             <>
               <Link
                 href="/login"
-                className="hidden text-[14.5px] text-ai-graphite-700 transition-colors hover:text-ai-graphite-900 sm:block"
+                className="hidden font-mono text-[10px] tracking-[0.12em] text-vellum-600 transition-colors hover:text-vellum-900 sm:block"
               >
-                Sign in
+                SIGN IN
               </Link>
               <Link
                 href="/free-trial"
-                className="rounded-lg bg-lamp-600 px-5 py-2.5 text-[14px] font-medium text-white transition-all duration-150 hover:bg-lamp-700 hover:shadow-[0_8px_20px_-10px_rgba(29,78,216,0.65)] active:scale-[0.98]"
+                className="border border-vellum-900 px-4 py-2 font-mono text-[10px] tracking-[0.12em] text-vellum-900 transition-colors duration-150 hover:bg-vellum-900 hover:text-vellum-100"
               >
-                Request free trial
+                REQUEST ACCESS
               </Link>
             </>
           )}

@@ -61,7 +61,7 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
     <>
       <div className="mt-8 flex flex-wrap items-center gap-4">
         <div
-          className="flex items-center gap-1 rounded-lg border border-paper-300 bg-white p-1"
+          className="flex items-center gap-1 border border-vellum-400 bg-vellum-100 p-1"
           role="group"
           aria-label="Billing cycle"
         >
@@ -74,7 +74,7 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
               className={`rounded-md px-4 py-2 text-[13.5px] font-medium transition-colors duration-150 ${
                 cycle === option
                   ? 'bg-lamp-600 text-white'
-                  : 'text-ai-graphite-700 hover:text-ai-graphite-900'
+                  : 'text-vellum-700 hover:text-vellum-900'
               }`}
             >
               {option === 'monthly' ? 'Monthly' : 'Yearly'}
@@ -89,11 +89,11 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
         <button
           type="button"
           onClick={() => setCurrency((c) => (c === 'USD' ? 'INR' : 'USD'))}
-          className="ml-auto flex items-center gap-2 rounded-lg border border-paper-300 bg-white px-3.5 py-2 text-[13.5px] text-ai-graphite-700 transition-colors duration-150 hover:border-paper-400 hover:text-ai-graphite-900"
+          className="ml-auto flex items-center gap-2 border border-vellum-400 bg-vellum-100 px-3.5 py-2 text-[13.5px] text-vellum-700 transition-colors duration-150 hover:border-vellum-500 hover:text-vellum-900"
         >
           <Globe className="h-4 w-4 text-lamp-600" />
           Showing {currency}
-          <span className="text-paper-500">· switch to {currency === 'USD' ? 'INR' : 'USD'}</span>
+          <span className="text-vellum-500">· switch to {currency === 'USD' ? 'INR' : 'USD'}</span>
         </button>
       </div>
 
@@ -113,14 +113,14 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
           return (
             <div
               key={plan.code}
-              className={`flex flex-col rounded-2xl border bg-white p-6 transition-all duration-200 ${
+              className={`flex flex-col border bg-vellum-100 p-6 transition-all duration-200 ${
                 featured
-                  ? 'border-lamp-300 shadow-[0_18px_44px_-24px_rgba(29,78,216,0.45)]'
-                  : 'border-paper-300 hover:border-paper-400'
+                  ? 'border-lamp-600'
+                  : 'border-vellum-400 hover:border-vellum-500'
               }`}
             >
               <div className="flex items-baseline justify-between gap-3">
-                <h3 className="text-[17px] font-medium tracking-[-0.012em] text-ai-graphite-900">
+                <h3 className="text-[17px] font-medium tracking-[-0.012em] text-vellum-900">
                   {plan.name}
                 </h3>
                 {featured && (
@@ -130,20 +130,20 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
                 )}
               </div>
 
-              <p className="mt-1.5 min-h-[38px] text-[13px] leading-[1.5] text-paper-600">
+              <p className="mt-1.5 min-h-[38px] text-[13px] leading-[1.5] text-vellum-600">
                 {plan.tagline}
               </p>
 
-              <div className="mt-5 border-t border-paper-300 pt-5">
+              <div className="mt-5 border-t border-vellum-400 pt-5">
                 {showPrice ? (
                   <>
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-[34px] font-semibold tracking-[-0.028em] text-ai-graphite-900">
+                      <span className="text-[34px] font-semibold tracking-[-0.028em] text-vellum-900">
                         {money(perMonth, currency)}
                       </span>
-                      <span className="text-[13.5px] text-paper-600">/ month</span>
+                      <span className="text-[13.5px] text-vellum-600">/ month</span>
                     </div>
-                    <p className="mt-1 text-[12.5px] text-paper-600">
+                    <p className="mt-1 text-[12.5px] text-vellum-600">
                       {cycle === 'yearly'
                         ? `Billed ${money(yearlyTotal, currency)} yearly`
                         : 'Billed monthly'}
@@ -151,10 +151,10 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
                   </>
                 ) : (
                   <>
-                    <div className="text-[34px] font-semibold tracking-[-0.028em] text-ai-graphite-900">
+                    <div className="text-[34px] font-semibold tracking-[-0.028em] text-vellum-900">
                       Custom
                     </div>
-                    <p className="mt-1 text-[12.5px] text-paper-600">
+                    <p className="mt-1 text-[12.5px] text-vellum-600">
                       Priced per organisation — seats, quotas and jurisdictions set with you.
                     </p>
                   </>
@@ -165,9 +165,9 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
                 {plan.features.map((feature) => (
                   <li key={feature.label} className="flex items-start gap-2.5">
                     <Check className="mt-0.5 h-4 w-4 flex-none text-lamp-600" strokeWidth={2} />
-                    <span className="text-[13px] leading-[1.5] text-paper-700">
+                    <span className="text-[13px] leading-[1.5] text-vellum-700">
                       {feature.value && (
-                        <span className="font-medium text-ai-graphite-900">{feature.value} </span>
+                        <span className="font-medium text-vellum-900">{feature.value} </span>
                       )}
                       {feature.label}
                     </span>
@@ -180,7 +180,7 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
                 className={`group mt-6 inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-[14.5px] font-medium transition-all duration-150 active:scale-[0.985] ${
                   featured
                     ? 'bg-lamp-600 text-white hover:bg-lamp-700'
-                    : 'border border-paper-300 bg-white text-ai-graphite-800 hover:border-paper-400 hover:bg-paper-50'
+                    : 'border border-vellum-900 bg-transparent text-vellum-900 hover:bg-vellum-900 hover:text-vellum-100'
                 }`}
               >
                 {SELF_SERVE_CHECKOUT_ENABLED ? `Start ${plan.name}` : CONTACT_FOR_PAYMENT.label}
@@ -191,7 +191,7 @@ export default function PricingPlans({ plans }: { plans: HomePlan[] }) {
         })}
       </div>
 
-      <div className="mt-6 flex flex-col gap-2 text-[13px] text-paper-600">
+      <div className="mt-6 flex flex-col gap-2 text-[13px] text-vellum-600">
         {!SELF_SERVE_CHECKOUT_ENABLED && <p>{CONTACT_FOR_PAYMENT.note}</p>}
         {currency === 'INR' && <p>Prices exclusive of 18% GST.</p>}
         <p>
