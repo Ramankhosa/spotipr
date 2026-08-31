@@ -1962,6 +1962,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       const figures = Array.isArray(res.plan?.figures) ? res.plan.figures : []
       if (figures.length === 0) throw new Error('The planner did not return any figures')
 
+      // Planner adjustments (shortfall vs a requested count, dropped unusable
+      // figures) must be visible before the user approves the plan.
+      const planningNotes = Array.isArray(res.plan?.planningNotes) ? res.plan.planningNotes : []
+      if (planningNotes.length > 0) {
+        setGenerationWarning(planningNotes.join(' '))
+      }
+
       setPlanFigures(figures.map((figure: any) => ({
         key: String(figure.key || ''),
         title: sanitizeFigureLabel(figure.title) || 'Untitled figure',

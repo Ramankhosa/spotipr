@@ -80,8 +80,29 @@ const NON_FIGURE_CONTEXT_KEYS = new Set([
 const MAXIMUM_CONTEXT_CHARACTERS = 12_000
 const MAXIMUM_CLAIMS_CHARACTERS = 6_000
 
-function compactInventionContext(context: unknown): string {
-  if (!context || typeof context !== 'object') return JSON.stringify(context ?? {})
+const TRUNCATION_MARKER = ' …[TRUNCATED: exceeds the figure-context budget]'
+const MINIMUM_TRUNCATED_SLICE = 500
+
+export type CompactedInventionContext = {
+  json: string
+  /** Keys present on the record but absent from the compacted context. */
+  droppedKeys: string[]
+  /** String keys included as a budget-limited slice with a truncation marker. */
+  truncatedKeys: string[]
+}
+
+/**
+ * Budget-compacts the invention record for figure prompts, reporting what was
+ * lost. Once a key no longer fits, no later key is admitted either — the model
+ * gets a clean priority-ordered prefix, never an arbitrarily holey record. An
+ * oversized STRING key is included as a truncated slice when meaningful budget
+ * remains, since dropping (say) the whole detailedDescription loses far more
+ * than trimming its tail.
+ */
+export function compactInventionContextDetailed(context: unknown): CompactedInventionContext {
+  if (!context || typeof context !== 'object') {
+    return { json: JSON.stringify(context ?? {}), droppedKeys: [], truncatedKeys: [] }
+  }
   const priority = [
     'processSteps', 'relationships', 'interactions', 'materials', 'constituents',
     'conditions', 'ranges', 'quantities', 'embodiments', 'alternatives',
@@ -96,25 +117,63 @@ function compactInventionContext(context: unknown): string {
       return (leftPriority < 0 ? priority.length : leftPriority) - (rightPriority < 0 ? priority.length : rightPriority)
     })
   const selected: Record<string, unknown> = {}
-  for (const [key, value] of entries) {
+  const droppedKeys: string[] = []
+  const truncatedKeys: string[] = []
+  for (let index = 0; index < entries.length; index++) {
+    const [key, value] = entries[index]
     const candidate = JSON.stringify({ ...selected, [key]: value })
-    if (candidate.length <= MAXIMUM_CONTEXT_CHARACTERS) selected[key] = value
+    if (candidate.length <= MAXIMUM_CONTEXT_CHARACTERS) {
+      selected[key] = value
+      continue
+    }
+    const remainingBudget = MAXIMUM_CONTEXT_CHARACTERS - JSON.stringify(selected).length - key.length - TRUNCATION_MARKER.length - 16
+    if (typeof value === 'string' && remainingBudget >= MINIMUM_TRUNCATED_SLICE) {
+      selected[key] = value.slice(0, remainingBudget) + TRUNCATION_MARKER
+      truncatedKeys.push(key)
+    } else {
+      droppedKeys.push(key)
+    }
+    // Budget exhausted: everything after this point is dropped too.
+    for (let rest = index + 1; rest < entries.length; rest++) droppedKeys.push(entries[rest][0])
+    break
   }
-  return JSON.stringify(selected)
+  return { json: JSON.stringify(selected), droppedKeys, truncatedKeys }
 }
 
-function compactClaimsContext(claims: unknown): string {
+function compactInventionContext(context: unknown): string {
+  return compactInventionContextDetailed(context).json
+}
+
+export type CompactedClaimsContext = {
+  json: string
+  /** Claim numbers (or 1-based positions when unnumbered) that did not fit. */
+  droppedClaimNumbers: number[]
+}
+
+export function compactClaimsContextDetailed(claims: unknown): CompactedClaimsContext {
   const rows = Array.isArray(claims)
     ? claims
     : claims && typeof claims === 'object' && Array.isArray((claims as any).claims)
       ? (claims as any).claims
       : [claims]
   const selected: unknown[] = []
-  for (const row of rows.filter(Boolean)) {
+  const droppedClaimNumbers: number[] = []
+  const present = rows.filter(Boolean)
+  for (let index = 0; index < present.length; index++) {
+    const row = present[index]
     const candidate = JSON.stringify([...selected, row])
-    if (candidate.length <= MAXIMUM_CLAIMS_CHARACTERS) selected.push(row)
+    if (candidate.length <= MAXIMUM_CLAIMS_CHARACTERS && droppedClaimNumbers.length === 0) {
+      selected.push(row)
+      continue
+    }
+    const claimNumber = Number((row as any)?.number)
+    droppedClaimNumbers.push(Number.isFinite(claimNumber) ? claimNumber : index + 1)
   }
-  return JSON.stringify(selected)
+  return { json: JSON.stringify(selected), droppedClaimNumbers }
+}
+
+function compactClaimsContext(claims: unknown): string {
+  return compactClaimsContextDetailed(claims).json
 }
 
 export function buildFigureSetPlanningPrompt(input: {

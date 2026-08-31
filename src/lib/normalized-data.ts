@@ -207,6 +207,24 @@ function unique(values: string[]) {
   return Array.from(new Set(values.map(value => String(value).trim()).filter(Boolean)))
 }
 
+/**
+ * Whether a normalizedData blob represents a normalization that actually
+ * extracted something. The idea record is created with `normalizedData: {}`
+ * BEFORE the Stage-0 LLM call, so a failed call leaves an empty-but-truthy
+ * object behind; gates that check mere truthiness treat that failure as a
+ * completed Stage 0 and draft from nothing.
+ */
+export function isNormalizedDataUsable(value: unknown): boolean {
+  const record = asRecord(value)
+  if (isLegacyExtractionFailure(record)) return false
+  if (Array.isArray(record.components) && record.components.length > 0) return true
+  const meaningfulText = (field: unknown) => {
+    const text = String(field ?? '').trim()
+    return text.length > 0 && !/^not stated by source$/i.test(text)
+  }
+  return meaningfulText(record.coreInventiveConcept) || meaningfulText(record.problem)
+}
+
 export function isLegacyExtractionFailure(value: unknown): boolean {
   const record = asRecord(value)
   const warningText = Array.isArray(record.normalizationReviewWarnings)

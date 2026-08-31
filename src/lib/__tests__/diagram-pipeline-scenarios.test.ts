@@ -299,14 +299,14 @@ describe('the four diagram kinds are the default set', () => {
     expect(plan.figures.map(figure => figure.kind)).toEqual(['COMPONENT', 'PROCESS', 'SEQUENCE', 'CONSTITUENT'])
   })
 
-  test('a short plan is padded to the four kinds rather than rejected', async () => {
+  test('a short plan is kept as planned, never padded with synthesized figures', async () => {
     planResponder = () => JSON.stringify({ schemaVersion: 3, figures: [planFigure(0)] })
     const plan = await planManagedFigureSet({ ...INPUT })
 
-    expect(plan.figures).toHaveLength(4)
-    expect(plan.figures.map(figure => figure.kind)).toEqual(['COMPONENT', 'PROCESS', 'SEQUENCE', 'CONSTITUENT'])
-    // The padded entries carry the whole registry so they can still be drawn.
-    expect(plan.figures[3].componentIds.length).toBeGreaterThan(0)
+    // The planner chose one figure the disclosure supports; padding used to
+    // fabricate generic figures (e.g. a "Composition" for a software idea).
+    expect(plan.figures).toHaveLength(1)
+    expect(plan.figures[0].kind).toBe('COMPONENT')
   })
 
   test('an over-long plan is trimmed to the requested count', async () => {
@@ -503,16 +503,33 @@ describe('auto mode sizes the figure set to the disclosure', () => {
     expect(planCall.prompt).toContain('plan exactly 3 figure(s)')
   })
 
-  test('auto mode pads only the missing kinds, keeping the model count otherwise', async () => {
+  test('auto mode keeps the model count and kinds without padding in missing ones', async () => {
     // Model plans 5 COMPONENT figures and nothing else.
     planResponder = () => JSON.stringify({
       schemaVersion: 3,
       figures: Array.from({ length: 5 }, (_, index) => planFigure(index, 'COMPONENT')),
     })
     const plan = await planManagedFigureSet({ ...INPUT })
-    expect(plan.figures).toHaveLength(8)
-    expect(plan.figures.slice(0, 5).every(figure => figure.kind === 'COMPONENT')).toBe(true)
-    expect(plan.figures.slice(5).map(figure => figure.kind)).toEqual(['PROCESS', 'SEQUENCE', 'CONSTITUENT'])
+    expect(plan.figures).toHaveLength(5)
+    expect(plan.figures.every(figure => figure.kind === 'COMPONENT')).toBe(true)
+  })
+
+  test('a manual-count shortfall reports a planning note instead of padding', async () => {
+    planResponder = () => JSON.stringify({
+      schemaVersion: 3,
+      figures: [planFigure(0, 'COMPONENT'), planFigure(1, 'PROCESS')],
+    })
+    const plan = await planManagedFigureSet({ ...INPUT, figureCount: 5 })
+    expect(plan.figures).toHaveLength(2)
+    expect((plan as any).planningNotes?.join(' ')).toContain('Planned 2 of the requested 5 figures')
+  })
+
+  test('a plan whose figures all reference unknown components fails instead of synthesizing', async () => {
+    planResponder = () => JSON.stringify({
+      schemaVersion: 3,
+      figures: [{ ...planFigure(0), componentIds: ['ghost-1', 'ghost-2'] }],
+    })
+    await expect(planManagedFigureSet({ ...INPUT })).rejects.toMatchObject({ code: 'EMPTY_FIGURE_PLAN' })
   })
 })
 

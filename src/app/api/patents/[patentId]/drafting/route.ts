@@ -4824,35 +4824,37 @@ function extractExplicitClaimCount(value: unknown): number | null {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
   if (!text) return null
 
-  const patterns = [
-    /\b(?:generate|draft|prepare|create|write|include|provide|need|want|requires?|limit(?:ed)? to|maximum of|max(?:imum)?|up to|at least|around|approximately|about)\s+(\d{1,3})\s+(?:total\s+)?claims?\b/i,
-    /\b(\d{1,3})\s+(?:total\s+)?claims?\b/i,
-  ]
-  for (const pattern of patterns) {
-    const match = text.match(pattern)
-    if (match) {
-      const count = Number(match[1])
-      if (Number.isInteger(count) && count > 0 && count <= 200) return count
-    }
+  // Anchored to a request verb only. An unanchored "\d+ claims" pattern used to
+  // fire on incidental prose ("the competitor patent has 4 claims") and silently
+  // cap the set; so did a heuristic that counted numbered claims pasted into
+  // remarks. A count is a cap only when the user asked for one.
+  const match = text.match(
+    /\b(?:generate|draft|prepare|create|write|include|provide|need|want|requires?|limit(?:ed)? to|maximum of|max(?:imum)?|up to|at least|around|approximately|about)\s+(\d{1,3})\s+(?:total\s+)?claims?\b/i
+  )
+  if (match) {
+    const count = Number(match[1])
+    if (Number.isInteger(count) && count > 0 && count <= 200) return count
   }
-
-  const numberedClaims = Array.from(text.matchAll(/(?:^|\n|\s)(\d{1,3})\.\s+(?:A|An|The)\b/g))
-    .map(match => Number(match[1]))
-    .filter(count => Number.isInteger(count) && count > 0 && count <= 200)
-  return numberedClaims.length ? Math.max(...numberedClaims) : null
+  return null
 }
 
-function resolveGeneratedClaimLimit(data: any, userInstructions: unknown, userClaimRemarks: unknown) {
+function resolveGeneratedClaimLimit(
+  data: any,
+  userInstructions: unknown,
+  userClaimRemarks: unknown
+): { limit: number; source: 'user_requested' | 'default' } {
   const requested = Number(data?.maxClaims ?? data?.claimCount ?? data?.claimsCount)
-  if (Number.isInteger(requested) && requested > 0 && requested <= 200) return requested
+  if (Number.isInteger(requested) && requested > 0 && requested <= 200) {
+    return { limit: requested, source: 'user_requested' }
+  }
 
   const explicitFromInstructions = extractExplicitClaimCount([
     userInstructions,
     userClaimRemarks,
   ].filter(Boolean).join('\n\n'))
-  if (explicitFromInstructions) return explicitFromInstructions
+  if (explicitFromInstructions) return { limit: explicitFromInstructions, source: 'user_requested' }
 
-  return DEFAULT_GENERATED_CLAIM_LIMIT
+  return { limit: DEFAULT_GENERATED_CLAIM_LIMIT, source: 'default' }
 }
 
 function applyGeneratedClaimLimit(params: {
@@ -4866,14 +4868,25 @@ function applyGeneratedClaimLimit(params: {
     return { claims, supportMatrix, qualityWarnings, capped: false }
   }
 
-  const limitedClaims = claims.slice(0, maxClaims)
-  const keptNumbers = new Set(limitedClaims.map(claim => Number(claim.number)).filter(Number.isFinite))
+  // Truncate whole claim trees, never positionally: a positional slice used to
+  // decapitate the second independent chain and keep its orphaned dependents.
+  // A claim survives only while quota remains AND its parent survived.
+  const keptNumbers = new Set<number>()
+  const limitedClaims: any[] = []
+  for (const claim of claims) {
+    if (limitedClaims.length >= maxClaims) break
+    const dependsOn = Number(claim?.dependsOn)
+    if (Number.isFinite(dependsOn) && dependsOn > 0 && !keptNumbers.has(dependsOn)) continue
+    limitedClaims.push(claim)
+    const claimNumber = Number(claim?.number)
+    if (Number.isFinite(claimNumber)) keptNumbers.add(claimNumber)
+  }
   return {
     claims: limitedClaims,
     supportMatrix: supportMatrix.filter(item => keptNumbers.has(Number(item?.claimNumber))),
     qualityWarnings: [
       ...qualityWarnings,
-      `Generated claim set was capped to ${maxClaims} claims because no higher explicit claim count was requested.`,
+      `Generated claim set was capped to ${limitedClaims.length} claims because no higher explicit claim count was requested.`,
     ],
     capped: true,
   }
@@ -4987,7 +5000,7 @@ async function handleGenerateClaims(
     return NextResponse.json({ error: 'Claims are locked. Unlock them to regenerate.' }, { status: 400 })
   }
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle ?? existingNormalized.claimScopeStyle)
-  const maxClaims = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks)
+  const { limit: maxClaims, source: claimCapSource } = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // PATENT TYPE DECISION - from Stage 0 normalization or user override
@@ -4996,24 +5009,34 @@ async function handleGenerateClaims(
   const logic = existingNormalized.logic || ''
   const currentContextHash = DraftingService.generatePatentTypeContextHash(components, logic)
 
-  let patentTypePrimary = DraftingService.normalizePatentTypePrimary((session as any).patentTypePrimary)
+  const storedPatentType = DraftingService.normalizePatentTypePrimary((session as any).patentTypePrimary)
     || DraftingService.normalizePatentTypePrimary(existingNormalized.patentTypePrimary)
+  // "Assumed" = the type came from the keyword-regex fallback (here or at Stage 0)
+  // and no decision (LLM classification or user override) has ever stamped it.
+  const patentTypeAssumed = !(session as any).patentTypeDecidedAt
+    && (!storedPatentType || existingNormalized.patentTypeSource === 'fallback')
+  let patentTypePrimary = storedPatentType
     || DraftingService.patentTypeFallbackFromText(
       session.ideaRecord?.rawInput || `${existingNormalized.problem || ''} ${existingNormalized.logic || ''}`,
       session.ideaRecord?.title || ''
     ).primary
 
+  // A stored (LLM- or user-provided) type may still be persisted and stamped as
+  // decided. A regex-guessed type is written WITHOUT patentTypeDecidedAt or the
+  // context hash: the guess must stay overridable, never frozen as a decision.
   if (!(session as any).patentTypePrimary || !(session as any).patentTypeComponentsHash) {
     await prisma.draftingSession.update({
       where: { id: sessionId },
-      data: {
-        patentTypePrimary,
-        patentTypeDecidedAt: new Date(),
-        patentTypeComponentsHash: currentContextHash
-      }
+      data: patentTypeAssumed
+        ? { patentTypePrimary }
+        : {
+            patentTypePrimary,
+            patentTypeDecidedAt: new Date(),
+            patentTypeComponentsHash: currentContextHash
+          }
     })
   }
-  console.log(`[handleGenerateClaims] Using stored patent type: ${patentTypePrimary}`)
+  console.log(`[handleGenerateClaims] Using ${patentTypeAssumed ? 'regex-assumed' : 'stored'} patent type: ${patentTypePrimary}`)
   onProgress?.({
     type: 'stage',
     key: 'reading',
@@ -5164,29 +5187,51 @@ async function handleGenerateClaims(
 
     // Build context from idea record or provided context. UI edits from Stage 1
     // are preferred, while claim-support fields stay anchored to normalization.
+    // A stale browser snapshot sends '' / [] placeholders for fields it never
+    // hydrated; those must fall through to the DB values, so "present" means
+    // non-empty, not merely non-null.
+    const firstMeaningful = (...candidates: any[]) => {
+      for (const candidate of candidates) {
+        if (candidate === null || candidate === undefined) continue
+        if (typeof candidate === 'string') {
+          if (candidate.trim()) return candidate
+          continue
+        }
+        if (Array.isArray(candidate)) {
+          if (candidate.length > 0) return candidate
+          continue
+        }
+        if (typeof candidate === 'object') {
+          if (Object.keys(candidate).length > 0) return candidate
+          continue
+        }
+        return candidate
+      }
+      return undefined
+    }
     const idea = session.ideaRecord || {} as any
     const context = {
-      title: ideaContext?.title ?? idea.title,
-      rawIdea: ideaContext?.rawIdea ?? idea.rawInput ?? '',
-      problem: ideaContext?.problem ?? idea.problem ?? existingNormalized.problem,
-      objectives: ideaContext?.objectives ?? idea.objectives ?? existingNormalized.objectives,
-      logic: ideaContext?.logic ?? idea.logic ?? existingNormalized.logic,
-      components: ideaContext?.components ?? idea.components ?? existingNormalized.components,
-      bestMethod: ideaContext?.bestMethod ?? idea.bestMethod ?? existingNormalized.bestMethod,
-      abstract: ideaContext?.abstract ?? idea.abstract ?? existingNormalized.abstract,
-      coreInventiveConcept: ideaContext?.coreInventiveConcept ?? existingNormalized.coreInventiveConcept,
-      claimableFeatures: ideaContext?.claimableFeatures ?? existingNormalized.claimableFeatures,
-      fallbackLimitations: ideaContext?.fallbackLimitations ?? existingNormalized.fallbackLimitations,
-      doNotClaim: ideaContext?.doNotClaim ?? existingNormalized.doNotClaim,
-      sourceFactLedger: ideaContext?.sourceFactLedger ?? existingNormalized.sourceFactLedger,
-      scopeRecommendations: ideaContext?.scopeRecommendations ?? existingNormalized.scopeRecommendations,
-      supportDataSources: ideaContext?.supportDataSources ?? existingNormalized.supportDataSources,
-      normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings,
+      title: firstMeaningful(ideaContext?.title, idea.title),
+      rawIdea: firstMeaningful(ideaContext?.rawIdea, idea.rawInput) ?? '',
+      problem: firstMeaningful(ideaContext?.problem, idea.problem, existingNormalized.problem),
+      objectives: firstMeaningful(ideaContext?.objectives, idea.objectives, existingNormalized.objectives),
+      logic: firstMeaningful(ideaContext?.logic, idea.logic, existingNormalized.logic),
+      components: firstMeaningful(ideaContext?.components, idea.components, existingNormalized.components),
+      bestMethod: firstMeaningful(ideaContext?.bestMethod, idea.bestMethod, existingNormalized.bestMethod),
+      abstract: firstMeaningful(ideaContext?.abstract, idea.abstract, existingNormalized.abstract),
+      coreInventiveConcept: firstMeaningful(ideaContext?.coreInventiveConcept, existingNormalized.coreInventiveConcept),
+      claimableFeatures: firstMeaningful(ideaContext?.claimableFeatures, existingNormalized.claimableFeatures),
+      fallbackLimitations: firstMeaningful(ideaContext?.fallbackLimitations, existingNormalized.fallbackLimitations),
+      doNotClaim: firstMeaningful(ideaContext?.doNotClaim, existingNormalized.doNotClaim),
+      sourceFactLedger: firstMeaningful(ideaContext?.sourceFactLedger, existingNormalized.sourceFactLedger),
+      scopeRecommendations: firstMeaningful(ideaContext?.scopeRecommendations, existingNormalized.scopeRecommendations),
+      supportDataSources: firstMeaningful(ideaContext?.supportDataSources, existingNormalized.supportDataSources),
+      normalizationReviewWarnings: firstMeaningful(ideaContext?.normalizationReviewWarnings, existingNormalized.normalizationReviewWarnings),
       inventionType: existingNormalized.inventionType,
       patentTypePrimary,
-      fieldOfRelevance: ideaContext?.fieldOfRelevance ?? idea.fieldOfRelevance ?? existingNormalized.fieldOfRelevance ?? existingNormalized.field,
-      field: ideaContext?.field ?? idea.field ?? existingNormalized.field,
-      subfield: ideaContext?.subfield ?? idea.subfield ?? existingNormalized.subfield
+      fieldOfRelevance: firstMeaningful(ideaContext?.fieldOfRelevance, idea.fieldOfRelevance, existingNormalized.fieldOfRelevance, existingNormalized.field),
+      field: firstMeaningful(ideaContext?.field, idea.field, existingNormalized.field),
+      subfield: firstMeaningful(ideaContext?.subfield, idea.subfield, existingNormalized.subfield)
     }
 
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
@@ -5413,6 +5458,7 @@ async function handleGenerateClaims(
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaimsRequested: maxClaims,
       claimsCappedToDefault: limitedClaimsPayload.capped,
+      claimCapSource,
       claimsJurisdiction: activeJurisdiction,
       claimsGeneratedAt: new Date().toISOString()
     }
@@ -5437,7 +5483,9 @@ async function handleGenerateClaims(
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaims,
       claimsCappedToDefault: limitedClaimsPayload.capped,
+      claimCapSource,
       patentType: patentTypePrimary, // Return patent type for UI display
+      patentTypeAssumed,
       personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
       personaProvenance,
       personaWarnings: [],
@@ -5476,7 +5524,31 @@ async function handleSaveClaims(user: any, patentId: string, data: any) {
 
   // Update claims in normalizedData
   const nextClaims = sanitizeClaimsHtml(claims || existingNormalized.claims)
-  const nextStructured = claimsStructured || existingNormalized.claimsStructured
+  // Clients that re-derive structure from editor HTML can only recover text and
+  // numbering; for same-numbered claims, keep the stored type/category/dependsOn
+  // whenever the incoming entry omits them.
+  let nextStructured = (Array.isArray(claimsStructured) && claimsStructured.length > 0)
+    ? claimsStructured
+    : existingNormalized.claimsStructured
+  if (
+    Array.isArray(nextStructured)
+    && nextStructured === claimsStructured
+    && Array.isArray(existingNormalized.claimsStructured)
+  ) {
+    const storedByNumber = new Map<number, any>(
+      existingNormalized.claimsStructured.map((c: any) => [Number(c?.number), c])
+    )
+    nextStructured = nextStructured.map((incoming: any) => {
+      const stored = storedByNumber.get(Number(incoming?.number))
+      if (!stored || typeof stored !== 'object') return incoming
+      return {
+        ...incoming,
+        type: incoming?.type ?? stored.type,
+        category: incoming?.category ?? stored.category,
+        dependsOn: incoming?.dependsOn ?? stored.dependsOn
+      }
+    })
+  }
   const updatedNormalized: Record<string, any> = {
     ...existingNormalized,
     claims: nextClaims,
@@ -6509,10 +6581,10 @@ Preserve all HTML tags and formatting exactly as in the input.`
 }
 
 // Helper function to parse claims from HTML (used by addComponentNumbersToClaims)
-function parseClaimsFromHtml(html: string): Array<{ number: number; text: string; type: string; category: string }> {
+function parseClaimsFromHtml(html: string): Array<{ number: number; text: string; type: string; dependsOn?: number }> {
   if (!html || html.trim() === '') return []
 
-  const claims: Array<{ number: number; text: string; type: string; category: string }> = []
+  const claims: Array<{ number: number; text: string; type: string; dependsOn?: number }> = []
   const blocks = html.split(/<\/p>/i)
 
   blocks.forEach((block) => {
@@ -6524,13 +6596,16 @@ function parseClaimsFromHtml(html: string): Array<{ number: number; text: string
       const number = Number(match[1])
       const text = match[2].trim()
       const depMatch = text.match(/(?:claim|claims?)\s+(\d+)/i)
-      const isDependent = number > 1 && depMatch !== null
+      const dependsOn = depMatch ? Number(depMatch[1]) : undefined
+      const isDependent = number > 1 && Number.isFinite(dependsOn)
 
+      // category is the statutory-class enum (method|system|...) and cannot be
+      // derived here; writing dependency words into it corrupted the enum.
       claims.push({
         number,
         text,
         type: isDependent ? 'dependent' : 'independent',
-        category: isDependent ? 'dependent' : 'independent'
+        ...(isDependent && (dependsOn as number) < number ? { dependsOn } : {})
       })
     }
   })
@@ -7374,10 +7449,14 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   const nextPatentTypeComponentsHash = DraftingService.generatePatentTypeContextHash(components, logic);
   const previousPatentTypeComponentsHash = (session as any).patentTypeComponentsHash;
   const stage0ComponentContextChanged = previousPatentTypeComponentsHash !== nextPatentTypeComponentsHash;
+  // Stamp a decision timestamp only when the LLM actually classified the type.
+  // A keyword-regex guess (patentTypeSource 'fallback') must stay overridable —
+  // stamping it made a low-confidence guess look like an authoritative decision.
+  const patentTypeFromLlm = (normalizedData as any)?.patentTypeSource !== 'fallback';
   const sessionUpdateData: any = {
     status: 'IDEA_ENTRY',
     patentTypePrimary,
-    patentTypeDecidedAt: new Date(),
+    patentTypeDecidedAt: patentTypeFromLlm ? new Date() : null,
     patentTypeComponentsHash: nextPatentTypeComponentsHash
   };
 
@@ -8061,6 +8140,22 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
       error: 'Patent search failed. Please retry the search later.',
       details: error instanceof Error ? error.message : String(error),
       showMockOption: true,
+    }, { status: 502 })
+  }
+
+  // A run where every provider errored is a failed search, not an empty one.
+  // Persisting it as completed made total provider outages read as "no prior
+  // art exists" and downstream stages drafted on a clean-novelty assumption.
+  const providerStats: Array<{ providerId?: string; error?: unknown }> = Array.isArray(searchResponse.providerStats)
+    ? searchResponse.providerStats
+    : []
+  const allProvidersFailed = providerStats.length > 0 && providerStats.every(stat => Boolean(stat?.error))
+  if (allProvidersFailed && searchResponse.results.length === 0) {
+    return NextResponse.json({
+      error: 'The patent search sources were unavailable for this search. No results were recorded — please retry.',
+      code: 'SEARCH_PROVIDERS_UNAVAILABLE',
+      providerStats: searchResponse.providerStats,
+      searchWarnings: searchResponse.warnings,
     }, { status: 502 })
   }
 

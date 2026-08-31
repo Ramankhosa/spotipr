@@ -300,14 +300,27 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
       setSavingClaims(true)
       setError(null)
       
-      // Convert editable claims back to HTML and structured format
+      // Convert editable claims back to HTML and structured format. Type,
+      // category, and dependency metadata come from the stored structured
+      // claims by claim number; a positional "1=independent, rest dependent"
+      // rewrite here used to collapse multi-independent claim sets.
       const claimsHtml = editableClaims.map(c => `<p>${c.number}. ${c.text}</p>`).join('\n')
-      const claimsStructured = editableClaims.map(c => ({
-        number: c.number,
-        text: c.text,
-        type: c.number === 1 ? 'independent' : 'dependent',
-        category: c.number === 1 ? 'independent' : 'dependent'
-      }))
+      const storedByNumber = new Map(
+        (Array.isArray(structured) ? structured : []).map((c: any) => [Number(c?.number), c])
+      )
+      const claimsStructured = editableClaims.map(c => {
+        const existing = storedByNumber.get(Number(c.number))
+        if (existing) return { ...existing, number: c.number, text: c.text }
+        const depMatch = c.text.match(/\bclaims?\s+(\d{1,3})\b/i)
+        const dependsOn = depMatch ? Number(depMatch[1]) : undefined
+        const isDependent = Number.isFinite(dependsOn) && (dependsOn as number) < c.number
+        return {
+          number: c.number,
+          text: c.text,
+          type: isDependent ? 'dependent' : 'independent',
+          ...(isDependent ? { dependsOn } : {})
+        }
+      })
 
       await onComplete({
         action: 'save_claims',

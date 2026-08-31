@@ -63,7 +63,7 @@ import {
   coerceSupportDataSources,
   type SupportDataSource
 } from '@/lib/support-data-sources'
-import { isLegacyExtractionFailure } from '@/lib/normalized-data'
+import { isLegacyExtractionFailure, isNormalizedDataUsable } from '@/lib/normalized-data'
 
 // Tooltip wrapper component for hover explanations
 const Tooltip = ({ children, content, position = 'bottom' }: { children: React.ReactNode; content: string; position?: 'top' | 'bottom' | 'left' | 'right' }) => (
@@ -217,7 +217,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
   }, [session])
 
-  const canProceed = !!normalizedData && !extractionFailed
+  // Object truthiness is not enough: the idea record is created with
+  // normalizedData {} before the LLM call, so a failed normalization leaves an
+  // empty blob behind that must not unlock the next stage.
+  const canProceed = !!normalizedData && !extractionFailed && isNormalizedDataUsable(normalizedRecord)
 
   const scopeSourceTypes = [
     'component', 'subcomponent', 'process_step', 'method_step', 'constituent', 'compound',

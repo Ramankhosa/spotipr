@@ -124,17 +124,30 @@ const parseClaimsFromHtml = (html: string): Claim[] => {
       const depMatch = text.match(/(?:claim|claims?)\s+(\d+)/i)
       const dependsOn = depMatch ? Number(depMatch[1]) : undefined
 
+      // No category here: it cannot be derived from the text, and a hardcoded
+      // value would overwrite the model's real classification on every save.
       claims.push({
         number,
         text,
         type: number === 1 || !dependsOn ? 'independent' : 'dependent',
-        dependsOn: number === 1 ? undefined : dependsOn,
-        category: 'method'
+        dependsOn: number === 1 ? undefined : dependsOn
       })
     }
   })
 
   return claims
+}
+
+// Re-parsing the editor HTML only recovers text and numbering; type, category,
+// and dependency metadata belong to the model's structured claims. Merge by
+// claim number so an editor round-trip never destroys that metadata.
+const mergeStructuredClaimsByNumber = (parsed: Claim[], prior: Claim[]): Claim[] => {
+  if (!Array.isArray(prior) || prior.length === 0) return parsed
+  const priorByNumber = new Map(prior.map((claim) => [Number(claim.number), claim]))
+  return parsed.map((claim) => {
+    const existing = priorByNumber.get(Number(claim.number))
+    return existing ? { ...existing, number: claim.number, text: claim.text } : claim
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +334,8 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
   // ---- Patent type state ----
   const [patentType, setPatentType] = useState<PatentType | null>(null)
+  // True when the type is a keyword guess never confirmed by the model or the user.
+  const [patentTypeAssumed, setPatentTypeAssumed] = useState(false)
   const [isUpdatingPatentType, setIsUpdatingPatentType] = useState(false)
   const [showPatentTypeDropdown, setShowPatentTypeDropdown] = useState(false)
 
@@ -416,7 +431,10 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     if (session?.patentTypePrimary) {
       setPatentType(session.patentTypePrimary as any)
     }
-  }, [session?.patentTypePrimary])
+    setPatentTypeAssumed(
+      !session?.patentTypeDecidedAt && normalizedRecord.patentTypeSource === 'fallback'
+    )
+  }, [session?.patentTypePrimary, session?.patentTypeDecidedAt, normalizedRecord.patentTypeSource])
 
   // ---- Close patent type dropdown on outside click / Escape ----
   useEffect(() => {
@@ -673,23 +691,31 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       setGenerationStartedAt(Date.now())
       resetGenerationProgress()
 
+      // Only send fields this snapshot actually holds: an empty string/array here
+      // is "not hydrated", and sending it would shadow the fresher DB value on
+      // the server. Absent keys let the server's own fallback chain decide.
+      const withValue = (value: any) => {
+        if (typeof value === 'string') return value.trim() ? value : undefined
+        if (Array.isArray(value)) return value.length > 0 ? value : undefined
+        return value ?? undefined
+      }
       const ideaContext = {
-        title,
-        rawIdea,
-        problem,
-        objectives,
-        logic,
-        components,
-        bestMethod,
-        abstract: abstractText,
-        coreInventiveConcept: normalizedRecord.coreInventiveConcept,
-        claimableFeatures: normalizedRecord.claimableFeatures,
-        fallbackLimitations: normalizedRecord.fallbackLimitations,
-        doNotClaim: normalizedRecord.doNotClaim,
-        sourceFactLedger: normalizedRecord.sourceFactLedger,
-        supportDataSources: normalizedRecord.supportDataSources,
-        scopeRecommendations: normalizedRecord.scopeRecommendations,
-        normalizationReviewWarnings: normalizedRecord.normalizationReviewWarnings
+        title: withValue(title),
+        rawIdea: withValue(rawIdea),
+        problem: withValue(problem),
+        objectives: withValue(objectives),
+        logic: withValue(logic),
+        components: withValue(components),
+        bestMethod: withValue(bestMethod),
+        abstract: withValue(abstractText),
+        coreInventiveConcept: withValue(normalizedRecord.coreInventiveConcept),
+        claimableFeatures: withValue(normalizedRecord.claimableFeatures),
+        fallbackLimitations: withValue(normalizedRecord.fallbackLimitations),
+        doNotClaim: withValue(normalizedRecord.doNotClaim),
+        sourceFactLedger: withValue(normalizedRecord.sourceFactLedger),
+        supportDataSources: withValue(normalizedRecord.supportDataSources),
+        scopeRecommendations: withValue(normalizedRecord.scopeRecommendations),
+        normalizationReviewWarnings: withValue(normalizedRecord.normalizationReviewWarnings)
       }
 
       const payload = {
@@ -739,6 +765,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       if (response?.patentType) {
         setPatentType(response.patentType as any)
       }
+      setPatentTypeAssumed(response?.patentTypeAssumed === true)
       if (response?.claimScopeStyle) {
         setClaimScopeStyle(normalizeClaimScopeStyle(response.claimScopeStyle))
       }
@@ -765,6 +792,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         patentType: newType
       })
       setPatentType(newType)
+      setPatentTypeAssumed(false)
       setShowPatentTypeDropdown(false)
       await onRefresh()
     } catch (e) {
@@ -817,7 +845,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       setError(null)
       const claimsContent = claimsEditorRef.current?.getHTML() || claimsText
       const parsedFromHtml = parseClaimsFromHtml(claimsContent)
-      const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
+      const structuredToSave = parsedFromHtml.length > 0
+        ? mergeStructuredClaimsByNumber(parsedFromHtml, claims)
+        : (claims.length > 0 ? claims : null)
       await onComplete({
         action: 'save_claims',
         sessionId: session.id,
@@ -859,7 +889,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       throw new Error('Please add claims before continuing.')
     }
     const parsedFromHtml = parseClaimsFromHtml(claimsContent)
-    const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
+    const structuredToSave = parsedFromHtml.length > 0
+      ? mergeStructuredClaimsByNumber(parsedFromHtml, claims)
+      : (claims.length > 0 ? claims : null)
     await onComplete({
       action: 'save_claims',
       sessionId: session.id,
@@ -877,7 +909,10 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     try {
       setIsNavigating(true)
       setError(null)
-      if (!claimsFrozen) await persistClaimsDraft()
+      // Persist only a live edit session. An untouched editor has nothing newer
+      // than the server state, and re-saving it would round-trip the claims
+      // through the lossy HTML parser for no reason.
+      if (!claimsFrozen && isEditingClaims) await persistClaimsDraft()
       await onComplete({
         action: 'set_stage',
         sessionId: session.id,
@@ -901,7 +936,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     try {
       setIsNavigating(true)
       setError(null)
-      if (!claimsFrozen) await persistClaimsDraft()
+      if (!claimsFrozen && isEditingClaims) await persistClaimsDraft()
       await onComplete({
         action: 'set_stage',
         sessionId: session.id,
@@ -1024,6 +1059,14 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                 )}
               </AnimatePresence>
             </div>
+            {patentTypeAssumed && !claimsFrozen && (
+              <span
+                title="The patent type was assumed from the idea text. Confirm it here or change it if it looks wrong."
+                className="whitespace-nowrap rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+              >
+                assumed — confirm
+              </span>
+            )}
           </ControlGroup>
 
           <ToolbarDivider />

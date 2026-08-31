@@ -326,15 +326,19 @@ export async function buildSketchContextBundle(
       : (refMapRaw?.components && Array.isArray(refMapRaw.components) ? refMapRaw.components : [])
     
     if (refMap.length > 0) {
-      bundle.keyComponents = refMap.map((c: any) => c.name || c.label || c.component).filter(Boolean)
+      // PRESERVE-mode names can be long inventor phrases; sketch labels need the
+      // short display form when one exists.
+      const sketchName = (c: any) => c.displayLabel || c.name || c.label || c.component
+      bundle.keyComponents = refMap.map(sketchName).filter(Boolean)
       // Build reference numerals map - use referenceLabel (universal across all patent types)
       // For NUMERIC_BUCKET: referenceLabel = "100", "200", etc.
       // For STEP_LABEL: referenceLabel = "S100", "S200", etc.
       // For CONSTITUENT_LABEL: referenceLabel = "(a)", "(b)", "(c)", etc.
       refMap.forEach((c: any) => {
         const label = c.referenceLabel || (c.numeral !== undefined ? String(c.numeral) : null)
-        if (label && (c.name || c.label)) {
-          bundle.referenceNumerals[label] = c.name || c.label
+        const name = sketchName(c)
+        if (label && name) {
+          bundle.referenceNumerals[label] = name
         }
       })
     }

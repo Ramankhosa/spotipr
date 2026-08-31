@@ -892,6 +892,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             <input
               type="text"
               value={node.name}
+              title={node.name}
               onChange={(e) => updateComponent(node.id, { name: e.target.value })}
               placeholder="Component name"
               aria-invalid={issues.length > 0 ? true : undefined}

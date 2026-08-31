@@ -1013,6 +1013,24 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       const items = Array.isArray(resp?.results) ? resp.results : []
       const newRunId = resp?.runId || null
 
+      // A degraded search must not read as a clean result set: name every
+      // source that did not respond so "no matches" is never mistaken for
+      // "no prior art exists".
+      const providerStats: any[] = Array.isArray(resp?.providerStats) ? resp.providerStats : []
+      const failedProviders = providerStats.filter((stat: any) => Boolean(stat?.error))
+      const searchWarnings: string[] = Array.isArray(resp?.searchWarnings) ? resp.searchWarnings : []
+      if (providerStats.length > 0 && failedProviders.length === providerStats.length) {
+        setError('The patent search sources were unavailable for this search. These results are incomplete — please retry.')
+        setPhase('idle')
+        setPhaseMessage('')
+        return
+      }
+      const degradedSearchNote = failedProviders.length > 0
+        ? `${failedProviders.length} of ${providerStats.length} search sources were unavailable for this search; results may be incomplete.`
+        : searchWarnings.length > 0
+          ? searchWarnings.join(' ').replace(/PQAI/gi, 'Patent Search Service')
+          : null
+
       // Fresh search: previous analysis and tags no longer apply.
       setAiAnalysis({})
       setAnalysisProgress(null)
@@ -1034,8 +1052,17 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       if (items.length === 0) {
         setPhase('idle')
         setPhaseMessage('')
-        setStatusMessage({ type: 'warning', text: 'No patents matched this search. Broaden the query or scope and try again.' })
+        setStatusMessage({
+          type: 'warning',
+          text: degradedSearchNote
+            ? `No patents were returned, and ${degradedSearchNote}`
+            : 'No patents matched this search. Broaden the query or scope and try again.'
+        })
         return
+      }
+
+      if (degradedSearchNote) {
+        setStatusMessage({ type: 'warning', text: degradedSearchNote })
       }
 
       // Assessment starts automatically — one user action, one pipeline.

@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { generateJWT } from '@/lib/auth'
 import { checkServiceAccess } from '@/lib/org-access-service'
 import { isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
+import { isNormalizedDataUsable } from '@/lib/normalized-data'
 import { renderAndWriteDiagramArtifacts, resolveDiagramPagePolicy } from '@/lib/patent-diagrams/artifacts'
 
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
@@ -1377,7 +1378,9 @@ async function runPipeline(job: any, workerId: string) {
   })
 
   let session = await loadSession(sessionId)
-  if (!session?.ideaRecord) {
+  // Row presence is not enough: a prior failed run leaves an ideaRecord with an
+  // empty normalizedData blob, and skipping normalization then drafts from nothing.
+  if (!session?.ideaRecord || !isNormalizedDataUsable(session.ideaRecord.normalizedData)) {
     await setStep(job.id, workerId, 'NORMALIZING')
     const ideaText = buildAutomationIdeaText(payload)
     if (!ideaText || !payload.title?.trim()) throw new Error('Title and idea details are required')

@@ -8,7 +8,7 @@ import { coerceSupportDataSources } from '@/lib/support-data-sources'
 import { EXTREME_ASPECT_RATIO_MAXIMUM, EXTREME_ASPECT_RATIO_MINIMUM } from '@/lib/plantuml-renderer'
 import { renderAndWriteDiagramArtifacts, resolveDiagramPagePolicy } from './artifacts'
 import { buildPatentDiagram } from './builders'
-import { buildDiagramBatchPrompt, buildFigureSetPlanningPrompt, buildFigureSplitPrompt, extractJsonObject } from './prompts'
+import { buildDiagramBatchPrompt, buildFigureSetPlanningPrompt, buildFigureSplitPrompt, compactClaimsContextDetailed, compactInventionContextDetailed, extractJsonObject } from './prompts'
 import { FIGURE_SET_PLAN_RESPONSE_SCHEMA, diagramBatchResponseSchema } from './response-schemas'
 import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
 import {
@@ -98,13 +98,19 @@ export function extractReferenceMapComponents(referenceMap: any): PatentDiagramC
     : Array.isArray(stored?.components)
       ? stored.components
       : []
-  const candidates: Array<PatentDiagramComponent & { parentName: string | null }> = rows.flatMap((component: any, index: number) => {
+  const candidates: Array<PatentDiagramComponent & { parentName: string | null; canonicalName: string }> = rows.flatMap((component: any, index: number) => {
     const id = String(component?.id || '').trim()
-    const name = String(component?.name || '').trim()
-    if (!id || !name) return []
+    const canonicalName = String(component?.name || '').trim()
+    if (!id || !canonicalName) return []
+    // PRESERVE-mode canonical names are the inventor's verbatim phrasing and can be
+    // arbitrarily long; the figure prompt needs a bounded name or the model's echoed
+    // displayLabel can blow the shortText length cap. Prefer the stored short label.
+    const shortLabel = String(component?.displayLabel || '').trim()
+    const name = canonicalName.length > 120 && shortLabel ? shortLabel : canonicalName
     return [{
       id,
       name,
+      canonicalName,
       type: component?.type ? String(component.type) : null,
       description: component?.description ? String(component.description) : null,
       referenceLabel: String(component?.referenceLabel || component?.numeral || component?.range || index + 1),
@@ -113,8 +119,14 @@ export function extractReferenceMapComponents(referenceMap: any): PatentDiagramC
       claimSupport: normalizeComponentClaimSupport(component?.claimSupport),
     }]
   })
-  const idByName = new Map(candidates.map(component => [component.name.toLowerCase(), component.id]))
-  return candidates.map(({ parentName, ...component }) => ({
+  // Parent references may use either the canonical (possibly long) name or the
+  // bounded label, so register both under the id.
+  const idByName = new Map<string, string>()
+  for (const component of candidates) {
+    idByName.set(component.name.toLowerCase(), component.id)
+    idByName.set(component.canonicalName.toLowerCase(), component.id)
+  }
+  return candidates.map(({ parentName, canonicalName: _canonicalName, ...component }) => ({
     ...component,
     parentId: component.parentId || (parentName ? idByName.get(parentName.toLowerCase()) || null : null),
   }))
@@ -357,75 +369,51 @@ function chunk<T>(items: T[], size: number): T[][] {
   return result
 }
 
-function fallbackPlanItem(kind: DiagramKind, index: number, components: PatentDiagramComponent[]): FigureSetPlanItem {
-  const titleByKind: Record<DiagramKind, string> = {
-    COMPONENT: 'System Architecture',
-    PROCESS: 'Method of Operation',
-    SEQUENCE: 'Interaction Sequence',
-    CONSTITUENT: 'Composition',
-  }
-  return {
-    key: `figure-${index + 1}-${kind.toLowerCase()}`,
-    kind,
-    title: titleByKind[kind],
-    purpose: `Depicts the ${titleByKind[kind].toLowerCase()} of the disclosed invention.`,
-    detailLevel: 'DETAIL',
-    direction: kind === 'SEQUENCE' ? 'LR' : 'TB',
-    componentIds: components.map(component => component.id).slice(0, 16),
-    claimCriticalComponentIds: [],
-    orderedGroups: [],
-    phaseHints: [],
-    evidenceIds: [],
-  }
-}
-
 /**
- * Makes a model-authored plan usable instead of rejecting it.
+ * Makes a model-authored plan usable without inventing content.
  *
- * Unknown component IDs are dropped, duplicate keys are made unique, and a
- * figure left with no components inherits the registry. In manual mode the set
- * is trimmed or padded to the exact requested count (cycling the default
- * kinds); in auto mode the planner's chosen count is kept, capped at the
- * per-run maximum, with missing kinds padded in so the four-kind floor always
- * holds. Nothing here can fail.
+ * Unknown component IDs are dropped and duplicate keys are made unique. The
+ * plan is never padded: synthesizing generic figures to hit a kind floor or a
+ * requested count fabricated drawings the disclosure did not support, and a
+ * figure whose components all resolve unknown is dropped rather than silently
+ * re-scoped to the whole registry. Every non-cosmetic repair is reported in
+ * `notes` so the caller can tell the user what changed.
  */
 function repairPlanFigures(
   figures: FigureSetPlanItem[],
   components: PatentDiagramComponent[],
   options: { exactCount: number | null },
-): FigureSetPlanItem[] {
+): { figures: FigureSetPlanItem[]; notes: string[] } {
   const known = new Set(components.map(component => component.id))
-  const allIds = components.map(component => component.id)
   const usedKeys = new Set<string>()
+  const notes: string[] = []
   const limit = options.exactCount ?? MAXIMUM_FIGURES_PER_RUN
-  const repaired = figures.slice(0, limit).map(figure => {
+  if (figures.length > limit) {
+    notes.push(`The planner proposed ${figures.length} figures; only the first ${limit} were kept.`)
+  }
+  const repaired = figures.slice(0, limit).flatMap(figure => {
     let key = figure.key
     while (usedKeys.has(key)) key = `${figure.key}-${usedKeys.size + 1}`
     usedKeys.add(key)
     const componentIds = figure.componentIds.filter(id => known.has(id))
-    return {
+    if (componentIds.length === 0) {
+      notes.push(`Planned figure "${figure.title}" referenced no known components and was dropped.`)
+      return []
+    }
+    return [{
       ...figure,
       key,
-      componentIds: componentIds.length ? componentIds : allIds.slice(0, 16),
+      componentIds,
       claimCriticalComponentIds: figure.claimCriticalComponentIds.filter(id => known.has(id)),
       orderedGroups: figure.orderedGroups
         .map(group => ({ ...group, componentIds: group.componentIds.filter(id => known.has(id)) }))
         .filter(group => group.componentIds.length),
-    }
+    }]
   })
-  if (options.exactCount != null) {
-    for (let index = repaired.length; index < options.exactCount; index++) {
-      repaired.push(fallbackPlanItem(DEFAULT_FIGURE_KINDS[index % DEFAULT_FIGURE_KINDS.length], index, components))
-    }
-    return repaired
+  if (options.exactCount != null && repaired.length < options.exactCount) {
+    notes.push(`Planned ${repaired.length} of the requested ${options.exactCount} figures — the disclosure did not support more. Adjust the plan or the requested count if needed.`)
   }
-  for (const kind of DEFAULT_FIGURE_KINDS) {
-    if (repaired.length >= MAXIMUM_FIGURES_PER_RUN) break
-    if (!repaired.some(figure => figure.kind === kind)) {
-      repaired.push(fallbackPlanItem(kind, repaired.length, components))
-    }
-  }
-  return repaired
+  return { figures: repaired, notes }
 }
 
 /** The single planning LLM call for a figure set. */
@@ -454,10 +442,19 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
     promptCacheKey: `patent-diagrams:${input.sessionId}`,
     metadata: { patentId: input.patentId, sessionId: input.sessionId, purpose: 'plan_figures_structured' },
   })
+  const repairResult = repairPlanFigures(llmPlan.figures, context.components, { exactCount })
+  if (repairResult.figures.length === 0) {
+    throw new PatentDiagramPipelineError(
+      'The planner produced no usable figures for this disclosure. Nothing was synthesized in their place — review the component plan and claims, then plan again.',
+      422,
+      undefined,
+      { code: 'EMPTY_FIGURE_PLAN', stage: 'PLAN', retryable: true, actions: ['Review the Component Plan, then run figure planning again.'] },
+    )
+  }
   const plan = figureSetPlanSchema.parse({
     schemaVersion: 3,
     contextChecksum,
-    figures: repairPlanFigures(llmPlan.figures, context.components, { exactCount }),
+    figures: repairResult.figures,
   })
   const previousAnalysis = context.session.aiAnalysisData && typeof context.session.aiAnalysisData === 'object'
     ? context.session.aiAnalysisData as Record<string, unknown>
@@ -466,7 +463,8 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
     where: { id: input.sessionId },
     data: { aiAnalysisData: { ...previousAnalysis, figurePlan: plan } as any },
   })
-  return plan
+  // Notes ride on the returned plan for the UI, never into the stored plan.
+  return repairResult.notes.length ? Object.assign({}, plan, { planningNotes: repairResult.notes }) : plan
 }
 
 /**
@@ -835,6 +833,36 @@ function summarizeReview(figures: RenderedManagedFigure[]) {
   return { status: 'READY' as const, ready: true, reviewNotes: notes }
 }
 
+/**
+ * What the figure prompts could NOT see. The prompt builders budget-compact the
+ * invention record and claims; when that compaction drops or truncates content,
+ * the run must say so — figures planned against a partial record used to look
+ * identical to figures planned against everything.
+ */
+function contextBudgetNotes(context: PipelineContext) {
+  const invention = compactInventionContextDetailed(context.idea)
+  const claims = compactClaimsContextDetailed(context.claims)
+  const notes: Array<{ figureNo: number; code: string; message: string }> = []
+  if (invention.droppedKeys.length > 0 || invention.truncatedKeys.length > 0) {
+    const parts: string[] = []
+    if (invention.truncatedKeys.length > 0) parts.push(`truncated: ${invention.truncatedKeys.join(', ')}`)
+    if (invention.droppedKeys.length > 0) parts.push(`not included: ${invention.droppedKeys.join(', ')}`)
+    notes.push({
+      figureNo: 0,
+      code: 'CONTEXT_BUDGET_REDUCED',
+      message: `Figure planning used a reduced invention context (${parts.join('; ')}). Content in those fields was not considered for the figures.`,
+    })
+  }
+  if (claims.droppedClaimNumbers.length > 0) {
+    notes.push({
+      figureNo: 0,
+      code: 'CLAIMS_CONTEXT_REDUCED',
+      message: `Claim(s) ${claims.droppedClaimNumbers.join(', ')} did not fit the figure-planning budget; claim-coverage judgments may be incomplete.`,
+    })
+  }
+  return notes
+}
+
 function figureResponse(figure: RenderedManagedFigure) {
   return {
     figureNo: figure.figureNo,
@@ -879,9 +907,11 @@ export async function generateManagedFigureSet(input: PatentDiagramPipelineInput
     pagePolicy: baseContext.pagePolicy,
   })
   const saved = await persistManagedFigureSet(input, baseContext.referenceMapChecksum, rendered, { replace: true, plan, baseContext })
+  const review = summarizeReview(rendered)
+  review.reviewNotes.unshift(...contextBudgetNotes(baseContext))
   return {
     plan,
-    filingReadiness: summarizeReview(rendered),
+    filingReadiness: review,
     // Computed on what was actually drawn, not on the plan.
     claimCoverage: claimComponentCoverage(rendered.map(figure => figure.built.diagram), baseContext.components),
     figures: rendered.map(figureResponse),
@@ -915,9 +945,11 @@ export async function addManagedFigures(input: PatentDiagramPipelineInput & { pl
     figureNumbers,
   })
   const saved = await persistManagedFigureSet(input, baseContext.referenceMapChecksum, rendered, { replace: false, plan, baseContext })
+  const review = summarizeReview(rendered)
+  review.reviewNotes.unshift(...contextBudgetNotes(baseContext))
   return {
     plan,
-    filingReadiness: summarizeReview(rendered),
+    filingReadiness: review,
     claimCoverage: claimComponentCoverage(rendered.map(figure => figure.built.diagram), baseContext.components),
     figures: rendered.map(figureResponse),
     saved,

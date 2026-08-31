@@ -3399,12 +3399,16 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       // Refresh to get updated session with translated draft
       await onRefresh()
       
-      // Build comprehensive success message
+      // Build comprehensive completion message
       let message = ''
 
-      // Add fallback warning if applicable
+      // Sections that couldn't be translated fell back to the reference-language
+      // text; that must never hide behind a clean success toast.
+      const translationErrors: string[] = Array.isArray(data.errors) ? data.errors : []
       if (data.warning) {
         message += `${data.warning}`
+      } else if (translationErrors.length > 0) {
+        message += `${translationErrors.length} section${translationErrors.length === 1 ? '' : 's'} could not be translated and kept the reference-language text. Retry translation for those sections.`
       }
 
       // Add validation issues if any
@@ -3416,7 +3420,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         }
       }
 
-      toast({ title: `Translation to ${code} complete!`, description: message || undefined, variant: 'success' })
+      const partialTranslation = translationErrors.length > 0 || Boolean(data.warning)
+      toast({
+        title: partialTranslation ? `Translation to ${code} finished with untranslated sections` : `Translation to ${code} complete!`,
+        description: message || undefined,
+        variant: partialTranslation ? 'warning' : 'success'
+      })
       
       // Switch to translated jurisdiction
       if (data.draft) {

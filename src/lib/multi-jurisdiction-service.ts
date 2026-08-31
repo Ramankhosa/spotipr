@@ -37,6 +37,7 @@ import {
   buildInventorTerminologyBlock,
   buildOriginalDisclosureBlock,
   buildSourceFidelityPromptBlock,
+  ORIGINAL_DISCLOSURE_SECTIONS,
   resolveSourceFidelityMode,
 } from '@/lib/source-fidelity'
 import { getWritingSample, buildWritingSampleBlock } from '@/lib/writing-sample-service'
@@ -1930,7 +1931,7 @@ ${referenceFidelityBlock}`)
       if (disclosureBlock) {
         promptParts.push(`
 ${disclosureBlock}
-This disclosure is authoritative source support for the detailedDescription, summary, and background sections.`)
+This disclosure is authoritative source support for the ${ORIGINAL_DISCLOSURE_SECTIONS.join(', ')} sections.`)
       }
     }
 
@@ -2553,7 +2554,7 @@ SOURCE FIDELITY (USER-SELECTED — CRITICAL)
 ${sectionFidelityBlock}`)
       const terminologyBlock = buildInventorTerminologyBlock(sourceFidelityMode, (normalizedData as any)?.components)
       if (terminologyBlock) promptParts.push(terminologyBlock)
-      if (['detailedDescription', 'summary', 'background'].includes(sectionKey)) {
+      if ((ORIGINAL_DISCLOSURE_SECTIONS as readonly string[]).includes(sectionKey)) {
         const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
         if (disclosureBlock) promptParts.push(`\n${disclosureBlock}`)
       }
@@ -2983,9 +2984,10 @@ export async function translateReferenceDraft(
     errors: errors.length > 0 ? errors : undefined,
     language: resolvedLanguage,
     stats,
-    // Include warning for UI to display if needed
-    warning: hasHighFallbackRate 
-      ? `${errors.length} of ${totalAttempted} sections (${fallbackRate.toFixed(0)}%) could not be translated and used reference content instead.`
+    // Any fallback at all is named — a sub-threshold failure used to ship a
+    // part-English draft behind a clean success response with no warning.
+    warning: errors.length > 0
+      ? `${errors.length} of ${totalAttempted} section${errors.length === 1 ? '' : 's'} could not be translated and kept the reference-language text. Retry translation for those sections.`
       : undefined
   }
 }

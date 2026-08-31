@@ -19,6 +19,18 @@ export type SourceFidelityStage = 'claims' | 'claimRefinement' | 'sections' | 'f
 /** Characters of raw disclosure injected into section prompts before truncation. */
 export const ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT = 15_000
 
+/**
+ * Sections whose PRESERVE-mode prompts carry the inventor's raw disclosure.
+ * These are the narrative sections that describe the idea itself; each costs up
+ * to ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT extra prompt characters per call.
+ */
+export const ORIGINAL_DISCLOSURE_SECTIONS = [
+  'detailedDescription',
+  'summary',
+  'background',
+  'technicalSolution',
+] as const
+
 export function resolveSourceFidelityMode(
   normalizedData: Record<string, any> | null | undefined
 ): SourceFidelityMode {
@@ -29,8 +41,10 @@ const PRESERVE_HEADER = `SOURCE FIDELITY MODE: PRESERVE ("Keep exactly what I pr
 The inventor chose to keep their idea exactly as provided. The draft must stay strictly inside the inventor's stated idea scope. These rules override any earlier strategy instruction that conflicts with them.`
 
 const PRESERVE_RULES_BY_STAGE: Record<SourceFidelityStage, string> = {
-  claims: `- Claim 1 must recite the inventive combination the inventor actually described; do not generalize it into a broader abstraction of the idea.
-- Do not generalize, rename, or abstract source-stated components, mechanisms, or steps; use the inventor's own terminology.
+  claims: `- Claim 1 must recite the inventive combination the inventor actually described; do not generalize it into a broader abstraction of the idea or re-center it away from the inventor's stated concept.
+- Honor the inventor's stated claim-scope intent: limitations the source designates as fallback positions (see Fallback Limitations) belong in dependent claims, never in Claim 1.
+- Scope wording is not renaming: in Claim 1, a source-stated count may be recited as "a plurality of" the inventor's own term, and a housing or support structure may be recited without its specific material, grade, or dimensions — PROVIDED the exact count, material, grade, or dimension is preserved in a dependent claim. Never apply this loosening to the mechanism the inventor presents as central.
+- Do not rename, substitute synonyms for, or abstract away the inventor's own terminology for any element; the inventor's terms are canonical in every claim.
 - Do not demote a mechanism the inventor presents as central to a dependent claim unless the user's confirmed scope selections deselect it.
 - Every source-stated claimable feature must appear somewhere in the claim set; do not silently drop source-stated features.
 - Do not introduce any element, step, material, value, or use case the inventor did not state.`,
@@ -41,6 +55,7 @@ const PRESERVE_RULES_BY_STAGE: Record<SourceFidelityStage, string> = {
 - Use the inventor's own terminology as the canonical vocabulary; do not substitute synonyms or renamed labels for the inventor's terms.
 - Keep the inventor's framing of the problem, objectives, and solution; do not re-frame the invention.
 - Do not omit source-stated features whose scope selections mark them as included; the description must cover them.
+- Source-stated measured results, trial or field-test accounts, comparative baselines, and failure-and-remedy details are disclosure, not commentary: reproduce them in the description with the source's own values, and do not drop them as non-technical.
 - Do not add embodiments, alternatives, advantages, or use cases the inventor did not state.`,
   figures: `- Depict only the structure, components, and flows the inventor stated; do not add inferred architecture, standard blocks, or typical-implementation elements.
 - Keep figure labels aligned with the inventor's own terminology.`,

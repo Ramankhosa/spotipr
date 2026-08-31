@@ -25,22 +25,37 @@ const CORE_EXCLUDED_FIELDS = new Set<string>([
   'scopeRecommendations', // always synthesized in code in the split flow
 ])
 
+export type ComponentNamingMode = 'PRESERVE' | 'STRUCTURE_ONLY'
+
 /**
  * Normalizes component hierarchy and display names.
- * Moved verbatim from the single-call parse block in DraftingService.normalizeIdea.
+ *
+ * The canonical `name` diverges by idea-handling mode: STRUCTURE_ONLY takes the
+ * short Title Case display form (historical behavior), while PRESERVE keeps the
+ * inventor's wording verbatim — the display rewrite would otherwise defeat the
+ * PRESERVE prompt rules and feed machine names into the CANONICAL INVENTOR
+ * TERMS block. Both modes keep `originalName` (raw LLM/inventor phrasing) and
+ * `displayLabel` (short form) so downstream surfaces can pick the right one.
  */
-export function normalizeCoreComponents(components: unknown): any[] {
+export function normalizeCoreComponents(
+  components: unknown,
+  opts?: { mode?: ComponentNamingMode }
+): any[] {
   if (!Array.isArray(components)) return []
+  const mode: ComponentNamingMode = opts?.mode === 'PRESERVE' ? 'PRESERVE' : 'STRUCTURE_ONLY'
   const componentNameMap = new Map<string, string>()
   return components.map((c: any, idx: number) => {
-    const originalName = typeof c?.name === 'string' ? c.name.trim() : ''
-    const displayName = normalizeComponentDisplayName(originalName, c?.type) || originalName
-    if (originalName && displayName) {
-      componentNameMap.set(originalName.toLowerCase(), displayName)
+    const originalName = typeof c?.name === 'string' ? c.name.replace(/\s+/g, ' ').trim() : ''
+    const displayLabel = normalizeComponentDisplayName(originalName, c?.type) || originalName
+    const canonicalName = mode === 'PRESERVE' ? (originalName || displayLabel) : displayLabel
+    if (originalName && canonicalName) {
+      componentNameMap.set(originalName.toLowerCase(), canonicalName)
     }
     return {
       ...c,
-      name: displayName,
+      name: canonicalName,
+      originalName,
+      displayLabel,
       level: typeof c?.level === 'number' && c.level >= 0 ? c.level : 0,
       sequence: typeof c?.sequence === 'number' && c.sequence > 0 ? c.sequence : (idx + 1),
     }
@@ -49,7 +64,8 @@ export function normalizeCoreComponents(components: unknown): any[] {
     if (!parent) return c
     return {
       ...c,
-      parent: componentNameMap.get(parent.toLowerCase()) || normalizeComponentDisplayName(parent),
+      parent: componentNameMap.get(parent.toLowerCase())
+        || (mode === 'PRESERVE' ? parent : normalizeComponentDisplayName(parent)),
     }
   })
 }

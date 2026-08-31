@@ -35,6 +35,7 @@ import {
   buildOriginalDisclosureBlock,
   buildSourceFidelityPromptBlock,
   ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT,
+  ORIGINAL_DISCLOSURE_SECTIONS,
   resolveSourceFidelityMode,
 } from '@/lib/source-fidelity';
 import {
@@ -179,6 +180,8 @@ export function generateReferenceLabel(
 export interface ProcessedComponent {
   id: string;
   name: string;
+  originalName?: string;      // Inventor's raw phrasing (canonical name in PRESERVE mode)
+  displayLabel?: string;      // Short Title Case form for figure/sketch labels
   type: string;
   description: string;
   numeral?: number;           // Only for SYSTEM/PRODUCT (NUMERIC_BUCKET)
@@ -595,7 +598,9 @@ export class DraftingService {
 
       // Normalize component hierarchy and display names if provided
       if (Array.isArray(normalizedData.components)) {
-        normalizedData.components = normalizeCoreComponents(normalizedData.components);
+        normalizedData.components = normalizeCoreComponents(normalizedData.components, {
+          mode: allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE',
+        });
       }
 
       return this.finalizeNormalizedIdea(normalizedData, {
@@ -643,10 +648,14 @@ export class DraftingService {
       normalizedData?.inventionType,
       normalizedData?.fieldOfRelevance || areaOfInvention || ''
     )
-    const detectedPatentType = this.normalizePatentTypePrimary(normalizedData?.patentTypePrimary)
+    const llmPatentType = this.normalizePatentTypePrimary(normalizedData?.patentTypePrimary)
+    const detectedPatentType = llmPatentType
       || this.patentTypeFallbackFromText(rawIdea, title).primary
     normalizedData.inventionType = detectedArchetype
     normalizedData.patentTypePrimary = detectedPatentType
+    // Whether the type is the model's classification or a keyword-regex guess.
+    // A 'fallback' value must never be frozen as an authoritative decision.
+    normalizedData.patentTypeSource = llmPatentType ? 'llm' : 'fallback'
     normalizedData.sourceHandlingMode = allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE'
     normalizedData.schemaVersion = 2
 
@@ -779,7 +788,9 @@ export class DraftingService {
         parts[key] = parsed.data;
       }
 
-      parts.core.components = normalizeCoreComponents(parts.core.components);
+      parts.core.components = normalizeCoreComponents(parts.core.components, {
+        mode: allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE',
+      });
 
       const normalizedData = assembleNormalizedData({
         core: parts.core,
@@ -2747,7 +2758,7 @@ ${sectionFidelityBlock}`)
       // In PRESERVE mode the inventor's raw disclosure is an authoritative source for
       // the narrative sections, so under-extraction at Stage 0 cannot silently erase
       // content the inventor wrote.
-      if (['detailedDescription', 'summary', 'background'].includes(section)) {
+      if ((ORIGINAL_DISCLOSURE_SECTIONS as readonly string[]).includes(section)) {
         const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, idea?.rawInput)
         if (disclosureBlock) {
           promptParts.push(`
@@ -3673,6 +3684,8 @@ Use the Super Admin panel to add the missing prompt.
         processedComponents.push({
           id: n.id,
           name: n.name,
+          originalName: n.originalName,
+          displayLabel: n.displayLabel,
           type: n.type || 'OTHER',
           description: n.description,
           numeral: n.numeral,
@@ -3714,6 +3727,8 @@ Use the Super Admin panel to add the missing prompt.
         processedComponents.push({
           id: n.id,
           name: n.name,
+          originalName: n.originalName,
+          displayLabel: n.displayLabel,
           type: n.type || 'OTHER',
           description: n.description,
           numeral: undefined, // No numeric numeral for PROCESS
@@ -3785,6 +3800,8 @@ Use the Super Admin panel to add the missing prompt.
         processedComponents.push({
           id: n.id,
           name: n.name,
+          originalName: n.originalName,
+          displayLabel: n.displayLabel,
           type: n.type || 'OTHER',
           description: n.description,
           numeral: undefined, // No numeric numeral for COMPOSITION
