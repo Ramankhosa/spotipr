@@ -8,6 +8,11 @@ import {
 } from '@/lib/source-fact-ledger'
 import { buildClaimScopePromptBlock } from '@/lib/scope-recommendations'
 import {
+  buildInventorTerminologyBlock,
+  buildSourceFidelityPromptBlock,
+  type SourceFidelityMode,
+} from '@/lib/source-fidelity'
+import {
   buildSupportDataSourceEntries,
   buildSupportDataSourcePromptBlock,
   hasSupportDataSources,
@@ -125,7 +130,7 @@ export function shouldBlockPreliminaryClaimReset(input: PreliminaryClaimResetBlo
   )
 }
 
-type PreliminaryClaimContext = {
+export type PreliminaryClaimContext = {
   title?: string
   rawIdea?: string
   problem?: string
@@ -171,6 +176,11 @@ type BuildPreliminaryClaimsPromptParams = {
    * originate from one.
    */
   noveltyGuidanceBlock?: string
+  /**
+   * The user's Stage-0 idea-handling choice (normalizedData.sourceHandlingMode).
+   * PRESERVE adds strict idea-scope guard rules; STRUCTURE_ONLY leaves the prompt unchanged.
+   */
+  sourceFidelityMode?: SourceFidelityMode
 }
 
 type AnalyzePreliminaryClaimQualityParams = {
@@ -181,7 +191,7 @@ type AnalyzePreliminaryClaimQualityParams = {
   llmQualityWarnings?: string[]
 }
 
-type SupportEntry = {
+export type SupportEntry = {
   id: string
   value: string
   sourceField: string
@@ -387,8 +397,11 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     claimScopeStyle,
     maxClaims = DEFAULT_PRELIMINARY_MAX_CLAIMS,
     noveltyGuidanceBlock,
+    sourceFidelityMode = 'STRUCTURE_ONLY',
   } = params
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle)
+  const sourceFidelityBlock = buildSourceFidelityPromptBlock(sourceFidelityMode, 'claims')
+  const inventorTerminologyBlock = buildInventorTerminologyBlock(sourceFidelityMode, context.components)
 
   const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
     context.sourceFactLedger,
@@ -505,6 +518,7 @@ For dependent claims under each independent claim:
 
 ${buildClaimScopeStyleStrategyBlock(normalizedClaimScopeStyle)}
 
+${sourceFidelityBlock ? `${sourceFidelityBlock}\n` : ''}${inventorTerminologyBlock ? `${inventorTerminologyBlock}\n` : ''}
 ${userClaimRemarks ? `USER CLAIM REMARKS (scope/emphasis only; do not treat as new source facts unless supported above):\n${userClaimRemarks}` : ''}
 
 MACHINE-READABLE OUTPUT CONTRACT:
@@ -553,7 +567,7 @@ function distinctiveTokens(value: string) {
     .filter(token => token.length > 3 && !STOPWORDS.has(token) && !/^\d+$/.test(token))
 }
 
-function entryMatchesClaim(claimText: string, entryValue: string) {
+export function entryMatchesClaim(claimText: string, entryValue: string) {
   const claim = normalizeText(claimText)
   const value = normalizeText(entryValue)
   if (!claim || !value) return false
@@ -565,7 +579,7 @@ function entryMatchesClaim(claimText: string, entryValue: string) {
   return hits >= Math.min(2, tokens.length)
 }
 
-function supportEntriesFromContext(context: PreliminaryClaimContext): SupportEntry[] {
+export function supportEntriesFromContext(context: PreliminaryClaimContext): SupportEntry[] {
   const entries: SupportEntry[] = []
 
   if (hasSupportDataSources(context)) {

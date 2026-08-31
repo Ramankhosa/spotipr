@@ -419,6 +419,15 @@ export function buildNormalizedDataBlock(
 
 Use this block only to adapt patent drafting vocabulary, disclosure units, and section emphasis. Do not use it to introduce unsupported components, steps, materials, values, algorithms, use cases, or embodiments.`)
 
+  // The user's Stage-0 idea-handling choice, surfaced so DB-managed prompts can
+  // condition on it (PRESERVE = "Keep exactly what I provided").
+  const sourceHandlingMode = formatContextScalar(pickContextValue('sourceHandlingMode'))
+  parts.push(
+    sourceHandlingMode === 'PRESERVE'
+      ? 'SOURCE FIDELITY MODE: PRESERVE — the user asked to keep their idea exactly as provided. Stay strictly inside the inventor\'s stated idea scope and terminology.'
+      : 'SOURCE FIDELITY MODE: STRUCTURE_ONLY — wording may be structured and polished, but no technical facts may be added.'
+  )
+
   // Title - IMPORTANT: Use AI-generated title from existingSections if available,
   // as this is the drafting-stage refined title that should be used for consistency
   const aiGeneratedTitle = existingSections?.title?.trim()
@@ -830,8 +839,21 @@ DETAILED DESCRIPTION SOURCE LOCK (RUNTIME OVERRIDE - CRITICAL)
 - Each sentence must be traceable to the Frozen Claims, Normalized Data, or auto-selected Detailed Description source data, except for permitted reference labels and figure parentheticals.
 `.trim()
 
-export function buildDetailedDescriptionSourceLockBlock(sectionKey: string): string {
-  return isDetailedDescriptionKey(sectionKey) ? DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK : ''
+const DETAILED_DESCRIPTION_PRESERVE_LOCK_ADDENDUM = `
+PRESERVE MODE ADDITIONS (user chose "Keep exactly what I provided"):
+- The Original Inventor Disclosure block, when present, is an additional authoritative source alongside the Frozen Claims and Normalized Data.
+- A detail expressly present in the Original Inventor Disclosure may be described even if the Normalized Data omitted it.
+- Use the inventor's own terminology as the canonical vocabulary; do not rename or generalize the inventor's terms.
+- Do not omit features the inventor stated in the Original Inventor Disclosure unless the user's scope selections exclude them.`.trimEnd()
+
+export function buildDetailedDescriptionSourceLockBlock(
+  sectionKey: string,
+  sourceFidelityMode?: 'PRESERVE' | 'STRUCTURE_ONLY'
+): string {
+  if (!isDetailedDescriptionKey(sectionKey)) return ''
+  return sourceFidelityMode === 'PRESERVE'
+    ? `${DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK}\n${DETAILED_DESCRIPTION_PRESERVE_LOCK_ADDENDUM}`
+    : DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK
 }
 
 type DetailedDescriptionScopeOptions = {

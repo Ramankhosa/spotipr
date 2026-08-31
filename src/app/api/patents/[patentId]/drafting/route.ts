@@ -86,6 +86,12 @@ import {
   resetPreliminaryClaimFields,
   shouldBlockPreliminaryClaimReset,
 } from '@/lib/preliminary-claim-generation';
+import {
+  buildInventorTerminologyBlock,
+  buildSourceFidelityPromptBlock,
+  resolveSourceFidelityMode,
+} from '@/lib/source-fidelity';
+import { computeDraftFidelityReport } from '@/lib/draft-fidelity-report';
 import { buildNoveltyGuidanceBlock } from '@/lib/novelty-drafting-handoff';
 import {
   generateSketch,
@@ -992,6 +998,9 @@ export async function POST(
 
       case 'validate_component_plan_llm':
         return await handleValidateComponentPlanLLM(authResult.user, patentId, data, requestHeaders);
+
+      case 'compute_source_fidelity':
+        return await handleComputeSourceFidelity(authResult.user, patentId, data);
 
       case 'update_figure_plan':
         return await handleUpdateFigurePlan(authResult.user, patentId, data);
@@ -4756,6 +4765,51 @@ const normalizeClaimsForSession = (normalized: Record<string, any> = {}) => {
   return normalizeClaimsForSessionShared(normalized)
 }
 
+// Claim numbers as they appear in the claims HTML (one <p> block per claim).
+const extractClaimNumbersFromHtml = (html?: string | null): number[] => {
+  const numbers: number[] = []
+  for (const block of String(html || '').split(/<\/p>/i)) {
+    const plain = block.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    const match = plain.match(/^(\d{1,3})[.)]\s+\S/)
+    if (match) numbers.push(Number(match[1]))
+  }
+  return numbers
+}
+
+// Rebuild a structured claim set from claims HTML, carrying over type/category/dependsOn
+// metadata from a prior structured set where claim numbers still line up.
+const structuredClaimsFromHtml = (html?: string | null, prior?: any[]): any[] => {
+  const priorByNumber = new Map<number, any>()
+  for (const claim of Array.isArray(prior) ? prior : []) {
+    const n = Number(claim?.number)
+    if (Number.isFinite(n)) priorByNumber.set(n, claim)
+  }
+  const claims: any[] = []
+  for (const block of String(html || '').split(/<\/p>/i)) {
+    const plain = block.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    const match = plain.match(/^(\d{1,3})[.)]\s*(.+)$/)
+    if (!match) continue
+    const number = Number(match[1])
+    const text = stripTrailingClaimDependencyLabel(match[2].trim())
+    if (!text) continue
+    const priorClaim = priorByNumber.get(number)
+    if (priorClaim) {
+      claims.push({ ...priorClaim, number, text })
+      continue
+    }
+    const depMatch = text.match(/\bclaims?\s+(\d{1,3})\b/i)
+    const dependsOn = depMatch ? Number(depMatch[1]) : undefined
+    const isDependent = Number.isFinite(dependsOn) && (dependsOn as number) < number
+    claims.push({
+      number,
+      text,
+      type: isDependent ? 'dependent' : 'independent',
+      ...(isDependent ? { dependsOn } : {})
+    })
+  }
+  return claims
+}
+
 const getWorkingClaims = (normalized: Record<string, any> = {}) => {
   const snapshot = getEditableClaims(normalized)
   const structured = snapshot.structured
@@ -5220,6 +5274,7 @@ async function handleGenerateClaims(
       // Positioning carried over when this session came from a novelty assessment. Read from
       // the session rather than normalizedData so re-running Stage 0 cannot drop it.
       noveltyGuidanceBlock: buildNoveltyGuidanceBlock((session as any).noveltyHandoff?.claimGuidance),
+      sourceFidelityMode: resolveSourceFidelityMode(existingNormalized),
     })
 
     onProgress?.({
@@ -5643,7 +5698,41 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
 
   // Settle the claim set (and lock it, unless the caller opted out)
   const now = new Date().toISOString()
-  const effectiveStructured = claimsStructured || existingNormalized.claimsStructured || existingNormalized.claimsStructuredFinal || existingNormalized.claimsStructuredProvisional
+  // An empty array must not win this chain: [] is truthy, and freezing it as the
+  // structured final would blank the claims every downstream stage drafts from.
+  let effectiveStructured = [
+    claimsStructured,
+    existingNormalized.claimsStructured,
+    existingNormalized.claimsStructuredFinal,
+    existingNormalized.claimsStructuredProvisional
+  ].find((candidate: any) => Array.isArray(candidate) && candidate.length > 0)
+
+  // The frozen structured set must describe the same claims as the frozen HTML:
+  // downstream drafting prefers structured claims once frozen, so a stale pairing
+  // silently anchors the whole specification to an older claim set.
+  let structuredConsistency: 'match' | 'rederived_from_html' | 'stale_dropped' = 'match'
+  const htmlClaimNumbers = extractClaimNumbersFromHtml(claimsContent)
+  if (effectiveStructured && htmlClaimNumbers.length > 0) {
+    const structuredNumbers = effectiveStructured
+      .map((c: any) => Number(c?.number))
+      .filter((n: number) => Number.isFinite(n))
+    const htmlSet = new Set(htmlClaimNumbers)
+    const structuredSet = new Set(structuredNumbers)
+    const sameClaimSet = htmlSet.size === structuredSet.size && Array.from(htmlSet).every(n => structuredSet.has(n))
+    if (!sameClaimSet) {
+      const rederived = structuredClaimsFromHtml(claimsContent, effectiveStructured)
+      if (rederived.length === htmlSet.size && rederived.length > 0) {
+        console.warn(`[freeze_claims] structured claims (${Array.from(structuredSet).join(',')}) did not match claims HTML (${Array.from(htmlSet).join(',')}); re-derived structured set from the HTML being frozen`)
+        effectiveStructured = rederived
+        structuredConsistency = 'rederived_from_html'
+      } else {
+        console.warn('[freeze_claims] structured claims did not match claims HTML and could not be re-derived; dropping the stale structured set so downstream falls back to the frozen HTML')
+        effectiveStructured = undefined
+        structuredConsistency = 'stale_dropped'
+      }
+    }
+  }
+
   const updatedNormalized: Record<string, any> = {
     ...existingNormalized,
     claims: claimsContent,
@@ -5715,6 +5804,7 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
     finalizedAt: now,
     jurisdiction: updatedNormalized.claimsJurisdiction,
     patentType: patentTypePrimary, // Return frozen patent type
+    structuredConsistency,
     ddEvidenceSelection: {
       status: 'queued',
       background: true
@@ -5950,6 +6040,9 @@ ${userDirectives}
     throw error
   }
 
+  const refinementFidelityBlock = buildSourceFidelityPromptBlock(resolveSourceFidelityMode(normalized), 'claimRefinement')
+  const refinementTerminologyBlock = buildInventorTerminologyBlock(resolveSourceFidelityMode(normalized), (normalized as any)?.components)
+
   const prompt = `You are an expert patent attorney refining claims to preserve the broadest defensible scope while addressing cited prior art.
 
 INVENTION BASICS:
@@ -5970,7 +6063,7 @@ ${autoRefBlocks ? `PATENTS SELECTED FOR CLAIM REFINEMENT (user-selected, claims 
 ${manualBlock || ''}
 ${buildNoveltyGuidanceBlock((session as any).noveltyHandoff?.claimGuidance)}
 ${criticalInstructionsBlock}
-
+${refinementFidelityBlock ? `\n${refinementFidelityBlock}\n` : ''}${refinementTerminologyBlock ? `\n${refinementTerminologyBlock}\n` : ''}
 Guidelines:
 - For each claim, either KEEP_AS_IS or provide a refined_text that avoids anticipation/obviousness over the selected patents.
 - Only narrow when justified by specific references from the selected patents list. Cite them via IDs (AUTO#1, MANUAL#1, etc.).
@@ -6023,6 +6116,16 @@ Return ONLY valid JSON:
     console.error('Failed to parse claim refinement preview JSON', e)
   }
 
+  // An empty result means the model output was unreadable, not "no changes suggested".
+  // Persisting it would mark the stage complete and block claim resets, so fail instead.
+  if (refinedClaims.length === 0) {
+    console.error('[claim_refinement_preview] refinement output was empty or unparseable; preview not persisted')
+    return NextResponse.json({
+      error: 'The refinement result could not be read. Nothing was saved - please run the refinement again.',
+      code: 'CLAIM_REFINEMENT_PARSE_FAILED'
+    }, { status: 502 })
+  }
+
   const previewPayload = {
     refinedClaims,
     generatedAt: new Date().toISOString(),
@@ -6073,6 +6176,12 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
   if (!preview || !Array.isArray(preview.refinedClaims)) {
     return NextResponse.json({ error: 'No refinement preview found. Generate a preview first.' }, { status: 400 })
   }
+  if (preview.refinedClaims.length === 0) {
+    return NextResponse.json({
+      error: 'The stored refinement preview is empty. Regenerate the refinement preview before applying.',
+      code: 'EMPTY_REFINEMENT_PREVIEW'
+    }, { status: 409 })
+  }
 
   const baseStructured: any[] =
     normalized.claimsStructured ||
@@ -6117,6 +6226,28 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
     }
     return { ...c }
   })
+
+  // Refuse to persist a merge that would erase or hollow out the claim set. An empty or
+  // text-less result here means the preview was unusable, never a legitimate refinement.
+  if (merged.length === 0) {
+    return NextResponse.json({
+      error: 'Applying this refinement would leave no claims. Nothing was changed - regenerate the refinement preview.',
+      code: 'REFINEMENT_WOULD_EMPTY_CLAIMS'
+    }, { status: 409 })
+  }
+  const emptyTextClaims = merged.filter((c: any) => !String(c?.text || '').trim())
+  if (emptyTextClaims.length > 0) {
+    return NextResponse.json({
+      error: `The refinement produced ${emptyTextClaims.length} claim(s) with no text (claim ${emptyTextClaims.map((c: any) => c.number).join(', ')}). Nothing was changed - regenerate the refinement preview.`,
+      code: 'REFINEMENT_EMPTY_CLAIM_TEXT'
+    }, { status: 409 })
+  }
+  if (Array.isArray(baseStructured) && baseStructured.length > 0 && merged.length < baseStructured.length) {
+    return NextResponse.json({
+      error: 'Applying this refinement would drop claims from the set. Nothing was changed.',
+      code: 'REFINEMENT_DROPPED_CLAIMS'
+    }, { status: 409 })
+  }
 
   const changedClaims = preview.refinedClaims.filter((r: any) => r.refined_text && (acceptAll || acceptedSet.has(Number(r.number))))
   const changeNotes = changedClaims.map((r: any) => {
@@ -6996,6 +7127,70 @@ async function handleProceedToComponents(user: any, patentId: string, data: any)
   return NextResponse.json({ message: 'Proceeded to component planning' });
 }
 
+/**
+ * Deterministic source-traceability report for the latest annexure draft:
+ * additions / omissions / dropped inventor terms relative to the raw idea and
+ * the Stage-0 normalized record. No LLM call — cheap to recompute on demand.
+ */
+async function handleComputeSourceFidelity(user: any, patentId: string, data: any) {
+  const { sessionId, jurisdiction } = data || {}
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: {
+      ideaRecord: true,
+      annexureDrafts: { orderBy: { version: 'desc' } },
+    },
+  })
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  const drafts: any[] = Array.isArray((session as any).annexureDrafts) ? (session as any).annexureDrafts : []
+  const requestedJurisdiction = typeof jurisdiction === 'string' && jurisdiction.trim()
+    ? jurisdiction.trim().toUpperCase()
+    : null
+  const draft = (requestedJurisdiction
+    ? drafts.find(d => String(d.jurisdiction || '').toUpperCase() === requestedJurisdiction)
+    : null) || drafts[0]
+  if (!draft) {
+    return NextResponse.json({ error: 'No annexure draft found for this session yet.' }, { status: 404 })
+  }
+
+  const normalized = (session.ideaRecord?.normalizedData as any) || {}
+  const extraSections = (draft.extraSections && typeof draft.extraSections === 'object') ? draft.extraSections : {}
+  const sections: Record<string, string | null | undefined> = {
+    ...extraSections,
+    title: draft.title,
+    fieldOfInvention: draft.fieldOfInvention,
+    background: draft.background,
+    summary: draft.summary,
+    briefDescriptionOfDrawings: draft.briefDescriptionOfDrawings,
+    detailedDescription: draft.detailedDescription,
+    bestMethod: draft.bestMethod,
+    abstract: draft.abstract,
+    industrialApplicability: draft.industrialApplicability,
+    listOfNumerals: draft.listOfNumerals,
+  }
+  const claimsText = draft.claims || normalized.claimsFinal || normalized.claims || ''
+
+  const report = computeDraftFidelityReport({
+    rawIdea: session.ideaRecord?.rawInput || '',
+    normalizedData: normalized,
+    sections,
+    claimsText,
+  })
+
+  return NextResponse.json({
+    report,
+    jurisdiction: draft.jurisdiction,
+    draftVersion: draft.version,
+  })
+}
+
 async function handleNormalizeIdea(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const { sessionId, areaOfInvention, allowRefine, sourceInputMeta } = data;
   const rawIdea = sanitizeStage0TextInput(data?.rawIdea)
@@ -7045,6 +7240,19 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
     return NextResponse.json(
       { error: 'Session not found or access denied' },
       { status: 404 }
+    );
+  }
+
+  // Re-normalization replaces normalizedData wholesale, which would silently discard
+  // approved claims. Match the lock guard that generate_claims and save_claims enforce.
+  const normalizedForLockGuard = (session.ideaRecord?.normalizedData as any) || {}
+  if (normalizedForLockGuard.claimsApprovedAt) {
+    return NextResponse.json(
+      {
+        error: 'Claims are approved and locked for this session. Re-running Stage 0 would discard them - unlock claims first if you want to re-normalize the idea.',
+        code: 'CLAIMS_LOCKED'
+      },
+      { status: 409 }
     );
   }
 
@@ -12656,6 +12864,7 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     debugSteps: result.debugSteps,
     llmMeta: result.llmMeta,
     warnings: result.warnings, // Context warnings (prior art, figures, components missing)
+    failedSections: result.failedSections, // Sections that returned no content (no placeholder substituted)
     personaStyleApplied: result.personaStyleApplied || false,
     personaProvenance: result.personaProvenance || {},
     personaWarnings: result.personaWarnings || []
@@ -14608,6 +14817,49 @@ async function handleApplyAIFix(
     })
   }
 
+  // Persist the fix into the draft itself. Recording it only on the review result made
+  // the UI show "fixed" (and the score climb) while export still shipped the old text.
+  let persistedToDraft = false
+  try {
+    const normalizedFixPatch = await normalizeSectionKeys({ [sectionKey]: fixedContent })
+    const [rawCanonicalKey, rawCanonicalValue] = Object.entries(normalizedFixPatch)[0] || [sectionKey, fixedContent]
+    const canonicalKey = String(rawCanonicalKey)
+    const value = typeof rawCanonicalValue === 'string' ? rawCanonicalValue.trim() : ''
+    if (value) {
+      const legacyFields = ANNEXURE_LEGACY_COLUMNS as readonly string[]
+      const targetDraft = session.annexureDrafts.find(
+        (d: any) => (d.jurisdiction || '').toUpperCase() === code
+      )
+      if (targetDraft) {
+        const prevExtra = (targetDraft as any).extraSections
+        const prevExtraObject = prevExtra && typeof prevExtra === 'object' ? prevExtra as Record<string, any> : {}
+        const updateData: Record<string, any> = legacyFields.includes(canonicalKey)
+          ? { [canonicalKey]: value }
+          : { extraSections: { ...prevExtraObject, [canonicalKey]: value } }
+        await prisma.annexureDraft.update({ where: { id: targetDraft.id }, data: updateData })
+      } else {
+        const createData: any = {
+          sessionId,
+          version: 1,
+          jurisdiction: code,
+          fullDraftText: '',
+          title: canonicalKey === 'title' ? value : 'Untitled'
+        }
+        if (canonicalKey !== 'title') {
+          if (legacyFields.includes(canonicalKey)) {
+            createData[canonicalKey] = value
+          } else {
+            createData.extraSections = { [canonicalKey]: value }
+          }
+        }
+        await prisma.annexureDraft.create({ data: createData })
+      }
+      persistedToDraft = true
+    }
+  } catch (persistError) {
+    console.error('[ApplyAIFix] Failed to persist fixed content to the draft:', persistError)
+  }
+
   return NextResponse.json({
     success: true,
     sectionKey,
@@ -14616,6 +14868,8 @@ async function handleApplyAIFix(
     diffData,
     fixHistoryEntry,
     issue: { ...issue, status: 'fixed' },
+    persistedToDraft,
+    warning: persistedToDraft ? undefined : 'The fixed text could not be saved to the draft automatically - save the section manually to keep this fix.',
     tokensUsed: result.response.outputTokens,
     // Include validation only if there's a critical problem
     validation: fixValidation.hasProblems ? fixValidation : undefined

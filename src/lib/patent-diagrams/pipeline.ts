@@ -337,14 +337,17 @@ function suggestedFigureCount(context: PipelineContext): number {
   return Math.min(MAXIMUM_FIGURES_PER_RUN, DEFAULT_FIGURE_KINDS.length + extra)
 }
 
-function planningContextChecksum(context: PipelineContext, input?: Pick<PatentDiagramPipelineInput, 'instructions' | 'figureCount'>): string {
+// Hashes only the underlying invention context, never the request knobs (figureCount,
+// instructions). The knobs were already consumed to produce the stored plan the user then
+// reviewed and approved; hashing them made the approved plan look stale at generation time
+// (planning hashed figureCount 'auto', generation sent the approved count) and every
+// generation silently re-planned, discarding the user's edits.
+function planningContextChecksum(context: PipelineContext): string {
   return semanticChecksum({
     claims: context.claims,
     inventionFacts: context.idea,
     components: context.components,
     jurisdiction: context.countryCode,
-    instructions: input?.instructions || null,
-    figureCount: exactFigureCount(input?.figureCount) ?? 'auto',
   })
 }
 
@@ -429,7 +432,7 @@ function repairPlanFigures(
 export async function planManagedFigureSet(input: PatentDiagramPipelineInput): Promise<FigureSetPlan> {
   const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const exactCount = exactFigureCount(input.figureCount)
-  const contextChecksum = planningContextChecksum(context, input)
+  const contextChecksum = planningContextChecksum(context)
   const prompt = buildFigureSetPlanningPrompt({
     inventionTitle: context.session.ideaRecord?.title || context.idea?.title || 'Untitled invention',
     patentType: context.session.patentTypePrimary,
@@ -860,8 +863,12 @@ export async function generateManagedFigureSet(input: PatentDiagramPipelineInput
   const baseContext = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const storedPlan = (baseContext.session.aiAnalysisData as any)?.figurePlan
   const parsedStoredPlan = storedPlan ? figureSetPlanSchema.safeParse(storedPlan) : null
-  const currentChecksum = planningContextChecksum(baseContext, input)
-  const storedIsCurrent = parsedStoredPlan?.success && parsedStoredPlan.data.contextChecksum === currentChecksum
+  const currentChecksum = planningContextChecksum(baseContext)
+  // Explicit generation instructions request a fresh plan; otherwise the stored, user-approved
+  // plan is authoritative as long as the invention context hasn't changed underneath it.
+  const storedIsCurrent = !input.instructions
+    && parsedStoredPlan?.success
+    && parsedStoredPlan.data.contextChecksum === currentChecksum
   const plan = input.plan
     || (storedIsCurrent ? parsedStoredPlan.data : await planManagedFigureSet(input))
   const detailed = await detailPlannedFigures(plan, baseContext, input)

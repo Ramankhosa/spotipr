@@ -27,8 +27,10 @@ describe('idea normalization prompt', () => {
     expect(prompt).toContain('"supportDataSources"')
     expect(prompt).toContain('Preserve complex source artifacts as support data')
     expect(prompt).toContain('JSON/XML/YAML/CSV fields')
-    expect(prompt).toContain('Component naming: "components[].name" is a short display label')
-    expect(prompt).toContain('Temperature Sensor Array')
+    // PRESERVE keeps the inventor's own component names instead of crisp Title Case labels
+    expect(prompt).toContain('Component naming (PRESERVE)')
+    expect(prompt).toContain("must be the inventor's own wording")
+    expect(prompt).not.toContain('Temperature Sensor Array')
     expect(prompt).toContain('Put qualifiers, locations, examples, IDs, values, conditions')
     expect(prompt).toContain('"scopeRecommendations"')
     expect(prompt).toContain('This is an LLM recommendation layer')
@@ -100,6 +102,24 @@ describe('split idea normalization prompts', () => {
     expect(structure).toContain('Structure and polish the wording')
     expect(structure).toContain('Do NOT add unsupported technical facts')
     expect(structure).toContain('Do NOT choose a preferred architecture')
+  })
+
+  test('component naming rules follow the idea-handling mode', () => {
+    const preserve = buildIdeaNormalizationCorePrompt({
+      rawIdea: 'A pump has spring preload 5-8 N and an optional lock.',
+      title: 'Pump Lock',
+      allowRefine: false,
+    })
+    expect(preserve).toContain('Component naming (PRESERVE)')
+    expect(preserve).not.toContain('Temperature Sensor Array')
+
+    const structure = buildIdeaNormalizationCorePrompt({
+      rawIdea: 'A pump has spring preload 5-8 N and an optional lock.',
+      title: 'Pump Lock',
+      allowRefine: true,
+    })
+    expect(structure).toContain('Component naming: "components[].name" is a short display label')
+    expect(structure).toContain('Temperature Sensor Array')
   })
 
   test.each(SPLIT_BUILDERS)('%s prompt fences user source data and neutralizes closing delimiters', (_name, build) => {

@@ -33,6 +33,12 @@ import {
 } from '@/lib/section-injection-config'
 import { buildSupportDataSourcePromptBlock } from '@/lib/support-data-sources'
 import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
+import {
+  buildInventorTerminologyBlock,
+  buildOriginalDisclosureBlock,
+  buildSourceFidelityPromptBlock,
+  resolveSourceFidelityMode,
+} from '@/lib/source-fidelity'
 import { getWritingSample, buildWritingSampleBlock } from '@/lib/writing-sample-service'
 import {
   areFiguresSkipped,
@@ -1905,8 +1911,31 @@ ${additionalContextParts.join('\n')}`)
       promptParts.push(antiHallucinationBlock)
     }
 
+    // Source fidelity: when the user chose "Keep exactly what I provided" at Stage 0,
+    // the reference draft carries the same promise the normalization made.
+    const sourceFidelityMode = resolveSourceFidelityMode(normalizedData)
+    const referenceFidelityBlock = buildSourceFidelityPromptBlock(sourceFidelityMode, 'sections')
+    if (referenceFidelityBlock) {
+      promptParts.push(`
+==============================================================================
+SOURCE FIDELITY (USER-SELECTED — CRITICAL)
+==============================================================================
+${referenceFidelityBlock}`)
+      const terminologyBlock = buildInventorTerminologyBlock(
+        sourceFidelityMode,
+        components.length ? components : (normalizedData as any)?.components
+      )
+      if (terminologyBlock) promptParts.push(terminologyBlock)
+      const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
+      if (disclosureBlock) {
+        promptParts.push(`
+${disclosureBlock}
+This disclosure is authoritative source support for the detailedDescription, summary, and background sections.`)
+      }
+    }
+
     if (dynamicSections.includes('detailedDescription')) {
-      promptParts.push(buildDetailedDescriptionSourceLockBlock('detailedDescription'))
+      promptParts.push(buildDetailedDescriptionSourceLockBlock('detailedDescription', sourceFidelityMode))
     }
 
     // Section instructions and output format
@@ -2512,7 +2541,25 @@ ${additionalContextParts.join('\n')}`)
       promptParts.push(antiHallucinationBlock)
     }
 
-    const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(sectionKey)
+    // Source fidelity: when the user chose "Keep exactly what I provided" at Stage 0,
+    // single-section regeneration carries the same promise the normalization made.
+    const sourceFidelityMode = resolveSourceFidelityMode(normalizedData)
+    const sectionFidelityBlock = buildSourceFidelityPromptBlock(sourceFidelityMode, 'sections')
+    if (sectionFidelityBlock) {
+      promptParts.push(`
+==============================================================================
+SOURCE FIDELITY (USER-SELECTED — CRITICAL)
+==============================================================================
+${sectionFidelityBlock}`)
+      const terminologyBlock = buildInventorTerminologyBlock(sourceFidelityMode, (normalizedData as any)?.components)
+      if (terminologyBlock) promptParts.push(terminologyBlock)
+      if (['detailedDescription', 'summary', 'background'].includes(sectionKey)) {
+        const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
+        if (disclosureBlock) promptParts.push(`\n${disclosureBlock}`)
+      }
+    }
+
+    const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(sectionKey, sourceFidelityMode)
     if (detailedDescriptionSourceLock) {
       promptParts.push(detailedDescriptionSourceLock)
     }

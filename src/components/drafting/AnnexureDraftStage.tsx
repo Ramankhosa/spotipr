@@ -232,6 +232,160 @@ function InlineDiffView({ original, revised }: { original: string; revised: stri
 }
 
 // ============================================================================
+// Source Traceability Panel — maps the finished draft back to the inventor's
+// original disclosure. Deterministic (no LLM), recomputable on demand.
+// ============================================================================
+
+function SourceTraceabilityPanel({ sessionId, jurisdiction, patentId }: {
+  sessionId: string
+  jurisdiction: string
+  patentId: string
+}) {
+  const [report, setReport] = useState<{
+    sourceHandlingMode: 'PRESERVE' | 'STRUCTURE_ONLY'
+    coverage: { covered: number; total: number }
+    omissions: Array<{ id: string; label: string; sourceField: string }>
+    additions: Array<{ section: string; sentence: string; unmatchedTerms: string[] }>
+    terminology: { missingTerms: string[]; totalTerms: number }
+  } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [openList, setOpenList] = useState<'omissions' | 'additions' | 'terminology' | null>(null)
+
+  const runReport = async () => {
+    if (!sessionId || !patentId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/patents/${patentId}/drafting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({
+          action: 'compute_source_fidelity',
+          sessionId,
+          // The reference draft has no per-jurisdiction annexure row; fall back to latest.
+          ...(jurisdiction && jurisdiction !== 'REFERENCE' ? { jurisdiction } : {})
+        })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not build the source traceability report.')
+      setReport(data.report)
+      setOpenList(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not build the source traceability report.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const coveragePercent = report && report.coverage.total > 0
+    ? Math.round((report.coverage.covered / report.coverage.total) * 100)
+    : null
+
+  const listButton = (key: 'omissions' | 'additions' | 'terminology', count: number, label: string) => (
+    <button
+      onClick={() => setOpenList(openList === key ? null : key)}
+      className={`rounded-xl p-3 text-center transition-all border ${
+        openList === key
+          ? 'border-ai-blue-300 bg-ai-blue-50'
+          : count > 0
+            ? 'border-paper-300 bg-white hover:bg-paper-100'
+            : 'border-paper-200 bg-paper-50'
+      }`}
+      disabled={count === 0}
+    >
+      <div className={`text-2xl font-bold ${count > 0 ? 'text-ai-graphite-900' : 'text-emerald-600'}`}>{count}</div>
+      <div className="text-[10px] text-ai-graphite-500 uppercase tracking-wider">{label}</div>
+    </button>
+  )
+
+  return (
+    <div className="mt-6 rounded-2xl border border-paper-300 bg-white overflow-hidden">
+      <div className="px-6 py-4 border-b border-paper-200 flex items-center justify-between gap-4">
+        <div>
+          <h3 className="text-base font-semibold text-ai-graphite-900">Source traceability</h3>
+          <p className="text-xs text-ai-graphite-500 mt-0.5">
+            How the draft maps back to the inventor's original disclosure
+            {report?.sourceHandlingMode === 'PRESERVE' ? ' · Keep-my-idea mode' : ''}
+          </p>
+        </div>
+        <button
+          onClick={runReport}
+          disabled={loading}
+          className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium bg-ai-blue-600 text-white hover:bg-ai-blue-500 disabled:opacity-50"
+        >
+          {loading ? 'Checking…' : report ? 'Re-check' : 'Check coverage'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="px-6 py-3 text-sm text-red-600 bg-red-50 border-b border-red-100">{error}</div>
+      )}
+
+      {report && (
+        <div className="p-4 space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-xl p-3 text-center border border-paper-200 bg-paper-50">
+              <div className="text-2xl font-bold text-ai-blue-600">{coveragePercent !== null ? `${coveragePercent}%` : '—'}</div>
+              <div className="text-[10px] text-ai-graphite-500 uppercase tracking-wider">
+                Source facts covered ({report.coverage.covered}/{report.coverage.total})
+              </div>
+            </div>
+            {listButton('omissions', report.omissions.length, 'Not yet covered')}
+            {listButton('additions', report.additions.length, 'Review wording')}
+            {listButton('terminology', report.terminology.missingTerms.length, 'Terms to restore')}
+          </div>
+
+          {openList === 'omissions' && (
+            <div className="rounded-xl border border-paper-200 divide-y divide-paper-100">
+              <div className="px-4 py-2 text-xs text-ai-graphite-500">
+                Facts from the disclosure that the draft does not clearly cover yet. Add them to the relevant section or confirm they were intentionally left out.
+              </div>
+              {report.omissions.map(item => (
+                <div key={item.id} className="px-4 py-2.5 text-sm text-ai-graphite-900">
+                  {item.label}
+                  <span className="ml-2 text-[10px] text-ai-graphite-400">{item.sourceField}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {openList === 'additions' && (
+            <div className="rounded-xl border border-paper-200 divide-y divide-paper-100">
+              <div className="px-4 py-2 text-xs text-ai-graphite-500">
+                Draft sentences whose wording does not trace back to the disclosure. Confirm each is standard drafting language, or edit the section.
+              </div>
+              {report.additions.map((item, index) => (
+                <div key={`${item.section}-${index}`} className="px-4 py-2.5 text-sm">
+                  <div className="text-ai-graphite-900">{item.sentence}</div>
+                  <div className="mt-1 text-[10px] text-ai-graphite-400">
+                    {item.section} · unmatched: {item.unmatchedTerms.join(', ')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {openList === 'terminology' && (
+            <div className="rounded-xl border border-paper-200 divide-y divide-paper-100">
+              <div className="px-4 py-2 text-xs text-ai-graphite-500">
+                Inventor terms from the disclosure that the draft never uses. Restore them where the draft renamed the same element.
+              </div>
+              {report.terminology.missingTerms.map(term => (
+                <div key={term} className="px-4 py-2.5 text-sm text-ai-graphite-900">{term}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
 // Comprehensive Validation Panel Component
 // ============================================================================
 
@@ -3400,6 +3554,15 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         })
         setGenerated(prev => ({ ...prev, ...filtered }))
         setDebugSteps(res?.debugSteps || [])
+
+        const failedSectionKeys = Array.isArray(res?.failedSections) ? res.failedSections : []
+        if (failedSectionKeys.length > 0) {
+          toast({
+            title: `${failedSectionKeys.length} section${failedSectionKeys.length > 1 ? 's' : ''} not generated`,
+            description: `No content was produced for: ${failedSectionKeys.join(', ')}. Retry those sections.`,
+            variant: 'error'
+          })
+        }
         
         // Extract B+T+U prompt injection info from debug steps
         const steps = res?.debugSteps || []
@@ -5646,7 +5809,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   }}
                   onAIIssuesChange={handleAIIssuesChange}
                 />
-                
+
+                <SourceTraceabilityPanel
+                  sessionId={session?.id || ''}
+                  jurisdiction={activeJurisdiction}
+                  patentId={patent?.id || ''}
+                />
+
                 {/* Export Section */}
                 <div id="export-section" className="mt-8 bg-white rounded-xl border border-paper-300 p-6">
                   <h4 className="font-semibold text-ai-graphite-900 mb-4">Export Options</h4>
@@ -5680,7 +5849,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   }}
                   onAIIssuesChange={handleAIIssuesChange}
                 />
-                
+
+                <SourceTraceabilityPanel
+                  sessionId={session?.id || ''}
+                  jurisdiction={activeJurisdiction}
+                  patentId={patent?.id || ''}
+                />
+
                 {/* Export Section */}
                 <div id="export-section-single" className="mt-8 bg-white rounded-xl border border-paper-300 p-6">
                   <h4 className="font-semibold text-ai-graphite-900 mb-4">Export Options</h4>

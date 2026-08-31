@@ -49,6 +49,9 @@ export type AutoPatentDraftIdeaInput = {
   claimsNotes?: string
   priorArtHandling?: PatentDraftingAutomationPayload['priorArtHandling']
   illustrativeData?: string
+  // Stage-0 idea handling: false = PRESERVE ("keep my idea exactly as provided").
+  // Undefined keeps the historical structure-and-polish default.
+  allowRefine?: boolean
   // Document-mode (one-patent-per-file) fields.
   sourceFilename?: string
   // Figure-handling choices (global default + per-file override). generateDiagrams
@@ -361,7 +364,7 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): PatentDra
     jurisdictions: fields.jurisdictions.length ? fields.jurisdictions : ['IN'],
     activeJurisdiction: (fields.jurisdictions[0] || 'IN').toUpperCase(),
     filingType: fields.filingType || 'utility',
-    allowRefine: true,
+    allowRefine: input.allowRefine !== false,
     claimsText,
     claimsHandling: normalizeClaimsHandling(fields.claimsHandling),
     claimsNotes,

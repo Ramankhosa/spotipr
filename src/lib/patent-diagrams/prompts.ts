@@ -2,6 +2,18 @@ import type { FigureSetPlanItem, PatentDiagramComponent, PatentDiagram, DiagramK
 import { DEFAULT_FIGURE_KINDS } from './types'
 import { PATENT_DIAGRAM_STYLE } from './style'
 import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
+import { buildSourceFidelityPromptBlock, resolveSourceFidelityMode } from '@/lib/source-fidelity'
+
+// The user's Stage-0 idea-handling choice rides on the raw invention context
+// (normalizedData.sourceHandlingMode) but is stripped by compactInventionContext,
+// so it is read here before compaction and rendered as its own guard block.
+function figureFidelityBlock(inventionContext: unknown): string {
+  const record = inventionContext && typeof inventionContext === 'object'
+    ? inventionContext as Record<string, any>
+    : null
+  const block = buildSourceFidelityPromptBlock(resolveSourceFidelityMode(record), 'figures')
+  return block ? `\n${block}\n` : ''
+}
 
 // Reference signs are shown because the builder prints them on the drawn boxes —
 // a model that cannot see them cannot pick the right component per step or
@@ -162,7 +174,7 @@ ${claimedComponents.length
 
 QUALITY BAR
 A planned figure must read like a patent drawing, not a software diagram: functional patent terminology (never vendors, APIs, SDKs, or implementation details), disclosed order preserved, one idea per figure, and every element traceable to a registry component.
-
+${figureFidelityBlock(input.inventionContext)}
 Required JSON shape:
 {
   "schemaVersion": 3,
@@ -272,7 +284,7 @@ RULES
 6. SCOPE — draw each planned figure whole and nothing more: include every planned componentId, honour the planned coverage, and leave content beyond the plan out.
 
 The server assigns canonical names, reference numerals, wrapping, rows, arrows, and all visual styling.
-
+${figureFidelityBlock(input.inventionContext)}
 USER MODIFICATION INSTRUCTIONS:
 ${input.instructions || 'None'}
 
@@ -340,7 +352,7 @@ RULES
 3. NO DUPLICATION — the drawing set already contains the OTHER FIGURES listed below. Do not re-depict their subject matter; the parts replace only the original figure.
 4. IDENTITY — use only Component Planner IDs from the registry below. Never invent components, operations, or quantities. Reference signs (ref=) are identification only; the server prints every numeral itself.${kind === 'PROCESS' ? '\n5. NUMBERING — every STEP and DECISION MUST set componentId to the registry component that performs it; a node without one is drawn unnumbered and flagged for attorney review.' : ''}
 ${kind === 'PROCESS' ? '6' : '5'}. LABELS — functional names of at most ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words; connector rules are unchanged from the original figure's kind.
-
+${figureFidelityBlock(input.inventionContext)}
 USER INSTRUCTIONS:
 ${input.instructions || 'None'}
 

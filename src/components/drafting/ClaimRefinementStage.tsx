@@ -401,7 +401,7 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
 
       userJustFrozeRef.current = true
 
-      await onComplete({
+      const freezeResponse = await onComplete({
         action: 'freeze_claims',
         lock: false,
         sessionId: session.id,
@@ -409,11 +409,13 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
         claimsStructured: structuredOverride || (structured && structured.length ? structured : undefined),
         jurisdiction: (session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
       })
-      await onComplete({
+      if (freezeResponse?.error) throw new Error(freezeResponse.error)
+      const stageResponse = await onComplete({
         action: 'set_stage',
         sessionId: session.id,
         stage: 'COMPONENT_PLANNER'
       })
+      if (stageResponse?.error) throw new Error(stageResponse.error)
       await onRefresh()
       setSuccessMessage('Claims finalized and ready for the next stage.')
       setTimeout(() => setSuccessMessage(null), 3000)

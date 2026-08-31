@@ -13,6 +13,20 @@ export type IdeaNormalizationPromptParams = {
   allowRefine?: boolean
 }
 
+// Component naming diverges by mode: STRUCTURE_ONLY may relabel components into
+// crisp Title Case display names, while PRESERVE must keep the inventor's own
+// vocabulary verbatim so downstream claims and sections stay in the inventor's
+// words instead of a renamed abstraction.
+function componentNamingRules(allowRefine: boolean): string {
+  if (!allowRefine) {
+    return `- Component naming (PRESERVE): "components[].name" must be the inventor's own wording for that component, verbatim apart from trimming whitespace. Do NOT rename, generalize, re-case, expand, or abbreviate the inventor's terms, and do NOT invent display labels the source does not use.
+- Put qualifiers, locations, examples, IDs, values, conditions, mechanisms, and use-specific details in "description", "figureHint", or "dependencies", not in the component name.`
+  }
+  return `- Component naming: "components[].name" is a short display label, not a sentence. Use Title Case, 2-5 words where possible, and max about 48 characters unless a standard term is longer. Preserve acronyms such as GPS, QR, RFID, PCM, API, DNA, RNA, and mRNA.
+- Put qualifiers, locations, examples, IDs, values, conditions, mechanisms, and use-specific details in "description", "figureHint", or "dependencies", not in the component name.
+- Prefer crisp names such as "Temperature Sensor Array", "Door / Lid Opening Sensor", "GPS / Route-Location Module", "PCM Status Estimation Module", and "Payload Identification Module". Avoid names like "multiple temperature sensors placed at different internal zones" or "payload identification module using QR/RFID/barcode".`
+}
+
 /**
  * Legacy single-call prompt. Kept intact for the IDEA_NORMALIZATION_SPLIT=false
  * rollback path; the split flow uses the three focused builders below.
@@ -53,9 +67,7 @@ Rules (must follow strictly):
 - Preserve every source-stated component, subcomponent, alternative, example, embodiment, metadata field, threshold, range, unit, safety rule, fallback rule, expiry rule, confidence score, condition, and claim seed that is important for patent drafting.
 - Preserve complex source artifacts as support data: tables, matrices, equations, formulae, variables, constraints, test data, datasets, schemas, API payloads, JSON/XML/YAML/CSV fields, algorithms, pseudocode, code blocks, figure captions, drawing labels, chemical/pharma formulae, compositions, constituents, salts, polymorphs, ratios, assay results, biological sequences, organisms, deposits, source/geographical origin, and sequence listings.
 - Preserve all numerical values exactly as stated, including units, ranges, inequality signs, concentrations, temperatures, pressures, voltages, times, percentages, ratios, pH, scores, and durations.
-- Component naming: "components[].name" is a short display label, not a sentence. Use Title Case, 2-5 words where possible, and max about 48 characters unless a standard term is longer. Preserve acronyms such as GPS, QR, RFID, PCM, API, DNA, RNA, and mRNA.
-- Put qualifiers, locations, examples, IDs, values, conditions, mechanisms, and use-specific details in "description", "figureHint", "dependencies", "sourceFactLedger", or "supportDataSources", not in the component name.
-- Prefer crisp names such as "Temperature Sensor Array", "Door / Lid Opening Sensor", "GPS / Route-Location Module", "PCM Status Estimation Module", and "Payload Identification Module". Avoid names like "multiple temperature sensors placed at different internal zones" or "payload identification module using QR/RFID/barcode".
+${componentNamingRules(allowRefine)}
 - If a field is not stated by the source, write "Not stated by source". Do not fill gaps with assumptions.
 - Populate "bestMethod" ONLY if the source explicitly states a preferred/best mode, preferred implementation, or best method. Otherwise use "Not stated by source".
 - Keep each top-level field as a string except: "schemaVersion" (number), "components" (array of objects), "cpcCodes" (array of strings), "ipcCodes" (array of strings), "inventionType" (array of archetype tags), "claimableFeatures" (array of strings), "fallbackLimitations" (array of strings), "doNotClaim" (array of strings), "sourceFactLedger" (object of arrays), "supportDataSources" (array of objects), "scopeRecommendations" (object), and "normalizationReviewWarnings" (array of strings).
@@ -272,9 +284,7 @@ Read the invention description and return ONLY one JSON object with the fields d
 Your task is NOT to summarize. Your task is to create a source-faithful patent fact ledger for downstream claims, figures, and specification drafting. This call extracts the core invention structure: components, problem, objectives, logic, claim seeds, and classification.
 
 ${sharedRules}
-- Component naming: "components[].name" is a short display label, not a sentence. Use Title Case, 2-5 words where possible, and max about 48 characters unless a standard term is longer. Preserve acronyms such as GPS, QR, RFID, PCM, API, DNA, RNA, and mRNA.
-- Put qualifiers, locations, examples, IDs, values, conditions, mechanisms, and use-specific details in "description", "figureHint", or "dependencies", not in the component name.
-- Prefer crisp names such as "Temperature Sensor Array", "Door / Lid Opening Sensor", "GPS / Route-Location Module", "PCM Status Estimation Module", and "Payload Identification Module". Avoid names like "multiple temperature sensors placed at different internal zones" or "payload identification module using QR/RFID/barcode".
+${componentNamingRules(params.allowRefine !== false)}
 - Populate "bestMethod" ONLY if the source explicitly states a preferred/best mode, preferred implementation, or best method. Otherwise use "Not stated by source".
 - Components: include every source-stated component/subcomponent that may support claims or figures. Use hierarchy when helpful. Do not cap the list. Use crisp Title Case names and keep metadata such as parent, level, inputs, outputs, dependencies, alternatives, conditions, and figure hints when stated.
 - Include "inventionType" as the archetype classification (one or more of: MECHANICAL, ELECTRICAL, SOFTWARE, CHEMICAL, BIO, GENERAL). Allow multiple using either an array or a "+"-joined string (e.g., "MECHANICAL+SOFTWARE"); uppercase the values.

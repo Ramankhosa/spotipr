@@ -148,10 +148,6 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
   const render = (text: string): ReactNode =>
     highlightOn && highlightVocabulary.length ? highlightTerms(text, highlightVocabulary) : text
 
-  // "Not found in this text" is only a finding if we hold the whole text.
-  const partialText =
-    detail !== null && (detail.claimsComplete === false || detail.descriptionComplete === false || detail.textProvenanceKnown === false)
-
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
@@ -222,15 +218,6 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
               <p className="mb-4 whitespace-pre-wrap text-xs leading-relaxed text-foreground/90">
                 {abstract ? render(abstract) : <span className="text-muted-foreground">No abstract stored for this document.</span>}
               </p>
-
-              {partialText && (
-                <p className="mb-4 rounded-md border border-amber-400/50 bg-amber-50 p-2 text-xs leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-                  <b>This is not the complete specification.</b>{' '}
-                  The corpus holds a partial capture for this document
-                  {detail?.textProvenanceKnown === false ? ' (legacy import — first independent claim and a description extract for US rows, nothing elsewhere)' : ''}.
-                  A term you cannot find here may still appear in the full document — absence in this text is not evidence of absence in the reference.
-                </p>
-              )}
 
               {claims && (
                 <>

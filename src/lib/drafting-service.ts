@@ -31,6 +31,13 @@ import {
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import {
+  buildInventorTerminologyBlock,
+  buildOriginalDisclosureBlock,
+  buildSourceFidelityPromptBlock,
+  ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT,
+  resolveSourceFidelityMode,
+} from '@/lib/source-fidelity';
+import {
   languageDisplayName,
   orderLanguagesForJurisdiction,
   resolveJurisdictionLanguage
@@ -258,6 +265,8 @@ export interface SectionGenerationResult {
   personaWarnings?: any[];
   // Warnings about missing context (prior art, figures, components) - non-blocking
   warnings?: Array<{ section: string; type: 'priorArt' | 'figures' | 'components'; message: string; impact: string }>;
+  // Sections the model returned no content for; no placeholder was substituted
+  failedSections?: string[];
 }
 
 export class DraftingService {
@@ -964,6 +973,7 @@ export class DraftingService {
     preferredLanguage?: string
   ): Promise<SectionGenerationResult> {
    const debugSteps: Array<{ step: string; status: 'ok'|'fail'|'warning'; meta?: any }> = []
+   const failedSections: string[] = []
     try {
       const figuresSkipped = areFiguresSkipped(session)
       const requestedSections = [...sections]
@@ -1788,8 +1798,17 @@ export class DraftingService {
           try { val = normalizeDLabels(val) } catch {}
         }
         if (!val) {
-          val = this.getFallbackContent(s, payload)
-          debugSteps.push({ step: `fallback_${s}`, status: 'ok', meta: { used: true } })
+          // Only title and listOfNumerals have fallbacks built from real session data
+          // (the idea title, the reference map). Every other section must fail visibly
+          // rather than substitute generic placeholder text that reads as a real draft.
+          if (s === 'title' || s === 'listOfNumerals') {
+            val = this.getFallbackContent(s, payload)
+            debugSteps.push({ step: `fallback_${s}`, status: 'ok', meta: { used: true, derivedFromSessionData: true } })
+          } else {
+            failedSections.push(s)
+            debugSteps.push({ step: `generation_failed_${s}`, status: 'fail', meta: { reason: 'The model returned no content for this section; no placeholder was substituted.' } })
+            continue
+          }
         }
         const approvedTitle = s === 'abstract' ? (payload.approved?.title || idea?.title) : undefined
         const detailedScopeForValidation = s === 'detailedDescription'
@@ -1859,18 +1878,6 @@ export class DraftingService {
         }
       }
 
-      // Pair safety remains effective if both requested
-      if (sections.includes('fieldOfInvention') && sections.includes('background')) {
-        if (!generated.fieldOfInvention || !generated.fieldOfInvention.trim()) {
-          generated.fieldOfInvention = this.getFallbackContent('fieldOfInvention', payload)
-          debugSteps.push({ step: 'pair_guard_fieldOfInvention', status: 'ok' })
-        }
-        if (!generated.background || !generated.background.trim()) {
-          generated.background = this.getFallbackContent('background', payload)
-          debugSteps.push({ step: 'pair_guard_background', status: 'ok' })
-        }
-      }
-
       // Step: numeral/figure integrity quick check (non-blocking - issues caught during review)
       const fullText = Object.values(generated).join('\n')
       const validation = this.validateDraftConsistency({ fullText }, session)
@@ -1898,6 +1905,7 @@ export class DraftingService {
         debugSteps,
         llmMeta,
         warnings: warnings.length > 0 ? warnings : undefined,
+        failedSections: failedSections.length > 0 ? failedSections : undefined,
         personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
         personaProvenance
       }
@@ -2404,7 +2412,16 @@ Background drafting requirements:
         '{{INDEPENDENT_CLAIMS}}': independentClaimsText,
         '{{KEY_EMBODIMENTS}}': '', // Omit if not available
         '{{FIGURE_LIST}}': figs || '',
-        '{{FULL_DISCLOSURE_TEXT}}': idea?.description || idea?.detailedDescription || '',
+        // The inventor's raw idea text lives on IdeaRecord.rawInput; the legacy
+        // description/detailedDescription fields do not exist on IdeaRecord, so
+        // without rawInput this variable always resolved empty and the raw
+        // disclosure never reached section prompts.
+        '{{FULL_DISCLOSURE_TEXT}}': (() => {
+          const disclosure = String(idea?.rawInput || idea?.description || idea?.detailedDescription || '')
+          return disclosure.length > ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT
+            ? `${disclosure.slice(0, ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT)}\n[TRUNCATED]`
+            : disclosure
+        })(),
         '{{ELEMENT_MAP}}': numeralsContext || '',
         '{{PREFERRED_PARAMS}}': '', // Omit if not available
         '{{BEST_EXAMPLE}}': '', // Omit if not available
@@ -2705,9 +2722,39 @@ USER INSTRUCTIONS (SESSION-SPECIFIC)
 ${userPrompt}`)
       }
 
+      // Source fidelity: when the user chose "Keep exactly what I provided" at Stage 0,
+      // every section prompt carries the same promise the normalization made.
+      const sourceFidelityMode = resolveSourceFidelityMode(normalizedData)
+      const sectionFidelityBlock = buildSourceFidelityPromptBlock(sourceFidelityMode, 'sections')
+      if (sectionFidelityBlock) {
+        promptParts.push(`
+────────────────────────────────────────
+SOURCE FIDELITY (USER-SELECTED — CRITICAL)
+────────────────────────────────────────
+${sectionFidelityBlock}`)
+        const terminologyBlock = buildInventorTerminologyBlock(
+          sourceFidelityMode,
+          componentsForContext.length ? componentsForContext : normalizedData?.components
+        )
+        if (terminologyBlock) promptParts.push(terminologyBlock)
+      }
+
       // Universal Drafting Bundle (ND + C1)
       if (udbResult.block) {
         promptParts.push(udbResult.block)
+      }
+
+      // In PRESERVE mode the inventor's raw disclosure is an authoritative source for
+      // the narrative sections, so under-extraction at Stage 0 cannot silently erase
+      // content the inventor wrote.
+      if (['detailedDescription', 'summary', 'background'].includes(section)) {
+        const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, idea?.rawInput)
+        if (disclosureBlock) {
+          promptParts.push(`
+────────────────────────────────────────
+${disclosureBlock}
+────────────────────────────────────────`)
+        }
       }
 
       if (detailedDescriptionScope?.guard) {
@@ -2775,7 +2822,7 @@ PERMITTED QUALITATIVE DISCLOSURE:
         promptParts.push(antiHallucinationBlock)
       }
 
-      const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(section)
+      const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(section, sourceFidelityMode)
       if (detailedDescriptionSourceLock) {
         promptParts.push(detailedDescriptionSourceLock)
       }

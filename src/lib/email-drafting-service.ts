@@ -163,6 +163,8 @@ function extractLabelSections(bodyText: string): Record<string, string> {
     'Title',
     'Jurisdictions',
     'Filing Type',
+    'Idea Handling',
+    'Idea Treatment',
     'Main Brief',
     'Claims',
     'Claims Handling',
@@ -427,6 +429,11 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
       ? (detectClaimsCompleteness(claimsText) ? 'use as is' : 'improve')
       : 'draft from brief'
 
+  // "Idea Handling: keep as is / preserve / exactly as provided" opts the draft into
+  // PRESERVE mode; anything else keeps the historical structure-and-polish default.
+  const ideaHandlingRaw = (sections['Idea Handling'] || sections['Idea Treatment'] || '').trim().toLowerCase()
+  const allowRefine = !/(keep\s*(it|my\s*idea)?\s*as[\s-]*is|as[\s-]*it[\s-]*is|preserve|exactly\s+as\s+provided|verbatim|do\s+not\s+(refine|change|modify))/i.test(ideaHandlingRaw)
+
   const priorArtHandling = sections['Prior Art Handling']
     ? parsePriorArtHandling(sections['Prior Art Handling'])
     : priorArtText
@@ -442,7 +449,7 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
     title: title.trim(),
     jurisdictions,
     filingType: parseFilingType(sections['Filing Type'] || ''),
-    allowRefine: true,
+    allowRefine,
     coverMemo: coverMemo.trim(),
     mainBriefText: [mainBriefText.trim(), noveltyText ? `Novelty / inventive distinction:\n${noveltyText}` : ''].filter(Boolean).join('\n\n'),
     normalizationBrief: condenseForNormalization([mainBriefText, noveltyText ? `Novelty / inventive distinction:\n${noveltyText}` : ''].filter(Boolean).join('\n\n')),
