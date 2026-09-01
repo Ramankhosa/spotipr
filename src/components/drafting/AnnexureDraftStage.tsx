@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import BackendActivityPanel from './BackendActivityPanel'
 import { Switch } from '@/components/ui/switch'
@@ -16,6 +16,7 @@ import { isDrawingSectionKey } from '@/lib/figure-availability'
 import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
 import { useToast } from '@/components/ui/toast'
 import IncompleteFilingDialog from '@/components/filing/IncompleteFilingDialog'
+import SourceCoveragePanel from './SourceCoveragePanel'
 
 // ============================================================================
 // AI Review Issue Type
@@ -227,160 +228,6 @@ function InlineDiffView({ original, revised }: { original: string; revised: stri
           )
         }
       })}
-    </div>
-  )
-}
-
-// ============================================================================
-// Source Traceability Panel — maps the finished draft back to the inventor's
-// original disclosure. Deterministic (no LLM), recomputable on demand.
-// ============================================================================
-
-function SourceTraceabilityPanel({ sessionId, jurisdiction, patentId }: {
-  sessionId: string
-  jurisdiction: string
-  patentId: string
-}) {
-  const [report, setReport] = useState<{
-    sourceHandlingMode: 'PRESERVE' | 'STRUCTURE_ONLY'
-    coverage: { covered: number; total: number }
-    omissions: Array<{ id: string; label: string; sourceField: string }>
-    additions: Array<{ section: string; sentence: string; unmatchedTerms: string[] }>
-    terminology: { missingTerms: string[]; totalTerms: number }
-  } | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [openList, setOpenList] = useState<'omissions' | 'additions' | 'terminology' | null>(null)
-
-  const runReport = async () => {
-    if (!sessionId || !patentId) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch(`/api/patents/${patentId}/drafting`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
-        },
-        body: JSON.stringify({
-          action: 'compute_source_fidelity',
-          sessionId,
-          // The reference draft has no per-jurisdiction annexure row; fall back to latest.
-          ...(jurisdiction && jurisdiction !== 'REFERENCE' ? { jurisdiction } : {})
-        })
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Could not build the source traceability report.')
-      setReport(data.report)
-      setOpenList(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not build the source traceability report.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const coveragePercent = report && report.coverage.total > 0
-    ? Math.round((report.coverage.covered / report.coverage.total) * 100)
-    : null
-
-  const listButton = (key: 'omissions' | 'additions' | 'terminology', count: number, label: string) => (
-    <button
-      onClick={() => setOpenList(openList === key ? null : key)}
-      className={`rounded-xl p-3 text-center transition-all border ${
-        openList === key
-          ? 'border-ai-blue-300 bg-ai-blue-50'
-          : count > 0
-            ? 'border-paper-300 bg-white hover:bg-paper-100'
-            : 'border-paper-200 bg-paper-50'
-      }`}
-      disabled={count === 0}
-    >
-      <div className={`text-2xl font-bold ${count > 0 ? 'text-ai-graphite-900' : 'text-emerald-600'}`}>{count}</div>
-      <div className="text-[10px] text-ai-graphite-500 uppercase tracking-wider">{label}</div>
-    </button>
-  )
-
-  return (
-    <div className="mt-6 rounded-2xl border border-paper-300 bg-white overflow-hidden">
-      <div className="px-6 py-4 border-b border-paper-200 flex items-center justify-between gap-4">
-        <div>
-          <h3 className="text-base font-semibold text-ai-graphite-900">Source traceability</h3>
-          <p className="text-xs text-ai-graphite-500 mt-0.5">
-            How the draft maps back to the inventor's original disclosure
-            {report?.sourceHandlingMode === 'PRESERVE' ? ' · Keep-my-idea mode' : ''}
-          </p>
-        </div>
-        <button
-          onClick={runReport}
-          disabled={loading}
-          className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium bg-ai-blue-600 text-white hover:bg-ai-blue-500 disabled:opacity-50"
-        >
-          {loading ? 'Checking…' : report ? 'Re-check' : 'Check coverage'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="px-6 py-3 text-sm text-red-600 bg-red-50 border-b border-red-100">{error}</div>
-      )}
-
-      {report && (
-        <div className="p-4 space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="rounded-xl p-3 text-center border border-paper-200 bg-paper-50">
-              <div className="text-2xl font-bold text-ai-blue-600">{coveragePercent !== null ? `${coveragePercent}%` : '—'}</div>
-              <div className="text-[10px] text-ai-graphite-500 uppercase tracking-wider">
-                Source facts covered ({report.coverage.covered}/{report.coverage.total})
-              </div>
-            </div>
-            {listButton('omissions', report.omissions.length, 'Not yet covered')}
-            {listButton('additions', report.additions.length, 'Review wording')}
-            {listButton('terminology', report.terminology.missingTerms.length, 'Terms to restore')}
-          </div>
-
-          {openList === 'omissions' && (
-            <div className="rounded-xl border border-paper-200 divide-y divide-paper-100">
-              <div className="px-4 py-2 text-xs text-ai-graphite-500">
-                Facts from the disclosure that the draft does not clearly cover yet. Add them to the relevant section or confirm they were intentionally left out.
-              </div>
-              {report.omissions.map(item => (
-                <div key={item.id} className="px-4 py-2.5 text-sm text-ai-graphite-900">
-                  {item.label}
-                  <span className="ml-2 text-[10px] text-ai-graphite-400">{item.sourceField}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {openList === 'additions' && (
-            <div className="rounded-xl border border-paper-200 divide-y divide-paper-100">
-              <div className="px-4 py-2 text-xs text-ai-graphite-500">
-                Draft sentences whose wording does not trace back to the disclosure. Confirm each is standard drafting language, or edit the section.
-              </div>
-              {report.additions.map((item, index) => (
-                <div key={`${item.section}-${index}`} className="px-4 py-2.5 text-sm">
-                  <div className="text-ai-graphite-900">{item.sentence}</div>
-                  <div className="mt-1 text-[10px] text-ai-graphite-400">
-                    {item.section} · unmatched: {item.unmatchedTerms.join(', ')}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {openList === 'terminology' && (
-            <div className="rounded-xl border border-paper-200 divide-y divide-paper-100">
-              <div className="px-4 py-2 text-xs text-ai-graphite-500">
-                Inventor terms from the disclosure that the draft never uses. Restore them where the draft renamed the same element.
-              </div>
-              {report.terminology.missingTerms.map(term => (
-                <div key={term} className="px-4 py-2.5 text-sm text-ai-graphite-900">{term}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -1965,10 +1812,65 @@ const fallbackSections: SectionConfig[] = [
   { keys: ['claims', 'listOfNumerals'], label: 'Claims + List of Reference Numerals' }
 ]
 
+// Highlights the coverage-report match inside a section's plain text. The
+// report's sentence had HTML stripped and whitespace collapsed, so matching is
+// done on a shrinking word-prefix regex joined by \s+ rather than a byte match.
+function renderCoverageHighlighted(text: string, matchText: string): React.ReactNode {
+  const words = String(matchText || '').split(/\s+/).filter(Boolean)
+  if (!words.length || !text) return text
+  let hit: { idx: number; len: number } | null = null
+  for (const count of [words.length, 12, 8, 5]) {
+    if (count > words.length || count < 1) continue
+    const pattern = words.slice(0, count)
+      .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+')
+    try {
+      const match = text.match(new RegExp(pattern, 'i'))
+      if (match && match.index !== undefined) {
+        hit = { idx: match.index, len: match[0].length }
+        break
+      }
+    } catch {
+      // An unmatchable pattern falls through to the next shorter prefix.
+    }
+  }
+  if (!hit) return text
+  return (
+    <>
+      {text.slice(0, hit.idx)}
+      <mark className="bg-ai-blue-100 ring-1 ring-ai-blue-300 rounded-sm px-0.5">
+        {text.slice(hit.idx, hit.idx + hit.len)}
+      </mark>
+      {text.slice(hit.idx + hit.len)}
+    </>
+  )
+}
+
 export default function AnnexureDraftStage({ session, patent, onComplete, onRefresh }: AnnexureDraftStageProps) {
   const { toast } = useToast()
   const figuresSkipped = !!session?.figuresSkipped
   const [generated, setGenerated] = useState<Record<string, string>>({})
+
+  // ── Check Coverage: jump-to-draft targets and transient highlight ──────────
+  const sectionElementRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const [coverageHighlight, setCoverageHighlight] = useState<{ sectionKey: string; text: string; nonce: number } | null>(null)
+  const coverageHighlightTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Bumped whenever section content changes, so the coverage drawer can flag a
+  // report as stale instead of presenting outdated assurance.
+  const [draftTouchedAt, setDraftTouchedAt] = useState<number | null>(null)
+  useEffect(() => {
+    setDraftTouchedAt(Date.now())
+  }, [generated])
+  const jumpToCoverage = useCallback((sectionKey: string, matchText?: string) => {
+    const element = sectionElementRefs.current[sectionKey]
+    if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (coverageHighlightTimeout.current) clearTimeout(coverageHighlightTimeout.current)
+    const nonce = Date.now()
+    setCoverageHighlight({ sectionKey, text: matchText || '', nonce })
+    coverageHighlightTimeout.current = setTimeout(() => {
+      setCoverageHighlight(current => (current?.nonce === nonce ? null : current))
+    }, 4000)
+  }, [])
   const [debugSteps, setDebugSteps] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [usePersonaStyle, setUsePersonaStyle] = useState<boolean>(false) // OFF by default
@@ -5438,7 +5340,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   ) : (
                     <div>
                       {section.keys.map(keyName => (
-                        <div key={keyName} className="mb-6 last:mb-0">
+                        <div
+                          key={keyName}
+                          ref={el => { sectionElementRefs.current[keyName] = el }}
+                          className={`mb-6 last:mb-0 scroll-mt-24 rounded-lg transition-shadow ${
+                            coverageHighlight?.sectionKey === keyName ? 'ring-2 ring-ai-blue-300 ring-offset-2' : ''
+                          }`}
+                        >
                           {section.keys.length > 1 && (
                              <h4 className="text-xs font-bold text-ai-graphite-400 uppercase tracking-wider mb-2 mt-4">{displayName[keyName] || keyName}</h4>
                           )}
@@ -5690,7 +5598,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                      fontSize,
                                      lineHeight
                                    }}>
-                                {generated[keyName] || (isWorking ? <span className="text-gray-300 animate-pulse">Drafting content...</span> : '')}
+                                {generated[keyName]
+                                  ? (coverageHighlight?.sectionKey === keyName && coverageHighlight.text
+                                      ? renderCoverageHighlighted(generated[keyName], coverageHighlight.text)
+                                      : generated[keyName])
+                                  : (isWorking ? <span className="text-gray-300 animate-pulse">Drafting content...</span> : '')}
                               </div>
 
 
@@ -5819,10 +5731,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   onAIIssuesChange={handleAIIssuesChange}
                 />
 
-                <SourceTraceabilityPanel
+                <SourceCoveragePanel
                   sessionId={session?.id || ''}
                   jurisdiction={activeJurisdiction}
                   patentId={patent?.id || ''}
+                  displayName={displayName}
+                  onJumpToSection={jumpToCoverage}
+                  draftTouchedAt={draftTouchedAt}
                 />
 
                 {/* Export Section */}
@@ -5859,10 +5774,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   onAIIssuesChange={handleAIIssuesChange}
                 />
 
-                <SourceTraceabilityPanel
+                <SourceCoveragePanel
                   sessionId={session?.id || ''}
                   jurisdiction={activeJurisdiction}
                   patentId={patent?.id || ''}
+                  displayName={displayName}
+                  onJumpToSection={jumpToCoverage}
+                  draftTouchedAt={draftTouchedAt}
                 />
 
                 {/* Export Section */}

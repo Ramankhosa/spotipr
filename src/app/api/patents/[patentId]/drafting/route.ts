@@ -1002,6 +1002,9 @@ export async function POST(
       case 'compute_source_fidelity':
         return await handleComputeSourceFidelity(authResult.user, patentId, data);
 
+      case 'save_coverage_review':
+        return await handleSaveCoverageReview(authResult.user, patentId, data);
+
       case 'update_figure_plan':
         return await handleUpdateFigurePlan(authResult.user, patentId, data);
 
@@ -7237,8 +7240,15 @@ async function handleComputeSourceFidelity(user: any, patentId: string, data: an
 
   const normalized = (session.ideaRecord?.normalizedData as any) || {}
   const extraSections = (draft.extraSections && typeof draft.extraSections === 'object') ? draft.extraSections : {}
+  // extraSections carries internal, non-section payloads (_rawDraft,
+  // _translationErrors, _coverageReview); only real string sections may reach
+  // the report corpus.
+  const cleanExtraSections: Record<string, string> = {}
+  for (const [key, value] of Object.entries(extraSections as Record<string, unknown>)) {
+    if (!key.startsWith('_') && typeof value === 'string') cleanExtraSections[key] = value
+  }
   const sections: Record<string, string | null | undefined> = {
-    ...extraSections,
+    ...cleanExtraSections,
     title: draft.title,
     fieldOfInvention: draft.fieldOfInvention,
     background: draft.background,
@@ -7259,11 +7269,77 @@ async function handleComputeSourceFidelity(user: any, patentId: string, data: an
     claimsText,
   })
 
+  const coverageReview = (extraSections as any)._coverageReview
   return NextResponse.json({
     report,
     jurisdiction: draft.jurisdiction,
     draftVersion: draft.version,
+    coverageReview: coverageReview && typeof coverageReview === 'object' ? coverageReview : {},
   })
+}
+
+/**
+ * Persists the attorney's per-item coverage review marks on the draft row.
+ * Keys are the report's stable content hashes, so marks survive recomputes and
+ * silently retire when the underlying fact changes (new content → new key).
+ */
+async function handleSaveCoverageReview(user: any, patentId: string, data: any) {
+  const { sessionId, jurisdiction, patch } = data || {}
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).length === 0) {
+    return NextResponse.json({ error: 'A non-empty review patch is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { annexureDrafts: { orderBy: { version: 'desc' } } },
+  })
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  const drafts: any[] = Array.isArray((session as any).annexureDrafts) ? (session as any).annexureDrafts : []
+  const requestedJurisdiction = typeof jurisdiction === 'string' && jurisdiction.trim()
+    ? jurisdiction.trim().toUpperCase()
+    : null
+  const draft = (requestedJurisdiction
+    ? drafts.find(d => String(d.jurisdiction || '').toUpperCase() === requestedJurisdiction)
+    : null) || drafts[0]
+  if (!draft) {
+    return NextResponse.json({ error: 'No annexure draft found for this session yet.' }, { status: 404 })
+  }
+
+  const extraSections = (draft.extraSections && typeof draft.extraSections === 'object')
+    ? { ...(draft.extraSections as Record<string, unknown>) }
+    : {}
+  const existingReview = (extraSections as any)._coverageReview
+  const coverageReview: Record<string, any> = existingReview && typeof existingReview === 'object'
+    ? { ...existingReview }
+    : {}
+
+  const now = new Date().toISOString()
+  for (const [rawKey, rawValue] of Object.entries(patch as Record<string, unknown>)) {
+    const key = String(rawKey).trim()
+    if (!/^[0-9a-f]{8}$/.test(key)) continue
+    if (rawValue === null) {
+      delete coverageReview[key]
+      continue
+    }
+    const value = rawValue as any
+    if (value?.status !== 'reviewed') continue
+    const note = typeof value.note === 'string' ? value.note.slice(0, 500) : undefined
+    coverageReview[key] = { status: 'reviewed', ...(note ? { note } : {}), by: user.id, at: now }
+  }
+
+  extraSections._coverageReview = coverageReview
+  await prisma.annexureDraft.update({
+    where: { id: draft.id },
+    data: { extraSections: extraSections as any },
+  })
+
+  return NextResponse.json({ success: true, coverageReview, jurisdiction: draft.jurisdiction, draftVersion: draft.version })
 }
 
 async function handleNormalizeIdea(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {

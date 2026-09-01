@@ -125,4 +125,112 @@ describe('computeDraftFidelityReport', () => {
 
     expect(report.additions).toEqual([])
   })
+
+  test('items enumerate the full denominator with attorney categories', () => {
+    const report = computeDraftFidelityReport({
+      rawIdea: RAW_IDEA,
+      normalizedData: NORMALIZED,
+      sections: {
+        detailedDescription: 'The microphone detects the whistle sound and the piezo vibration sensor confirms it.',
+      },
+    })
+
+    expect(report.items.length).toBeGreaterThan(0)
+    const statuses = new Set(report.items.map(item => item.status))
+    expect(statuses.has('covered')).toBe(true)
+    expect(statuses.has('open')).toBe(true)
+    const ledgerItem = report.items.find(item => item.sourceField === 'sourceFactLedger.componentsAndSubcomponents')
+    expect(ledgerItem?.category).toBe('components')
+    report.items.forEach(item => expect(item.key).toMatch(/^[0-9a-f]{8}$/))
+  })
+
+  test('item keys are stable when source arrays reorder', () => {
+    const reordered = {
+      ...NORMALIZED,
+      sourceFactLedger: {
+        componentsAndSubcomponents: ['coin cell', 'silicone heat shield', 'piezo vibration sensor', 'microphone'],
+        safetyFallbackOrExpiryRules: [],
+      },
+    }
+    const input = {
+      rawIdea: RAW_IDEA,
+      sections: { detailedDescription: 'The microphone detects the whistle sound.' },
+    }
+    const original = computeDraftFidelityReport({ ...input, normalizedData: NORMALIZED })
+    const shuffled = computeDraftFidelityReport({ ...input, normalizedData: reordered })
+
+    const keyFor = (report: ReturnType<typeof computeDraftFidelityReport>, label: string) =>
+      report.items.find(item => item.label === label && item.sourceField.startsWith('sourceFactLedger'))?.key
+    expect(keyFor(original, 'coin cell')).toBeTruthy()
+    expect(keyFor(original, 'coin cell')).toBe(keyFor(shuffled, 'coin cell'))
+    expect(keyFor(original, 'silicone heat shield')).toBe(keyFor(shuffled, 'silicone heat shield'))
+  })
+
+  test('covered items record the section and best-matching sentence', () => {
+    const report = computeDraftFidelityReport({
+      rawIdea: RAW_IDEA,
+      normalizedData: NORMALIZED,
+      sections: {
+        summary: 'The device counts whistles for a pressure cooker.',
+        detailedDescription: [
+          'The clip attaches to the lid handle.',
+          'A silicone heat shield protects the clip from lid heat during operation.',
+        ].join(' '),
+      },
+    })
+
+    const shieldItem = report.items.find(item => item.label.toLowerCase() === 'silicone heat shield')
+    expect(shieldItem?.status).toBe('covered')
+    const location = shieldItem?.coveredIn.find(loc => loc.section === 'detailedDescription')
+    expect(location).toBeTruthy()
+    expect(location?.sentence.toLowerCase()).toContain('heat shield')
+  })
+
+  test('exclusions enumerate the user-deselected material by reason', () => {
+    const report = computeDraftFidelityReport({
+      rawIdea: RAW_IDEA,
+      normalizedData: {
+        ...NORMALIZED,
+        doNotClaim: ['drying chillies as such'],
+        supportDataSources: [
+          { id: 'SDS-001', kind: 'component', label: 'Old bracket', value: 'Old bracket', status: 'deleted', sectionTargets: ['claims'], claimUse: 'core', figureUse: 'include' },
+          { id: 'SDS-002', kind: 'risk', label: 'Software per se risk', value: 'Software per se risk', status: 'source_stated', sectionTargets: ['claims'], claimUse: 'none', figureUse: 'do_not_show' },
+          { id: 'SDS-003', kind: 'material', label: 'Paraffin as material', value: 'Paraffin as material', status: 'source_stated', sectionTargets: ['claims'], claimUse: 'do_not_claim', figureUse: 'do_not_show' },
+        ],
+        scopeRecommendations: {
+          version: 1,
+          generatedAt: '',
+          basis: { patentTypePrimary: 'PRODUCT', inventionType: ['MECHANICAL'], fieldOfRelevance: 'Mechanical', subfield: '' },
+          elements: [
+            { id: 'kitchen_env', label: 'Kitchen environment', sourceType: 'environment', recommended: { claim: 'none', numbering: 'do_not_number', figures: 'do_not_show', description: 'optional' }, reason: 'context only', sourceRefs: [] },
+            { id: 'decor_trim', label: 'Decorative trim', sourceType: 'component', recommended: { claim: 'dependent_claim', numbering: 'number', figures: 'optional', description: 'include' }, user: { description: 'exclude' }, reason: '', sourceRefs: [] },
+          ],
+        },
+      },
+      sections: { detailedDescription: 'The microphone detects the whistle sound.' },
+    })
+
+    const byReason = (reason: string) => report.excluded.filter(item => item.reason === reason).map(item => item.label)
+    expect(byReason('marked_do_not_claim')).toContain('drying chillies as such')
+    expect(byReason('marked_do_not_claim')).toContain('Paraffin as material')
+    expect(byReason('removed_by_you')).toContain('Old bracket')
+    expect(byReason('guardrail')).toContain('Software per se risk')
+    expect(byReason('scope_no_claim')).toContain('Kitchen environment')
+    expect(byReason('scope_excluded')).toContain('Decorative trim')
+  })
+
+  test('terminology terms carry found locations and stable keys', () => {
+    const report = computeDraftFidelityReport({
+      rawIdea: RAW_IDEA,
+      normalizedData: NORMALIZED,
+      sections: { summary: 'The microphone detects the whistle sound.' },
+    })
+
+    const microphone = report.terminology.terms.find(term => term.term === 'microphone')
+    expect(microphone?.status).toBe('found')
+    expect(microphone?.foundIn).toContain('summary')
+    const shield = report.terminology.terms.find(term => term.term === 'silicone heat shield')
+    expect(shield?.status).toBe('missing')
+    expect(shield?.foundIn).toEqual([])
+  })
 })
