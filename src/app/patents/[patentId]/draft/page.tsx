@@ -22,6 +22,8 @@ import CountryWiseDraftStage from '@/components/drafting/CountryWiseDraftStage'
 import PreliminaryClaimsStage from '@/components/drafting/PreliminaryClaimsStage'
 // Vertical Stage Navigation (replaces FloatingStageNavigation)
 import VerticalStageNav from '@/components/drafting/VerticalStageNav'
+import StageFooterNav from '@/components/drafting/StageFooterNav'
+import { STAGE_DEFINITIONS } from '@/lib/stage-navigation-config'
 // Floating forward/backward navigation buttons
 
 interface DraftingSession {
@@ -579,6 +581,22 @@ export default function PatentDraftingPage() {
     await handleStageComplete({ action: 'set_stage', sessionId: session.id, stage: next })
   }
 
+  /**
+   * Rail items under "Review & Export" are actions on the current draft, not
+   * pipeline stages: move to the drafting stage if needed, then tell the stage
+   * which panel to open. The stage listens for this event so the generic
+   * StageComponent prop contract stays unchanged.
+   */
+  const handleOpenDraftAction = async (actionKey: string) => {
+    if (getCurrentStage() !== 'ANNEXURE_DRAFT') {
+      await handleNavigateToStage('ANNEXURE_DRAFT')
+    }
+    // Let the stage mount/settle before it is asked to focus a panel.
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('patentnest:draft-action', { detail: { action: actionKey } }))
+    }, 60)
+  }
+
   if (authLoading || isLoading) {
     return <PageLoadingBird message="Loading patent drafting..." />
   }
@@ -610,6 +628,23 @@ export default function PatentDraftingPage() {
 
   const currentStage = getCurrentStage()
   // StageComponent is now memoized above
+
+  // Compact Back/Next shown under every stage. Routed through the same handler
+  // as the rail so the unsaved-work guard applies to these controls too.
+  const stageFooterNav = (() => {
+    const { prev, next } = getPrevNextStages()
+    const labelFor = (key: string | null) =>
+      key ? (STAGE_DEFINITIONS.find(stage => stage.key === key)?.label || null) : null
+    const order = getVisibleStageOrder()
+    const position = order.indexOf(currentStage as any)
+    return {
+      prevLabel: labelFor(prev),
+      nextLabel: labelFor(next),
+      onBack: () => { if (prev) void handleNavigateToStage(prev) },
+      onNext: () => { if (next) void handleNavigateToStage(next) },
+      positionLabel: position >= 0 ? `Stage ${position + 1} of ${order.length}` : undefined,
+    }
+  })()
 
   // Handler for stage navigation from sidebar
   const handleNavigateToStage = async (stageKey: string) => {
@@ -656,6 +691,7 @@ export default function PatentDraftingPage() {
           currentStage={currentStage}
           patentId={patentId}
           onNavigateToStage={handleNavigateToStage}
+          onOpenDraftAction={handleOpenDraftAction}
           onCollapsedChange={setSidebarCollapsed}
           mobileOpen={stageNavOpen}
           onMobileClose={() => setStageNavOpen(false)}
@@ -837,7 +873,7 @@ export default function PatentDraftingPage() {
             </div>
           )}
 
-          <div className="bg-white rounded-xl border border-gray-200/60 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] min-h-[calc(100vh-140px)] overflow-hidden">
+          <div className="bg-white rounded-xl border border-gray-200/60 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] min-h-[calc(100vh-140px)]">
             {session ? (
               <div className="h-full">
                 <StageComponent
@@ -845,6 +881,13 @@ export default function PatentDraftingPage() {
                   patent={patent}
                   onComplete={handleStageComplete}
                   onRefresh={refreshSessionData}
+                />
+                <StageFooterNav
+                  prevLabel={stageFooterNav.prevLabel}
+                  nextLabel={stageFooterNav.nextLabel}
+                  onBack={stageFooterNav.onBack}
+                  onNext={stageFooterNav.onNext}
+                  positionLabel={stageFooterNav.positionLabel}
                 />
               </div>
             ) : (

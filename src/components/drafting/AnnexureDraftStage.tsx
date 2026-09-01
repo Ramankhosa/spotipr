@@ -1861,6 +1861,33 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   useEffect(() => {
     setDraftTouchedAt(Date.now())
   }, [generated])
+  // The stage rail's "Review & Export" items are actions on this draft; the
+  // page dispatches them here rather than through the stage prop contract.
+  const [coverageOpenSignal, setCoverageOpenSignal] = useState(0)
+  useEffect(() => {
+    const onDraftAction = (event: Event) => {
+      const action = (event as CustomEvent)?.detail?.action
+      if (action === 'coverage') {
+        setCoverageOpenSignal(value => value + 1)
+        return
+      }
+      const targetId = action === 'export'
+        ? ['export-section', 'export-section-single']
+        : action === 'ai_review'
+          ? ['ai-review-section']
+          : []
+      for (const id of targetId) {
+        const element = document.getElementById(id)
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          break
+        }
+      }
+    }
+    window.addEventListener('patentnest:draft-action', onDraftAction)
+    return () => window.removeEventListener('patentnest:draft-action', onDraftAction)
+  }, [])
+
   const jumpToCoverage = useCallback((sectionKey: string, matchText?: string) => {
     const element = sectionElementRefs.current[sectionKey]
     if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -5709,7 +5736,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
               (activeJurisdiction === 'REFERENCE' && session?.referenceDraftComplete) ||
               (activeJurisdiction !== 'REFERENCE' && latestDrafts[activeJurisdiction]?.version > 0)
             ) && (
-              <div className="mt-16 border-t pt-8">
+              <div id="ai-review-section" className="mt-16 border-t pt-8 scroll-mt-6">
                 <ValidationPanel
                   sessionId={session?.id || ''}
                   jurisdiction={activeJurisdiction}
@@ -5738,6 +5765,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   displayName={displayName}
                   onJumpToSection={jumpToCoverage}
                   draftTouchedAt={draftTouchedAt}
+                  openSignal={coverageOpenSignal}
                 />
 
                 {/* Export Section */}
@@ -5755,7 +5783,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             
             {/* Validation & Export Section (Single jurisdiction) */}
             {!isMultiJurisdiction && Object.keys(generated).length > 0 && (
-              <div className="mt-16 border-t pt-8">
+              <div id="ai-review-section" className="mt-16 border-t pt-8 scroll-mt-6">
                 <ValidationPanel
                   sessionId={session?.id || ''}
                   jurisdiction={activeJurisdiction}
@@ -5781,6 +5809,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   displayName={displayName}
                   onJumpToSection={jumpToCoverage}
                   draftTouchedAt={draftTouchedAt}
+                  openSignal={coverageOpenSignal}
                 />
 
                 {/* Export Section */}

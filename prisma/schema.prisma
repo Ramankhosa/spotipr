@@ -2783,6 +2783,10 @@ model DDUserData {
   // JSON object: { "REFERENCE": false, "US": false, "EP": false, ... }
   jurisdictionToggles Json @default("{}") @map("jurisdiction_toggles")
 
+  // Present tabular user data as tables (Markdown in draft, real tables on export)
+  // instead of flattening to prose. Honored only where the jurisdiction allows tables.
+  renderAsTable Boolean @default(false) @map("render_as_table")
+
   // Audit fields
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -88,6 +88,7 @@ export default function SourceCoveragePanel({
   displayName,
   onJumpToSection,
   draftTouchedAt,
+  openSignal = 0,
 }: {
   sessionId: string
   jurisdiction: string
@@ -95,6 +96,8 @@ export default function SourceCoveragePanel({
   displayName: Record<string, string>
   onJumpToSection: (sectionKey: string, matchText?: string) => void
   draftTouchedAt: number | null
+  /** Incremented by the stage when the rail asks to open the coverage drawer. */
+  openSignal?: number
 }) {
   const [report, setReport] = useState<DraftFidelityReport | null>(null)
   const [reportMeta, setReportMeta] = useState<{ draftVersion?: number; jurisdiction?: string } | null>(null)
@@ -123,6 +126,16 @@ export default function SourceCoveragePanel({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [drawerOpen])
+
+  // Opened from the stage rail: show the drawer and fetch on first open.
+  useEffect(() => {
+    if (openSignal <= 0) return
+    setDrawerOpen(true)
+    if (!report && !loading) void runReport()
+    // runReport/report/loading intentionally excluded: this must fire on the
+    // signal alone, not whenever the report state settles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSignal])
 
   const authHeaders = () => ({
     'Content-Type': 'application/json',

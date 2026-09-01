@@ -45,11 +45,19 @@ import { useIsDesktop } from '@/hooks/useMediaQuery'
 // Types
 // ============================================================================
 
+/**
+ * Sub-stages under the drafting stage that are ACTIONS on the current draft
+ * (open a panel) rather than pipeline stages to navigate between.
+ */
+const DRAFT_ACTION_SUB_STAGES = ['ai_review', 'coverage', 'export']
+
 interface VerticalStageNavProps {
   session: any
   currentStage: string
   patentId: string
   onNavigateToStage: (stage: string) => Promise<void>
+  /** Opens a draft-level panel (AI review / coverage / export) in the drafting stage. */
+  onOpenDraftAction?: (actionKey: string) => void | Promise<void>
   onCollapsedChange?: (collapsed: boolean) => void
   /** Below lg the rail is an off-canvas drawer driven by the page header. */
   mobileOpen?: boolean
@@ -192,6 +200,7 @@ export default function VerticalStageNav({
   currentStage,
   patentId,
   onNavigateToStage,
+  onOpenDraftAction,
   onCollapsedChange,
   mobileOpen = false,
   onMobileClose
@@ -437,7 +446,7 @@ export default function VerticalStageNav({
     }
 
     const reviewExport = draftingStage.subStages
-      .filter(s => ['ai_review', 'export'].includes(s.key))
+      .filter(s => DRAFT_ACTION_SUB_STAGES.includes(s.key))
       .map(s => ({ status: s.getStatus(session), required: s.required }))
 
     const sectionStatuses = jurisdictionDrafts.flatMap(j => j.sections.map(sec => ({
@@ -498,6 +507,11 @@ export default function VerticalStageNav({
     if (!isDesktop) onMobileClose?.()
     await onNavigateToStage(stageKey)
   }, [isDesktop, onMobileClose, onNavigateToStage])
+
+  const handleDraftActionClick = useCallback(async (actionKey: string) => {
+    if (!isDesktop) onMobileClose?.()
+    await onOpenDraftAction?.(actionKey)
+  }, [isDesktop, onMobileClose, onOpenDraftAction])
 
   // Escape closes the drawer, and the page behind it must not scroll.
   useEffect(() => {
@@ -805,7 +819,7 @@ export default function VerticalStageNav({
                 <div className={`ml-5 pl-4 border-l ${themeClasses.subStageBorder} py-1 mt-1 space-y-0.5`}>
                   {/* Static Sub-Stages */}
                   {stage.subStages
-                    .filter(sub => !isDraftingStage || !['ai_review', 'export'].includes(sub.key))
+                    .filter(sub => !isDraftingStage || !DRAFT_ACTION_SUB_STAGES.includes(sub.key))
                     .map(subStage => {
                       const SubIcon = subStage.icon
                       const status = subStage.getStatus(session)
@@ -916,16 +930,22 @@ export default function VerticalStageNav({
                       </div>
                       
                       {stage.subStages
-                        .filter(sub => ['ai_review', 'export'].includes(sub.key))
+                        .filter(sub => DRAFT_ACTION_SUB_STAGES.includes(sub.key))
                         .map(subStage => {
                           const SubIcon = subStage.icon
                           const status = subStage.getStatus(session)
 
+                          // These are actions on the current draft, not pipeline
+                          // stages — clicking jumps to the drafting stage and
+                          // opens the matching panel instead of moving the flow.
                           return (
-                            <div
+                            <button
                               key={subStage.key}
+                              type="button"
+                              onClick={() => handleDraftActionClick(subStage.key)}
+                              title={subStage.description}
                               className={`
-                                flex items-center gap-2 px-2 py-1.5 rounded-lg
+                                w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left
                                 ${themeClasses.hover} transition-colors
                               `}
                             >
@@ -937,7 +957,7 @@ export default function VerticalStageNav({
                                 {subStage.label}
                               </span>
                               <SubIcon className={`w-3 h-3 ${themeClasses.textSubtle}`} />
-                            </div>
+                            </button>
                           )
                         })}
                     </>

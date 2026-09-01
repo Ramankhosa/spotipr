@@ -31,6 +31,7 @@ import {
   Edit3,
   Lock,
   List,
+  ListChecks,
   Zap,
   type LucideIcon
 } from 'lucide-react'
@@ -475,6 +476,24 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
           )
           
           return hasReviewForSelectedJurisdiction ? 'completed' : 'pending'
+        }
+      },
+      {
+        key: 'coverage',
+        label: 'Check Coverage',
+        icon: ListChecks,
+        description: 'Trace the draft back to the disclosure',
+        required: false,
+        getStatus: (session) => {
+          // "Engaged with" rather than "passed": the coverage percentage needs a
+          // fresh report, but review marks are a durable record that the
+          // attorney worked the list.
+          const drafts = session?.annexureDrafts || []
+          const hasMarks = drafts.some((draft: any) => {
+            const review = draft?.extraSections?._coverageReview
+            return review && typeof review === 'object' && Object.keys(review).length > 0
+          })
+          return hasMarks ? 'completed' : 'pending'
         }
       },
       {
