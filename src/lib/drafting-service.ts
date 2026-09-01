@@ -2592,6 +2592,7 @@ ${writingSampleBlock}`
         archetype,
         jurisdiction,
         suppressClaimInjection: independentClaimsTemplateUsed,
+        tablesAllowed: ctx?.globalRules?.allowTables !== false,
       })
       
       // Check gating: if section requires Claim 1 but it's missing, throw error

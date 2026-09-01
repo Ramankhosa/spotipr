@@ -150,6 +150,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [stage0OverlayError, setStage0OverlayError] = useState<string | undefined>(undefined)
   const [activeTab, setActiveTab] = useState<'core' | 'components' | 'supportData' | 'scope' | 'classification' | 'inventors'>('core')
   const [expandedComponents, setExpandedComponents] = useState<Set<number>>(new Set())
+  // Incremented by the readiness header to focus needs-attention facts in the editor.
+  const [attentionSignal, setAttentionSignal] = useState(0)
 
   // Editable fields
   const [problem, setProblem] = useState('')
@@ -513,27 +515,48 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         </Alert>
       )}
 
-      {/* Combined Notice: Sequential Steps + Experimental Data */}
-      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-        <div className="flex items-start gap-3">
-          <div className="flex-shrink-0 p-1.5 bg-amber-100 rounded-full">
-            <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+      {/* Readiness strip — what was extracted and where it stands */}
+      {showNormalized && normalizedData && (() => {
+        const activeFacts = supportDataSources.filter(source => source.status !== 'deleted')
+        const claimedCount = activeFacts.filter(source => ['core', 'dependent', 'fallback'].includes(source.claimUse)).length
+        const keptOutCount = activeFacts.filter(source => source.claimUse === 'do_not_claim').length
+        const attentionCount = activeFacts.filter(source =>
+          source.status === 'not_stated' || source.status === 'unsupported' ||
+          source.kind === 'missing_fact' || source.kind === 'risk'
+        ).length
+        return (
+          <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-paper-300 bg-white px-4 py-2.5">
+            <span className="text-xs text-ai-graphite-600">
+              <span className="font-semibold text-ai-graphite-900 tabular-nums">{activeFacts.length}</span> source facts extracted
+            </span>
+            <span className="hidden h-4 w-px bg-paper-300 sm:block" />
+            <span className="text-xs text-ai-graphite-600">
+              <span className="font-semibold text-ai-blue-700 tabular-nums">{claimedCount}</span> routed to claims
+            </span>
+            <span className="hidden h-4 w-px bg-paper-300 sm:block" />
+            <span className="text-xs text-ai-graphite-600">
+              <span className="font-semibold text-ai-graphite-900 tabular-nums">{keptOutCount}</span> kept out of claims
+            </span>
+            {attentionCount > 0 && (
+              <>
+                <span className="hidden h-4 w-px bg-paper-300 sm:block" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInventionDetails(true)
+                    setActiveTab('supportData')
+                    setAttentionSignal(v => v + 1)
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
+                >
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  <span className="tabular-nums">{attentionCount}</span> need your attention
+                </button>
+              </>
+            )}
           </div>
-          <div className="flex-1 space-y-2">
-            {/* Sequential Steps Notice */}
-            <p className="text-xs text-amber-800 leading-relaxed">
-              <span className="inline-flex items-center gap-1 bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded text-[10px] font-bold mr-1">⚠️ FOLLOW STEPS IN ORDER</span>
-              Complete each stage sequentially for best results: <span className="font-medium">Invention → Claims → Prior Art → Refinement → Components → Figures → Draft</span>
-            </p>
-            {/* Experimental Data Notice */}
-            <p className="text-xs text-amber-700 leading-relaxed">
-              <strong>About Support Data:</strong> This stage extracts complex source facts. Review tables, equations, examples, test results, sequences, and exclusions in the <strong>Support Data</strong> tab.
-            </p>
-          </div>
-        </div>
-      </div>
+        )
+      })()}
 
       {(!showNormalized || !normalizedData) && (
         <KishoNormalizationLoader mode={allowRefine ? 'enhance' : 'preserve'} />
@@ -1220,11 +1243,21 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
                       {/* ═══ SCOPE TAB ═══ */}
                       {activeTab === 'supportData' && (
-                        <SupportDataSourcesEditor
-                          sources={supportDataSources}
-                          onChange={setSupportDataSources}
-                          isEditing={isEditing}
-                        />
+                        <div className="space-y-3">
+                          <SupportDataSourcesEditor
+                            sources={supportDataSources}
+                            onChange={setSupportDataSources}
+                            isEditing={isEditing}
+                            attentionSignal={attentionSignal}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('scope')}
+                            className="text-[11px] text-ai-blue-600 hover:text-ai-blue-800 hover:underline"
+                          >
+                            Looking for per-element claim, numbering, or figure treatment? → Scope
+                          </button>
+                        </div>
                       )}
 
                       {activeTab === 'scope' && (
@@ -1235,8 +1268,15 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 Scope Recommendations <span className="text-ai-graphite-400 font-normal text-xs">({scopeRecommendations?.elements?.length || 0})</span>
                               </h4>
                               <p className="text-[11px] text-ai-graphite-500 mt-0.5">
-                                Controls what the claims stage may claim, number, draw, or describe.
+                                Element-level treatment — what may be claimed, numbered, drawn, or described, per invention element.
                               </p>
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab('supportData')}
+                                className="mt-1 text-[11px] text-ai-blue-600 hover:text-ai-blue-800 hover:underline"
+                              >
+                                Looking for the facts and evidence themselves? → Support Data
+                              </button>
                             </div>
                             <button
                               type="button"
@@ -1460,11 +1500,16 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                   name: c.name.trim() // Trim whitespace from names
                                 }))
                               
+                              // suppressRefresh: a refresh would swap the session object and
+                              // re-run the hydrate effect, overwriting every local edit made
+                              // while the save was in flight. Local state stays authoritative;
+                              // the next stage navigation refreshes the session anyway.
                               await onComplete({
                                 action: 'update_idea_record',
                                 sessionId: session?.id,
+                                suppressRefresh: true,
                                 patch: {
-                                  problem, objectives, logic, bestMethod, 
+                                  problem, objectives, logic, bestMethod,
                                   components: validComponents,
                                   searchQuery, abstract: abstractText, cpcCodes, ipcCodes,
                                   scopeRecommendations,
@@ -1472,11 +1517,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                   schemaVersion: 2
                                 }
                               })
-                              
+
                               // Update local state with cleaned components
                               setComponents(validComponents)
                               setIsEditing(false)
-                              onRefresh()
                             } catch (err) {
                               console.error('Failed to save edits:', err)
                               setError('Failed to save edits')

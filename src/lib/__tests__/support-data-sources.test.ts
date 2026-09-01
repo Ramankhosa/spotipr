@@ -5,13 +5,15 @@ import {
   buildSupportDataSourceEntries,
   buildSupportDataSourcePromptBlock,
   coerceSupportDataSources,
+  completeSupportDataSources,
   extractSupportDataSourceCandidates,
   previewSupportDataSource,
+  projectSupportDataDestinations,
   updateDetailedDescriptionInjectionControls,
 } from '@/lib/support-data-sources'
 
 describe('support data sources', () => {
-  test('coerces, dedupes, filters malformed items, and reassigns SDS ids', () => {
+  test('coerces, dedupes, filters malformed items, and mints ids for id-less entries', () => {
     const sources = coerceSupportDataSources([
       { id: 'bad', kind: 'component', label: 'Controller', value: 'Controller receives sensor data', claimUse: 'core' },
       { kind: 'component', label: 'Controller', value: 'Controller receives sensor data', claimUse: 'core' },
@@ -22,6 +24,98 @@ describe('support data sources', () => {
     expect(sources).toHaveLength(2)
     expect(sources[0]).toMatchObject({ id: 'SDS-001', kind: 'component', label: 'Controller', claimUse: 'core' })
     expect(sources[1]).toMatchObject({ id: 'SDS-002', kind: 'table' })
+  })
+
+  test('preserves well-formed supplied ids, even out of order', () => {
+    const sources = coerceSupportDataSources([
+      { id: 'SDS-007', kind: 'component', label: 'Pump', value: 'A pump circulates fluid.' },
+      { id: 'SDS-002', kind: 'component', label: 'Valve', value: 'A valve regulates flow.' },
+    ])
+
+    expect(sources.map(s => s.id)).toEqual(['SDS-007', 'SDS-002'])
+  })
+
+  test('deleting an earlier fact does not renumber later ones', () => {
+    const original = coerceSupportDataSources([
+      { kind: 'component', label: 'Pump', value: 'A pump circulates fluid.' },
+      { kind: 'component', label: 'Valve', value: 'A valve regulates flow.' },
+      { kind: 'component', label: 'Tank', value: 'A tank stores fluid.' },
+    ])
+    expect(original.map(s => s.id)).toEqual(['SDS-001', 'SDS-002', 'SDS-003'])
+
+    const afterDelete = coerceSupportDataSources(original.filter(s => s.id !== 'SDS-001'))
+    expect(afterDelete.map(s => s.id)).toEqual(['SDS-002', 'SDS-003'])
+  })
+
+  test('de-collides duplicate supplied ids, first wins, and mints above the highest suffix', () => {
+    const sources = coerceSupportDataSources([
+      { id: 'SDS-005', kind: 'component', label: 'Pump', value: 'A pump circulates fluid.' },
+      { id: 'SDS-005', kind: 'component', label: 'Valve', value: 'A valve regulates flow.' },
+      { kind: 'component', label: 'Tank', value: 'A tank stores fluid.' },
+    ])
+
+    expect(sources[0].id).toBe('SDS-005')
+    expect(sources[1].id).toBe('SDS-006')
+    expect(sources[2].id).toBe('SDS-007')
+    expect(new Set(sources.map(s => s.id)).size).toBe(sources.length)
+  })
+
+  test('completeSupportDataSources merges fresh candidates without id collisions', () => {
+    const rawIdea = [
+      'The dryer uses a controller.',
+      '',
+      '| Temp | Time |',
+      '| --- | --- |',
+      '| 60 C | 4 h |',
+    ].join('\n')
+    const existing = coerceSupportDataSources([
+      { id: 'SDS-001', kind: 'component', label: 'Controller', value: 'A controller manages heating.' },
+      { id: 'SDS-004', kind: 'numeric_value', label: 'airflow', value: '2 m/s' },
+    ])
+
+    const { supportDataSources } = completeSupportDataSources(rawIdea, { supportDataSources: existing })
+
+    const ids = supportDataSources.map(s => s.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).toContain('SDS-001')
+    expect(ids).toContain('SDS-004')
+    // Candidates mint above the highest existing suffix — they never reuse a gap.
+    const minted = ids.filter(id => !['SDS-001', 'SDS-004'].includes(id))
+    expect(minted.length).toBeGreaterThan(0)
+    minted.forEach((id) => {
+      expect(parseInt(id.slice(4), 10)).toBeGreaterThan(4)
+    })
+  })
+
+  test('destination projection agrees with the prompt builder, caps included', () => {
+    const raw = [
+      ...Array.from({ length: 47 }, (_, i) => ({
+        kind: 'component',
+        label: `Component ${i + 1}`,
+        value: `Component ${i + 1} performs step ${i + 1}.`,
+        claimUse: 'dependent',
+        sectionTargets: ['claims'],
+      })),
+      ...Array.from({ length: 5 }, (_, i) => ({
+        kind: 'do_not_claim',
+        label: `Exclusion ${i + 1}`,
+        value: `Do not claim variant ${i + 1}.`,
+        claimUse: 'do_not_claim',
+        sectionTargets: ['claims'],
+      })),
+    ]
+    const sources = coerceSupportDataSources(raw)
+    const claims = projectSupportDataDestinations(sources).find(p => p.section === 'claims')
+
+    expect(claims).toBeDefined()
+    expect(claims!.positiveTotal).toBe(47)
+    expect(claims!.positives).toBe(40)
+    expect(claims!.guardrails).toBe(5)
+    expect(claims!.truncated).toBe(true)
+
+    const block = buildSupportDataSourcePromptBlock({ supportDataSources: sources }, 'claims')
+    const injectedLines = (block.match(/^- \[SDS-/gm) || []).length
+    expect(injectedLines).toBe(claims!.positives + claims!.guardrails)
   })
 
   test('injects claim support with guardrails and excludes deleted/background-only positives', () => {
@@ -148,6 +242,85 @@ describe('support data sources', () => {
     expect(preview.selectedSources[0]).toMatchObject({ sourceId: 'SDS-001', included: true, edited: true })
     expect(preview.selectedSources[1]).toMatchObject({ sourceId: 'SDS-002', included: false })
     expect(preview.guardrailSources[0]).toMatchObject({ sourceId: 'SDS-003', included: false })
+  })
+
+  test('renderSourcesAsTable adds the table-presentation instruction, gated by tablesAllowed', () => {
+    const base = {
+      supportDataSources: coerceSupportDataSources([
+        { kind: 'test_result', label: 'Dissolution', value: 'F1 released 92.4% at 60 min.', claimUse: 'dependent', sectionTargets: ['detailedDescription'] },
+      ]),
+      detailedDescriptionSourceSelection: {
+        schemaVersion: 1,
+        status: 'ready',
+        sectionKey: 'detailedDescription',
+        jurisdiction: 'US',
+        inputHash: 'hash-t',
+        selectedSources: [{ sourceId: 'SDS-001', role: 'claim_support', confidence: 'high', reason: 'Data support.' }],
+        guardrailSources: [],
+        excludedSources: [],
+        warnings: [],
+      },
+    }
+    const withTables = {
+      ...base,
+      detailedDescriptionInjectionControls: {
+        schemaVersion: 1,
+        sectionKey: 'detailedDescription',
+        jurisdictions: { US: { selectionInputHash: 'hash-t', renderSourcesAsTable: true } },
+      },
+    }
+
+    // Off by default
+    expect(buildDetailedDescriptionEvidencePromptBlock(base, { jurisdiction: 'US' }))
+      .not.toContain('SOURCE DATA TABLE PRESENTATION')
+    // On when the attorney enabled it
+    const enabledBlock = buildDetailedDescriptionEvidencePromptBlock(withTables, { jurisdiction: 'US' })
+    expect(enabledBlock).toContain('BEGIN SOURCE DATA TABLE PRESENTATION (ATTORNEY-ENABLED)')
+    expect(enabledBlock).toContain('Markdown table')
+    expect(enabledBlock).toContain('VERBATIM')
+    // Suppressed where the jurisdiction disallows tables
+    expect(buildDetailedDescriptionEvidencePromptBlock(withTables, { jurisdiction: 'US', tablesAllowed: false }))
+      .not.toContain('SOURCE DATA TABLE PRESENTATION')
+    // Preview surfaces the flag
+    expect(buildDetailedDescriptionEvidencePreview(withTables, 'US').renderSourcesAsTable).toBe(true)
+    expect(buildDetailedDescriptionEvidencePreview(base, 'US').renderSourcesAsTable).toBe(false)
+  })
+
+  test('updateDetailedDescriptionInjectionControls round-trips renderSourcesAsTable', () => {
+    const normalizedData = {
+      supportDataSources: coerceSupportDataSources([
+        { kind: 'test_result', label: 'Dissolution', value: 'F1 released 92.4% at 60 min.', claimUse: 'dependent', sectionTargets: ['detailedDescription'] },
+      ]),
+      detailedDescriptionSourceSelection: {
+        schemaVersion: 1,
+        status: 'ready',
+        sectionKey: 'detailedDescription',
+        jurisdiction: 'US',
+        inputHash: 'hash-t',
+        selectedSources: [{ sourceId: 'SDS-001', role: 'claim_support', confidence: 'high' }],
+        guardrailSources: [],
+        excludedSources: [],
+        warnings: [],
+      },
+    }
+
+    const enabled = updateDetailedDescriptionInjectionControls(normalizedData, 'US', { renderSourcesAsTable: true })
+    expect(enabled.jurisdictions?.US?.renderSourcesAsTable).toBe(true)
+
+    const disabled = updateDetailedDescriptionInjectionControls(
+      { ...normalizedData, detailedDescriptionInjectionControls: enabled },
+      'US',
+      { renderSourcesAsTable: false }
+    )
+    expect(disabled.jurisdictions?.US?.renderSourcesAsTable).toBeUndefined()
+
+    // Untouched when the update omits the field
+    const untouched = updateDetailedDescriptionInjectionControls(
+      { ...normalizedData, detailedDescriptionInjectionControls: enabled },
+      'US',
+      { coveragePreset: 'lean' }
+    )
+    expect(untouched.jurisdictions?.US?.renderSourcesAsTable).toBe(true)
   })
 
   test('applies DD coverage presets to LLM-selected source support', () => {

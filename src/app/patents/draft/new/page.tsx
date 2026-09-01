@@ -15,6 +15,7 @@ import {
   MAX_DRAFTING_UPLOAD_BYTES,
   MAX_DRAFTING_UPLOAD_MB
 } from '@/lib/drafting-constants'
+import { detectNumericResults } from '@/lib/supporting-data-detection'
 
 const DRAFTING_INPUT_WARNING_CHARS = Math.floor(MAX_DRAFTING_INPUT_CHARS * 0.9)
 const EXTRACTED_IMAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
@@ -133,7 +134,9 @@ function NewPatentDraftPageContent() {
   const [selectedProject, setSelectedProject] = useState<string>(initialProjectId)
   const [patentTitle, setPatentTitle] = useState('')
   const [rawIdea, setRawIdea] = useState('')
-  
+  // Advisory only: points pharma/chem-style disclosures at the DD supporting-data panel
+  const hasNumericResults = useMemo(() => detectNumericResults(rawIdea), [rawIdea])
+
   // Load content from URL params (for idea bank integration)
   useEffect(() => {
     const urlTitle = searchParams?.get('title')
@@ -1351,6 +1354,19 @@ function NewPatentDraftPageContent() {
                   <strong>Note:</strong> Include tables, equations, examples, test measurements, schemas, sequences, or exclusions here if they support the invention. Stage 0 will extract them into editable support data.
                 </p>
               </div>
+              {/* Supporting-data pointer: shown when the description carries measured results */}
+              {hasNumericResults && (
+                <div className="mt-2 flex items-start gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-md">
+                  <svg className="w-4 h-4 text-emerald-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M8 6v12M16 6v12M4 6h16a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V7a1 1 0 011-1z" />
+                  </svg>
+                  <p className="text-xs text-emerald-800">
+                    <strong>Experimental data detected.</strong> Later, in the Draft stage, you can paste your
+                    measurements into the &quot;Detailed Description Data&quot; panel and present them as
+                    formatted tables — useful for efficacy, stability, or trial results.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* File Upload */}

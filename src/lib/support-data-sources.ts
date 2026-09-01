@@ -140,6 +140,9 @@ export type DetailedDescriptionJurisdictionInjectionControls = {
   sourceTextOverrides?: Record<string, DetailedDescriptionSourceTextOverride>
   customIncludeInstruction?: string
   customIntegrationInstruction?: string
+  // Present data-carrying selected sources (tables, test results, numeric series)
+  // as Markdown tables in the drafted Detailed Description instead of prose.
+  renderSourcesAsTable?: boolean
   updatedAt?: string
 }
 
@@ -174,6 +177,7 @@ export type DetailedDescriptionEvidencePreview = {
   coveragePreset?: DetailedDescriptionCoveragePreset
   customIncludeInstruction?: string
   customIntegrationInstruction?: string
+  renderSourcesAsTable?: boolean
   includedSelectedCount?: number
   totalSelectedCount?: number
   selectedSources: DetailedDescriptionEvidencePreviewItem[]
@@ -335,7 +339,7 @@ function defaultSectionTargets(kind: SupportDataSourceKind, claimUse: SupportCla
   return ['detailedDescription']
 }
 
-function defaultClaimUse(kind: SupportDataSourceKind, status: SupportStatus): SupportClaimUse {
+export function defaultClaimUse(kind: SupportDataSourceKind, status: SupportStatus): SupportClaimUse {
   if (status === 'unsupported' || kind === 'do_not_claim') return 'do_not_claim'
   if (kind === 'prior_art') return 'background_only'
   if (kind === 'risk' || kind === 'missing_fact') return 'none'
@@ -343,7 +347,7 @@ function defaultClaimUse(kind: SupportDataSourceKind, status: SupportStatus): Su
   return 'none'
 }
 
-function defaultFigureUse(kind: SupportDataSourceKind) {
+export function defaultFigureUse(kind: SupportDataSourceKind) {
   if (kind === 'figure') return 'include' as const
   if (kind === 'component' || kind === 'subcomponent' || kind === 'process_step') return 'optional' as const
   return 'do_not_show' as const
@@ -364,11 +368,35 @@ function sourceId(index: number) {
   return `SDS-${String(index + 1).padStart(3, '0')}`
 }
 
+const SOURCE_ID_PATTERN = /^SDS-(\d{3,})$/
+
+export function isWellFormedSourceId(value: unknown): value is string {
+  return typeof value === 'string' && SOURCE_ID_PATTERN.test(value)
+}
+
+// Mint the next id above the highest suffix already taken. Never positional:
+// downstream records (DD injection controls, figure evidenceIds) key on these
+// ids, so an id must never depend on where the fact sits in the array.
+export function mintSourceId(taken: Set<string>): string {
+  let max = 0
+  taken.forEach((id) => {
+    const match = SOURCE_ID_PATTERN.exec(id)
+    if (match) max = Math.max(max, parseInt(match[1], 10))
+  })
+  const id = sourceId(max)
+  taken.add(id)
+  return id
+}
+
 export function coerceSupportDataSources(value: unknown): SupportDataSource[] {
   if (!Array.isArray(value)) return []
 
   const seen = new Set<string>()
   const normalized: Array<Omit<SupportDataSource, 'id'>> = []
+  const suppliedIds: Array<string | undefined> = []
+  // Ids of dedupe-dropped duplicates: never reassigned to a different fact,
+  // since stale references (figure evidenceIds) may still point at them.
+  const retiredIds = new Set<string>()
 
   value.forEach((raw) => {
     if (!raw) return
@@ -415,12 +443,32 @@ export function coerceSupportDataSources(value: unknown): SupportDataSource[] {
       status,
     }
     const key = supportDedupeKey(item)
-    if (seen.has(key)) return
+    if (seen.has(key)) {
+      if (isWellFormedSourceId(record.id)) retiredIds.add(record.id)
+      return
+    }
     seen.add(key)
     normalized.push(item)
+    suppliedIds.push(isWellFormedSourceId(record.id) ? record.id : undefined)
   })
 
-  return normalized.map((item, index) => ({ id: sourceId(index), ...item }))
+  // Stable id assignment: a well-formed supplied id is preserved (first claim
+  // wins), everything else is minted above the highest suffix in play. Ids are
+  // unique by construction — `taken` pre-claims every supplied id so a mint can
+  // never collide with a later entry's supplied id.
+  const taken = new Set<string>(retiredIds)
+  suppliedIds.forEach((id) => { if (id) taken.add(id) })
+  const assigned = new Set<string>()
+  return normalized.map((item, index) => {
+    const supplied = suppliedIds[index]
+    if (supplied && !assigned.has(supplied)) {
+      assigned.add(supplied)
+      return { id: supplied, ...item }
+    }
+    const id = mintSourceId(taken)
+    assigned.add(id)
+    return { id, ...item }
+  })
 }
 
 function parseMarkdownTable(block: string) {
@@ -502,7 +550,10 @@ function addRiskIfMatches(rawIdea: string, pattern: RegExp, label: string, value
   })
 }
 
-export function extractSupportDataSourceCandidates(rawIdea: string): SupportDataSource[] {
+// Raw candidates carry NO id — ids are assigned by the coerce pass of whichever
+// merge consumes them, so a re-normalization can never collide with ids already
+// claimed by existing facts.
+function collectSupportDataSourceCandidates(rawIdea: string): Array<Omit<SupportDataSource, 'id'>> {
   const out: any[] = []
   const text = rawIdea || ''
 
@@ -626,7 +677,11 @@ export function extractSupportDataSourceCandidates(rawIdea: string): SupportData
   addRiskIfMatches(text, /\btraditional\s+knowledge\b/i, 'India traditional knowledge risk', 'Traditional knowledge language requires claim-scope and novelty-source review.', out)
   addRiskIfMatches(text, /\bmere\s+admixture\b/i, 'India mere admixture risk', 'Mere admixture language may require synergy or technical-effect support.', out)
 
-  return coerceSupportDataSources(out)
+  return out
+}
+
+export function extractSupportDataSourceCandidates(rawIdea: string): SupportDataSource[] {
+  return coerceSupportDataSources(collectSupportDataSourceCandidates(rawIdea))
 }
 
 export function completeSupportDataSources(
@@ -634,9 +689,11 @@ export function completeSupportDataSources(
   normalizedData: Record<string, unknown>
 ): { supportDataSources: SupportDataSource[]; normalizationReviewWarnings: string[] } {
   const existing = coerceSupportDataSources(normalizedData?.supportDataSources)
+  // Existing facts come first so their ids are claimed before id-less
+  // candidates are minted above them.
   const combined = coerceSupportDataSources([
     ...existing,
-    ...extractSupportDataSourceCandidates(rawIdea),
+    ...collectSupportDataSourceCandidates(rawIdea),
   ])
   const before = new Set(existing.map(item => supportDedupeKey(item)))
   const warnings = combined
@@ -695,7 +752,7 @@ export function isDetailedDescriptionGuardrailCandidate(item: SupportDataSource)
   return isSupportDataGuardrail(item)
 }
 
-function sectionMatches(item: SupportDataSource, sectionKey: string) {
+export function sectionMatches(item: SupportDataSource, sectionKey: string) {
   const section = normalizeSectionTarget(sectionKey) || sectionKey
   if (item.status === 'deleted') return false
   if (section === 'claims') {
@@ -720,6 +777,97 @@ function sectionMatches(item: SupportDataSource, sectionKey: string) {
       /\b(best|preferred|preferably)\b/i.test(`${item.label} ${item.value}`)
   }
   return item.sectionTargets.includes(section)
+}
+
+// Injection caps used by buildSupportDataSourcePromptBlock. The Stage 0
+// destinations strip shares these so its counts never drift from what the
+// prompt builder actually injects.
+export const SECTION_PROMPT_POSITIVE_CAP = 40
+export const SECTION_PROMPT_GUARDRAIL_CAP = 20
+
+// The positive-support filter buildSupportDataSourcePromptBlock applies after
+// sectionMatches. Shared with projectSupportDataDestinations for the same reason.
+function isPositiveSupportForSection(item: SupportDataSource, section: string): boolean {
+  if (isSupportDataGuardrail(item) || item.status === 'unsupported' || item.status === 'not_stated') return false
+  if (section === 'claims') return ['core', 'dependent', 'fallback'].includes(item.claimUse)
+  if (section === 'background' || section === 'technicalProblem') {
+    return item.claimUse === 'background_only' || item.kind === 'prior_art' || item.sectionTargets.includes(section)
+  }
+  return true
+}
+
+export const SUPPORT_SECTION_LABELS: Record<string, string> = {
+  title: 'Title',
+  preamble: 'Preamble',
+  fieldOfInvention: 'Field of invention',
+  background: 'Background',
+  objectsOfInvention: 'Objects of invention',
+  summary: 'Summary',
+  technicalProblem: 'Technical problem',
+  technicalSolution: 'Technical solution',
+  advantageousEffects: 'Advantages',
+  briefDescriptionOfDrawings: 'Drawings intro',
+  detailedDescription: 'Detailed description',
+  bestMethod: 'Best method',
+  bestMode: 'Best mode',
+  industrialApplicability: 'Industrial applicability',
+  claims: 'Claims',
+  abstract: 'Abstract',
+  listOfNumerals: 'List of numerals',
+  crossReference: 'Cross reference',
+}
+
+export type SupportDestinationProjection = {
+  section: SupportSectionTarget
+  positives: number
+  guardrails: number
+  positiveTotal: number
+  guardrailTotal: number
+  truncated: boolean
+  // detailedDescription only: counts are eligibility — the final in/out is
+  // decided by the evidence-selection pass and coverage preset.
+  viaEvidenceSelection: boolean
+}
+
+// Forward-projects where each fact will land, using the SAME predicates and
+// caps as the prompt builders. Sections with nothing routed are omitted.
+export function projectSupportDataDestinations(sources: SupportDataSource[]): SupportDestinationProjection[] {
+  if (!sources.length) return []
+  const projections: SupportDestinationProjection[] = []
+  SUPPORT_SECTION_TARGETS.forEach((section) => {
+    if (section === 'detailedDescription') {
+      const positiveTotal = sources.filter(isDetailedDescriptionPositiveCandidate).length
+      const guardrailTotal = sources.filter(isDetailedDescriptionGuardrailCandidate).length
+      if (!positiveTotal && !guardrailTotal) return
+      projections.push({
+        section,
+        positives: positiveTotal,
+        guardrails: guardrailTotal,
+        positiveTotal,
+        guardrailTotal,
+        truncated: false,
+        viaEvidenceSelection: true,
+      })
+      return
+    }
+    const filtered = sources.filter(item => sectionMatches(item, section))
+    if (!filtered.length) return
+    const positiveTotal = filtered.filter(item => isPositiveSupportForSection(item, section)).length
+    const guardrailTotal = filtered.filter(isSupportDataGuardrail).length
+    if (!positiveTotal && !guardrailTotal) return
+    const positives = Math.min(positiveTotal, SECTION_PROMPT_POSITIVE_CAP)
+    const guardrails = Math.min(guardrailTotal, SECTION_PROMPT_GUARDRAIL_CAP)
+    projections.push({
+      section,
+      positives,
+      guardrails,
+      positiveTotal,
+      guardrailTotal,
+      truncated: positives < positiveTotal || guardrails < guardrailTotal,
+      viaEvidenceSelection: false,
+    })
+  })
+  return projections
 }
 
 function compactDetails(kind: SupportDataSourceKind, details: Record<string, any> | undefined) {
@@ -871,6 +1019,7 @@ function normalizeJurisdictionControls(value: unknown): DetailedDescriptionJuris
     sourceTextOverrides: normalizeSourceTextOverrides(record.sourceTextOverrides),
     ...(customIncludeInstruction ? { customIncludeInstruction } : {}),
     ...(customIntegrationInstruction ? { customIntegrationInstruction } : {}),
+    ...(record.renderSourcesAsTable === true ? { renderSourcesAsTable: true } : {}),
     ...(record.updatedAt ? { updatedAt: cleanString(record.updatedAt, 80) } : {}),
   }
 }
@@ -1041,7 +1190,7 @@ function formatGuardrailSupportLine(
 
 export function buildDetailedDescriptionEvidencePromptBlock(
   normalizedData: unknown,
-  optionsOrHeading: string | { heading?: string; jurisdiction?: string } = 'AUTO-SELECTED DETAILED DESCRIPTION SOURCE DATA'
+  optionsOrHeading: string | { heading?: string; jurisdiction?: string; tablesAllowed?: boolean } = 'AUTO-SELECTED DETAILED DESCRIPTION SOURCE DATA'
 ): string {
   if (!normalizedData || typeof normalizedData !== 'object') return ''
   const sources = coerceSupportDataSources((normalizedData as any).supportDataSources)
@@ -1068,6 +1217,8 @@ export function buildDetailedDescriptionEvidencePromptBlock(
   const coveragePreset = coveragePresetForControls(controls)
   const customIncludeInstruction = coveragePreset === 'custom' ? controls.customIncludeInstruction : undefined
   const customIntegrationInstruction = coveragePreset === 'custom' ? controls.customIntegrationInstruction : undefined
+  const tablesAllowed = typeof optionsOrHeading === 'string' ? true : optionsOrHeading.tablesAllowed !== false
+  const renderSourcesAsTable = controls.renderSourcesAsTable === true && tablesAllowed
 
   const selected = uniqueBySourceId(effectiveSelection.selectedSources || [])
     .map(item => ({ selection: item, source: byId.get(item.sourceId) }))
@@ -1105,6 +1256,23 @@ export function buildDetailedDescriptionEvidencePromptBlock(
       blocks.push(`How to integrate: ${customIntegrationInstruction}`)
     }
     blocks.push('END ATTORNEY CUSTOM INSTRUCTIONS FOR SELECTED DETAILED DESCRIPTION DATA')
+  }
+
+  if (renderSourcesAsTable && selected.length) {
+    blocks.push(`BEGIN SOURCE DATA TABLE PRESENTATION (ATTORNEY-ENABLED)
+The user expressly requires tabular output for data-carrying source items. This user instruction
+OVERRIDES any general directive to convert tables into prose paragraphs or to avoid long tables.
+Where a selected source item above carries tabular or measured data (kinds such as table,
+test_result, numeric_value, condition, or example with data series), reproduce that data in the
+Detailed Description as a GitHub-style Markdown table (pipe-delimited cells, a header row, then a
+|---|---| separator row):
+- Preserve the source's rows, columns, headers, units, and values VERBATIM.
+- Do NOT add, remove, reorder, merge, or recompute any row, column, or value.
+- Immediately before each table, add a caption paragraph of the form "Table N — <short descriptive title>".
+- Number tables sequentially, sharing one running sequence with any other tables in this section.
+- Separate each table from surrounding prose with a blank line on both sides.
+- Source items that do not carry tabular or measured data remain prose.
+END SOURCE DATA TABLE PRESENTATION (ATTORNEY-ENABLED)`)
   }
 
   if (guardrails.length) {
@@ -1152,9 +1320,11 @@ export function buildDetailedDescriptionEvidencePreview(
   const byId = sourceMapById(sources)
   const selection = selectionFromNormalizedData(normalizedData)
   if (!selection) {
+    const { controls: missingControls } = controlsFromNormalizedData(normalizedData, jurisdiction, null)
     return {
       status: 'missing',
       jurisdiction: normalizeJurisdictionCode(jurisdiction || 'US'),
+      renderSourcesAsTable: missingControls.renderSourcesAsTable === true,
       selectedSources: [],
       guardrailSources: [],
       excludedSources: [],
@@ -1220,6 +1390,7 @@ export function buildDetailedDescriptionEvidencePreview(
     coveragePreset,
     ...(controls.customIncludeInstruction ? { customIncludeInstruction: controls.customIncludeInstruction } : {}),
     ...(controls.customIntegrationInstruction ? { customIntegrationInstruction: controls.customIntegrationInstruction } : {}),
+    renderSourcesAsTable: controls.renderSourcesAsTable === true,
     includedSelectedCount: selectedSources.filter(item => item.included).length,
     totalSelectedCount: selectedSources.length,
     selectedSources,
@@ -1240,6 +1411,7 @@ export function updateDetailedDescriptionInjectionControls(
     removeSourceTextOverrideIds?: unknown
     customIncludeInstruction?: unknown
     customIntegrationInstruction?: unknown
+    renderSourcesAsTable?: unknown
   }
 ): DetailedDescriptionInjectionControls {
   const root = normalizeDetailedDescriptionInjectionControls((normalizedData as any)?.detailedDescriptionInjectionControls)
@@ -1300,6 +1472,13 @@ export function updateDetailedDescriptionInjectionControls(
       delete next.customIntegrationInstruction
     }
   }
+  if (update.renderSourcesAsTable !== undefined) {
+    if (update.renderSourcesAsTable === true) {
+      next.renderSourcesAsTable = true
+    } else {
+      delete next.renderSourcesAsTable
+    }
+  }
   next.selectionInputHash = currentHash
   next.updatedAt = new Date().toISOString()
 
@@ -1326,7 +1505,7 @@ export function buildSupportDataSourcePromptBlock(
   normalizedData: unknown,
   sectionKey: string,
   heading = 'SUPPORT DATA SOURCES (SECTION-FILTERED SOURCE SUPPORT)',
-  options?: { jurisdiction?: string }
+  options?: { jurisdiction?: string; tablesAllowed?: boolean }
 ) {
   if (!normalizedData || typeof normalizedData !== 'object') return ''
   const sources = coerceSupportDataSources((normalizedData as any).supportDataSources)
@@ -1336,18 +1515,16 @@ export function buildSupportDataSourcePromptBlock(
 
   const section = normalizeSectionTarget(sectionKey) || sectionKey
   if (section === 'detailedDescription') {
-    return buildDetailedDescriptionEvidencePromptBlock(normalizedData, { jurisdiction: options?.jurisdiction })
+    return buildDetailedDescriptionEvidencePromptBlock(normalizedData, {
+      jurisdiction: options?.jurisdiction,
+      tablesAllowed: options?.tablesAllowed,
+    })
   }
 
-  const positives = filtered.filter((item) => {
-    if (isSupportDataGuardrail(item) || item.status === 'unsupported' || item.status === 'not_stated') return false
-    if (section === 'claims') return ['core', 'dependent', 'fallback'].includes(item.claimUse)
-    if (section === 'background' || section === 'technicalProblem') {
-      return item.claimUse === 'background_only' || item.kind === 'prior_art' || item.sectionTargets.includes(section)
-    }
-    return true
-  }).slice(0, 40)
-  const guardrails = filtered.filter(isSupportDataGuardrail).slice(0, 20)
+  const positives = filtered
+    .filter(item => isPositiveSupportForSection(item, section))
+    .slice(0, SECTION_PROMPT_POSITIVE_CAP)
+  const guardrails = filtered.filter(isSupportDataGuardrail).slice(0, SECTION_PROMPT_GUARDRAIL_CAP)
   const lines = [
     heading,
     'Use these SDS IDs as traceable source support. Do not invent missing facts. Do not treat optional, unsupported, deleted, or do-not-claim items as mandatory invention elements.',

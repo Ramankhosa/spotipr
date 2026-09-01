@@ -14,6 +14,7 @@ import PersonaManager, { type PersonaSelection } from './PersonaManager'
 import type { ValidationIssue as UnifiedValidationIssue } from '@/types/validation'
 import { isDrawingSectionKey } from '@/lib/figure-availability'
 import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
+import { detectTabularData } from '@/lib/supporting-data-detection'
 import { useToast } from '@/components/ui/toast'
 import IncompleteFilingDialog from '@/components/filing/IncompleteFilingDialog'
 import SourceCoveragePanel from './SourceCoveragePanel'
@@ -72,6 +73,7 @@ interface DDEvidencePreview {
   coveragePreset?: DDEvidenceCoveragePreset
   customIncludeInstruction?: string
   customIntegrationInstruction?: string
+  renderSourcesAsTable?: boolean
   includedSelectedCount?: number
   totalSelectedCount?: number
   selectedSources: DDEvidencePreviewItem[]
@@ -1980,6 +1982,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [ddUserDataToggles, setDdUserDataToggles] = useState<Record<string, boolean>>({})
   // Present tabular user data as tables (pharma/chem supporting data) instead of prose
   const [ddRenderAsTable, setDdRenderAsTable] = useState(false)
+  // Shown when table presentation was switched on by paste-detection rather than by hand.
+  // The ref makes auto-enable fire at most once, so unticking is always respected.
+  const [ddTableAutoEnabled, setDdTableAutoEnabled] = useState(false)
+  const ddTableAutoSuggestedRef = useRef(false)
   const [ddUserDataLoading, setDdUserDataLoading] = useState(false)
   const [ddUserDataSaving, setDdUserDataSaving] = useState(false)
   const [ddUserDataSaved, setDdUserDataSaved] = useState(false) // For save confirmation feedback
@@ -2961,6 +2967,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       customIncludeInstruction: '',
       customIntegrationInstruction: '',
     })
+  }, [patchDDEvidenceControls])
+
+  const handleToggleDDSourcesAsTable = useCallback((enabled: boolean) => {
+    void patchDDEvidenceControls({ renderSourcesAsTable: enabled })
   }, [patchDDEvidenceControls])
 
   const handleToggleDDEvidenceSource = useCallback((sourceId: string, included: boolean) => {
@@ -4743,58 +4753,67 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
                 {/* DD User Data Panel - Only for detailedDescription sections */}
                 {section.keys.includes('detailedDescription') && (
-                  <div className="mb-4 border border-amber-200 rounded-lg bg-amber-50/50 overflow-hidden">
+                  <div className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                     <button
                       onClick={() => setDdUserDataExpanded(!ddUserDataExpanded)}
-                      className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-amber-100/50 transition-colors"
+                      aria-expanded={ddUserDataExpanded}
+                      className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-inset transition-colors"
                     >
-                      <div className="flex items-center gap-2">
-                        <svg className={`w-4 h-4 text-amber-600 transform transition-transform ${ddUserDataExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                        <span className="text-sm font-medium text-amber-800">Detailed Description Data</span>
-                        {ddUserData && (
-                          <span className="text-xs px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full">
-                            user {Math.round(new TextEncoder().encode(ddUserData).length / 1024)}KB
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-ai-blue-50 text-ai-blue-600">
+                          <svg className="h-4.5 w-4.5" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 15h18M9 5v14M4.5 5h15A1.5 1.5 0 0121 6.5v11a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 17.5v-11A1.5 1.5 0 014.5 5z" />
+                          </svg>
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-ai-graphite-900">Detailed Description Data</span>
+                          <span className="hidden sm:block text-xs text-ai-graphite-500 truncate">
+                            Stage 0 source support and additional supporting data for this section
                           </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        {ddEvidencePreview?.selectedSources?.length ? (
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            ddAutoIncludedCount > 0
-                              ? 'bg-ai-blue-100 text-ai-blue-700'
-                              : 'bg-paper-200 text-ai-graphite-500'
-                          }`}>
-                            Auto sources: {ddAutoIncludedCount}/{ddEvidencePreview.selectedSources.length}
-                          </span>
-                        ) : null}
-                        {ddEvidencePreview?.guardrailSources?.length ? (
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            ddGuardrailIncludedCount > 0
-                              ? 'bg-slate-100 text-slate-700'
-                              : 'bg-paper-200 text-ai-graphite-500'
-                          }`}>
-                            Guardrails: {ddGuardrailIncludedCount}/{ddEvidencePreview.guardrailSources.length}
-                          </span>
-                        ) : null}
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          ddManualInjectionEnabled
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-paper-200 text-ai-graphite-500'
-                        }`}>
-                          Additional: {ddManualInjectionEnabled ? ddManualInjectedTargets.join(', ') : 'Off'}
                         </span>
                       </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="hidden md:flex flex-wrap items-center justify-end gap-1.5">
+                          {ddEvidencePreview?.selectedSources?.length ? (
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              ddAutoIncludedCount > 0
+                                ? 'bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}>
+                              Sources {ddAutoIncludedCount}/{ddEvidencePreview.selectedSources.length}
+                            </span>
+                          ) : null}
+                          {ddEvidencePreview?.guardrailSources?.length ? (
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              ddGuardrailIncludedCount > 0
+                                ? 'bg-slate-100 text-slate-700 border border-slate-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}>
+                              Guardrails {ddGuardrailIncludedCount}/{ddEvidencePreview.guardrailSources.length}
+                            </span>
+                          ) : null}
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                            ddManualInjectionEnabled
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-500 border border-slate-200'
+                          }`}>
+                            Additional {ddManualInjectionEnabled ? `· ${ddManualInjectedTargets.join(', ')}` : 'off'}
+                          </span>
+                        </span>
+                        <svg className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${ddUserDataExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
                     </button>
-                    
+
                     {ddUserDataExpanded && (
-                      <div className="px-4 pb-4 border-t border-amber-200">
-                        <div className="mt-3 rounded-md border border-ai-blue-200 bg-white p-3">
+                      <div className="px-4 pb-4 border-t border-slate-200 bg-slate-50/60">
+                        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
-                              <div className="text-sm font-medium text-slate-800">Auto-selected source support</div>
-                              <div className="text-xs text-slate-500">
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-ai-blue-600">Stage 0 source support</div>
+                              <div className="mt-0.5 text-sm font-semibold text-ai-graphite-900">Auto-selected data from your disclosure</div>
+                              <div className="text-xs text-ai-graphite-500">
                                 {ddEvidencePreview?.status === 'ready'
                                   ? `${ddAutoIncludedCount} / ${ddEvidencePreview.selectedSources.length} support item${ddEvidencePreview.selectedSources.length === 1 ? '' : 's'} will be injected`
                                   : ddEvidencePreview?.status === 'failed'
@@ -4836,13 +4855,20 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           ) : null}
 
                           {ddEvidencePreview?.warnings?.length ? (
-                            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                            <div className={`mt-2 rounded border px-2 py-1.5 text-xs ${
+                              ddEvidencePreview.status === 'missing'
+                                ? 'border-slate-200 bg-slate-50 text-slate-600'
+                                : 'border-amber-200 bg-amber-50 text-amber-800'
+                            }`}>
                               {ddEvidencePreview.warnings[0]}
                             </div>
                           ) : null}
 
                           {!ddAnyInjectionEnabled ? (
-                            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                            <div className="mt-2 flex items-start gap-1.5 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
+                              <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
                               No Detailed Description data is currently selected for prompt injection.
                             </div>
                           ) : null}
@@ -4859,8 +4885,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   </div>
                                   <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                                     ddCoveragePreset === 'custom'
-                                      ? 'bg-lamp-100 text-lamp-700'
-                                      : 'bg-ai-blue-100 text-ai-blue-700'
+                                      ? 'bg-ai-blue-600 text-white'
+                                      : 'bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-200'
                                   }`}>
                                     {DD_EVIDENCE_COVERAGE_STAGES.find(stage => stage.value === ddCoveragePreset)?.label || 'Full'}
                                   </span>
@@ -4919,7 +4945,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   </div>
                                 </div>
                                 {ddCoveragePreset === 'custom' && (
-                                  <div className="mt-3 rounded border border-lamp-200 bg-white p-3">
+                                  <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
                                     {ddCustomInstructionsOpen ? (
                                       <div className="grid gap-3">
                                         <label className="grid gap-1">
@@ -4929,7 +4955,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             value={ddCustomIncludeDraft}
                                             onChange={(e) => setDdCustomIncludeDraft(e.target.value)}
                                             rows={3}
-                                            className="w-full rounded border border-lamp-200 bg-white p-2 text-xs text-slate-800 focus:border-lamp-500 focus:ring-lamp-500"
+                                            className="w-full rounded border border-slate-300 bg-white p-2 text-xs text-slate-800 focus:border-ai-blue-500 focus:ring-ai-blue-500"
                                             placeholder="Topics, experiments, results, embodiments, source labels, or examples to prioritize..."
                                             disabled={ddEvidenceSaving}
                                           />
@@ -4940,7 +4966,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             value={ddCustomIntegrationDraft}
                                             onChange={(e) => setDdCustomIntegrationDraft(e.target.value)}
                                             rows={3}
-                                            className="w-full rounded border border-lamp-200 bg-white p-2 text-xs text-slate-800 focus:border-lamp-500 focus:ring-lamp-500"
+                                            className="w-full rounded border border-slate-300 bg-white p-2 text-xs text-slate-800 focus:border-ai-blue-500 focus:ring-ai-blue-500"
                                             placeholder="Drafting style, density, emphasis, ordering, or exclusions..."
                                             disabled={ddEvidenceSaving}
                                           />
@@ -4961,7 +4987,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <button
                                             type="button"
                                             onClick={handleClearDDEvidenceCustomInstructions}
-                                            className="rounded border border-lamp-200 px-2 py-1 text-xs text-lamp-700 hover:bg-lamp-50"
+                                            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
                                             disabled={ddEvidenceSaving || (!ddCustomIncludeDraft.trim() && !ddCustomIntegrationDraft.trim() && !ddHasCustomInstructions)}
                                           >
                                             Clear
@@ -4969,7 +4995,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <button
                                             type="button"
                                             onClick={handleSaveDDEvidenceCustomInstructions}
-                                            className="rounded bg-lamp-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                                            className="rounded bg-ai-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-ai-blue-700 disabled:opacity-50"
                                             disabled={ddEvidenceSaving}
                                           >
                                             Save custom instructions
@@ -5000,7 +5026,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             setDdCustomIntegrationDraft(ddEvidencePreview?.customIntegrationInstruction || '')
                                             setDdCustomInstructionsOpen(true)
                                           }}
-                                          className="rounded border border-lamp-200 px-2 py-1 text-xs font-medium text-lamp-700 hover:bg-lamp-50"
+                                          className="rounded border border-ai-blue-200 px-2 py-1 text-xs font-medium text-ai-blue-700 hover:bg-ai-blue-50"
                                           disabled={ddEvidenceSaving}
                                         >
                                           {ddHasCustomInstructions ? 'Edit instructions' : 'Add instructions'}
@@ -5010,6 +5036,35 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   </div>
                                 )}
                               </div>
+
+                              {/* Present Stage 0 source data as tables */}
+                              <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                <div className="min-w-0">
+                                  <div className="text-xs font-medium text-slate-800">Present source data as tables</div>
+                                  <div className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                                    Data-carrying items above (tables, test results, numeric series) are drafted as formatted
+                                    tables instead of prose. Values stay verbatim and non-limiting.
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={ddEvidencePreview?.renderSourcesAsTable === true}
+                                  aria-label="Present source data as tables"
+                                  onClick={() => handleToggleDDSourcesAsTable(!(ddEvidencePreview?.renderSourcesAsTable === true))}
+                                  disabled={ddEvidenceSaving}
+                                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    ddEvidencePreview?.renderSourcesAsTable ? 'bg-ai-blue-600' : 'bg-slate-300'
+                                  }`}
+                                >
+                                  <span
+                                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                      ddEvidencePreview?.renderSourcesAsTable ? 'translate-x-5' : 'translate-x-0'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+
                               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <button type="button" onClick={handleSelectAllDDEvidence} disabled={ddEvidenceSaving} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">Select all</button>
@@ -5046,7 +5101,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           {item.role && <span className="text-[11px] px-1.5 py-0.5 rounded bg-ai-blue-100 text-ai-blue-700">{item.role.replace(/_/g, ' ')}</span>}
                                           {item.confidence && <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{item.confidence}</span>}
                                           {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">excluded</span>}
-                                          {item.edited && <span className="text-[11px] px-1.5 py-0.5 rounded bg-lamp-100 text-lamp-700">edited</span>}
+                                          {item.edited && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">edited</span>}
                                           {item.controlsStale && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">stale</span>}
                                         </div>
                                         <div className="mt-1 text-xs text-slate-600">{item.excerpt}</div>
@@ -5080,8 +5135,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-700">{item.injectedText || item.originalInjectedText}</pre>
                                         )}
                                         {ddEvidenceEditingSourceId === item.sourceId && (
-                                          <div className="mt-2 rounded border border-lamp-200 bg-lamp-50 p-2">
-                                            <div className="mb-1 text-[11px] font-medium text-lamp-800">Prompt-only edit. Original source data is unchanged.</div>
+                                          <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
+                                            <div className="mb-1 text-[11px] font-medium text-slate-700">Prompt-only edit. Original source data is unchanged.</div>
                                             <div className="mb-1 text-[11px] text-slate-600">Original source data</div>
                                             <pre className="mb-2 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-600">{item.originalInjectedText}</pre>
                                             <div className="mb-1 text-[11px] text-slate-600">Injected text override</div>
@@ -5089,12 +5144,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                               value={ddEvidenceEditDraft}
                                               onChange={(e) => setDdEvidenceEditDraft(e.target.value)}
                                               rows={5}
-                                              className="w-full rounded border border-lamp-300 bg-white p-2 text-xs text-slate-800"
+                                              className="w-full rounded border border-slate-300 bg-white p-2 text-xs text-slate-800 focus:border-ai-blue-500 focus:ring-ai-blue-500"
                                             />
                                             <div className="mt-2 flex justify-end gap-2">
                                               <button type="button" onClick={() => { setDdEvidenceEditingSourceId(null); setDdEvidenceEditDraft('') }} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700">Cancel</button>
                                               <button type="button" onClick={() => handleResetDDEvidenceOverride(item.sourceId)} className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700">Reset to original</button>
-                                              <button type="button" onClick={handleSaveDDEvidenceOverride} disabled={ddEvidenceSaving} className="rounded bg-lamp-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50">Save override</button>
+                                              <button type="button" onClick={handleSaveDDEvidenceOverride} disabled={ddEvidenceSaving} className="rounded bg-ai-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-ai-blue-700 disabled:opacity-50">Save override</button>
                                             </div>
                                           </div>
                                         )}
@@ -5159,42 +5214,62 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           ) : null}
                         </div>
 
-                        <div className="mt-3 mb-2 p-3 bg-amber-100/50 rounded-md border border-amber-200">
-                          <p className="text-xs text-amber-800">
-                            <strong>Legal Notice:</strong> Data entered here is for illustrative purposes only. 
-                            It is NON-LIMITING and will not establish thresholds, ranges, or requirements. 
-                            It will be injected with a legal wrapper when generating the Detailed Description.
-                          </p>
-                        </div>
-                        
-                        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                          <div className="text-xs font-medium text-amber-800">Additional user data</div>
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            ddManualInjectionEnabled
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-paper-200 text-ai-graphite-500'
-                          }`}>
-                            {ddManualInjectionEnabled
-                              ? `Additional data included for ${ddManualInjectedTargets.join(', ')}`
-                              : 'Additional data not included'}
-                          </span>
-                        </div>
+                        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-ai-blue-600">Additional data</div>
+                              <div className="mt-0.5 text-sm font-semibold text-ai-graphite-900">Supporting data not in the disclosure</div>
+                              <div className="text-xs text-ai-graphite-500">Experimental data, measurements, or test observations (max 50KB)</div>
+                            </div>
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              ddManualInjectionEnabled
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}>
+                              {ddManualInjectionEnabled
+                                ? `Included for ${ddManualInjectedTargets.join(', ')}`
+                                : 'Not included'}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <svg className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6M9 8h6M6 21h12a1 1 0 001-1V4a1 1 0 00-1-1H6a1 1 0 00-1 1v16a1 1 0 001 1z" />
+                            </svg>
+                            <p className="text-xs leading-relaxed text-slate-600">
+                              <span className="font-semibold text-slate-800">Legal notice:</span> data entered here is illustrative only.
+                              It is non-limiting, establishes no thresholds, ranges, or requirements, and is injected
+                              with a legal wrapper when the Detailed Description is generated.
+                            </p>
+                          </div>
+
                         <textarea
-                          className="w-full border border-amber-300 rounded-md p-3 text-sm focus:ring-amber-500 focus:border-amber-500 bg-white resize-none"
+                          className="mt-3 w-full border border-slate-300 rounded-lg p-3 text-sm text-ai-graphite-800 placeholder:text-ai-graphite-400 focus:ring-ai-blue-500 focus:border-ai-blue-500 bg-white resize-none"
                           rows={6}
                           placeholder="Paste experimental data, measurements, or test observations here (max 50KB)..."
                           value={ddUserData}
-                          onChange={(e) => setDdUserData(e.target.value)}
+                          onChange={(e) => {
+                            const value = e.target.value
+                            setDdUserData(value)
+                            if (!ddRenderAsTable && !ddTableAutoSuggestedRef.current && detectTabularData(value)) {
+                              ddTableAutoSuggestedRef.current = true
+                              setDdRenderAsTable(true)
+                              setDdTableAutoEnabled(true)
+                            }
+                          }}
                           disabled={ddUserDataLoading || ddUserDataSaving}
                         />
 
                         {/* Table presentation checkbox (pharma/chem supporting data) */}
-                        <label className={`mt-2 flex items-start gap-2 ${ddUserData.trim() ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                        <label className={`mt-3 flex items-start gap-2.5 ${ddUserData.trim() ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                           <input
                             type="checkbox"
-                            className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
                             checked={ddRenderAsTable}
-                            onChange={(e) => setDdRenderAsTable(e.target.checked)}
+                            onChange={(e) => {
+                              setDdRenderAsTable(e.target.checked)
+                              if (!e.target.checked) setDdTableAutoEnabled(false)
+                            }}
                             disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
                           />
                           <span className="min-w-0">
@@ -5204,11 +5279,16 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               in the Detailed Description instead of prose. Values are kept verbatim and remain non-limiting.
                               Applied only where the jurisdiction permits tables.
                             </span>
+                            {ddTableAutoEnabled && (
+                              <span className="mt-1 inline-block rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] text-emerald-700">
+                                Tabular data detected — enabled automatically. Untick to keep prose.
+                              </span>
+                            )}
                           </span>
                         </label>
 
                         {/* Additional user data include toggle */}
-                        <div className="mt-4 p-3 bg-paper-100 rounded-lg border border-paper-300">
+                        <div className="mt-3 p-3 bg-slate-50 rounded-md border border-slate-200">
                           <div className="flex items-center justify-between">
                             <div>
                               <div className="text-sm font-medium text-ai-graphite-700">Include additional user data</div>
@@ -5247,10 +5327,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   setDdUserDataToggles(autoSelect)
                                 }
                               }}
-                              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 ${
+                              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
                                 Object.values(ddUserDataToggles).some(v => v === true)
-                                  ? 'bg-amber-600'
-                                  : 'bg-gray-300'
+                                  ? 'bg-ai-blue-600'
+                                  : 'bg-slate-300'
                               }`}
                               disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
                               title={!ddUserData.trim() ? 'Enter additional data before including it' : ''}
@@ -5267,7 +5347,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           
                           {/* Jurisdiction Selection - Only show when enabled */}
                           {Object.values(ddUserDataToggles).some(v => v === true) && (
-                            <div className="mt-3 pt-3 border-t border-paper-300">
+                            <div className="mt-3 pt-3 border-t border-slate-200">
                               <span className="text-xs text-ai-graphite-600 block mb-2">Select jurisdictions for additional data:</span>
                               <div className="flex flex-wrap gap-2">
                                 {isMultiJurisdiction ? (
@@ -5277,10 +5357,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                       key={code} 
                                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
                                         ddUserDataToggles[code]
-                                          ? code === 'REFERENCE' 
-                                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                            : 'bg-ai-blue-100 text-ai-blue-800 border border-ai-blue-300'
-                                          : 'bg-paper-200 text-ai-graphite-600 border border-paper-300 hover:bg-paper-300'
+                                          ? code === 'REFERENCE'
+                                            ? 'bg-ai-blue-600 text-white border border-ai-blue-600'
+                                            : 'bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-300'
+                                          : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
                                       }`}
                                     >
                                       <input
@@ -5304,8 +5384,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                       key={code} 
                                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
                                         ddUserDataToggles[code]
-                                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                          : 'bg-paper-200 text-ai-graphite-600 border border-paper-300 hover:bg-paper-300'
+                                          ? 'bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-300'
+                                          : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
                                       }`}
                                     >
                                       <input
@@ -5346,7 +5426,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               <button
                                 onClick={handleDeleteDDUserData}
                                 disabled={ddUserDataSaving}
-                                className="px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 rounded border border-rose-200 disabled:opacity-50"
+                                className="px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 rounded-md border border-rose-200 disabled:opacity-50"
                               >
                                 Delete
                               </button>
@@ -5354,12 +5434,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                             <button
                               onClick={handleSaveDDUserData}
                               disabled={ddUserDataSaving || ddUserDataLoading}
-                              className="px-4 py-1.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded shadow-sm disabled:opacity-50 flex items-center gap-2"
+                              className="px-4 py-1.5 text-xs font-medium text-white bg-ai-blue-600 hover:bg-ai-blue-700 rounded-md shadow-sm disabled:opacity-50 flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-offset-2"
                             >
                               {ddUserDataSaving && <span className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full"></span>}
                               {ddUserDataSaving ? 'Saving...' : 'Save Additional Data'}
                             </button>
                           </div>
+                        </div>
                         </div>
                       </div>
                     )}

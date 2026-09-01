@@ -314,6 +314,8 @@ interface DraftingContextOptions {
   jurisdiction?: string
   suppressClaimInjection?: boolean
   suppressSupportDataSources?: boolean
+  // Country-profile rules.global.allowTables — gates attorney-enabled table presentation
+  tablesAllowed?: boolean
 }
 
 function formatContextScalar(value: unknown): string {
@@ -529,7 +531,7 @@ Use this block only to adapt patent drafting vocabulary, disclosure units, and s
         supportDataSourceContainer,
         options?.sectionKey || 'detailedDescription',
         'SUPPORT DATA SOURCES (READ-ONLY SOURCE SUPPORT)',
-        { jurisdiction: options?.jurisdiction }
+        { jurisdiction: options?.jurisdiction, tablesAllowed: options?.tablesAllowed }
       )
   if (supportDataBlock) {
     parts.push(supportDataBlock)

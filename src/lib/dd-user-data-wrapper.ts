@@ -8,8 +8,11 @@
 const DD_TABULAR_DATA_PROSE_RULE =
   '5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.'
 
-const DD_TABULAR_DATA_TABLE_RULE = `5) If tabular data is provided, reproduce it as a GitHub-style Markdown table
-   (pipe-delimited cells, a header row, then a |---|---| separator row):
+const DD_TABULAR_DATA_TABLE_RULE = `5) TABULAR OUTPUT EXPRESSLY REQUIRED (USER INSTRUCTION):
+   The user expressly requires tabular output for the tabular data provided below. This user
+   instruction OVERRIDES any general directive to convert tables into prose paragraphs, to avoid
+   long tables, or to present data as descriptive listings. Reproduce tabular data as a GitHub-style
+   Markdown table (pipe-delimited cells, a header row, then a |---|---| separator row):
    - Preserve the inventor's rows, columns, headers, units, and values VERBATIM.
    - Do NOT add, remove, reorder, merge, or recompute any row, column, or value.
    - Do NOT rank, compare, or evaluate the tabulated values beyond what the data itself states.

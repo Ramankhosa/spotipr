@@ -247,6 +247,7 @@ export async function POST(
  * - removeSourceTextOverrideIds: Optional string[]
  * - customIncludeInstruction: Optional string
  * - customIntegrationInstruction: Optional string
+ * - renderSourcesAsTable: Optional boolean - present data-carrying selected sources as tables
  */
 export async function PATCH(
   request: NextRequest,
@@ -266,6 +267,7 @@ export async function PATCH(
       removeSourceTextOverrideIds,
       customIncludeInstruction,
       customIntegrationInstruction,
+      renderSourcesAsTable,
     } = body
 
     if (sectionKey !== 'detailedDescription') {
@@ -320,6 +322,7 @@ export async function PATCH(
       removeSourceTextOverrideIds,
       customIncludeInstruction,
       customIntegrationInstruction,
+      renderSourcesAsTable,
     })
     const updatedNormalizedData = {
       ...normalizedData,
