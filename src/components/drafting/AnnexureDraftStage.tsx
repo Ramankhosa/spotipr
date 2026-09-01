@@ -1978,6 +1978,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [ddUserData, setDdUserData] = useState<string>('')
   // Toggle defaults are set dynamically based on drafting type (see useEffect below)
   const [ddUserDataToggles, setDdUserDataToggles] = useState<Record<string, boolean>>({})
+  // Present tabular user data as tables (pharma/chem supporting data) instead of prose
+  const [ddRenderAsTable, setDdRenderAsTable] = useState(false)
   const [ddUserDataLoading, setDdUserDataLoading] = useState(false)
   const [ddUserDataSaving, setDdUserDataSaving] = useState(false)
   const [ddUserDataSaved, setDdUserDataSaved] = useState(false) // For save confirmation feedback
@@ -2741,6 +2743,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           setDdEvidencePreview(data.evidencePreview || null)
           if (data.data) {
             setDdUserData(data.data.userData || '')
+            setDdRenderAsTable(data.data.renderAsTable === true)
             // Use saved toggles if they exist, otherwise use defaults based on drafting type
             const savedToggles = data.data.jurisdictionToggles
             if (savedToggles && Object.keys(savedToggles).length > 0) {
@@ -2814,7 +2817,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           sessionId: session.id,
           sectionKey: 'detailedDescription',
           userData: trimmedData,
-          jurisdictionToggles: ddUserDataToggles
+          jurisdictionToggles: ddUserDataToggles,
+          renderAsTable: ddRenderAsTable
         })
       })
       if (!res.ok) {
@@ -2834,7 +2838,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     } finally {
       setDdUserDataSaving(false)
     }
-  }, [session?.id, patent?.id, ddUserData, ddUserDataToggles, DD_USER_DATA_MAX_SIZE])
+  }, [session?.id, patent?.id, ddUserData, ddUserDataToggles, ddRenderAsTable, DD_USER_DATA_MAX_SIZE])
 
   // Delete DD User Data handler
   const handleDeleteDDUserData = useCallback(async () => {
@@ -2853,6 +2857,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       if (res.ok) {
         setDdUserData('')
         setDdUserDataToggles(getDefaultDdToggles())
+        setDdRenderAsTable(false)
       }
     } catch (err) {
       console.error('Failed to delete DD user data:', err)
@@ -5182,7 +5187,26 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           onChange={(e) => setDdUserData(e.target.value)}
                           disabled={ddUserDataLoading || ddUserDataSaving}
                         />
-                        
+
+                        {/* Table presentation checkbox (pharma/chem supporting data) */}
+                        <label className={`mt-2 flex items-start gap-2 ${ddUserData.trim() ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                            checked={ddRenderAsTable}
+                            onChange={(e) => setDdRenderAsTable(e.target.checked)}
+                            disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-ai-graphite-700">Present supporting data as tables</span>
+                            <span className="block text-xs text-ai-graphite-500">
+                              Tabular data (e.g. efficacy, stability, or test results) is reproduced as formatted tables
+                              in the Detailed Description instead of prose. Values are kept verbatim and remain non-limiting.
+                              Applied only where the jurisdiction permits tables.
+                            </span>
+                          </span>
+                        </label>
+
                         {/* Additional user data include toggle */}
                         <div className="mt-4 p-3 bg-paper-100 rounded-lg border border-paper-300">
                           <div className="flex items-center justify-between">

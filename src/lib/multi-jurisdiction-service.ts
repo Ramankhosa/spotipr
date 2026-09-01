@@ -10,9 +10,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { llmGateway } from '@/lib/metering'
-import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper'
-
-const DD_USER_DATA_LEGAL_WRAPPER = DD_USER_DATA_LLM_WRAPPER
+import { getDdUserDataLlmWrapper } from '@/lib/dd-user-data-wrapper'
 import type { LLMRequest } from '@/lib/metering'
 import { getCountryProfile } from '@/lib/country-profile-service'
 import {
@@ -1851,7 +1849,7 @@ The reference draft serves as the master source from which jurisdiction-specific
           if (isReferenceEnabled) {
             const ddUserDataContext = `
 ────────────────────────────────────────
-${DD_USER_DATA_LEGAL_WRAPPER}
+${getDdUserDataLlmWrapper(ddUserData.renderAsTable === true)}
 
 BEGIN USER-ADDED DETAILED DESCRIPTION DATA
 ${ddUserData.userData}
@@ -1865,7 +1863,7 @@ IMPORTANT: The above illustrative data should ONLY be incorporated into the "det
 Do NOT use this data in any other section.`
             additionalContextParts.push(ddUserDataContext)
             ddDataInjected = true
-            console.log(`[generateReferenceDraft] Injected DD user data (${ddUserData.userData.length} chars) for detailedDescription`)
+            console.log(`[generateReferenceDraft] Injected DD user data (${ddUserData.userData.length} chars, tableMode=${ddUserData.renderAsTable === true}) for detailedDescription`)
           }
         }
       } catch (ddErr) {
@@ -2484,7 +2482,7 @@ COMPONENTS REQUIREMENTS:
           if (isReferenceEnabled) {
             const ddUserDataContext = `
 ────────────────────────────────────────
-${DD_USER_DATA_LEGAL_WRAPPER}
+${getDdUserDataLlmWrapper(ddUserData.renderAsTable === true)}
 
 BEGIN USER-ADDED DETAILED DESCRIPTION DATA
 ${ddUserData.userData}
@@ -2495,7 +2493,7 @@ END OF ILLUSTRATIVE DATA
 ────────────────────────────────────────`
             additionalContextParts.push(ddUserDataContext)
             ddDataInjected = true
-            console.log(`[generateReferenceDraftSection] Injected DD user data (${ddUserData.userData.length} chars) for detailedDescription`)
+            console.log(`[generateReferenceDraftSection] Injected DD user data (${ddUserData.userData.length} chars, tableMode=${ddUserData.renderAsTable === true}) for detailedDescription`)
           }
         }
       } catch (ddErr) {

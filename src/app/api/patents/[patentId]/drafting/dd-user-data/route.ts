@@ -92,6 +92,7 @@ export async function GET(
       data: ddUserData ? {
         userData: ddUserData.userData,
         jurisdictionToggles: ddUserData.jurisdictionToggles,
+        renderAsTable: ddUserData.renderAsTable,
         createdAt: ddUserData.createdAt,
         updatedAt: ddUserData.updatedAt
       } : null,
@@ -116,6 +117,7 @@ export async function GET(
  * - sectionKey: Required - must be 'detailedDescription' (access control)
  * - userData: Required - plain text user data (max 50KB)
  * - jurisdictionToggles: Optional - { "REFERENCE": false, "US": false, ... } - defaults to all OFF
+ * - renderAsTable: Optional boolean - present tabular data as tables instead of prose (default false)
  */
 export async function POST(
   request: NextRequest,
@@ -124,7 +126,7 @@ export async function POST(
   try {
     const { patentId } = await params
     const body = await request.json()
-    const { sessionId, sectionKey, userData, jurisdictionToggles } = body
+    const { sessionId, sectionKey, userData, jurisdictionToggles, renderAsTable } = body
 
     // Access control: Only allow access for detailedDescription sections
     if (sectionKey !== 'detailedDescription') {
@@ -198,12 +200,15 @@ export async function POST(
       update: {
         userData: trimmedData,
         jurisdictionToggles: resolvedToggles,
+        // Only touch the flag when the client sent it, so an older client can't reset it
+        ...(typeof renderAsTable === 'boolean' ? { renderAsTable } : {}),
         updatedBy: authResult.user.id
       },
       create: {
         sessionId,
         userData: trimmedData,
         jurisdictionToggles: resolvedToggles,
+        renderAsTable: renderAsTable === true,
         createdBy: authResult.user.id
       }
     })
@@ -213,6 +218,7 @@ export async function POST(
       data: {
         userData: ddUserData.userData,
         jurisdictionToggles: ddUserData.jurisdictionToggles,
+        renderAsTable: ddUserData.renderAsTable,
         createdAt: ddUserData.createdAt,
         updatedAt: ddUserData.updatedAt
       }

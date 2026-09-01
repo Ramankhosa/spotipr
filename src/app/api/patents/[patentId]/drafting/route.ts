@@ -166,6 +166,7 @@ import { saveRawPlantUmlOverride } from '@/lib/patent-diagrams/raw-source'
 import { translateAllPatentDiagrams, translatePatentDiagram } from '@/lib/patent-diagrams/translation'
 import { diagramFactsForDownstream, summarizeDiagramPlan } from '@/lib/patent-diagrams/facts'
 import { validateDiagramExportReadiness } from '@/lib/patent-diagrams/export'
+import { splitContentSegments, parseMarkdownTable } from '@/lib/markdown-table'
 
 // User-provided (imported) figures are parked in a high figureNo band so they never
 // consume the low slots that AI-generated / planned figures (Fig. 1..N) use. They sort
@@ -2497,13 +2498,13 @@ function preExportNormalizer(
         blockId: `block_${blockCounter++}`
       })
     } else {
-      // Split into paragraphs and collapse empty ones
-      const paragraphs = cleanedContent.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0)
-      for (const para of paragraphs) {
+      // Split into paragraphs and collapse empty ones; runs of Markdown table rows
+      // become dedicated table blocks (rendered as real tables, never numbered)
+      for (const segment of splitContentSegments(cleanedContent)) {
         blocks.push({
-          type: 'paragraph',
+          type: segment.kind,
           section,
-          content: para,
+          content: segment.content,
           blockId: `block_${blockCounter++}`
         })
       }
@@ -2999,7 +3000,8 @@ async function handleExportDOCX(
 
     const {
       Document, Packer, Paragraph, HeadingLevel, TextRun, AlignmentType, Media, ImageRun,
-      PageBreak, Footer, Header, PageNumber, NumberOfPages, SectionType
+      PageBreak, Footer, Header, PageNumber, NumberOfPages, SectionType,
+      Table, TableRow, TableCell, WidthType
     } = docx as any
 
     // Get document type configuration from country profile with user overrides
@@ -3235,6 +3237,33 @@ async function handleExportDOCX(
                 style: 'bodyStyle'
               })
             )
+          } else if (block.type === 'table') {
+            const parsed = parseMarkdownTable(block.content)
+            if (!parsed) continue
+            const makeCell = (text: string, bold: boolean) => new TableCell({
+              children: [new Paragraph({
+                children: [new TextRun({
+                  text,
+                  bold,
+                  size: fontSizeHalfPt,
+                  color: '000000',
+                  font: fontFamily
+                })],
+                spacing: { line: 240, before: 40, after: 40 }
+              })],
+              margins: { top: 60, bottom: 60, left: 100, right: 100 }
+            })
+            ;(titleSection.children as any[]).push(
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                rows: [
+                  new TableRow({ children: parsed.headers.map(h => makeCell(h, true)), tableHeader: true }),
+                  ...parsed.rows.map(row => new TableRow({ children: row.map(c => makeCell(c, false)) }))
+                ]
+              }),
+              // Spacer so the table doesn't collide with the following paragraph
+              new Paragraph({ children: [], spacing: { after: 120 } })
+            )
           }
         }
       }
@@ -3378,7 +3407,9 @@ async function handleExportDOCX(
       const abstractBlocks = blocks.filter((b: { type: string; section: string; subtype?: string; content: string; blockId: string }) => b.section === 'abstract')
 
       for (const block of abstractBlocks) {
-        if (block.type === 'paragraph') {
+        // Abstracts never legitimately contain tables; render any table block as raw
+        // text rather than dropping content silently.
+        if (block.type === 'paragraph' || block.type === 'table') {
           ;(abstractSection.children as any[]).push(
             new Paragraph({
               children: [new TextRun({
@@ -3891,6 +3922,14 @@ function buildPDFHtml(
     for (const block of sectionBlocks) {
       if (block.type === 'paragraph') {
         bodyHtml += `<p style="margin-bottom: 12pt; text-align: justify;">${escapeHtml(block.content)}</p>`
+      } else if (block.type === 'table') {
+        const parsed = parseMarkdownTable(block.content)
+        if (!parsed) continue
+        const headerCells = parsed.headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')
+        const bodyRows = parsed.rows
+          .map(row => `<tr>${row.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`)
+          .join('')
+        bodyHtml += `<table class="data-table"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`
       }
     }
   }
@@ -3949,7 +3988,9 @@ function buildPDFHtml(
     bodyHtml += `<div style="page-break-before: always;"></div>`
     bodyHtml += getSectionHeading('abstract', 'Abstract')
     for (const block of abstractBlocks) {
-      if (block.type === 'paragraph') {
+      // Abstracts never legitimately contain tables; render any table block as raw
+      // text rather than dropping content silently.
+      if (block.type === 'paragraph' || block.type === 'table') {
         bodyHtml += `<p style="margin-bottom: 12pt; text-align: justify;">${escapeHtml(block.content)}</p>`
       }
     }
@@ -3993,6 +4034,21 @@ function buildPDFHtml(
     p {
       margin-bottom: 12pt;
       text-align: justify;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12pt 0;
+      page-break-inside: avoid;
+    }
+    table.data-table th, table.data-table td {
+      border: 1px solid #000;
+      padding: 4pt 6pt;
+      text-align: left;
+      vertical-align: top;
+    }
+    table.data-table th {
+      font-weight: bold;
     }
     .title-block {
       text-align: center;

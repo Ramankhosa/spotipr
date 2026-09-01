@@ -65,7 +65,7 @@ import {
   completeSupportDataSources,
 } from '@/lib/support-data-sources';
 import { ensureDetailedDescriptionSourceSelection } from '@/lib/dd-source-selection-service';
-import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper';
+import { getDdUserDataLlmWrapper } from '@/lib/dd-user-data-wrapper';
 import {
   buildIdeaNormalizationExtractedFields,
   migrateNormalizedData,
@@ -89,7 +89,6 @@ import crypto from 'crypto';
 // Base prompts are stored in SupersetSection table
 // Country-specific top-up prompts are stored in CountrySectionPrompt table
 
-const DD_USER_DATA_LEGAL_WRAPPER = DD_USER_DATA_LLM_WRAPPER
 
 export interface IdeaNormalizationRequest {
   rawIdea: string;
@@ -253,7 +252,7 @@ interface SectionPromptContext {
   // Database-driven context injection requirements
   contextRequirements?: SectionContextRequirements | null;
   // DD User Data (Detailed Description only - sidecar injection)
-  ddUserData?: { userData: string; isEnabled: boolean } | null;
+  ddUserData?: { userData: string; isEnabled: boolean; renderAsTable?: boolean } | null;
 }
 
 export interface SectionGenerationResult {
@@ -1405,7 +1404,7 @@ export class DraftingService {
       // ══════════════════════════════════════════════════════════════════════════════
       // DD USER DATA - Load sidecar data for detailedDescription section
       // ══════════════════════════════════════════════════════════════════════════════
-      let ddUserDataContext: { userData: string; isEnabled: boolean } | null = null
+      let ddUserDataContext: { userData: string; isEnabled: boolean; renderAsTable: boolean } | null = null
       if (sections.includes('detailedDescription')) {
         try {
           const ddUserData = await prisma.dDUserData.findUnique({
@@ -1420,7 +1419,8 @@ export class DraftingService {
 
             ddUserDataContext = {
               userData: ddUserData.userData,
-              isEnabled
+              isEnabled,
+              renderAsTable: ddUserData.renderAsTable === true
             }
             debugSteps.push({
               step: 'dd_user_data',
@@ -1428,6 +1428,7 @@ export class DraftingService {
               meta: {
                 dataSize: ddUserData.userData.length,
                 isEnabled,
+                renderAsTable: ddUserData.renderAsTable === true,
                 jurisdiction: jurisdictionCode
               }
             })
@@ -2790,9 +2791,12 @@ ${additionalContext}`)
       // ══════════════════════════════════════════════════════════════════════════════
       if (section === 'detailedDescription') {
         if (ctx?.ddUserData?.isEnabled && ctx?.ddUserData?.userData) {
-          // User data IS provided - inject with legal wrapper and anti-hallucination directive
+          // User data IS provided - inject with legal wrapper and anti-hallucination directive.
+          // Table mode is honored only where the jurisdiction's global rules allow tables.
+          const tablesAllowed = ctx?.globalRules?.allowTables !== false
+          const useTableWrapper = ctx.ddUserData.renderAsTable === true && tablesAllowed
           promptParts.push(`
-${DD_USER_DATA_LEGAL_WRAPPER}
+${getDdUserDataLlmWrapper(useTableWrapper)}
 
 BEGIN USER-ADDED DETAILED DESCRIPTION DATA
 ${ctx.ddUserData.userData}
@@ -2801,7 +2805,7 @@ END USER-ADDED DETAILED DESCRIPTION DATA
 ────────────────────────────────────────
 END OF ILLUSTRATIVE DATA
 ────────────────────────────────────────`)
-          console.log(`[buildSectionPrompt] Injected DD user data (${ctx.ddUserData.userData.length} chars) for ${jurisdiction}`)
+          console.log(`[buildSectionPrompt] Injected DD user data (${ctx.ddUserData.userData.length} chars, tableMode=${useTableWrapper}) for ${jurisdiction}`)
         } else {
           // NO user data provided - add explicit anti-hallucination instruction
           promptParts.push(`

@@ -1,7 +1,24 @@
 // Shared DD user-data wrapper text.
 // Keep LLM and display wrappers explicit so any intentional divergence is visible.
 
-export const DD_USER_DATA_LLM_WRAPPER = `
+// Rule 5 of the permitted-use block exists in two variants. Prose mode (the default)
+// flattens tabular data to a descriptive listing. Table mode reproduces it verbatim
+// as Markdown tables so disciplines that live on data tables (pharma, chemistry)
+// keep them; the export layer renders them as real tables.
+const DD_TABULAR_DATA_PROSE_RULE =
+  '5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.'
+
+const DD_TABULAR_DATA_TABLE_RULE = `5) If tabular data is provided, reproduce it as a GitHub-style Markdown table
+   (pipe-delimited cells, a header row, then a |---|---| separator row):
+   - Preserve the inventor's rows, columns, headers, units, and values VERBATIM.
+   - Do NOT add, remove, reorder, merge, or recompute any row, column, or value.
+   - Do NOT rank, compare, or evaluate the tabulated values beyond what the data itself states.
+   - Immediately before each table, add a caption paragraph of the form
+     "Table N — <short descriptive title>", numbering tables sequentially from 1.
+   - Separate each table from surrounding prose with a blank line on both sides.
+   - Present non-tabular data items as descriptive prose, not as tables.`
+
+const buildDdUserDataLlmWrapper = (tabularDataRule: string) => `
 ----------------------------------------
 INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
 ----------------------------------------
@@ -39,7 +56,7 @@ When inventor-provided data is present, you MUST use it only in the following ma
    - "under selected test conditions"
    - "example measurements indicate"
 4) Describe WHAT was observed without interpreting WHY it occurs or HOW it improves the system.
-5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.
+${tabularDataRule}
 6) After presenting the data, explicitly clarify that the data is illustrative only and does not limit the invention.
 
 SECTION SCOPE LIMITATION (CRITICAL):
@@ -50,6 +67,15 @@ SECTION SCOPE LIMITATION (CRITICAL):
 
 ILLUSTRATIVE DATA (VERBATIM):
 `.trim()
+
+export const DD_USER_DATA_LLM_WRAPPER = buildDdUserDataLlmWrapper(DD_TABULAR_DATA_PROSE_RULE)
+
+export const DD_USER_DATA_TABLE_LLM_WRAPPER = buildDdUserDataLlmWrapper(DD_TABULAR_DATA_TABLE_RULE)
+
+// Table mode is opt-in (attorney checkbox) and only honored where the jurisdiction allows tables.
+export function getDdUserDataLlmWrapper(renderAsTable: boolean): string {
+  return renderAsTable ? DD_USER_DATA_TABLE_LLM_WRAPPER : DD_USER_DATA_LLM_WRAPPER
+}
 
 export const DD_USER_DATA_DISPLAY_WRAPPER = `
 ----------------------------------------
