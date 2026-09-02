@@ -21,6 +21,7 @@ import {
 import { buildFigurelessDraftGuard } from '@/lib/figure-availability'
 import { filterComponentsByScopeForDescription } from '@/lib/scope-recommendations'
 import { migrateNormalizedData } from '@/lib/normalized-data'
+import { buildSourceFidelityModeLine } from '@/lib/source-fidelity'
 import {
   formatIndependentClaimsText,
   getAuthoritativeClaims,
@@ -424,11 +425,7 @@ Use this block only to adapt patent drafting vocabulary, disclosure units, and s
   // The user's Stage-0 idea-handling choice, surfaced so DB-managed prompts can
   // condition on it (PRESERVE = "Keep exactly what I provided").
   const sourceHandlingMode = formatContextScalar(pickContextValue('sourceHandlingMode'))
-  parts.push(
-    sourceHandlingMode === 'PRESERVE'
-      ? 'SOURCE FIDELITY MODE: PRESERVE — the user asked to keep their idea exactly as provided. Stay strictly inside the inventor\'s stated idea scope and terminology.'
-      : 'SOURCE FIDELITY MODE: STRUCTURE_ONLY — wording may be structured and polished, but no technical facts may be added.'
-  )
+  parts.push(buildSourceFidelityModeLine(sourceHandlingMode === 'PRESERVE' ? 'PRESERVE' : 'STRUCTURE_ONLY'))
 
   // Title - IMPORTANT: Use AI-generated title from existingSections if available,
   // as this is the drafting-stage refined title that should be used for consistency

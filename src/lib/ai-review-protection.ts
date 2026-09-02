@@ -80,8 +80,32 @@ export function isDiagramAssetMutationSuggestion(issue: ReviewIssueLike): boolea
   )
 }
 
+/**
+ * The patent title is authored by the applicant at Stage 0 and linked through
+ * every generation step untouched, so a review item that would rename the
+ * invention is never applied automatically. Figure and section headings are a
+ * different thing and stay reviewable.
+ */
+export function isTitleMutationSuggestion(issue: ReviewIssueLike): boolean {
+  const sectionKey = issue.sectionKey || issue.s || issue.metadata?.sectionKey
+  if (normalizeAIReviewSectionKey(sectionKey) === 'title') return true
+
+  let text = issueText(issue)
+  text = text
+    .replace(/\b(?:figure|fig\.?|drawing|sketch|diagram|section|heading|column|table|claim)\s+titles?\b/g, '')
+    .replace(/\btitles?\s+of\s+(?:the\s+)?(?:figure|drawing|sketch|diagram|section|table)s?\b/g, '')
+  if (!/\btitles?\b/.test(text)) return false
+
+  return (
+    /\b(?:change|amend|rewrite|revise|modify|edit|replace|shorten|lengthen|reword|rename|retitle|re-title|update|improve|correct|fix)\b.{0,60}\btitles?\b/.test(text) ||
+    /\btitles?\b.{0,80}\b(?:changed|amended|rewritten|revised|modified|edited|replaced|shortened|lengthened|reworded|renamed|retitled|re-titled|updated|improved|corrected|fixed)\b/.test(text)
+  )
+}
+
 export function isProtectedAIReviewIssue(issue: ReviewIssueLike): boolean {
-  return isClaimMutationSuggestion(issue) || isDiagramAssetMutationSuggestion(issue)
+  return isClaimMutationSuggestion(issue)
+    || isDiagramAssetMutationSuggestion(issue)
+    || isTitleMutationSuggestion(issue)
 }
 
 export function filterProtectedAIReviewIssues<T extends ReviewIssueLike>(issues: T[]): T[] {

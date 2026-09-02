@@ -4,6 +4,7 @@ import {
   isClaimMutationSuggestion,
   isDiagramAssetMutationSuggestion,
   isProtectedAIReviewSection,
+  isTitleMutationSuggestion,
 } from '@/lib/ai-review-protection'
 
 describe('ai review protection helpers', () => {
@@ -62,5 +63,40 @@ describe('ai review protection helpers', () => {
     ])
 
     expect(issues).toHaveLength(2)
+  })
+  test('protects the user-authored title from review rewrites', () => {
+    expect(isTitleMutationSuggestion({ sectionKey: 'title', title: 'Title too long' })).toBe(true)
+
+    expect(isTitleMutationSuggestion({
+      sectionKey: 'abstract',
+      fix: 'Rewrite the title to better reflect the claimed subject matter.',
+    })).toBe(true)
+
+    expect(isTitleMutationSuggestion({
+      sectionKey: 'summary',
+      fix: 'The title should be shortened to fewer than fifteen words.',
+    })).toBe(true)
+  })
+
+  test('leaves figure and section headings reviewable', () => {
+    expect(isTitleMutationSuggestion({
+      sectionKey: 'briefDescriptionOfDrawings',
+      fix: 'Update the figure title for FIG. 2 to match the drawing.',
+    })).toBe(false)
+
+    expect(isTitleMutationSuggestion({
+      sectionKey: 'detailedDescription',
+      fix: 'Add a paragraph describing the sensor assembly.',
+    })).toBe(false)
+  })
+
+  test('drops title issues from the surfaced review list', () => {
+    const issues = filterProtectedAIReviewIssues([
+      { sectionKey: 'title', title: 'Title issue', fix: 'Rename the invention.' },
+      { sectionKey: 'summary', title: 'Summary issue', fix: 'Revise the summary text.' },
+    ])
+
+    expect(issues).toHaveLength(1)
+    expect(issues[0].sectionKey).toBe('summary')
   })
 })

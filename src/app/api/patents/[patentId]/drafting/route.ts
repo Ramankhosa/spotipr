@@ -14200,6 +14200,15 @@ async function handleTranslateToJurisdiction(
     delete (rawDraft as Record<string, any>).briefDescriptionOfDrawings
   }
 
+  // The user's Stage 0 title is the title that gets filed. Reassert it here so a
+  // legacy reference draft carrying an older generated title cannot leak into the
+  // jurisdiction drafts; translateReferenceDraft links it through without
+  // regenerating it (translating it only when the filing language differs).
+  const stage0Title = String(session.ideaRecord?.title || '').trim()
+  if (stage0Title) {
+    (rawDraft as Record<string, any>).title = stage0Title
+  }
+
   // Translate to target jurisdiction with language support
   const result = await translateReferenceDraft(rawDraft, targetCode, resolvedLanguage, user.tenantId, requestHeaders)
 
@@ -14887,7 +14896,7 @@ async function handleApplyAIFix(
 
   if (isProtectedAIReviewIssue(normalizedIssue)) {
     return NextResponse.json({
-      error: 'This AI review item targets frozen claims or approved diagram assets and cannot be applied automatically.'
+      error: 'This AI review item targets frozen claims, approved diagram assets, or the title you authored, and cannot be applied automatically.'
     }, { status: 400 })
   }
 

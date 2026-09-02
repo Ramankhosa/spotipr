@@ -1445,6 +1445,17 @@ export class DraftingService {
       let llmMeta: any = undefined
 
       for (const s of sections) {
+        // The title is authored by the user at Stage 0 (patent creation); link it through
+        // instead of generating a new one. The model must never rename the invention.
+        if (s === 'title') {
+          const userTitle = String(idea?.title || '').trim()
+          if (userTitle) {
+            generated[s] = userTitle
+            debugSteps.push({ step: 'title_linked_from_stage0', status: 'ok', meta: { source: 'ideaRecord.title' } })
+            console.log(`[DraftingService] Title linked from Stage 0 user input (no generation): "${userTitle}"`)
+            continue
+          }
+        }
         // Fetch writing sample for example-based style mimicry (if persona style is enabled)
         const usePersonaStyle = (session as any).usePersonaStyle === true // Only ON if explicitly true
         const personaSelection = (session as any).personaSelection || undefined
@@ -2772,9 +2783,9 @@ ${disclosureBlock}
 
       if (detailedDescriptionScope?.guard) {
         promptParts.push(`
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+────────────────────────────────────────
 INVENTION-SCOPED DETAILED DESCRIPTION GUARD
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+────────────────────────────────────────
 ${detailedDescriptionScope.guard}`)
       }
 
@@ -3899,6 +3910,14 @@ Use the Super Admin panel to add the missing prompt.
           success: false,
           error: draftResult.error
         };
+      }
+
+      // The title is authored by the user at Stage 0; it always overrides whatever
+      // the model returned. The model must never rename the invention.
+      const userTitle = String(session?.ideaRecord?.title || '').trim();
+      if (userTitle && draftResult.draft) {
+        (draftResult.draft as Record<string, any>).title = userTitle;
+        console.log(`[generateAnnexureDraft] Title linked from Stage 0 user input: "${userTitle}"`);
       }
 
       // Validate draft consistency

@@ -2713,17 +2713,17 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     loadUserInstructions()
   }, [session?.id, patent?.id])
 
-  // Compute default DD user data toggles based on drafting type
-  // DEFAULT: All toggles OFF - user must explicitly enable after providing data
+  // Compute default DD user data toggles based on drafting type.
+  // DEFAULT: included everywhere — presence of saved data means "use it". The server
+  // gates on `=== true`, so materialize explicit booleans. Multi-jurisdiction users
+  // can then EXCLUDE specific filings; single-jurisdiction has no exclusion control.
   const getDefaultDdToggles = useCallback(() => {
+    const toggles: Record<string, boolean> = {}
     if (isMultiJurisdiction) {
-      // Multi-jurisdiction: Default all to OFF (including REFERENCE)
-      return { REFERENCE: false }
-    } else if (availableJurisdictions.length === 1) {
-      // Single jurisdiction: Default to OFF
-      return { [availableJurisdictions[0]]: false }
+      toggles['REFERENCE'] = true
     }
-    return {}
+    availableJurisdictions.forEach(code => { toggles[code] = true })
+    return toggles
   }, [isMultiJurisdiction, availableJurisdictions])
 
   // Set default toggles when jurisdictions change (if no saved data exists)
@@ -2750,13 +2750,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           if (data.data) {
             setDdUserData(data.data.userData || '')
             setDdRenderAsTable(data.data.renderAsTable === true)
-            // Use saved toggles if they exist, otherwise use defaults based on drafting type
+            // Saved toggles are honored only when at least one filing is explicitly included
+            // (a deliberate partial selection from the multi-jurisdiction chips). Legacy or
+            // "nothing enabled" maps are treated as unconfigured → include everywhere.
             const savedToggles = data.data.jurisdictionToggles
-            if (savedToggles && Object.keys(savedToggles).length > 0) {
-              setDdUserDataToggles(savedToggles)
-            } else {
-              setDdUserDataToggles(getDefaultDdToggles())
-            }
+            const anyIncluded = savedToggles && Object.values(savedToggles).some(v => v === true)
+            setDdUserDataToggles(anyIncluded ? savedToggles : getDefaultDdToggles())
           } else {
             // No saved data - set defaults
             setDdUserDataToggles(getDefaultDdToggles())
@@ -5043,7 +5042,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   <div className="text-xs font-medium text-slate-800">Present source data as tables</div>
                                   <div className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
                                     Data-carrying items above (tables, test results, numeric series) are drafted as formatted
-                                    tables instead of prose. Values stay verbatim and non-limiting.
+                                    tables instead of prose. Values stay verbatim and non-limiting. Takes effect the next time
+                                    the Detailed Description is generated.
                                   </div>
                                 </div>
                                 <button
@@ -5279,6 +5279,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               in the Detailed Description instead of prose. Values are kept verbatim and remain non-limiting.
                               Applied only where the jurisdiction permits tables.
                             </span>
+                            <span className="mt-0.5 block text-xs font-medium text-ai-blue-700">
+                              Save, then generate (or regenerate) the Detailed Description — tables appear in the newly
+                              generated draft, not the existing one.
+                            </span>
                             {ddTableAutoEnabled && (
                               <span className="mt-1 inline-block rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] text-emerald-700">
                                 Tabular data detected — enabled automatically. Untick to keep prose.
@@ -5287,127 +5291,71 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           </span>
                         </label>
 
-                        {/* Additional user data include toggle */}
-                        <div className="mt-3 p-3 bg-slate-50 rounded-md border border-slate-200">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-sm font-medium text-ai-graphite-700">Include additional user data</div>
-                              <div className="text-xs text-ai-graphite-500">Only controls the pasted text below. Auto-selected source support is controlled above.</div>
-                            </div>
-                            {/* Slider Toggle */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                // Determine current manual-data state - is ANY jurisdiction enabled?
-                                const isCurrentlyEnabled = Object.values(ddUserDataToggles).some(v => v === true)
-                                
-                                if (isCurrentlyEnabled) {
-                                  // Disable all
-                                  const allOff: Record<string, boolean> = {}
-                                  if (isMultiJurisdiction) {
-                                    allOff['REFERENCE'] = false
-                                    availableJurisdictions.forEach(code => { allOff[code] = false })
-                                  } else {
-                                    availableJurisdictions.forEach(code => { allOff[code] = false })
-                                  }
-                                  setDdUserDataToggles(allOff)
-                                } else {
-                                  // Enable - auto-select based on active jurisdiction
-                                  const autoSelect: Record<string, boolean> = {}
-                                  if (isMultiJurisdiction) {
-                                    // Multi-jurisdiction: Enable REFERENCE by default
-                                    autoSelect['REFERENCE'] = true
-                                    availableJurisdictions.forEach(code => { autoSelect[code] = false })
-                                  } else {
-                                    // Single-jurisdiction: Enable the active/only jurisdiction
-                                    availableJurisdictions.forEach(code => { 
-                                      autoSelect[code] = (code === activeJurisdiction)
-                                    })
-                                  }
-                                  setDdUserDataToggles(autoSelect)
-                                }
-                              }}
-                              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                Object.values(ddUserDataToggles).some(v => v === true)
-                                  ? 'bg-ai-blue-600'
-                                  : 'bg-slate-300'
-                              }`}
-                              disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
-                              title={!ddUserData.trim() ? 'Enter additional data before including it' : ''}
-                            >
-                              <span
-                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                                  Object.values(ddUserDataToggles).some(v => v === true)
-                                    ? 'translate-x-5'
-                                    : 'translate-x-0'
-                                }`}
-                              />
-                            </button>
-                          </div>
-                          
-                          {/* Jurisdiction Selection - Only show when enabled */}
-                          {Object.values(ddUserDataToggles).some(v => v === true) && (
-                            <div className="mt-3 pt-3 border-t border-slate-200">
-                              <span className="text-xs text-ai-graphite-600 block mb-2">Select jurisdictions for additional data:</span>
-                              <div className="flex flex-wrap gap-2">
-                                {isMultiJurisdiction ? (
-                                  // Multi-jurisdiction mode: Show REFERENCE first, then individual jurisdictions
-                                  ['REFERENCE', ...availableJurisdictions].map(code => (
-                                    <label 
-                                      key={code} 
-                                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
-                                        ddUserDataToggles[code]
+                        {/* Injection scope. Presence of saved data means "include it" — there is no
+                            separate on/off gate. Single-jurisdiction drafts include it silently;
+                            multi-jurisdiction drafts get default-on chips to EXCLUDE specific filings. */}
+                        {ddUserData.trim() && (
+                          isMultiJurisdiction ? (
+                            <div className="mt-3 p-3 bg-slate-50 rounded-md border border-slate-200">
+                              <div className="flex flex-wrap items-baseline justify-between gap-1">
+                                <span className="text-xs font-medium text-ai-graphite-700">Included in these filings</span>
+                                <span className="text-[11px] text-ai-graphite-500">Click a filing to exclude it</span>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {['REFERENCE', ...availableJurisdictions].map(code => {
+                                  const included = ddUserDataToggles[code] === true
+                                  return (
+                                    <button
+                                      key={code}
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={included}
+                                      onClick={() => setDdUserDataToggles(prev => ({ ...prev, [code]: !included }))}
+                                      disabled={ddUserDataLoading || ddUserDataSaving}
+                                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-offset-1 disabled:opacity-50 ${
+                                        included
                                           ? code === 'REFERENCE'
                                             ? 'bg-ai-blue-600 text-white border border-ai-blue-600'
                                             : 'bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-300'
-                                          : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                                          : 'bg-white text-slate-400 border border-slate-300 line-through hover:bg-slate-50'
                                       }`}
                                     >
-                                      <input
-                                        type="checkbox"
-                                        checked={ddUserDataToggles[code] || false}
-                                        onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
-                                        className="sr-only"
-                                      />
-                                      {ddUserDataToggles[code] && (
+                                      {included && (
                                         <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                                           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                                         </svg>
                                       )}
                                       <span className={code === 'REFERENCE' ? 'font-medium' : ''}>{code}</span>
-                                    </label>
-                                  ))
-                                ) : (
-                                  // Single-jurisdiction mode: Show only that jurisdiction
-                                  availableJurisdictions.map(code => (
-                                    <label 
-                                      key={code} 
-                                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
-                                        ddUserDataToggles[code]
-                                          ? 'bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-300'
-                                          : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
-                                      }`}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={ddUserDataToggles[code] || false}
-                                        onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
-                                        className="sr-only"
-                                      />
-                                      {ddUserDataToggles[code] && (
-                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                        </svg>
-                                      )}
-                                      <span className="font-medium">{code}</span>
-                                    </label>
-                                  ))
-                                )}
+                                    </button>
+                                  )
+                                })}
                               </div>
                             </div>
-                          )}
-                        </div>
-                        
+                          ) : (
+                            <div className="mt-3 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                              <svg className="h-4 w-4 shrink-0 text-emerald-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              <span className="text-xs text-emerald-800">
+                                This data will be included in the Detailed Description. To leave it out, clear the box above.
+                              </span>
+                            </div>
+                          )
+                        )}
+
+                        {/* Safety net: multi-jurisdiction user has excluded every filing */}
+                        {ddUserData.trim() && isMultiJurisdiction && !ddManualInjectionEnabled && (
+                          <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3">
+                            <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                            </svg>
+                            <p className="text-xs text-amber-800">
+                              <span className="font-semibold">This data is excluded from every filing.</span> Select at least
+                              one filing above to include it, or clear the box to remove it.
+                            </p>
+                          </div>
+                        )}
+
                         <div className="mt-3 flex items-center justify-between">
                           {/* Save confirmation indicator */}
                           <div className="flex items-center gap-2">
@@ -5502,6 +5450,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                     </svg>
                                   )}
                                </button>
+                               {keyName === 'title' ? (
+                                 /* The title is the one the user authored at Stage 0 and is linked
+                                    through every generation step untouched, so there is nothing to
+                                    regenerate here. */
+                                 <span className="px-2 py-0.5 rounded text-[11px] font-medium text-ai-graphite-500 bg-paper-200">
+                                   Your title, used as provided
+                                 </span>
+                               ) : (
                                <div className="relative">
                                  <button
                                    onClick={() => !sectionLoading[keyName] && setRegenOpen(prev => ({ ...prev, [keyName]: !prev[keyName] }))}
@@ -5624,6 +5580,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                    </div>
                                  )}
                                </div>
+                               )}
                                <button
                                  onClick={() => { setEditingKey(editingKey === keyName ? null : keyName); setEditDrafts(prev => ({ ...prev, [keyName]: generated?.[keyName] || '' })) }}
                                  className={`p-1.5 rounded transition-colors ${editingKey === keyName ? 'text-ai-blue-600 bg-ai-blue-50' : 'text-ai-graphite-400 hover:text-ai-graphite-700 hover:bg-paper-200'}`}

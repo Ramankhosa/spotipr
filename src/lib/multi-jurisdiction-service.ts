@@ -14,6 +14,7 @@ import { getDdUserDataLlmWrapper } from '@/lib/dd-user-data-wrapper'
 import type { LLMRequest } from '@/lib/metering'
 import { getCountryProfile } from '@/lib/country-profile-service'
 import {
+  DEFAULT_DRAFTING_LANGUAGE,
   getJurisdictionLanguage,
   languageDisplayName,
   resolveJurisdictionLanguage
@@ -2023,6 +2024,15 @@ OUTPUT FORMAT
     if (frozenClaimsText) {
       draft.claims = frozenClaimsText
     }
+    // The title is authored by the user at Stage 0; it always overrides whatever the
+    // model produced so the invention is never silently renamed.
+    if (dynamicSections.includes('title')) {
+      const userTitle = String(idea?.title || '').trim()
+      if (userTitle) {
+        draft.title = userTitle
+        console.log(`[generateReferenceDraft] Title linked from Stage 0 user input: "${userTitle}"`)
+      }
+    }
     if (figuresSkipped) {
       draft.briefDescriptionOfDrawings = ''
     }
@@ -2079,6 +2089,20 @@ export async function generateReferenceDraftSection(
         success: true,
         content: '',
         sectionKey
+      }
+    }
+
+    // The title is authored by the user at Stage 0; link it through instead of
+    // generating (or regenerating) a new one.
+    if (sectionKey === 'title') {
+      const userTitle = String(session.ideaRecord?.title || '').trim()
+      if (userTitle) {
+        console.log(`[generateReferenceDraftSection] Title linked from Stage 0 user input: "${userTitle}"`)
+        return {
+          success: true,
+          content: userTitle,
+          sectionKey
+        }
       }
     }
 
@@ -2676,6 +2700,92 @@ interface SectionToTranslate {
   content: string
 }
 
+/** True when a mapping key refers to the title section (via the alias table). */
+async function isTitleSectionKey(key: string): Promise<boolean> {
+  if (!key) return false
+  if (key.trim().toLowerCase() === 'title') return true
+  try {
+    return (await normalizeToSupersetKey(key)) === 'title'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Render the user's title in a non-English filing language.
+ *
+ * This is a translation, not a title generation: the applicant's title is the
+ * one that gets filed, so the model may only carry it across languages using
+ * the office's standard technical terminology. On any failure the user's
+ * original title is kept rather than substituting something invented.
+ */
+async function localizeLinkedTitle(
+  title: string,
+  jurisdictionCode: string,
+  targetLanguage: string,
+  tenantId?: string,
+  requestHeaders?: Record<string, string>
+): Promise<{ title: string; tokensUsed?: number; error?: string }> {
+  const source = String(title || '').trim()
+  if (!source) return { title: '' }
+
+  const languageName = languageDisplayName(targetLanguage)
+  const prompt = `Translate ONE patent title into ${languageName} for a ${jurisdictionCode} filing.
+
+The title below was written by the applicant and is the title that will be filed.
+Do NOT rewrite, re-scope, shorten, expand, or "improve" it. Translate the same
+title faithfully, using standard ${jurisdictionCode} patent terminology for the
+technical terms only. Keep any reference numerals, symbols, and chemical or
+product names exactly as written.
+
+TITLE:
+${source}
+
+Return ONLY the translated title as plain text on a single line - no quotes, no
+markdown, no explanation.`
+
+  const llmRequest: LLMRequest & { stageCode?: string } = {
+    taskCode: 'LLM2_DRAFT',
+    stageCode: 'DRAFT_ANNEXURE_DESCRIPTION',
+    prompt,
+    parameters: { tenantId, purpose: 'translate_linked_title', temperature: 0 },
+    idempotencyKey: crypto.randomUUID(),
+    metadata: {
+      purpose: 'translate_linked_title',
+      targetJurisdiction: jurisdictionCode,
+      targetLanguage
+    }
+  }
+
+  try {
+    const result = await llmGateway.executeLLMOperation({ headers: requestHeaders || {} }, llmRequest)
+    if (!result.success || !result.response) {
+      return { title: source, error: result.error?.message || 'Title translation LLM call failed' }
+    }
+
+    const translated = String(result.response.output || '')
+      .replace(/```[a-z]*/gi, '')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)[0] || ''
+    const cleaned = translated.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim()
+
+    if (!cleaned) {
+      return { title: source, error: 'Title translation returned no content' }
+    }
+
+    return {
+      title: cleaned,
+      tokensUsed: (llmRequest.inputTokens || 0) + (result.response.outputTokens || 0)
+    }
+  } catch (error) {
+    return {
+      title: source,
+      error: error instanceof Error ? error.message : 'Title translation failed'
+    }
+  }
+}
+
 /**
  * Translate entire reference draft to a target jurisdiction
  * 
@@ -2740,10 +2850,15 @@ export async function translateReferenceDraft(
 
   // Collect sections that need translation
   const sectionsToTranslate: SectionToTranslate[] = []
-  
+
   // Track skipped sections for debugging
   const skippedSections: Array<{ key: string; reason: string }> = []
-  
+
+  // The title is authored by the user at Stage 0 and linked verbatim into the
+  // reference draft. The jurisdiction pass must never re-word or "adapt" it, so
+  // it is pulled out of the translate batch and handled separately below.
+  let linkedTitle: { countryKey: string; content: string } | null = null
+
   for (const mapping of mappings) {
     if (!mapping.isApplicable) {
       // Section not applicable for this jurisdiction (N/A, Implicit, etc.)
@@ -2770,12 +2885,45 @@ export async function translateReferenceDraft(
       continue
     }
 
+    if (await isTitleSectionKey(mapping.supersetKey)) {
+      linkedTitle = { countryKey: mapping.countryKey, content: referenceContent }
+      continue
+    }
+
     sectionsToTranslate.push({
       supersetKey: mapping.supersetKey,
       countryKey: mapping.countryKey,
       countryHeading: mapping.countryHeading,
       content: referenceContent
     })
+  }
+
+  // Resolve the linked title without ever asking the model for a new one.
+  // Same-language jurisdictions take the user's title byte-for-byte; a
+  // different filing language gets a literal translation of that same title.
+  if (linkedTitle) {
+    if (resolvedLanguage === DEFAULT_DRAFTING_LANGUAGE) {
+      translatedDraft[linkedTitle.countryKey] = linkedTitle.content
+      skippedCount++
+      skippedSections.push({ key: 'title', reason: 'Linked from the user title (never regenerated)' })
+      console.log(`[translateReferenceDraft] Title linked from the user title (no generation): "${linkedTitle.content}"`)
+    } else {
+      const localized = await localizeLinkedTitle(
+        linkedTitle.content,
+        code,
+        resolvedLanguage,
+        tenantId,
+        requestHeaders
+      )
+      translatedDraft[linkedTitle.countryKey] = localized.title
+      totalTokensUsed += localized.tokensUsed || 0
+      if (localized.error) {
+        errors.push(`Title translation failed for ${code}: ${localized.error}`)
+      } else {
+        translatedCount++
+      }
+      console.log(`[translateReferenceDraft] Title literally translated to ${resolvedLanguage} (not regenerated): "${localized.title}"`)
+    }
   }
 
   console.log(`[translateReferenceDraft] ${sectionsToTranslate.length} sections to translate, ${skippedSections.length} skipped, Batch Mode: ${useBatchMode}`)
@@ -2791,12 +2939,13 @@ export async function translateReferenceDraft(
       draft: translatedDraft,
       language: resolvedLanguage,
       stats: {
-        translated: 0,
+        translated: translatedCount,
         skipped: skippedCount,
-        failed: 0,
+        failed: errors.length,
         batchMode: useBatchMode,
-        tokensUsed: 0
-      }
+        tokensUsed: totalTokensUsed
+      },
+      errors: errors.length ? errors : undefined
     }
   }
 
@@ -3059,6 +3208,11 @@ IMPORTANT RULES:
 3. Maintain technical accuracy while adapting to local patent practice
 4. Apply any section-specific constraints provided below
 5. Keep reference numerals consistent with the original
+6. PRESERVE ANY MARKDOWN TABLES EXACTLY. If a section contains a Markdown table
+   (pipe-delimited rows with a |---| separator row), reproduce it verbatim — same rows,
+   columns, headers, units, values, and its "Table N —" caption. Do NOT convert tabular
+   data into prose, do NOT drop or reword the table. Translate only the caption text and
+   textual cell labels for non-English targets; never alter numeric values.
 
 ${sectionInstructions}
 
@@ -3199,6 +3353,11 @@ IMPORTANT RULES:
 3. Maintain technical accuracy while adapting to local patent practice
 4. Apply the jurisdiction-specific requirements above if provided
 5. Keep reference numerals consistent with the original
+6. PRESERVE ANY MARKDOWN TABLES EXACTLY. If the content contains a Markdown table
+   (pipe-delimited rows with a |---| separator row), reproduce it verbatim — same rows,
+   columns, headers, units, values, and its "Table N —" caption. Do NOT convert tabular
+   data into prose. Translate only the caption text and textual cell labels for non-English
+   targets; never alter numeric values.
 
 OUTPUT: Return ONLY the translated section content, no headers or formatting markers.`
 
