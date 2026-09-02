@@ -2701,7 +2701,10 @@ ${writingSampleBlock}`
 
       // Assemble the full prompt with UDB
       const promptParts: string[] = [roleToneHeader]
-      
+      // Set when DD table mode is active, so the final OUTPUT CONTROL block can restate the
+      // table requirement at the point the model decides its output format.
+      let ddTableModeActive = false
+
       promptParts.push(`
 YOU ARE DRAFTING A PATENT SPECIFICATION SECTION.
 FOLLOW THE PROMPTS BELOW IN THE GIVEN PRIORITY ORDER.
@@ -2807,6 +2810,9 @@ ${additionalContext}`)
           // Table mode is honored only where the jurisdiction's global rules allow tables.
           const tablesAllowed = ctx?.globalRules?.allowTables !== false
           const useTableWrapper = ctx.ddUserData.renderAsTable === true && tablesAllowed
+          // Remember for the OUTPUT CONTROL block (the model's last, most salient instruction),
+          // so the table requirement isn't outweighed by the "paragraph" formatting note.
+          ddTableModeActive = useTableWrapper
           promptParts.push(`
 ${getDdUserDataLlmWrapper(useTableWrapper)}
 
@@ -2855,6 +2861,15 @@ PERMITTED QUALITATIVE DISCLOSURE:
       }
 
       // Output control
+      const mandatoryTableDirective = ddTableModeActive ? `
+- MANDATORY TABLE OUTPUT: The user has REQUIRED that the inventor-provided tabular data be
+  presented as a table. Your JSON string for "${section}" MUST contain at least one GitHub-style
+  Markdown table reproducing that data — a header row, then a separator row of dashes
+  (e.g. | --- | --- |), then one data row per line — with the source values VERBATIM.
+  Put a caption line "Table N — <short title>" immediately before each table. Do NOT render the
+  tabular data as prose sentences; the table is required. Within a table use SINGLE newlines
+  (one row per line); the two-newline rule applies only between ordinary paragraphs. This
+  instruction overrides any earlier guidance to express tables in prose or to avoid tables.` : ''
       promptParts.push(`
 ────────────────────────────────────────
 OUTPUT CONTROL
@@ -2863,7 +2878,7 @@ Return ONLY a valid JSON object exactly matching this schema:
 { "${section}": "..." }
 
 Formatting requirements INSIDE the JSON string:
-- Preserve paragraph breaks using two newline characters between paragraphs.
+- Preserve paragraph breaks using two newline characters between paragraphs.${mandatoryTableDirective}
 - Do not include any other keys.`)
 
       return promptParts.join('\n')
