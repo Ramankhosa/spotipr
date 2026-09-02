@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/hint'
 import { useToast } from '@/components/ui/toast'
 import { HypothesesPanel } from '../HypothesesPanel'
-import { authHeaders, pollRun, wsApi, type RunProgress } from '../api'
+import { authHeaders, conflictRunId, isPollAborted, PollAbortedError, pollRun, wsApi, type RunProgress } from '../api'
 import { CoOccupancyGrid } from './CoOccupancyGrid'
-import { GapDirections } from './GapDirections'
+import { GapDirections, MAX_ATTACKS_PER_ROUND } from './GapDirections'
 import { JourneyRail, type JourneyStep, type StepState } from './JourneyRail'
 import { RoundsTimeline } from './RoundsTimeline'
 import { TrailPanel } from './TrailPanel'
@@ -57,6 +57,25 @@ interface RunRow {
 
 const SECTION_IDS = ['invention', 'scope', 'viewpoints', 'grid', 'directions', 'hypotheses'] as const
 
+/** Sleep that rejects with PollAbortedError the moment the signal fires. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new PollAbortedError())
+      return
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new PollAbortedError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export function InventionStudyApp({ studyId }: { studyId: string }) {
   const { toast } = useToast()
   const [study, setStudy] = useState<Study | null>(null)
@@ -84,6 +103,22 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
   // stale scope and the second would overwrite the first.
   const scopeSaveInFlight = useRef(false)
 
+  // Aborts every poll this app owns on unmount. A map or attack round runs for
+  // minutes; without this, navigating away left the loop polling every three
+  // seconds — and the attack loop POSTing new metered runs — from a dead
+  // component. A set, because a map poll and an attack round can coexist.
+  const pollAborts = useRef<Set<AbortController>>(new Set())
+  useEffect(() => {
+    const controllers = pollAborts.current
+    return () => {
+      controllers.forEach(controller => controller.abort())
+    }
+  }, [])
+  /** The DIMENSION_MAP run currently being watched, so load() never double-attaches. */
+  const watchedDimensionRun = useRef<string | null>(null)
+  /** Set by load() when a reload finds a map still in flight; an effect attaches to it. */
+  const [resumeRunId, setResumeRunId] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     setLoadError(null)
     try {
@@ -100,6 +135,13 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
       }
       const failed = data.runs.find(run => run.stage === 'DIMENSION_MAP' && run.status === 'FAILED')
       if (failed && !latest) setRunError(failed.lastError)
+
+      // A map still in flight after a reload must resume polling — otherwise
+      // the page shows an idle "Map the field" button over a working server.
+      const active = data.runs.find(
+        run => run.stage === 'DIMENSION_MAP' && (run.status === 'QUEUED' || run.status === 'PROCESSING')
+      )
+      if (active && watchedDimensionRun.current !== active.id) setResumeRunId(active.id)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not load the study.')
     } finally {
@@ -146,11 +188,60 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
     }
   }, [study, scopeEmpty, compile])
 
+  /**
+   * Watches one DIMENSION_MAP run to completion. Shared by a fresh start, a
+   * 409 attach, and a reload that found the run already in flight. Nothing here
+   * touches state after its controller aborts: an abort means the component is
+   * unmounting, or a newer watcher owns the state.
+   */
+  const attachToDimensionRun = useCallback(
+    async (runId: string, controller: AbortController) => {
+      watchedDimensionRun.current = runId
+      setRunning(true)
+      setRunError(null)
+      try {
+        const final = await pollRun(studyId, runId, (_status, tick) => setProgress(tick), controller.signal)
+        if (controller.signal.aborted) return
+        if (final.status === 'COMPLETED') {
+          setResult(final.results as DimensionMapResult)
+          setEdit({ removedDimensions: new Set(), removedValues: new Set() })
+          setSelectedGaps(new Set())
+        } else {
+          setRunError(final.error || 'The run did not finish.')
+        }
+        await load()
+      } catch (error) {
+        if (isPollAborted(error)) return
+        setRunError(error instanceof Error ? error.message : 'Could not run the map.')
+      } finally {
+        if (watchedDimensionRun.current === runId) watchedDimensionRun.current = null
+        pollAborts.current.delete(controller)
+        if (!controller.signal.aborted) {
+          setRunning(false)
+          setProgress(null)
+        }
+      }
+    },
+    [load, studyId]
+  )
+
+  // Re-attach after a reload found a map QUEUED/PROCESSING (see load).
+  useEffect(() => {
+    if (!resumeRunId) return
+    setResumeRunId(null)
+    if (watchedDimensionRun.current === resumeRunId) return
+    const controller = new AbortController()
+    pollAborts.current.add(controller)
+    void attachToDimensionRun(resumeRunId, controller)
+  }, [resumeRunId, attachToDimensionRun])
+
   const runDimensionMap = useCallback(
     async (registry?: DimensionMapResult['registry']) => {
       setRunning(true)
       setRunError(null)
       setProgress(null)
+      const controller = new AbortController()
+      pollAborts.current.add(controller)
       try {
         const body: Record<string, unknown> = { stage: 'DIMENSION_MAP' }
         if (registry) {
@@ -164,27 +255,31 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
             },
           }
         }
-        const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
-          method: 'POST',
-          body: JSON.stringify(body),
-        })
-        const final = await pollRun(studyId, started.runId, (_status, tick) => setProgress(tick))
-        if (final.status === 'COMPLETED') {
-          setResult(final.results as DimensionMapResult)
-          setEdit({ removedDimensions: new Set(), removedValues: new Set() })
-          setSelectedGaps(new Set())
-        } else {
-          setRunError(final.error || 'The run did not finish.')
+        let runId: string
+        try {
+          const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          })
+          runId = started.runId
+        } catch (error) {
+          // 409 means a map with these params is already in flight — attach to
+          // it rather than reporting a failure for work under way.
+          const liveRunId = conflictRunId(error)
+          if (!liveRunId) throw error
+          runId = liveRunId
         }
-        await load()
+        await attachToDimensionRun(runId, controller)
       } catch (error) {
+        pollAborts.current.delete(controller)
+        if (isPollAborted(error)) return
         setRunError(error instanceof Error ? error.message : 'Could not run the map.')
-      } finally {
         setRunning(false)
         setProgress(null)
       }
     },
-    [load, studyId]
+    [attachToDimensionRun, studyId]
   )
 
   /**
@@ -272,47 +367,114 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
     void runDimensionMap(registry)
   }, [edit, result, runDimensionMap])
 
+  /**
+   * Starts one VALIDATE run. Attaches to the live run on 409; on 429 (the run
+   * limiter allows five starts a minute, which sequential attacks can brush)
+   * waits out part of the window and retries once before giving a clear reason.
+   */
+  const startValidateRun = useCallback(
+    async (hypothesisId: string, signal: AbortSignal): Promise<string> => {
+      const start = () =>
+        wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
+          method: 'POST',
+          body: JSON.stringify({ stage: 'VALIDATE', params: { hypothesisId } }),
+          signal,
+        })
+      try {
+        return (await start()).runId
+      } catch (error) {
+        const liveRunId = conflictRunId(error)
+        if (liveRunId) return liveRunId
+        if ((error as { status?: number })?.status !== 429) throw error
+        await abortableDelay(20_000, signal)
+        try {
+          return (await start()).runId
+        } catch (retryError) {
+          const retryLiveRunId = conflictRunId(retryError)
+          if (retryLiveRunId) return retryLiveRunId
+          if ((retryError as { status?: number })?.status === 429) {
+            throw new Error(
+              'The run limiter is still at its cap. Wait a minute, then attack the remaining directions again.'
+            )
+          }
+          throw retryError
+        }
+      }
+    },
+    [studyId]
+  )
+
   const attackSelected = useCallback(async () => {
     if (!result || !selectedGaps.size) return
     const latest = runs.find(run => run.stage === 'DIMENSION_MAP' && run.status === 'COMPLETED')
     if (!latest) return
     setAttacking(true)
+    const controller = new AbortController()
+    pollAborts.current.add(controller)
     try {
       setAttackLabel('Promoting the selected directions…')
       const promoted = await wsApi<{ promoted: Array<{ gapId: string; hypothesisId: string }> }>(
         `/api/whitespace/studies/${studyId}/gaps/promote`,
-        { method: 'POST', body: JSON.stringify({ runId: latest.id, gapIds: Array.from(selectedGaps) }) }
+        {
+          method: 'POST',
+          // The server promotes at most MAX_ATTACKS_PER_ROUND per call; the
+          // selection is capped to the same number, this slice is a backstop.
+          body: JSON.stringify({ runId: latest.id, gapIds: Array.from(selectedGaps).slice(0, MAX_ATTACKS_PER_ROUND) }),
+          signal: controller.signal,
+        }
       )
       let index = 0
+      let failedCount = 0
       for (const entry of promoted.promoted) {
+        // The user leaving aborts the round — never POST a new metered run
+        // from a component that is no longer there.
+        if (controller.signal.aborted) throw new PollAbortedError()
         index += 1
         setAttackLabel(`Attacking direction ${index} of ${promoted.promoted.length}…`)
-        const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
-          method: 'POST',
-          body: JSON.stringify({ stage: 'VALIDATE', params: { hypothesisId: entry.hypothesisId } }),
-        })
-        await pollRun(studyId, started.runId)
+        const runId = await startValidateRun(entry.hypothesisId, controller.signal)
+        const final = await pollRun(studyId, runId, undefined, controller.signal)
+        if (final.status !== 'COMPLETED') failedCount += 1
       }
-      toast({
-        variant: 'success',
-        title: 'Attacks finished',
-        description: `${promoted.promoted.length} direction${promoted.promoted.length === 1 ? '' : 's'} tested. The verdicts are in the section below.`,
-      })
+      if (controller.signal.aborted) return
+      const total = promoted.promoted.length
+      const plural = total === 1 ? '' : 's'
+      if (failedCount === 0) {
+        toast({
+          variant: 'success',
+          title: 'Attacks finished',
+          description: `${total} direction${plural} tested. The verdicts are in the section below.`,
+        })
+      } else if (failedCount < total) {
+        toast({
+          variant: 'warning',
+          title: 'Some attacks did not finish',
+          description: `${total} direction${plural} tested, ${failedCount} did not finish. The verdicts that completed are in the section below.`,
+        })
+      } else {
+        toast({
+          variant: 'error',
+          title: 'The attacks did not finish',
+          description: `None of the ${total} direction${plural} completed. Try again, or test them one at a time from the verdicts section.`,
+        })
+      }
       setSelectedGaps(new Set())
       await load()
-      // Every poll above has settled, so remounting cannot abort a live run.
       setPanelEpoch(epoch => epoch + 1)
     } catch (error) {
+      if (isPollAborted(error)) return
       toast({
         variant: 'error',
         title: 'Could not attack the directions',
         description: error instanceof Error ? error.message : 'Try again.',
       })
     } finally {
-      setAttacking(false)
-      setAttackLabel(null)
+      pollAborts.current.delete(controller)
+      if (!controller.signal.aborted) {
+        setAttacking(false)
+        setAttackLabel(null)
+      }
     }
-  }, [load, result, runs, selectedGaps, studyId, toast])
+  }, [load, result, runs, selectedGaps, startValidateRun, studyId, toast])
 
   // wsApi parses every response as JSON, so the report has to be fetched raw.
   const downloadReport = useCallback(async () => {
@@ -653,7 +815,10 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                   onToggle={id =>
                     setSelectedGaps(prev => {
                       const next = new Set(prev)
-                      next.has(id) ? next.delete(id) : next.add(id)
+                      if (next.has(id)) next.delete(id)
+                      // The promote endpoint takes at most this many per call
+                      // and silently drops the rest — don't let more be chosen.
+                      else if (next.size < MAX_ATTACKS_PER_ROUND) next.add(id)
                       return next
                     })
                   }
@@ -663,10 +828,11 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
               {/* Attacked directions land here. Before this section existed the
                   verdicts were written and never shown. The panel brings its own
                   card header, so this wrapper only supplies the rail anchor and
-                  cancels the standalone top margin. */}
+                  cancels the standalone top margin. refreshToken (not key): a
+                  remount would destroy an in-progress review draft. */}
               <section id="section-hypotheses" className="scroll-mt-6 [&>section]:mt-0">
                 <HypothesesPanel
-                  key={panelEpoch}
+                  refreshToken={panelEpoch}
                   studyId={studyId}
                   areasReady
                   proposeEnabled={false}
@@ -697,9 +863,13 @@ function Field({ label, value }: { label: string; value: string }) {
 
 function FieldStats({ result }: { result: DimensionMapResult }) {
   const placed = 1 - result.unclassifiedShare
+  // The label map may trail the server's reasons; never throw over a stat hint.
+  // The strip takes everything through the first "— ", which also handles
+  // multi-word prefixes like "stopped at the round limit — ".
+  const settledHint = (SETTLED_LABEL[result.settledReason] ?? 'axes the field varies along').replace(/^[^—]*— /, '')
   const stats: Array<[string, string, string]> = [
     ['Families', result.familyCount.toLocaleString(), 'in the field we read'],
-    ['Viewpoints', String(result.registry.length), SETTLED_LABEL[result.settledReason].replace(/^[a-z]+ — /, '')],
+    ['Viewpoints', String(result.registry.length), settledHint],
     ['Placed', `${Math.round(placed * 100)}%`, 'match at least one value'],
     ['Rounds', String(result.rounds.length || 1), 'until nothing new appeared'],
   ]

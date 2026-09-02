@@ -82,6 +82,15 @@ export type SemanticLaneResult =
       appliedMaxDistance: number | null
       /** Present only when the ceiling was resolved adaptively. */
       background?: SemanticBackground
+      /**
+       * The most rows this retrieval could have returned. Equals the requested
+       * limit except on the float/HNSW column, where pgvector clamps ef_search
+       * at 1,000 and an HNSW scan returns at most that many rows — so a larger
+       * request is silently truncated, and `neighbors.length < limit` there
+       * means "the index's cap", not "everything near". Callers defining a SET
+       * from this result must judge saturation against THIS, not the limit.
+       */
+      effectiveLimit: number
     }
   | { available: false; reason: string }
 
@@ -419,6 +428,13 @@ export async function calibrationDistanceProfile(input: {
 }
 
 /**
+ * pgvector's hard ceiling on hnsw.ef_search — and, since an HNSW scan returns
+ * at most ef_search rows, on what one HNSW retrieval can deliver. IVFFlat
+ * (the binary production column) has no such row cap.
+ */
+const HNSW_MAX_EF_SEARCH = 1_000
+
+/**
  * ANN retrieval over the corpus, optionally restricted by a scope predicate
  * (aliased `lp`). The restriction matters: semantic novelty is self-calibrated
  * per field, so neighbours must come from the same field the percentiles do.
@@ -514,7 +530,14 @@ export async function semanticNeighbors(input: {
   // the pool has to be big enough that some of it survives the filter.
   const SCOPED_CANDIDATE_POOL = 1_000
   const wanted = input.scopeFilter ? Math.max(input.limit, SCOPED_CANDIDATE_POOL) : input.limit
-  const efSearch = String(Math.max(40, Math.min(1000, wanted)))
+  const efSearch = String(Math.max(40, Math.min(HNSW_MAX_EF_SEARCH, wanted)))
+  // What this retrieval can actually deliver. On the binary/IVFFlat column the
+  // limit is served in full; on the float/HNSW column anything past the
+  // ef_search clamp is truncated by the index scan itself (the planner's exact
+  // scan on a small corpus can exceed this, so it is a conservative bound —
+  // which is the honest direction for a completeness claim).
+  const effectiveLimit =
+    PATENT_CORPUS_EMBEDDING_SQL_TYPE === 'bit' ? input.limit : Math.min(input.limit, HNSW_MAX_EF_SEARCH)
   try {
     const [, , , rows] = await prisma.$transaction([
       prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(input.timeoutMs ?? 20_000)}, true)`,
@@ -550,6 +573,7 @@ export async function semanticNeighbors(input: {
       neighbors: rows.map(row => ({ ...row, distance: Number(row.distance) / DISTANCE_DENOMINATOR })),
       appliedMaxDistance,
       background,
+      effectiveLimit,
     }
   } catch (error) {
     console.error('[Whitespace] Semantic retrieval failed:', error instanceof Error ? error.message : error)

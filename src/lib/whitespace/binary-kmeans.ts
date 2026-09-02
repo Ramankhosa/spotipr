@@ -121,7 +121,10 @@ function seedCentroids(data: Uint32Array, n: number, k: number, random: () => nu
 
 /**
  * Lloyd iterations with per-bit majority-vote centroid update. Empty clusters
- * are re-seeded from the point farthest from its centroid, so k stays k.
+ * are re-seeded mid-run from the points farthest from their centroids (each
+ * from a DIFFERENT point), so k stays k while iterating; any cluster still
+ * empty under the final assignment is dropped before returning, so the
+ * returned k can be smaller than requested but never names an empty area.
  */
 export function binaryKMeans(
   data: Uint32Array,
@@ -185,19 +188,27 @@ export function binaryKMeans(
     }
 
     const next = new Uint32Array(effectiveK * WORDS)
+    // Points already used to re-seed a dead centre THIS iteration: two dead
+    // centres seeded from the same globally-worst point are the same centroid
+    // twice, and one of them is guaranteed dead again next iteration.
+    const reseeded = new Set<number>()
     for (let c = 0; c < effectiveK; c++) {
       if (sizes[c] === 0) {
-        // Re-seed a dead centre from the globally worst-fitted point.
-        let worst = 0
+        // Re-seed a dead centre from the worst-fitted point not yet used.
+        let worst = -1
         let worstDistance = -1
         for (let i = 0; i < n; i++) {
+          if (reseeded.has(i)) continue
           const d = hamming(data, centroids, i * WORDS, assignments[i] * WORDS)
           if (d > worstDistance) {
             worstDistance = d
             worst = i
           }
         }
-        next.set(data.subarray(worst * WORDS, worst * WORDS + WORDS), c * WORDS)
+        if (worst >= 0) {
+          reseeded.add(worst)
+          next.set(data.subarray(worst * WORDS, worst * WORDS + WORDS), c * WORDS)
+        }
         continue
       }
       const half = sizes[c] / 2
@@ -215,17 +226,36 @@ export function binaryKMeans(
     if (changed === 0) break
   }
 
-  const centroidMeans = new Float32Array(effectiveK * BITS)
+  // Zero-member clusters must not be returned: a centre re-seeded on the exit
+  // iteration (or dead exactly at maxIterations) has no members under the final
+  // assignment, and the caller persists every cluster as a real area — one with
+  // no members, no medoids, and a deep dive that fails. Drop them and renumber
+  // so every returned cluster index has at least one member.
   sizes.fill(0)
   for (let i = 0; i < n; i++) sizes[assignments[i]]++
+  const remap = new Int32Array(effectiveK).fill(-1)
+  let liveK = 0
   for (let c = 0; c < effectiveK; c++) {
-    if (!sizes[c]) continue
-    for (let b = 0; b < BITS; b++) {
-      centroidMeans[c * BITS + b] = bitVotes[c * BITS + b] / sizes[c]
-    }
+    if (sizes[c] > 0) remap[c] = liveK++
   }
 
-  return { assignments, centroids, centroidMeans, k: effectiveK, iterations }
+  const liveCentroids = liveK === effectiveK ? centroids : new Uint32Array(liveK * WORDS)
+  const centroidMeans = new Float32Array(liveK * BITS)
+  for (let c = 0; c < effectiveK; c++) {
+    const target = remap[c]
+    if (target < 0) continue
+    if (liveK !== effectiveK) {
+      liveCentroids.set(centroids.subarray(c * WORDS, c * WORDS + WORDS), target * WORDS)
+    }
+    for (let b = 0; b < BITS; b++) {
+      centroidMeans[target * BITS + b] = bitVotes[c * BITS + b] / sizes[c]
+    }
+  }
+  if (liveK !== effectiveK) {
+    for (let i = 0; i < n; i++) assignments[i] = remap[assignments[i]]
+  }
+
+  return { assignments, centroids: liveCentroids, centroidMeans, k: liveK, iterations }
 }
 
 export interface ClusterGeometry {

@@ -71,6 +71,94 @@ function OriginTag({ origin }: { origin: 'user' | 'copilot' }) {
   )
 }
 
+/**
+ * Comma-separated list editor that lets the user actually type commas.
+ *
+ * `value={list.join(', ')}` with parse-on-change stripped a trailing comma on
+ * the re-render, so the next character concatenated onto the previous term.
+ * The raw string lives here and is parsed on blur; the model reseeds it
+ * whenever the underlying list changes while the field is not being edited.
+ */
+function ListInput({
+  values,
+  onCommit,
+  placeholder,
+  className,
+  transform,
+}: {
+  values: string[]
+  onCommit: (items: string[]) => void
+  placeholder?: string
+  className?: string
+  /** Applied to each parsed item (e.g. uppercasing jurisdiction codes). */
+  transform?: (item: string) => string
+}) {
+  const joined = values.join(', ')
+  const [raw, setRaw] = useState(joined)
+  const [editing, setEditing] = useState(false)
+
+  useEffect(() => {
+    if (!editing) setRaw(joined)
+  }, [joined, editing])
+
+  return (
+    <Input
+      value={raw}
+      onFocus={() => setEditing(true)}
+      onChange={e => setRaw(e.target.value)}
+      onBlur={() => {
+        setEditing(false)
+        const items = raw
+          .split(',')
+          .map(s => (transform ? transform(s.trim()) : s.trim()))
+          .filter(Boolean)
+        if (JSON.stringify(items) !== JSON.stringify(values)) onCommit(items)
+        else setRaw(joined)
+      }}
+      placeholder={placeholder}
+      className={className}
+    />
+  )
+}
+
+/** Year field that tolerates being cleared mid-typing; parsed and clamped on blur. */
+function YearInput({
+  value,
+  fallback,
+  onCommit,
+  className,
+}: {
+  value: number
+  /** Used when the field is left empty or unparsable. */
+  fallback: number
+  onCommit: (year: number) => void
+  className?: string
+}) {
+  const [raw, setRaw] = useState(String(value))
+  const [editing, setEditing] = useState(false)
+
+  useEffect(() => {
+    if (!editing) setRaw(String(value))
+  }, [value, editing])
+
+  return (
+    <Input
+      type="number"
+      value={raw}
+      onFocus={() => setEditing(true)}
+      onChange={e => setRaw(e.target.value)}
+      onBlur={() => {
+        setEditing(false)
+        const parsed = Number.parseInt(raw, 10)
+        const year = Number.isFinite(parsed) ? Math.min(Math.max(parsed, CORPUS_FIRST_YEAR), 2100) : fallback
+        if (year !== value) onCommit(year)
+        else setRaw(String(value))
+      }}
+      className={className}
+    />
+  )
+}
+
 function Bars({ rows, total }: { rows: Array<{ label: string; families: number; definition?: string }>; total: number }) {
   const max = rows.reduce((m, r) => Math.max(m, r.families), 0)
   if (!rows.length) return <p className="text-sm text-muted-foreground">Nothing in range.</p>
@@ -536,15 +624,11 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <Input
-                        value={concept.synonyms.join(', ')}
-                        onChange={e =>
+                      <ListInput
+                        values={concept.synonyms}
+                        onCommit={items =>
                           patchScope(d => {
-                            d.concepts[index] = {
-                              ...d.concepts[index],
-                              synonyms: e.target.value.split(',').map(s => s.trim()).filter(Boolean),
-                              origin: 'user',
-                            }
+                            d.concepts[index] = { ...d.concepts[index], synonyms: items, origin: 'user' }
                             return d
                           })
                         }
@@ -652,20 +736,16 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Excluded terms
                 </label>
-                <Input
-                  value={scope.exclusions.map(e => e.term).join(', ')}
-                  onChange={e =>
+                <ListInput
+                  values={scope.exclusions.map(e => e.term)}
+                  onCommit={items =>
                     patchScope(d => ({
                       ...d,
-                      exclusions: e.target.value
-                        .split(',')
-                        .map(s => s.trim())
-                        .filter(Boolean)
-                        .map(term => ({
-                          term,
-                          reason: d.exclusions.find(x => x.term === term)?.reason,
-                          origin: d.exclusions.find(x => x.term === term)?.origin ?? 'user',
-                        })),
+                      exclusions: items.map(term => ({
+                        term,
+                        reason: d.exclusions.find(x => x.term === term)?.reason,
+                        origin: d.exclusions.find(x => x.term === term)?.origin ?? 'user',
+                      })),
                     }))
                   }
                   placeholder="Comma separated"
@@ -675,15 +755,13 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Jurisdictions
                 </label>
-                <Input
-                  value={scope.filters.jurisdictions.join(', ')}
-                  onChange={e =>
+                <ListInput
+                  values={scope.filters.jurisdictions}
+                  transform={item => item.toUpperCase()}
+                  onCommit={items =>
                     patchScope(d => ({
                       ...d,
-                      filters: {
-                        ...d.filters,
-                        jurisdictions: e.target.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
-                      },
+                      filters: { ...d.filters, jurisdictions: items },
                     }))
                   }
                   placeholder="US, EP, IN — empty means all"
@@ -694,21 +772,17 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                   Filing years
                 </label>
                 <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
+                  <YearInput
                     value={scope.filters.yearFrom}
-                    onChange={e =>
-                      patchScope(d => ({ ...d, filters: { ...d.filters, yearFrom: Number(e.target.value) || CORPUS_FIRST_YEAR } }))
-                    }
+                    fallback={CORPUS_FIRST_YEAR}
+                    onCommit={year => patchScope(d => ({ ...d, filters: { ...d.filters, yearFrom: year } }))}
                     className="w-28"
                   />
                   <span className="text-sm text-muted-foreground">to</span>
-                  <Input
-                    type="number"
+                  <YearInput
                     value={scope.filters.yearTo}
-                    onChange={e =>
-                      patchScope(d => ({ ...d, filters: { ...d.filters, yearTo: Number(e.target.value) || d.filters.yearTo } }))
-                    }
+                    fallback={scope.filters.yearTo}
+                    onCommit={year => patchScope(d => ({ ...d, filters: { ...d.filters, yearTo: year } }))}
                     className="w-28"
                   />
                 </div>
@@ -717,12 +791,12 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Assignees
                 </label>
-                <Input
-                  value={scope.filters.assignees.join(', ')}
-                  onChange={e =>
+                <ListInput
+                  values={scope.filters.assignees}
+                  onCommit={items =>
                     patchScope(d => ({
                       ...d,
-                      filters: { ...d.filters, assignees: e.target.value.split(',').map(s => s.trim()).filter(Boolean) },
+                      filters: { ...d.filters, assignees: items },
                     }))
                   }
                   placeholder="Empty means all"
@@ -953,8 +1027,10 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
         onChanged={() => setPanelEpoch(epoch => epoch + 1)}
       />
 
-      {/* Stages 5-7: hypotheses, validation, concepts. */}
-      <HypothesesPanel key={panelEpoch} studyId={studyId} areasReady={Boolean(results)} />
+      {/* Stages 5-7: hypotheses, validation, concepts. refreshToken (not key):
+          a remount on every upstream stage completion destroyed an in-progress
+          review draft and the scroll position. */}
+      <HypothesesPanel refreshToken={panelEpoch} studyId={studyId} areasReady={Boolean(results)} />
     </div>
   )
 }

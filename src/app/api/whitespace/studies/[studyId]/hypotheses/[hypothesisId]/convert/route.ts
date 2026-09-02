@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { appendTrail, getOwnedStudy } from '@/lib/whitespace/service'
 import { convertHypothesis } from '@/lib/whitespace/convert'
+import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
 
 export const runtime = 'nodejs'
 
@@ -28,14 +29,14 @@ export async function POST(
       userId: auth.user.id,
     })
 
-    await appendTrail(study.id, 'HYPOTHESIS', `user:${auth.user.id}`, `Promoted to concept: ${result.title}`)
+    // A re-click returns the concept that already exists; it is not a second
+    // promotion, so it neither trails again nor claims 201.
+    if (!result.existing) {
+      await appendTrail(study.id, 'HYPOTHESIS', `user:${auth.user.id}`, `Promoted to concept: ${result.title}`)
+    }
 
-    return NextResponse.json({ concept: result }, { status: 201 })
+    return NextResponse.json({ concept: result }, { status: result.existing ? 200 : 201 })
   } catch (error) {
-    console.error('[Whitespace] Convert failed:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Could not promote the hypothesis.' },
-      { status: 400 }
-    )
+    return whitespaceErrorResponse(error, 'Convert')
   }
 }

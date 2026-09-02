@@ -20,12 +20,23 @@ export async function wsApi<T>(path: string, init?: RequestInit): Promise<T> {
     const error = new Error(payload?.error || `Request failed (${response.status})`) as Error & {
       status: number
       code?: string
+      payload?: unknown
     }
     error.status = response.status
     error.code = payload?.code
+    // The body travels with the error: a 409 for "already running" carries the
+    // live runId, and discarding it left callers unable to attach to that run.
+    error.payload = payload
     throw error
   }
   return payload as T
+}
+
+/** The live run a 409 "already in flight" response points at, if any. */
+export function conflictRunId(error: unknown): string | null {
+  const err = error as { status?: number; payload?: { runId?: unknown } } | null
+  if (err?.status !== 409) return null
+  return typeof err.payload?.runId === 'string' ? err.payload.runId : null
 }
 
 /** Live narration a stage writes while it works. Null once the run finishes. */
@@ -51,7 +62,11 @@ export class PollAbortedError extends Error {
 }
 
 export function isPollAborted(error: unknown): boolean {
-  return error instanceof PollAbortedError || (error as { name?: string })?.name === 'PollAbortedError'
+  const name = (error as { name?: string })?.name
+  // 'AbortError' is what fetch itself rejects with when the signal fires
+  // mid-request — without matching it, an abort that lands between polls is
+  // swallowed but one landing inside the fetch escapes as a spurious toast.
+  return error instanceof PollAbortedError || name === 'PollAbortedError' || name === 'AbortError'
 }
 
 /**

@@ -7,11 +7,12 @@ import {
   conceptQueryGroups,
   emptyFieldAdvice,
   minimumOptionalBounds,
+  ruleLoosenedNote,
   searchableTerms,
   textMatchPredicate,
 } from '../field-map'
-import { DISABLED_REASON, UNCALIBRATED_REASON } from '../candidates'
-import { emptyWhitespaceScope } from '../types'
+import { candidateCoverageNote, DISABLED_REASON, UNCALIBRATED_REASON } from '../candidates'
+import { emptyWhitespaceScope, type FieldRule } from '../types'
 
 describe('concept term hygiene in buildConceptQuery', () => {
   it('searches the sanitised terms, not the compiler prose', () => {

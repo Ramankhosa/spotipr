@@ -28,6 +28,7 @@ const CLAIMS_TIMEOUT_MS = 15_000
 
 export async function runDeepDiveStage(input: {
   runId: string
+  workerId: string
   studyId: string
   clusterId: string
   llmContext: WhitespaceLLMContext
@@ -125,6 +126,10 @@ export async function runDeepDiveStage(input: {
   // --- extraction, batched, with a shared normalised vocabulary -------------
   const extracted: ClaimElementFamily[] = []
   const vocabulary: string[] = []
+  // Extractions whose familyKey matched nothing in the batch, counted rather
+  // than silently dropped — the module header promises families are never
+  // silently omitted, and a garbled echo is a data gap like any other.
+  let unmatchedExtractions = 0
   for (let offset = 0; offset < readable.length; offset += EXTRACTION_BATCH) {
     const batch = readable.slice(offset, offset + EXTRACTION_BATCH)
     try {
@@ -145,8 +150,16 @@ export async function runDeepDiveStage(input: {
       }>(response.output, 'Claim-element extraction')
 
       for (const entry of parsed.families ?? []) {
-        const source = batch.find(item => item.familyKey === entry.familyKey)
-        if (!source) continue
+        // The prompt shows "FAMILY {familyKey} ({publicationNumber})", and the
+        // model sometimes echoes the publication number where the family key
+        // was asked for — matching on it keeps the extraction.
+        const source =
+          batch.find(item => item.familyKey === entry.familyKey) ??
+          batch.find(item => item.publicationNumber === entry.familyKey)
+        if (!source) {
+          unmatchedExtractions++
+          continue
+        }
         const elements = Array.isArray(entry.elements)
           ? Array.from(
               new Set(
@@ -176,7 +189,17 @@ export async function runDeepDiveStage(input: {
       console.error('[Whitespace] Element extraction batch failed:', error instanceof Error ? error.message : error)
       coverageNotes.push(`One extraction batch of ${batch.length} families failed and is missing from the analysis.`)
     }
-    await heartbeatRun(input.runId)
+    await heartbeatRun(input.runId, input.workerId)
+  }
+
+  if (unmatchedExtractions > 0) {
+    coverageNotes.push(
+      `${unmatchedExtractions} extraction${
+        unmatchedExtractions === 1 ? '' : 's'
+      } named a family that was not in the batch put to the model and ${
+        unmatchedExtractions === 1 ? 'was' : 'were'
+      } dropped — element analysis may under-read this area.`
+    )
   }
 
   if (!extracted.length) {

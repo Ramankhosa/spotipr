@@ -28,7 +28,12 @@ import {
   PATENT_CORPUS_EMBEDDING_MODEL,
 } from '@/lib/patent-corpus-service'
 import type { WhitespaceScope } from './types'
-import { buildScopeFilter, corpusMembershipPredicate, exclusionMatchPredicate } from './field-map'
+import {
+  buildScopeFilter,
+  corpusMembershipPredicate,
+  exclusionMatchPredicate,
+  SEMANTIC_LANE_DID_NOT_RUN_MARKER,
+} from './field-map'
 import {
   corpusVectorRowEstimate,
   describeLaneError,
@@ -237,9 +242,26 @@ export interface FieldCandidates {
   /** False when the lane could not run; `reason` then says why, for the trail. */
   available: boolean
   reason?: string
+  /**
+   * True when the unavailability is a deterministic property of the scope or
+   * the installation (no concepts, kill switch, no embedding key) rather than
+   * of this attempt. Only meaningful when `available` is false. Cache layers
+   * (this module's memo, and resolveFieldDefinition's) may remember a
+   * permanent refusal; a transient one MUST be retried — the flag exists so
+   * they can tell the two apart structurally instead of sniffing the prose
+   * `reason`.
+   */
+  permanent?: boolean
   /** True when the cap was hit — the arm is the N nearest, not everything near. */
   saturated: boolean
   cap: number
+  /**
+   * The cap the retrieval could actually serve, when SMALLER than `cap`: an
+   * HNSW index scan returns at most ~1,000 rows however many were requested
+   * (see semanticNeighbors), so past that the arm is the nearest ~1,000, not
+   * the nearest `cap`. Absent when the requested cap was fully servable.
+   */
+  effectiveCap?: number
   /**
    * The normalised distance ceiling actually applied to THIS scope's query. Under
    * `adaptive` it differs from study to study by design; 0 when nothing ran.
@@ -251,10 +273,11 @@ export interface FieldCandidates {
   background?: SemanticBackground
 }
 
-const UNAVAILABLE = (reason: string): FieldCandidates => ({
+const UNAVAILABLE = (reason: string, permanent = false): FieldCandidates => ({
   ids: [],
   available: false,
   reason,
+  permanent,
   saturated: false,
   cap: CANDIDATE_CAP,
   maxDistance: 0,
@@ -355,16 +378,18 @@ export async function resolveFieldCandidates(
   const queryText = candidateQueryText(scope)
   // No concepts means no lexical concept gate either, so the field is already
   // the whole structural slice — there is nothing for the semantic arm to widen.
-  if (!queryText) return UNAVAILABLE('The scope states no concepts, so no semantic candidates are needed.')
+  // These three refusals are PERMANENT: properties of the scope or the
+  // configuration, not of the attempt, so caches may remember them.
+  if (!queryText) return UNAVAILABLE('The scope states no concepts, so no semantic candidates are needed.', true)
   if (!semanticLaneConfigured()) {
-    return UNAVAILABLE('Semantic search is not configured (no embedding key), so the field is lexical-only.')
+    return UNAVAILABLE('Semantic search is not configured (no embedding key), so the field is lexical-only.', true)
   }
   const ceiling: SemanticCeiling | null =
     options.maxDistance !== undefined
       ? { mode: 'absolute', maxDistance: options.maxDistance }
       : await resolveSemanticCeiling()
   // Only the deliberate kill switch stops the arm before it runs.
-  if (ceiling === null) return UNAVAILABLE(semanticArmUnavailableReason() ?? DISABLED_REASON)
+  if (ceiling === null) return UNAVAILABLE(semanticArmUnavailableReason() ?? DISABLED_REASON, true)
 
   const key = cacheKey(scope, cap, ceiling)
   const hit = cache.get(key)
@@ -398,12 +423,18 @@ export async function resolveFieldCandidates(
       console.error('[Whitespace] Applying exclusions to semantic candidates failed:', error instanceof Error ? error.message : error)
       return UNAVAILABLE(`The scope's exclusions could not be applied to the semantic candidates: ${describeLaneError(error, timeoutMs)}.`)
     }
+    // The cap the index could actually serve: an HNSW scan clips at ~1,000
+    // rows however many were requested (semanticNeighbors reports the clamp as
+    // effectiveLimit), and measuring saturation against the REQUESTED cap read
+    // a truncated 1,000-row retrieval as "unclipped and complete".
+    const effectiveCap = Math.min(cap, result.effectiveLimit ?? cap)
     value = {
       ids,
       available: true,
       // Saturation is a property of the retrieval, before exclusions are subtracted.
-      saturated: result.neighbors.length >= cap,
+      saturated: result.neighbors.length >= effectiveCap,
       cap,
+      ...(effectiveCap < cap ? { effectiveCap } : {}),
       maxDistance: result.appliedMaxDistance ?? 0,
       mode: ceiling.mode,
       background: result.background,
@@ -450,7 +481,10 @@ export function candidateCoverageNote(candidates: FieldCandidates): string {
     if (candidates.reason && /states no concepts/i.test(candidates.reason)) {
       return `Field defined by structural filters alone — ${candidates.reason}`
     }
-    return `Field matched on concept text alone — ${candidates.reason}`
+    // The marker is the structural contract with emptyFieldAdvice (field-map.ts):
+    // it rides on `available`, not on the reason wording, so advice keeps naming
+    // the lane however future failure reasons are phrased.
+    return `Field matched on concept text alone — ${SEMANTIC_LANE_DID_NOT_RUN_MARKER}: ${candidates.reason}`
   }
   if (!candidates.ids.length) {
     return 'Field matched on concept text alone — the semantic lane found no additional documents in this slice.'
@@ -465,10 +499,18 @@ export function candidateCoverageNote(candidates: FieldCandidates): string {
           (candidates.background.mean - candidates.maxDistance) / candidates.background.sd
         ).toFixed(1)} standard deviations below this query's mean distance to the corpus`
       : `a ${candidates.maxDistance.toFixed(3)} embedding-distance ceiling`
-  const base = `Field matched on concept text OR semantic similarity: ${candidates.ids.length.toLocaleString()} documents were admitted by meaning rather than wording (within ${ceiling}).`
-  return candidates.saturated
-    ? `${base} That is the ${candidates.cap.toLocaleString()}-document ceiling, so the semantic arm is the nearest ${candidates.cap.toLocaleString()} rather than every document inside the ceiling — narrow the scope for an unclipped semantic arm.`
-    : base
+  // "fell within", not "admitted by meaning RATHER THAN wording": the ids are
+  // everything inside the ceiling, and many of them also match the concept
+  // wording — the earlier phrasing claimed a lexical/semantic split this
+  // module never measures (splitNote in field-definition.ts is what does).
+  const base = `Field matched on concept text OR semantic similarity: ${candidates.ids.length.toLocaleString()} documents fell within ${ceiling} (some may also match the concept wording).`
+  if (!candidates.saturated) return base
+  const servedCap = Math.min(candidates.cap, candidates.effectiveCap ?? candidates.cap)
+  const capPhrase =
+    servedCap < candidates.cap
+      ? `the ~${servedCap.toLocaleString()}-row ceiling of the ANN index scan (below the configured ${candidates.cap.toLocaleString()}-document cap)`
+      : `the ${candidates.cap.toLocaleString()}-document ceiling`
+  return `${base} That is ${capPhrase}, so the semantic arm is the nearest ${servedCap.toLocaleString()} rather than every document inside the ceiling — narrow the scope for an unclipped semantic arm.`
 }
 
 /** Test seam: the memo is process-wide and would otherwise leak across cases. */

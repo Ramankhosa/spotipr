@@ -3,6 +3,7 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { appendTrail, getOwnedStudy } from '@/lib/whitespace/service'
 import { quotePhrase } from '@/lib/whitespace/field-map'
+import { WhitespaceHttpError, whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
 import type { DimensionGap, DimensionMapResult, HypothesisScores } from '@/lib/whitespace/types'
 import type { Prisma } from '@prisma/client'
 
@@ -10,6 +11,51 @@ export const runtime = 'nodejs'
 
 /** Each promoted gap later costs a full metered validation run; keep batches deliberate. */
 const MAX_PROMOTIONS_PER_CALL = 5
+
+const NOT_PROMOTABLE = "This run's results are not in a promotable shape."
+
+/**
+ * Stored run results are client-shaped jsonb from an older writer, not a typed
+ * row. Everything this handler dereferences — registry values, familyCount for
+ * the rationale, the limitations list — is checked here, so a malformed legacy
+ * payload refuses with the curated 400 instead of a TypeError.
+ */
+function readPromotableResults(value: unknown): DimensionMapResult {
+  const results =
+    value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+  if (
+    !results ||
+    !Array.isArray(results.registry) ||
+    !results.registry.every(
+      dimension =>
+        Boolean(dimension) &&
+        typeof dimension === 'object' &&
+        Array.isArray((dimension as { values?: unknown }).values)
+    ) ||
+    !Array.isArray(results.gaps) ||
+    typeof results.familyCount !== 'number' ||
+    !Number.isFinite(results.familyCount) ||
+    !Array.isArray(results.limitations)
+  ) {
+    throw new WhitespaceHttpError(400, NOT_PROMOTABLE)
+  }
+  if (!results.gaps.length) {
+    throw new WhitespaceHttpError(400, 'That run holds no candidate gaps.')
+  }
+  return results as unknown as DimensionMapResult
+}
+
+/** The fields buildStatement/buildRationale and the evidence passage dereference. */
+function assertPromotableGap(gap: DimensionGap): void {
+  const ok =
+    typeof gap.aValueLabel === 'string' &&
+    typeof gap.bValueLabel === 'string' &&
+    [gap.observed, gap.marginA, gap.marginB, gap.expected, gap.z].every(
+      entry => typeof entry === 'number' && Number.isFinite(entry)
+    ) &&
+    (!gap.nearMissB || (typeof gap.nearMissB === 'object' && Number.isFinite(gap.nearMissB.families)))
+  if (!ok) throw new WhitespaceHttpError(400, NOT_PROMOTABLE)
+}
 
 /**
  * Promotes selected dimension gaps into WhitespaceHypothesis rows the EXISTING
@@ -46,23 +92,35 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       return NextResponse.json({ error: 'Pass runId and at least one gapId.' }, { status: 400 })
     }
 
-    const run = await prisma.whitespaceRun.findUnique({ where: { id: runId } })
+    const run = await prisma.whitespaceRun.findUnique({
+      where: { id: runId },
+      select: { id: true, studyId: true, stage: true, status: true },
+    })
     if (!run || run.studyId !== study.id || run.stage !== 'DIMENSION_MAP' || run.status !== 'COMPLETED') {
       return NextResponse.json({ error: 'That dimension map run is not available.' }, { status: 404 })
     }
-    const results = run.results as unknown as DimensionMapResult | null
-    if (!results?.gaps?.length) {
-      return NextResponse.json({ error: 'That run holds no candidate gaps.' }, { status: 400 })
-    }
-
-    const valueById = new Map(
-      results.registry.flatMap(dimension => dimension.values.map(value => [value.id, value] as const))
-    )
 
     const promoted: Array<{ gapId: string; hypothesisId: string; existing: boolean }> = []
     const userId = auth.user.id
 
     await prisma.$transaction(async tx => {
+      // The whole read-check-create-stamp sequence runs under a row lock on the
+      // run. Without it, two concurrent promotions of the same gap both read
+      // hypothesisId === null and both create; and because the stamp below
+      // rewrites the whole results object, whichever wrote last erased the
+      // other's stamps, so even sequential re-promotes duplicated.
+      await tx.$queryRaw`SELECT "id" FROM "whitespace_runs" WHERE "id" = ${run.id} FOR UPDATE`
+
+      const locked = await tx.whitespaceRun.findUnique({
+        where: { id: run.id },
+        select: { results: true },
+      })
+      const results = readPromotableResults(locked?.results)
+
+      const valueById = new Map(
+        results.registry.flatMap(dimension => dimension.values.map(value => [value.id, value] as const))
+      )
+
       for (const gapId of gapIds) {
         const gap = results.gaps.find(entry => entry.id === gapId)
         if (!gap) continue
@@ -70,6 +128,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
           promoted.push({ gapId, hypothesisId: gap.hypothesisId, existing: true })
           continue
         }
+        assertPromotableGap(gap)
 
         const aValue = valueById.get(gap.aValueId)
         const bValue = valueById.get(gap.bValueId)
@@ -225,11 +284,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
     }
     return NextResponse.json({ promoted }, { status: 201 })
   } catch (error) {
-    console.error('[Whitespace] Gap promotion failed:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Could not promote the gaps.' },
-      { status: 400 }
-    )
+    return whitespaceErrorResponse(error, 'Gap promotion')
   }
 }
 

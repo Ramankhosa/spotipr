@@ -18,7 +18,7 @@
  * refutation outweighs any amount of supporting evidence.
  */
 
-import { Prisma, TaskCode } from '@prisma/client'
+import { Prisma, TaskCode, type WhitespaceHypothesis } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { textMatchPredicate } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
@@ -41,10 +41,17 @@ import type {
 } from './types'
 
 const ATTACK_HIT_LIMIT = 25
-const MAPPING_CANDIDATES = 8
+/**
+ * Candidates put to one element-mapping call. The call is a single batched
+ * prompt (buildElementMappingPrompt caps each candidate at ~4KB of claims), so
+ * 12 stays well inside budget while letting the round-robin below cover the top
+ * hit of every attack even when all four strategies retrieved.
+ */
+const MAPPING_CANDIDATES = 12
 const SEARCH_TIMEOUT_MS = 20_000
 
-interface AttackHit {
+/** Exported for tests (candidate selection and mapping-outcome relabelling). */
+export interface AttackHit {
   familyKey: string
   publicationNumber: string
   title: string
@@ -62,30 +69,56 @@ interface AttackHit {
  */
 type AttackOutcome = { hits: AttackHit[] } | { hits: null; reason: string }
 
-interface MappedCandidate {
+/** Exported for tests. */
+export interface MappedCandidate {
   publicationNumber: string
   basis: string
   fullCombination: 'PRESENT' | 'PARTIAL' | 'ABSENT'
   elements: Array<{ element: string; verdict: string; quote: string }>
 }
 
-export async function runValidateStage(input: {
+interface ValidateStageInput {
   runId: string
+  workerId: string
   studyId: string
   hypothesisId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
-}): Promise<{ status: string; type: WhitespaceType; confidence: number | null; attacksRun: number }> {
+}
+
+export async function runValidateStage(
+  input: ValidateStageInput
+): Promise<{ status: string; type: WhitespaceType; confidence: number | null; attacksRun: number }> {
   const hypothesis = await prisma.whitespaceHypothesis.findUnique({ where: { id: input.hypothesisId } })
   if (!hypothesis || hypothesis.studyId !== input.studyId) {
     throw new WhitespacePermanentError('That hypothesis no longer exists.')
   }
 
+  const priorStatus = hypothesis.status
   await prisma.whitespaceHypothesis.update({
     where: { id: hypothesis.id },
     data: { status: 'VALIDATING' },
   })
 
+  // Any throw past this point used to leave the hypothesis stuck in VALIDATING —
+  // the run-level failure handling lives elsewhere and never resets hypothesis
+  // status. Put the prior status back before rethrowing; the error is unchanged.
+  try {
+    return await executeValidation(input, hypothesis)
+  } catch (error) {
+    try {
+      await prisma.whitespaceHypothesis.update({ where: { id: hypothesis.id }, data: { status: priorStatus } })
+    } catch (resetError) {
+      console.error('[Whitespace] Could not reset hypothesis status after a failed validation:', resetError)
+    }
+    throw error
+  }
+}
+
+async function executeValidation(
+  input: ValidateStageInput,
+  hypothesis: WhitespaceHypothesis
+): Promise<{ status: string; type: WhitespaceType; confidence: number | null; attacksRun: number }> {
   const combination = (hypothesis.elementCombination ?? {}) as Record<string, unknown>
   const elements = Array.isArray(combination.elements)
     ? (combination.elements as unknown[]).filter((element): element is string => typeof element === 'string')
@@ -135,7 +168,7 @@ export async function runValidateStage(input: {
     console.error('[Whitespace] Disproof query generation failed; using fallback queries:', error)
   }
 
-  await heartbeatRun(input.runId)
+  await heartbeatRun(input.runId, input.workerId)
 
   // --- 2. run the four attack strategies ------------------------------------
   for (const query of plan.synonymShifted) {
@@ -194,12 +227,16 @@ export async function runValidateStage(input: {
     reason: 'No non-patent-literature provider is configured for this deployment.',
   })
 
-  await heartbeatRun(input.runId)
+  await heartbeatRun(input.runId, input.workerId)
 
   // --- 3. element-map the closest hits --------------------------------------
   // Publication numbers the model invented or garbled, dropped rather than
   // trusted. Counted so the run can say the mapping was incomplete.
   let unmatchedMappings = 0
+  // Verdicts whose fullCombination was missing or unrecognisable, likewise
+  // dropped and counted — never coerced to ABSENT, which is the survival
+  // direction and exactly the fail-open this stage exists to prevent.
+  let malformedMappings = 0
 
   const mapCandidates = async (candidates: AttackHit[]): Promise<MappedCandidate[]> => {
     if (!candidates.length) return []
@@ -236,7 +273,27 @@ export async function runValidateStage(input: {
           )
           continue
         }
-        accepted.push({ ...candidate, publicationNumber: resolved })
+        // The verdict object is unvalidated model JSON. A missing `elements`
+        // array threw mid-persist — AFTER status was set VALIDATING, leaving
+        // the hypothesis stuck — and an uncased "Present" failed the strict
+        // === 'PRESENT' checks downstream, silently reading as ABSENT.
+        const verdict =
+          typeof candidate.fullCombination === 'string' ? candidate.fullCombination.trim().toUpperCase() : ''
+        if (verdict !== 'PRESENT' && verdict !== 'PARTIAL' && verdict !== 'ABSENT') {
+          malformedMappings++
+          console.warn(`[Whitespace] Element mapping returned no usable verdict for ${resolved}; discarded.`)
+          continue
+        }
+        accepted.push({
+          ...candidate,
+          publicationNumber: resolved,
+          fullCombination: verdict,
+          elements: Array.isArray(candidate.elements)
+            ? candidate.elements.filter((entry): entry is MappedCandidate['elements'][number] =>
+                Boolean(entry) && typeof entry === 'object'
+              )
+            : [],
+        })
       }
       return accepted
     } catch (error) {
@@ -245,7 +302,9 @@ export async function runValidateStage(input: {
     }
   }
 
-  let mapped: MappedCandidate[] = await mapCandidates(Array.from(allHits.values()).slice(0, MAPPING_CANDIDATES))
+  let mapped: MappedCandidate[] = await mapCandidates(
+    selectMappingCandidates(hitFamiliesByAttack, allHits, MAPPING_CANDIDATES)
+  )
 
   applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
 
@@ -302,12 +361,16 @@ export async function runValidateStage(input: {
       )
       if (redTeamMapped.length) {
         mapped = [...mapped, ...redTeamMapped]
-        applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
       }
     }
+    // Re-labelled unconditionally, not only when fresh hits mapped: the red-team
+    // attack itself must be judged against the verdicts that already exist (its
+    // hits are often families the primary mapping read), and if nothing of its
+    // retrieval was read it gets the unread treatment like every other attack.
+    applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
   }
 
-  await heartbeatRun(input.runId)
+  await heartbeatRun(input.runId, input.workerId)
 
   // --- 5. persist the evidence trail ----------------------------------------
   for (const attack of attacks) {
@@ -353,7 +416,7 @@ export async function runValidateStage(input: {
   })
 
   const scores = computeScores({
-    prior: hypothesis.scores as unknown as HypothesisScores,
+    prior: priorScoresOf(hypothesis.scores),
     attacks,
     gates,
     fullRefutation,
@@ -385,6 +448,13 @@ export async function runValidateStage(input: {
     coverageLimitations.push(
       `${unmatchedMappings} element-mapping verdict${unmatchedMappings === 1 ? '' : 's'} named a document that was not among the retrieved candidates and ${
         unmatchedMappings === 1 ? 'was' : 'were'
+      } discarded — the closest art may not be fully read.`
+    )
+  }
+  if (malformedMappings > 0) {
+    coverageLimitations.push(
+      `${malformedMappings} element-mapping verdict${malformedMappings === 1 ? '' : 's'} came back without a usable full-combination judgment and ${
+        malformedMappings === 1 ? 'was' : 'were'
       } discarded — the closest art may not be fully read.`
     )
   }
@@ -439,6 +509,15 @@ async function tsqueryHasTerms(query: string): Promise<boolean> {
 
 const NO_SEARCHABLE_WORDS =
   'The query contained no searchable words after common-word removal, so it could not have matched anything — recorded as not run rather than as a clean attack.'
+
+/**
+ * LIKE/ILIKE wildcards in model-written strings made literal. The values are
+ * parameterised (injection-safe), but a stray % or _ in a CPC code or assignee
+ * name silently broadened the attack's scope — wrong retrieval, not a breach.
+ */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&')
+}
 
 /**
  * Full-text attack over the whole readable corpus. Deliberately UNSCOPED: the
@@ -504,7 +583,7 @@ async function cpcAttack(code: string, elements: string[]): Promise<AttackOutcom
              left(coalesce(lp."abstract", ''), 1500) AS abstract,
              left(coalesce(lp."claimsText", ''), 6000) AS "claimsText"
       FROM "local_patents" lp
-      WHERE EXISTS (SELECT 1 FROM unnest(lp."classifications") c WHERE replace(upper(c), ' ', '') LIKE ${normalized + '%'})
+      WHERE EXISTS (SELECT 1 FROM unnest(lp."classifications") c WHERE replace(upper(c), ' ', '') LIKE ${escapeLikePattern(normalized) + '%'})
         AND ${attackTextPredicate(elementQuery)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
     return {
@@ -539,7 +618,7 @@ async function assigneeAttack(assignee: string, elements: string[]): Promise<Att
              left(coalesce(lp."abstract", ''), 1500) AS abstract,
              left(coalesce(lp."claimsText", ''), 6000) AS "claimsText"
       FROM "local_patents" lp
-      WHERE lp."applicants"::text ILIKE ${'%' + assignee.trim() + '%'}
+      WHERE lp."applicants"::text ILIKE ${'%' + escapeLikePattern(assignee.trim()) + '%'}
         AND ${attackTextPredicate(elementQuery)}
       LIMIT ${ATTACK_HIT_LIMIT}`)
     return {
@@ -600,8 +679,53 @@ async function enrichWithClaims(candidates: AttackHit[]) {
   }))
 }
 
-/** Re-labels each attack's outcome from the mapping verdicts of its hits. */
-function applyMappingOutcomes(
+/**
+ * Mapping candidates drawn round-robin across attacks — the top hit of each
+ * attack, then the second of each, and so on, up to the limit. The previous
+ * rule ("first N of allHits in insertion order") was an ORDER-BY-less slice of
+ * the FIRST lexical attack's LIMIT 25: semantic, CPC and assignee hits were
+ * essentially never element-mapped, applyMappingOutcomes left those attacks
+ * CLEAN, and a VALIDATED verdict could issue with ~95% of retrieved art unread
+ * — the exact failure mode the red-team lane names for itself, live on every
+ * primary lane. Exported for tests.
+ */
+export function selectMappingCandidates(
+  hitFamiliesByAttack: Map<string, Set<string>>,
+  allHits: Map<string, AttackHit>,
+  limit: number
+): AttackHit[] {
+  const perAttack = Array.from(hitFamiliesByAttack.values()).map(families => Array.from(families))
+  const chosen: AttackHit[] = []
+  const seen = new Set<string>()
+  for (let depth = 0; chosen.length < limit; depth++) {
+    let anyLeft = false
+    for (const families of perAttack) {
+      if (depth >= families.length) continue
+      anyLeft = true
+      const familyKey = families[depth]
+      if (seen.has(familyKey)) continue
+      seen.add(familyKey)
+      const hit = allHits.get(familyKey)
+      if (hit) {
+        chosen.push(hit)
+        if (chosen.length >= limit) break
+      }
+    }
+    if (!anyLeft) break
+  }
+  return chosen
+}
+
+/**
+ * Re-labels each attack's outcome from the mapping verdicts of its hits.
+ *
+ * An attack that retrieved hits of which NONE was element-mapped is re-labelled
+ * NOT_RUN with the reason recorded: leaving it CLEAN would count unread
+ * retrieval as survival. NOT_RUN is what the ladder already treats as "could
+ * not be completed" — it lowers disproofCompleteness, earns no survival share,
+ * and G2 will not count it as vocabulary tested. Exported for tests.
+ */
+export function applyMappingOutcomes(
   attacks: AttackRecord[],
   hitFamiliesByAttack: Map<string, Set<string>>,
   allHits: Map<string, AttackHit>,
@@ -611,13 +735,23 @@ function applyMappingOutcomes(
   for (const attack of attacks) {
     if (attack.outcome === 'NOT_RUN') continue
     let worst: 'CLEAN' | 'WEAKENING' | 'REFUTING' = 'CLEAN'
+    let anyRead = false
     const hitFamilies = hitFamiliesByAttack.get(keyForAttack(attack.strategy, attack.query)) ?? new Set<string>()
     for (const familyKey of Array.from(hitFamilies)) {
       const hit = allHits.get(familyKey)
       if (!hit) continue
       const verdict = verdictByPublication.get(hit.publicationNumber)
+      if (!verdict) continue
+      anyRead = true
       if (verdict === 'PRESENT') worst = 'REFUTING'
       else if (verdict === 'PARTIAL' && worst === 'CLEAN') worst = 'WEAKENING'
+    }
+    if (attack.hits > 0 && !anyRead) {
+      attack.outcome = 'NOT_RUN'
+      attack.reason = `retrieved ${attack.hits} document${
+        attack.hits === 1 ? '' : 's'
+      } but none was element-mapped — its art is unread, so the attack counts as not completed rather than as clean.`
+      continue
     }
     attack.outcome = worst
   }
@@ -757,6 +891,27 @@ async function evaluateGates(input: {
   })
 
   return gates
+}
+
+/**
+ * The prior score vector, read defensively. The schema says `scores` is always
+ * the full vector, but a null or legacy row threw mid-stage on the first field
+ * access. Every missing or non-numeric field defaults to null — the vector's
+ * own "unmeasured" value, which every downstream formula already handles —
+ * rather than to a fabricated measurement of 0.
+ */
+function priorScoresOf(value: unknown): HypothesisScores {
+  const raw = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const num = (key: string): number | null => (typeof raw[key] === 'number' ? (raw[key] as number) : null)
+  return {
+    density: num('density'),
+    rarity: num('rarity'),
+    semanticNovelty: num('semanticNovelty'),
+    evidenceQuality: num('evidenceQuality'),
+    confidence: num('confidence'),
+    crowdedness: num('crowdedness'),
+    strength: num('strength'),
+  }
 }
 
 function computeScores(input: {

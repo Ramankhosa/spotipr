@@ -57,10 +57,23 @@ const assumptionSchema = z
  */
 const thisYear = () => new Date().getFullYear()
 
+/**
+ * Year bound that ROUNDS a fractional number before demanding an integer.
+ * Years reach the scope from a language model (service.ts's asInt passes a
+ * numeric 2015.5 through unparsed), and a stored scope that fails .int() here
+ * fails EVERY later readScope — the study bricks over a half-year nobody can
+ * see. The contract is still "an integer year"; rounding just performs the
+ * repair a numeric near-miss obviously intends instead of rejecting forever.
+ */
+const yearField = z.preprocess(
+  value => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : value),
+  z.number().int().min(CORPUS_FIRST_YEAR)
+)
+
 const filtersSchema = z
   .object({
-    yearFrom: z.number().int().min(CORPUS_FIRST_YEAR),
-    yearTo: z.number().int().min(CORPUS_FIRST_YEAR),
+    yearFrom: yearField,
+    yearTo: yearField,
     jurisdictions: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/, 'Use two-letter country codes.')).max(60),
     assignees: z.array(nonEmptyText(200)).max(50),
   })
@@ -204,6 +217,10 @@ export function combinationCount(n: number, k: number): number {
 
 export function rungIsCompilable(optionalCount: number, minimumOptional: number): boolean {
   if (minimumOptional <= 0) return true
+  // k > n is inexpressible, not "cheap": combinationCount returns 0 there, which
+  // slipped under the ceiling and read as compilable — and a rung with zero
+  // k-subsets compiles to NO predicate arms, silently deleting the concept gate.
+  if (minimumOptional > optionalCount) return false
   return combinationCount(optionalCount, minimumOptional) <= MAX_RUNG_COMBINATIONS
 }
 
@@ -248,8 +265,10 @@ export function normalizeScope(scope: WhitespaceScope): WhitespaceScope {
   })
 
   const ceiling = thisYear()
-  const yearFrom = Math.max(CORPUS_FIRST_YEAR, Math.min(scope.filters.yearFrom, ceiling))
-  const yearTo = Math.max(yearFrom, Math.min(scope.filters.yearTo, ceiling + 1))
+  // Rounded for the same reason yearField rounds: a fractional year that
+  // reached normalisation must not be stored to fail every later validation.
+  const yearFrom = Math.max(CORPUS_FIRST_YEAR, Math.min(Math.round(scope.filters.yearFrom), ceiling))
+  const yearTo = Math.max(yearFrom, Math.min(Math.round(scope.filters.yearTo), ceiling + 1))
 
   return {
     ...scope,

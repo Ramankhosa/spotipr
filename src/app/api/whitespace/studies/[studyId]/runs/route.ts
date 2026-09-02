@@ -6,6 +6,7 @@ import { appendTrail, getOwnedStudy, readScope, startWhitespaceRun } from '@/lib
 import { scopeIsRunnable } from '@/lib/whitespace/scope-schema'
 import type { WhitespaceRunStage } from '@/lib/whitespace/types'
 import type { Prisma } from '@prisma/client'
+import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
 
 export const runtime = 'nodejs'
 
@@ -105,6 +106,19 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
+    // A targeted stage with no usable target used to enqueue anyway and fail
+    // minutes later inside the executor. Refuse now, with the executor's words.
+    const runParams = sanitiseParams(stage, body?.params)
+    if (stage === 'DEEP_DIVE' && !runParams) {
+      return NextResponse.json({ error: 'A deep dive needs the area to read (clusterId).' }, { status: 400 })
+    }
+    if (stage === 'VALIDATE' && !runParams) {
+      return NextResponse.json(
+        { error: 'Validation needs the hypothesis to attack (hypothesisId).' },
+        { status: 400 }
+      )
+    }
+
     // Entitlement is checked for every metered stage, tenant or not. Guarding
     // the check on `auth.user.tenantId` meant an account with no tenant — a
     // solo signup, an invited user before assignment — ran deep dives,
@@ -152,7 +166,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       scope,
       scopeVersion: study.scopeVersion,
       requestHeaders: headersToRecord(request),
-      params: sanitiseParams(stage, body?.params) as Prisma.InputJsonValue | undefined,
+      params: runParams as Prisma.InputJsonValue | undefined,
     })
 
     if (!existing) {
@@ -166,10 +180,6 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       { status: existing ? 409 : 202 }
     )
   } catch (error) {
-    console.error('[Whitespace] Run start failed:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Could not start the run.' },
-      { status: 400 }
-    )
+    return whitespaceErrorResponse(error, 'Run start')
   }
 }

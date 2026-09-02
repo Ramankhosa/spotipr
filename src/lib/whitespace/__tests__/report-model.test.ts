@@ -422,6 +422,40 @@ describe('buildWhitespaceReportModel', () => {
     expect(model.scope.intersectionWarning).toMatch(/glucose, wearable/)
   })
 
+  it('renders a legacy round with a malformed slice as unmeasured instead of throwing', () => {
+    const model = buildWhitespaceReportModel(
+      input({
+        stageResults: {
+          dimensionMap: {
+            scopeVersion: 3,
+            results: {
+              familyCount: 900,
+              publicationCount: 2000,
+              sample: { families: 900, weight: 1, method: 'md5-family-key' },
+              registry: [],
+              rounds: [
+                // A legacy row missing `slice` used to crash the whole report.
+                { round: 1, acceptedDimensions: [], acceptedValues: [], rejected: [], residualShareAfter: 0.4 },
+              ],
+              settled: true,
+              settledReason: 'RESIDUAL_UNDER_FLOOR',
+              matrices: [],
+              gaps: [],
+              thresholds: { marginFloor: 30, expectedFloor: 5, residualCeiling: 0.2, redundancyCeiling: 0.6 },
+              unclassifiedFamilies: 0,
+              unclassifiedShare: 0,
+              coverageNotes: [],
+              limitations: [],
+              generatedAt: '2026-08-01T00:00:00.000Z',
+            },
+          },
+        },
+      })
+    )
+
+    expect(model.dimensionMap!.rounds[0].sliceLine).toBe('— families (sample)')
+  })
+
   it('lists only the funnel steps that were measured', () => {
     const model = buildWhitespaceReportModel(
       input({

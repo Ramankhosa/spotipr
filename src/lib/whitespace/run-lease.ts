@@ -30,8 +30,12 @@ export const RUN_LEASE_MS = 20 * 60 * 1000
 /** Retry backoff by attempt number, in milliseconds. */
 const RETRY_BACKOFF_MS = [30_000, 2 * 60_000, 5 * 60_000]
 
+/**
+ * `attemptCount` is the attempt that just failed, ALREADY incremented by the
+ * claim — so the first failure arrives as 1 and must map to the first rung.
+ */
 export function retryDelayMs(attemptCount: number): number {
-  return RETRY_BACKOFF_MS[Math.min(attemptCount, RETRY_BACKOFF_MS.length - 1)]
+  return RETRY_BACKOFF_MS[Math.max(0, Math.min(attemptCount - 1, RETRY_BACKOFF_MS.length - 1))]
 }
 
 /**
@@ -61,6 +65,27 @@ export function isPermanentFailure(error: unknown): boolean {
 }
 
 /**
+ * The run's lease is no longer this worker's.
+ *
+ * Thrown by heartbeatRun when the fenced write matches no row: the lease
+ * expired and another worker reclaimed the run, or the run was resolved from
+ * outside. The stage must abort — every further model call is spend on work
+ * whose result cannot be committed, and every further write races the worker
+ * that now legitimately holds the run.
+ */
+export class WhitespaceLeaseLostError extends Error {
+  readonly leaseLost = true
+  constructor(runId: string) {
+    super(`Run ${runId} is no longer leased to this worker.`)
+    this.name = 'WhitespaceLeaseLostError'
+  }
+}
+
+export function isLeaseLost(error: unknown): boolean {
+  return error instanceof WhitespaceLeaseLostError || (error as { leaseLost?: boolean })?.leaseLost === true
+}
+
+/**
  * Extends this run's lease and records live narration.
  *
  * Stages used to each keep a private `heartbeat()` that wrote `heartbeatAt` and
@@ -68,23 +93,32 @@ export function isPermanentFailure(error: unknown): boolean {
  * than RUN_LEASE_MS without pushing `lockedUntil` forward would have its run
  * claimed by a second worker and executed twice. Every stage calls this instead.
  *
- * Never throws. A missed heartbeat costs a re-claim at worst; failing a
+ * Fenced on `lockedBy`: an unconditional write would let a worker that already
+ * lost its lease re-extend it and keep working blind against the new holder.
+ * When the fence matches no row this throws WhitespaceLeaseLostError so the
+ * stage aborts. A write that merely errors (a connection blip) is still
+ * swallowed — a missed heartbeat costs a re-claim at worst; failing a
  * forty-minute census because a bookkeeping write blipped would be far worse.
  */
 export async function heartbeatRun(
   runId: string,
+  workerId: string,
   progress?: { phase: string; detail: string; round?: number }
 ): Promise<void> {
+  let count: number
   try {
-    await prisma.whitespaceRun.update({
-      where: { id: runId },
+    const updated = await prisma.whitespaceRun.updateMany({
+      where: { id: runId, lockedBy: workerId, status: 'PROCESSING' },
       data: {
         heartbeatAt: new Date(),
         lockedUntil: new Date(Date.now() + RUN_LEASE_MS),
         ...(progress ? { progress: { ...progress } } : {}),
       },
     })
+    count = updated.count
   } catch {
     // Staleness detection and narration only.
+    return
   }
+  if (count === 0) throw new WhitespaceLeaseLostError(runId)
 }

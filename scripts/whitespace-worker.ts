@@ -19,11 +19,17 @@ import { drainWhitespaceRuns } from '../src/lib/whitespace/service'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+/** NaN from a garbage env value would make the drain loop spin hot; refuse it. */
+function envInt(raw: string | undefined, fallback: number, min: number): number {
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? Math.max(min, Math.floor(parsed)) : fallback
+}
+
 async function main() {
   const workerId = process.env.WHITESPACE_WORKER_ID || `whitespace-worker-${process.pid}`
   const once = process.argv.includes('--once') || process.env.WHITESPACE_WORKER_ONCE === 'true'
-  const batch = Math.max(1, Number(process.env.WHITESPACE_WORKER_BATCH || 1))
-  const idleMs = Math.max(1000, Number(process.env.WHITESPACE_WORKER_IDLE_MS || 5000))
+  const batch = envInt(process.env.WHITESPACE_WORKER_BATCH, 1, 1)
+  const idleMs = envInt(process.env.WHITESPACE_WORKER_IDLE_MS, 5000, 1000)
 
   console.log(`[WhitespaceWorker] ${workerId} starting (batch ${batch}${once ? ', single pass' : ''})`)
 
@@ -46,10 +52,16 @@ async function main() {
       // A failed drain is a claim-level problem (the database is down, say).
       // Individual run failures are recorded on their rows and never reach here.
       console.error('[WhitespaceWorker] Drain failed:', error instanceof Error ? error.message : error)
+      if (once) break
       await sleep(idleMs)
     }
-    if (once || stopping) break
-    if (!handled.length) await sleep(idleMs)
+    if (stopping) break
+    if (!handled.length) {
+      // --once means "drain what is queued, then exit" — keep passing until a
+      // claim comes back empty, whatever the batch size.
+      if (once) break
+      await sleep(idleMs)
+    }
   } while (true)
 
   console.log('[WhitespaceWorker] stopped.')

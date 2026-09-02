@@ -3,7 +3,7 @@ export function escapeReadOnlyPromptData(value: string) {
     .replace(/\u0000/g, '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
-    .replace(/<\/(source_data|title_text|invention_text)>/gi, '<\\/$1>')
+    .replace(/<\/(source_data|title_text|invention_text|original_disclosure|original_source_excerpt)>/gi, '<\\/$1>')
 }
 
 export type IdeaNormalizationPromptParams = {

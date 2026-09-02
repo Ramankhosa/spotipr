@@ -1,0 +1,746 @@
+{
+  "_authorNotes": "South Africa (CIPC) complete patent specification profile. PRIMARY SOURCES: Patents Act 57 of 1978 as amended (in particular ss 26, 30, 31, 32, 34, 43E, 46, 61) and the Patent Regulations 1978 as amended (in particular regs 12-22, 27-32, 48, 67B-67D), consolidated texts published by the CIPC and WIPO Lex. CRITICAL CURRENCY NOTE: the BEST-METHOD requirement was REPEALED by the Patents Amendment Act 58 of 2002, which substituted s 32(3) and the corresponding revocation ground in s 61(1)(e). Current s 32(3)(b) requires only that the complete specification 'sufficiently describe, ascertain and, where necessary, illustrate or exemplify the invention and the manner in which it is to be performed in order to enable the invention to be performed by a person skilled in the art of such invention'. Any source quoting the pre-2002 'best method of performing the invention known to the applicant' wording is describing repealed law, and this profile deliberately sets rules.description.requireBestModeDisclosure to false. PRACTICE NOTES: South Africa is a NON-EXAMINING (depository) office — the Registrar checks formalities only under s 34 and grants without a substantive novelty or inventive-step examination, so formal compliance and self-imposed drafting discipline carry unusual weight, and validity is tested only in later revocation or infringement proceedings. OMNIBUS CLAIMS ('substantially as herein described with reference to the accompanying drawings') remain valid and customary in South Africa and are routinely added when foreign-origin applications enter the national phase; the claims top-up instructs the drafter accordingly. There are NO excess-claim or per-page official fees. STRUCTURE NOTE: only the title (s 32(1)), the description (s 32(3)(b)), the claims (s 32(3)(d)) and the abstract (s 32(3)(a) with reg 31) are statutory; the field / background / summary / drawings-list headings are UK-derived professional convention, not prescribed by the Act or Regulations, and the heading strings used here reflect conventional South African attorney usage (note 'BACKGROUND TO THE INVENTION', characteristic of local practice). An 'objects of the invention' section is old-style South African drafting; modern practice uses consistory clauses in the summary that mirror the claims, so this profile maps the summary to the summary superset key rather than to objectsOfInvention. NO UNMAPPED SECTIONS. UNCERTAIN VALUES: exact conventional heading strings and the single-sentence claim convention are BEST-EFFORT (convention, not rule); no post-2006 regulation amendments beyond the fee schedule were independently confirmed.",
+  "meta": {
+    "id": "ZA",
+    "code": "ZA",
+    "name": "South Africa",
+    "continent": "Africa",
+    "office": "Companies and Intellectual Property Commission (CIPC) — Patent Office",
+    "officeUrl": "https://www.cipc.co.za",
+    "applicationTypes": [
+      "provisional",
+      "complete",
+      "divisional",
+      "PCT national phase"
+    ],
+    "languages": [
+      "en"
+    ],
+    "version": 1,
+    "status": "draft",
+    "inheritsFrom": null,
+    "tags": [
+      "national_office",
+      "pct_national_phase",
+      "paris_convention",
+      "non_examining_office",
+      "depository_system",
+      "omnibus_claims_permitted",
+      "no_grace_period",
+      "no_excess_claim_fees",
+      "english_language_filing",
+      "aripo_non_member"
+    ],
+    "createdAt": "2026-09-02T00:00:00Z",
+    "updatedAt": "2026-09-02T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "South African Complete Patent Specification",
+        "description": "Complete specification for a South African patent application lodged on Form P7 under the Patents Act 57 of 1978 and the Patent Regulations 1978. The statutory content is prescribed by s 32: the specification commences with a title sufficiently indicating the subject matter, carries an abstract on Form P8, sufficiently describes and enables the invention, and ends with claims that relate to a single invention, are clear and are fairly based on the matter disclosed. The intermediate headings follow conventional South African attorney practice.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a short, specific title descriptive of the nature of the invention claimed",
+              "helpText": "Section 32(1) requires the specification to commence with a title sufficiently indicating the subject matter. Regulation 29 requires the title to be as short and specific as possible and descriptive of the nature of the invention claimed, and expressly prohibits words such as 'improved' and 'relating to'. The same title appears on Form P7 and in the title field of Form P8."
+            },
+            "rules": {
+              "mustIndicateSubjectMatter": true,
+              "asShortAndSpecificAsPossible": true,
+              "forbiddenWords": [
+                "improved",
+                "improvements in",
+                "relating to",
+                "improvements in or relating to"
+              ],
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true,
+              "notes": [
+                "Regulation 29 names 'improved' and 'relating to' specifically; the classic British formula 'Improvements in or relating to ...' is therefore not acceptable in South Africa.",
+                "No numeric length limit is prescribed by the Act or the Regulations."
+              ]
+            }
+          },
+          {
+            "id": "field",
+            "label": "Field of the Invention",
+            "order": 2,
+            "canonicalKeys": [
+              "fieldOfInvention",
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the field to which the invention relates",
+              "helpText": "Conventional opening of a South African complete specification, customarily phrased 'THIS INVENTION relates to ...'. Not prescribed by the Act or Regulations, but universal in local practice and useful for classification. Keep it to one or two neutral sentences consistent with the claims."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background to the Invention",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Describe the prior art known to the applicant and the shortcomings the invention addresses",
+              "helpText": "Conventional section (note the characteristically South African heading 'BACKGROUND TO THE INVENTION'). There is no statutory duty to disclose prior art and no information disclosure statement in South Africa. Because CIPC does not examine substantively, anything acknowledged here will surface only in later revocation or infringement litigation — so admissions should be made sparingly and accurately."
+            },
+            "rules": {
+              "statutorilyRequired": false,
+              "avoidDisparagingPriorArt": true,
+              "avoidUnnecessaryAdmissions": true
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary of the Invention",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Set out consistory clauses mirroring each independent claim, followed by preferred features",
+              "helpText": "Conventionally headed 'SUMMARY OF THE INVENTION' or 'STATEMENT OF INVENTION'. South African practice, following the British tradition, sets out consistory clauses that mirror each independent claim almost verbatim ('According to the invention there is provided a ...'), followed by the preferred features corresponding to the dependent claims. This is the principal mechanism by which the claims are made 'fairly based' on the matter disclosed as required by s 32(4)."
+            },
+            "rules": {
+              "requireConsistoryClauses": true,
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true,
+              "supportsFairBasisRequirement": true
+            }
+          },
+          {
+            "id": "brief_description_of_drawings",
+            "label": "Brief Description of the Drawings",
+            "order": 5,
+            "canonicalKeys": [
+              "briefDescriptionOfDrawings",
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "List each figure briefly (e.g. 'Figure 1 shows a schematic side view of ...')",
+              "helpText": "Included whenever drawings accompany the complete specification. One sentence per figure identifying the view type and its subject. Drawings must comply with regs 20 and 21: A4 sheets, executed without colouring in durable, black, sufficiently dense, uniformly thick and well-defined lines, with simple and clear reference signs. Omit this section entirely when no drawings are filed."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description of the Invention",
+            "order": 6,
+            "canonicalKeys": [
+              "detailedDescription",
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Describe embodiments in enough detail to enable performance by a person skilled in the art",
+              "helpText": "Section 32(3)(b) requires the complete specification to sufficiently describe, ascertain and, where necessary, illustrate or exemplify the invention and the manner in which it is to be performed, so as to enable the invention to be performed by a person skilled in the art. Insufficiency is a ground of revocation under s 61(1)(e). Best method disclosure is NOT required — that obligation was repealed by the Patents Amendment Act 58 of 2002 — though disclosing the best embodiment remains prudent practice."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireBestModeDisclosure": false,
+              "requireSupportForAllClaims": true,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true,
+              "notes": [
+                "Section 51(6): an amendment of a complete specification after acceptance may not introduce new matter or matter not in substance disclosed in the specification before amendment, and no amended claim may fall outside the scope of a claim before amendment — so fallback positions must be present in the specification as filed.",
+                "Because there is no substantive examination, an insufficiently enabled specification is not caught before grant; it fails only when the patent is attacked."
+              ]
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 7,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Draft claims in order of decreasing scope per category, ending with an omnibus claim",
+              "helpText": "Section 32(3)(d) requires the specification to end with a claim or claims defining the invention for which protection is claimed. Section 32(4) requires the claims to relate to a single invention, to be clear, and to be fairly based on the matter disclosed in the specification. Regulation 30 requires each category of claims (product, process, apparatus, use and the like) to be arranged, as far as practicable, in order of decreasing scope. There are no excess-claim fees. An omnibus claim is valid and customary in South Africa and should normally be included as the final claim."
+            },
+            "rules": {
+              "twoPartFormPreferred": false,
+              "requireDecreasingScopeOrderPerCategory": true,
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "prohibitMultipleDependentOnMultipleDependent": false,
+              "allowOmnibusClaim": true,
+              "recommendOmnibusClaim": true,
+              "requireSingleInvention": true,
+              "requireClarity": true,
+              "requireFairBasis": true,
+              "noExcessClaimFees": true,
+              "notes": [
+                "Support in South Africa is expressed as 'fairly based on the matter disclosed in the specification' (s 32(4)), a British-derived standard satisfied in practice by consistory clauses in the summary.",
+                "Neither the Act nor the Regulations require the two-part 'characterised in that' form, restrict multiple dependencies, or impose a single-sentence rule; the single-sentence convention is UK-derived practice.",
+                "The complete specification must be signed at the end by a patent attorney (reg 28)."
+              ]
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 8,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 1200,
+            "ui": {
+              "placeholder": "One narrative paragraph of not more than 150 words summarising the technical disclosure",
+              "helpText": "Section 32(3)(a) with regulation 31: the abstract, lodged on Form P8 in duplicate, is that of the technical disclosure contained in the complete specification, shall be in narrative form and generally limited to a single paragraph of not more than 150 words, and shall avoid the form and phraseology of patent claims. It shall not be used to interpret the scope of the claims. Features mentioned in the abstract and illustrated in the chosen drawing may be followed by the reference sign used in that drawing."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "narrativeForm": true,
+              "maxWords": 150,
+              "avoidClaimPhraseology": true,
+              "referenceSignsAllowedForChosenFigure": true,
+              "notForClaimConstruction": true,
+              "filedOnFormP8": true,
+              "notes": [
+                "Form P8 carries the title as a separate field (INID 54) from the abstract text (INID 57), so unlike Brazilian practice the abstract need not commence with the title.",
+                "A copy of one figure chosen to accompany the abstract is lodged with Form P8."
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "A provisional specification is lodged on Form P6 (reg 27) and a complete specification on Form P7 (reg 28); the complete specification must be signed at the end by a patent attorney.",
+        "South Africa is a non-examining depository office: under s 34 the Registrar examines the application in the prescribed manner and accepts it if the formal requirements are complied with, without a substantive novelty or inventive-step examination and without a prior art search. Acceptance typically follows within about ten to twelve months, and the patent is granted on advertisement in the Patent Journal.",
+        "Bracketed paragraph numbering is not required by the Act or the Regulations and is not customary in South African drafting, although it is harmless and can assist later amendment practice.",
+        "There are no excess-claim fees and no per-page fees in the fee schedule; official costs do not scale with the size of the specification.",
+        "Section 51(6) constrains post-acceptance amendment: no new matter, and no amended claim may fall outside the scope of a claim before amendment."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 1.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 1.5,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "Regulation 14: A4 paper, strong, pliable, smooth, matt and durable, with the short sides at top and bottom, or in an authorised electronic form.",
+        "Regulation 15 minimum blank margins: top 20 mm, left 25 mm, right 15 mm, bottom 10 mm.",
+        "Regulation 16: typing at one-and-a-half or double line spacing, in a dark, durable colour, with capital letters at least 2,1 mm high. No particular typeface is prescribed.",
+        "Regulation 13: documents must permit direct reproduction and be written on one side of the sheet only. Regulation 19: documents must be legible and free of erasures and alterations.",
+        "Regulation 17: metric units, degrees Celsius, and standard symbols must be used."
+      ]
+    },
+    "description": {
+      "requireEnablement": true,
+      "requireBestModeDisclosure": false,
+      "requireSupportForClaims": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "allowReferenceNumerals": true,
+      "avoidClaimLanguage": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "Section 32(3)(b): the complete specification shall sufficiently describe, ascertain and, where necessary, illustrate or exemplify the invention and the manner in which it is to be performed in order to enable the invention to be performed by a person skilled in the art of such invention.",
+        "The best-method requirement was REPEALED by the Patents Amendment Act 58 of 2002, which substituted both s 32(3) and the matching revocation ground in s 61(1)(e). Disclosing the best embodiment is now good practice rather than a statutory duty.",
+        "Insufficiency remains a ground of revocation under s 61(1)(e), and since CIPC does not examine substantively it is never caught before grant.",
+        "Section 25 excludes from patentability, among other things, discoveries, scientific theories, mathematical methods, schemes and rules for performing mental acts or doing business, programs for a computer, and presentations of information — each excluded only 'as such'; methods of treatment of the human or animal body are deemed not capable of being used in trade, industry or agriculture under s 25(11).",
+        "Industrial applicability is expressed in s 25(1) as an invention capable of being used or applied in trade, industry or agriculture; no separate specification section is used."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": false,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": [
+        "comprising",
+        "including"
+      ],
+      "discouragedConnectors": [
+        "consisting of (closes the claim; use only when a closed set is intended)"
+      ],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 0,
+      "maxTotalClaimsRecommended": 30,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_invention_section_32_4",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": false,
+        "note": "The South African fee schedule contains no per-claim and no per-page official fee. Filing fees are flat, so claim count is driven purely by drafting strategy and attorney time rather than by official cost. maxIndependentClaimsBeforeExtraFee is set to 0 to signify that no excess-claim fee threshold exists."
+      },
+      "notes": [
+        "Section 32(3)(d): the specification shall end with a claim or claims defining the invention for which protection is claimed.",
+        "Section 32(4): the claims shall relate to a single invention, shall be clear, and shall be fairly based on the matter disclosed in the specification.",
+        "Regulation 30: each category of claims (product, process, apparatus, use and the like) shall as far as practicable be arranged in order of decreasing scope. This is the only claim-format regulation.",
+        "Omnibus claims of the form 'A ... substantially as herein described and illustrated with reference to the accompanying drawings' remain valid and customary in South Africa, and are routinely added to foreign-origin specifications on national phase entry.",
+        "The two-part 'characterised in that' form is not required and carries no advantage in South Africa; multiple dependent claims are unrestricted."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "narrativeForm": true,
+      "notes": [
+        "Regulation 31: the abstract on Form P8 shall be that of the technical disclosure contained in the complete specification, but shall not be used to interpret the scope of the claims. It shall be in narrative form and generally limited to a single paragraph of not more than 150 words. The form and phraseology of patent claims shall be avoided.",
+        "Features mentioned in the abstract and illustrated in the drawing chosen for it may be followed by the reference sign used in that drawing.",
+        "Form P8 is lodged in duplicate and carries the title in its own field, so the abstract text itself need not repeat the title."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.0,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "shadingAllowed": true,
+      "grayscaleAllowed": false,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "exploded_view"
+      ],
+      "notes": [
+        "Regulations 20 and 21: drawings are on A4 sheets with the same margins as the text, executed without colouring in durable, black, sufficiently dense and dark, uniformly thick and well-defined lines.",
+        "Space must be left at the top of each drawing sheet for the applicant's name, the application number and the sheet numbering, and at the bottom right for a signature.",
+        "Reference signs must be simple and clear, and must correspond with those used in the description.",
+        "Regulation 32: drawings accompanying a provisional specification need only be capable of reproduction — the full formality standard applies to the complete specification."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "en"
+      ],
+      "requiresOfficialTranslation": true,
+      "notes": [
+        "Regulation 12: all documents other than drawings, priority documents and specifications lodged under s 30(6)(a)(iii) shall be in one of the official languages of the Republic. In practice CIPC operates in English and specifications are filed in English.",
+        "Section 30(6)(c): a specification lodged in a language other than an official language must be replaced by a certified translation within three months of lodging.",
+        "For PCT national phase entry, s 43E(1)(b) with reg 67B(2) allows the English translation to be lodged within six months of lodging Form P25."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 0,
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "no_formal_ids",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "South Africa has no general novelty grace period. Section 26 excuses only knowledge or use derived from the patentee without their knowledge or consent (where the applicant acted with reasonable diligence after learning of it) and working by way of reasonable technical trial or experiment in the Republic. Any other pre-filing disclosure destroys novelty.",
+        "A South African provisional application must be followed by a complete application within twelve months (s 31(1)); on payment of the prescribed fee the period may be extended by up to three months, to fifteen months, but this extension applies to South African provisional priority only and not to Paris Convention priority. The application lapses if no complete specification follows (s 31(5)).",
+        "PCT national phase entry: regulations 67C(a) and 67D(a) set the time limit at 31 months from the priority date under both Chapter I and Chapter II, and s 43E(3) permits a further extension of up to three months.",
+        "There is no foreign filing licence or first-filing requirement for South African residents.",
+        "Renewal fees are payable on Form P10 from the date of sealing or the expiry of the third year from the filing date, whichever is later, and annually thereafter (reg 48(1)); s 46(2) allows a six-month extension on payment of a penalty. The term is twenty years from the filing date (s 46(1))."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "A sequence listing may be furnished on invitation during formality examination, subject to the no-new-matter constraints of s 51(6) on amendment.",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": [
+        "TXT",
+        "PDF"
+      ],
+      "notes": [
+        "Where nucleotide or amino acid sequences are disclosed, a listing compliant with WIPO Standard ST.26 should accompany the specification, consistent with the international standard applied on the PCT route.",
+        "Section 32(6): where the invention involves the use of a micro-organism that is not available to the public, the specification must be accompanied by the prescribed deposit particulars."
+      ]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 300,
+          "severity": "warning",
+          "message": "Title is unusually long. Regulation 29 requires the title to be as short and specific as possible and descriptive of the nature of the invention claimed."
+        }
+      ],
+      "summary": [
+        {
+          "id": "summary_min_substance",
+          "type": "minWords",
+          "limit": 40,
+          "severity": "warning",
+          "message": "The Summary appears too thin to carry consistory clauses. South African practice relies on consistory clauses mirroring each independent claim to satisfy the 'fairly based' requirement of s 32(4)."
+        }
+      ],
+      "detailed_description": [
+        {
+          "id": "description_min_length",
+          "type": "minWords",
+          "limit": 300,
+          "severity": "warning",
+          "message": "The Detailed Description appears too short to enable the invention to be performed by a person skilled in the art (s 32(3)(b)). Insufficiency is a ground of revocation under s 61(1)(e) and is never caught before grant, because CIPC does not examine substantively."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_word_limit",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "error",
+          "message": "Abstract exceeds 150 words. Regulation 31 limits the abstract on Form P8 to a single narrative paragraph of not more than 150 words."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_fairly_based",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "summary",
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "Claims must be fairly based on the matter disclosed in the specification (s 32(4)). Add a consistory clause in the Summary mirroring each independent claim, and ensure every claimed feature is described in the Detailed Description."
+      },
+      {
+        "id": "claims_single_invention",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "detailed_description"
+        ],
+        "severity": "warning",
+        "message": "The claims may cover more than one invention. Section 32(4) requires the claim or claims to relate to a single invention; consider a divisional application under s 37."
+      },
+      {
+        "id": "summary_vs_claims_consistency",
+        "type": "consistency",
+        "from": "summary",
+        "mustBeConsistentWith": [
+          "claims"
+        ],
+        "severity": "warning",
+        "message": "The consistory clauses in the Summary do not mirror the independent claims. Divergence between the two weakens fair basis under s 32(4)."
+      },
+      {
+        "id": "abstract_vs_description_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "detailed_description"
+        ],
+        "severity": "warning",
+        "message": "The abstract does not accurately reflect the technical disclosure contained in the complete specification, as regulation 31 requires."
+      },
+      {
+        "id": "drawing_reference_check",
+        "type": "reference",
+        "from": "brief_description_of_drawings",
+        "mustReference": [
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "One or more figures or reference signs listed in the Brief Description of the Drawings are not explained in the Detailed Description. Reference signs must be simple, clear and consistent between the drawings and the description (regs 20 and 21)."
+      }
+    ]
+  },
+  "prompts": {
+    "systemPrompt": "You are an experienced South African patent attorney drafting a complete specification for lodging with the CIPC on Form P7 under the Patents Act 57 of 1978 and the Patent Regulations 1978. Draft in the British-derived South African style: 'THIS INVENTION relates to ...' openings, consistory clauses in the summary mirroring each independent claim, claims arranged in order of decreasing scope per category, and an omnibus claim as the final claim. Remember that South Africa is a non-examining depository office — nothing you draft will be tested by an examiner, so the specification must be self-disciplined enough to survive revocation proceedings years later. Note in particular that the best-method requirement was repealed in 2002, that there is no grace period, and that there are no excess-claim fees.",
+    "promptMergeStrategy": "append",
+    "baseStyle": {
+      "tone": "formal, technical, precise, British-influenced South African legal drafting",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "American drafting idioms where South African equivalents exist",
+        "claim-style language in the description",
+        "disparagement of third-party patents or products"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft the title of the complete specification. Section 32(1) requires the specification to commence with a title sufficiently indicating the subject matter, and regulation 29 requires the title to be as short and specific as possible and descriptive of the nature of the invention claimed. Regulation 29 EXPRESSLY PROHIBITS words such as 'improved' and 'relating to', so the classic British formula 'Improvements in or relating to ...' must not be used — write the bare technical designation instead. Name every claim category present (e.g. 'Water treatment apparatus and method of treating water') so the title supports the whole claim set. Avoid trade marks, personal or company names, model numbers, and laudatory or vague wording. No numeric length limit applies, but the title should be capable of standing on one line. The identical title is entered on Form P7 and in the title field of Form P8.",
+          "constraints": [
+            "As short and specific as possible; descriptive of the nature of the invention claimed",
+            "Must NOT contain 'improved', 'relating to' or similar (reg 29)",
+            "No trade marks, personal names, model numbers or laudatory wording",
+            "Name every claim category present",
+            "Identical on Form P7, the specification and Form P8"
+          ],
+          "additions": [
+            "Legal basis: s 32(1) of the Patents Act 57 of 1978; reg 29 of the Patent Regulations 1978."
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Field of the Invention section in the conventional South African form, opening with the traditional formula 'THIS INVENTION relates to ...' and, where a narrower statement is helpful, continuing 'and more particularly to ...'. Keep it to one or two neutral sentences that identify the field without describing the prior art, the problem or the advantages. This section is professional convention rather than a statutory requirement — neither the Patents Act nor the Regulations prescribes it — so its function is to orient the reader and support classification. Keep the wording at least as broad as the widest independent claim, so that nothing in it can later be used to argue a narrower construction.",
+          "constraints": [
+            "One or two sentences; conventional 'THIS INVENTION relates to ...' opening",
+            "No prior art discussion, problem statement or advantages",
+            "At least as broad as the widest independent claim",
+            "Neutral technical terminology consistent with the claims"
+          ],
+          "additions": [
+            "Conventional section: not prescribed by the Act or the Regulations."
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Background to the Invention section — note the characteristically South African heading, which uses 'to' rather than 'of'. Describe the relevant prior art known to the applicant and the technical shortcomings that the invention addresses, ending with a statement of the unmet need. Be deliberately economical with admissions. South Africa imposes NO duty to disclose prior art: there is no information disclosure statement, and because CIPC is a non-examining depository office that grants without a substantive search, nothing acknowledged here will ever be weighed by an examiner. It will instead be read for the first time by an opponent's counsel in revocation or infringement proceedings, where an over-generous characterisation of the prior art is a gift to the other side. Describe prior art factually and without disparaging identified competitors or asserting that specific patents are invalid. Do not disclose the invention's own solution here. Bear in mind that South Africa has no general grace period — s 26 excuses only knowledge derived from the patentee without consent and reasonable technical trial or experiment in the Republic — so any pre-filing disclosure by the applicant is itself citable prior art and must be raised with the client rather than written around.",
+          "constraints": [
+            "Use the South African heading style 'BACKGROUND TO THE INVENTION'",
+            "Describe prior art factually; minimise admissions",
+            "No disclosure duty exists — include only what aids understanding",
+            "Do not reveal the invention's solution here",
+            "No disparagement of third-party patents or products"
+          ],
+          "additions": [
+            "No IDS duty and no substantive examination in South Africa — admissions surface only in litigation.",
+            "No general grace period: s 26 excuses only derived disclosure and reasonable technical trial or experiment."
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the Summary of the Invention using CONSISTORY CLAUSES, the central technique of South African and British specification drafting. For each independent claim, write a paragraph that reproduces that claim's wording almost verbatim in prose, in the canonical form 'According to the invention there is provided a [claim 1 wording]'. Follow the consistory clauses with the preferred and optional features corresponding to the dependent claims, introduced non-limitingly ('The apparatus may include ...', 'Preferably, ...', 'In one embodiment, ...'). This is not stylistic decoration: s 32(4) requires the claims to be FAIRLY BASED on the matter disclosed in the specification, and consistory clauses are the mechanism by which that requirement is satisfied — a claim with no counterpart statement in the description is exposed on fair-basis grounds in revocation proceedings. Cover every independent claim and every claim category. Where a technical problem and its solution can be stated, do so briefly before the consistory clauses. Keep the terminology strictly identical to the claims, and remember s 51(6): post-acceptance amendment may not introduce new matter and no amended claim may fall outside the scope of a claim before amendment, so every fallback position must be present here from the outset.",
+          "constraints": [
+            "One consistory clause per independent claim, mirroring the claim wording",
+            "Preferred/optional features in non-limiting language for the dependent claims",
+            "Terminology strictly identical to the claims",
+            "Cover every claim category present",
+            "State all fallback positions now (s 51(6) amendment limits)",
+            "No marketing language or unsupported advantages"
+          ],
+          "additions": [
+            "Legal basis: s 32(4) 'fairly based' requirement; s 51(6) amendment constraints.",
+            "May also be headed 'STATEMENT OF INVENTION' in South African practice."
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Brief Description of the Drawings, included only where drawings accompany the complete specification. Introduce the list with the conventional lead-in 'The invention will now be described, by way of example only, with reference to the accompanying drawings, in which:' — the phrase 'by way of example only' is standard South African practice and guards against the embodiments being read as limiting. Then give one sentence per figure, in the form 'Figure 1 shows a schematic side view of ...' or 'Figure 2 is a flow diagram of ...'. Identify the view type and the subject only; operation and reference numerals belong in the Detailed Description. Number the figures consecutively with no gaps, list every figure filed, and file every figure listed. The drawings must comply with regs 20 and 21: A4 sheets, executed without colouring in durable, black, sufficiently dense and uniformly thick lines, with simple and clear reference signs, space at the top for the applicant's name and application number, and space at the bottom right for a signature.",
+          "constraints": [
+            "Open with 'by way of example only, with reference to the accompanying drawings'",
+            "One sentence per figure; view type and subject only",
+            "Consecutive figure numbering with complete one-to-one correspondence to the drawings",
+            "Refer to figures as 'Figure 1' in South African style",
+            "Omit the section entirely when no drawings are filed"
+          ],
+          "additions": [
+            "Drawing formalities: regs 20 and 21 — no colouring, durable black uniformly thick lines, simple and clear reference signs."
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Detailed Description satisfying s 32(3)(b): the complete specification must sufficiently describe, ascertain and, where necessary, illustrate or exemplify the invention and the manner in which it is to be performed, so as to enable the invention to be performed by a person skilled in the art. Describe each embodiment systematically with reference numerals matching the drawings, covering structure first and then operation, and support every feature of every claim — independent and dependent — with a concrete implementation. IMPORTANT CURRENCY POINT: South Africa NO LONGER requires disclosure of the best method of performing the invention. That requirement was repealed by the Patents Amendment Act 58 of 2002, which substituted s 32(3) and the corresponding revocation ground in s 61(1)(e); any precedent or checklist demanding a best-method statement is applying pre-2002 law. Disclosing the best embodiment nonetheless remains prudent, so describe the preferred embodiment fully without labelling it as the statutorily required best method. Draft defensively for two South African realities: first, there is no substantive examination, so an insufficient disclosure is never flagged before grant and surfaces only when the patent is attacked under s 61(1)(e); second, s 51(6) bars post-acceptance amendments that introduce new matter or produce a claim falling outside the scope of an earlier claim, so every intermediate generalisation, alternative and preferred range must be written into the specification now. Close with the conventional statement that the invention is not limited to the embodiments described, which are given by way of example only.",
+          "constraints": [
+            "Enablement standard of s 32(3)(b): performable by a person skilled in the art",
+            "Best method NOT required (repealed by Act 58 of 2002) — do not present one as mandatory",
+            "Every claim feature backed by a described implementation",
+            "Reference numerals consistent with the drawings",
+            "All fallback positions, alternatives and ranges stated now (s 51(6))",
+            "No claim-style language",
+            "Close with a non-limiting 'by way of example only' statement"
+          ],
+          "additions": [
+            "Legal basis: s 32(3)(b) sufficiency; s 61(1)(e) revocation for insufficiency; s 51(6) amendment limits.",
+            "No substantive examination occurs — the specification is tested only in later litigation.",
+            "Avoid presenting subject matter excluded by s 25(2) (computer programs, business methods, mental acts, presentations of information, each 'as such') or s 25(11) (methods of treatment) as the invention itself; frame software inventions through their technical effect."
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the claims to comply with ss 32(3)(d) and 32(4) and reg 30. The specification must END with the claims; they must relate to a SINGLE INVENTION, be CLEAR, and be FAIRLY BASED on the matter disclosed in the specification. Regulation 30 requires each category of claims (product, process, apparatus, use and the like) to be arranged, as far as practicable, in ORDER OF DECREASING SCOPE — so within each category the broadest claim comes first and successive claims narrow. INCLUDE AN OMNIBUS CLAIM as the final claim: omnibus claims of the form 'A [subject] substantially as herein described and illustrated with reference to the accompanying drawings' remain valid and customary in South Africa, and are routinely added to foreign-origin specifications on national phase entry. Note what South African law does NOT require: there is no two-part 'characterised in that' form, no restriction on multiple dependent claims, and no prohibition on a multiple dependent claim depending on another. There are also NO excess-claim fees and no per-page fees, so claim count is a strategic and drafting-time decision rather than a cost one — but every claim must still be clear and fairly based, and each dependent claim should represent a genuine fallback position, because s 51(6) prevents broadening or scope-shifting amendments after acceptance and the patent will face its first real scrutiny in revocation proceedings. Ensure each independent claim has a matching consistory clause in the Summary. Follow the South African convention of one claim per sentence, numbered consecutively. Remember that the complete specification must be signed at the end by a patent attorney (reg 28).",
+          "constraints": [
+            "Claims must end the specification (s 32(3)(d))",
+            "Single invention, clear, and fairly based (s 32(4))",
+            "Arrange each category in order of decreasing scope (reg 30)",
+            "Include an omnibus claim as the final claim",
+            "No two-part form required; multiple dependencies unrestricted",
+            "No excess-claim fees — but every claim must earn its place as a fallback",
+            "Each independent claim needs a matching consistory clause in the Summary",
+            "One sentence per claim, numbered consecutively"
+          ],
+          "additions": [
+            "Legal basis: ss 32(3)(d), 32(4) of the Patents Act 57 of 1978; regs 28 and 30 of the Patent Regulations 1978.",
+            "Omnibus claims are valid in South Africa, unlike in many other jurisdictions — do not strip them out of a specification being adapted from another country.",
+            "Avoid claiming subject matter excluded under s 25(2) and s 25(11)."
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the abstract required by s 32(3)(a) and regulation 31, which is lodged on Form P8 in duplicate. It must be an abstract of the TECHNICAL DISCLOSURE contained in the complete specification, in NARRATIVE FORM, generally limited to a SINGLE PARAGRAPH OF NOT MORE THAN 150 WORDS — this is a hard drafting limit in South African practice. The form and phraseology of patent claims SHALL BE AVOIDED: do not write 'A device comprising ... characterised in that ...', and do not reproduce claim 1 verbatim; recast the disclosure as flowing descriptive prose. Cover the technical field, the problem addressed and the essence of the solution, written for a searcher assessing relevance. Features that are mentioned in the abstract AND illustrated in the drawing chosen to accompany Form P8 may be followed by that drawing's reference sign in parentheses. Unlike Brazilian practice the abstract need not begin with the title, because Form P8 carries the title in a separate field. The abstract shall not be used to interpret the scope of the claims, so it creates no estoppel — but an inaccurate abstract is still a formality objection.",
+          "constraints": [
+            "Single narrative paragraph, not more than 150 words (reg 31)",
+            "Abstract of the technical disclosure in the complete specification",
+            "Claim form and phraseology must be avoided",
+            "Reference signs in parentheses only for features shown in the chosen figure",
+            "Need not begin with the title (Form P8 carries it separately)",
+            "No marketing language or speculative advantages"
+          ],
+          "additions": [
+            "Legal basis: s 32(3)(a); reg 31 of the Patent Regulations 1978; lodged on Form P8 in duplicate with a copy of one chosen figure.",
+            "The abstract shall not be used to interpret the scope of the claims."
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "South African Complete Specification (Form P7, CIPC-compliant PDF)",
+        "includesSections": [
+          "title",
+          "field",
+          "background",
+          "summary",
+          "brief_description_of_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "lineSpacing": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 1.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 1.5
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TITLE",
+      "field": "FIELD OF THE INVENTION",
+      "background": "BACKGROUND TO THE INVENTION",
+      "summary": "SUMMARY OF THE INVENTION",
+      "brief_description_of_drawings": "BRIEF DESCRIPTION OF THE DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION OF THE INVENTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "Figure {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for components and arrows for signal, data or material flow, executed without colouring in durable black lines of uniform thickness (regs 20-21). Label each block with a reference numeral used in the Detailed Description; keep any text inside blocks to short indispensable words.",
+      "flowchart": "Use standard flowchart symbols for the steps of the claimed method, so each step of a method claim can be traced to a box. Number the steps consistently with the Detailed Description.",
+      "schematic": "Use conventional symbols showing functional relationships in firm black lines suitable for direct reproduction. Reference signs must be simple and clear and must match the description.",
+      "perspective_view": "Show the overall physical form of the apparatus with every claimed structural element labelled with its reference numeral; avoid heavy surface shading that would impair reproduction.",
+      "cross_section": "Use hatching to distinguish sectioned components, keeping reference numerals and leader lines legible, and indicate the cutting plane on a related overview figure.",
+      "graph": "Label both axes with quantities and metric units (reg 17 requires metric units and degrees Celsius) and distinguish curves by line style rather than colour, since colouring is not permitted.",
+      "exploded_view": "Show assembly relationships with parts separated along a common axis, each part carrying a unique reference numeral explained in the Detailed Description."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure every figure and reference sign listed in the Brief Description of the Drawings is defined and explained in the Detailed Description, and that reference signs are used consistently between the drawings and the text (regs 20-21).",
+        "from": "brief_description_of_drawings",
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure the structural elements recited in the claims appear in at least one figure where drawings are present, so that an omnibus claim referring to the drawings is properly grounded.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_description_of_drawings"
+        ]
+      },
+      {
+        "id": "claims_fairly_based_on_summary",
+        "description": "Ensure each independent claim has a corresponding consistory clause in the Summary and full support in the Detailed Description, satisfying the 'fairly based' requirement of s 32(4).",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "summary",
+          "detailed_description"
+        ]
+      }
+    ]
+  }
+}

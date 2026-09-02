@@ -3,6 +3,7 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { appendTrail, getOwnedStudy, readScope } from '@/lib/whitespace/service'
 import { generateHypotheses } from '@/lib/whitespace/hypothesize'
+import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -63,10 +64,6 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
 
     return NextResponse.json({ hypotheses: result.hypotheses }, { status: 201 })
   } catch (error) {
-    console.error('[Whitespace] Hypothesis generation failed:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Hypothesis generation failed.' },
-      { status: 400 }
-    )
+    return whitespaceErrorResponse(error, 'Hypothesis generation')
   }
 }

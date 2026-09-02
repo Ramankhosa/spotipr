@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { appendTrail, compileScope, getOwnedStudy, readScope } from '@/lib/whitespace/service'
 import { normalizeScope } from '@/lib/whitespace/scope-schema'
 import type { Prisma } from '@prisma/client'
+import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -97,10 +98,6 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       modelCode,
     })
   } catch (error) {
-    console.error('[Whitespace] Scope compile failed:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Scope compile failed.' },
-      { status: 400 }
-    )
+    return whitespaceErrorResponse(error, 'Scope compile')
   }
 }

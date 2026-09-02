@@ -160,15 +160,17 @@ const HYPOTHESIS = {
   ],
 }
 
-const { getOwnedStudy, readScope, loadFirmBranding, runFindMany, prismaMock } = vi.hoisted(() => {
+const { getOwnedStudy, readScope, loadFirmBranding, runFindMany, runFindFirst, prismaMock } = vi.hoisted(() => {
   const runFindMany = vi.fn()
+  const runFindFirst = vi.fn()
   return {
     getOwnedStudy: vi.fn(),
     readScope: vi.fn((value: unknown) => value),
     loadFirmBranding: vi.fn(),
     runFindMany,
+    runFindFirst,
     prismaMock: {
-      whitespaceRun: { findMany: runFindMany },
+      whitespaceRun: { findMany: runFindMany, findFirst: runFindFirst },
       whitespaceCluster: { findMany: vi.fn(async () => []) },
       whitespaceAreaAnalysis: { findMany: vi.fn(async () => []) },
       whitespaceHypothesis: { findMany: vi.fn(async () => []) },
@@ -215,34 +217,35 @@ describe('Whitespace study report', () => {
       { kind: 'NOTE', actor: 'user:user-1', summary: 'Attorney review — ENDORSED', createdAt: new Date('2026-08-07T09:00:00.000Z') },
     ] as never)
 
-    // Pass 1 returns run metadata; pass 2 returns results for the latest completed run.
-    runFindMany.mockImplementation(async (args: { select?: Record<string, boolean> }) => {
-      if (args.select?.results) {
-        return [{ stage: 'DIMENSION_MAP', results: DIMENSION_RESULTS, scopeVersion: 4 }]
-      }
-      return [
-        {
-          id: 'run-1',
-          stage: 'DIMENSION_MAP',
-          status: 'COMPLETED',
-          scopeVersion: 4,
-          durationMs: 62_000,
-          lastError: null,
-          createdAt: new Date('2026-08-05T00:00:00.000Z'),
-          completedAt: new Date('2026-08-05T00:01:02.000Z'),
-        },
-        {
-          id: 'run-0',
-          stage: 'CLUSTER',
-          status: 'FAILED',
-          scopeVersion: 4,
-          durationMs: null,
-          lastError: 'Clustering requires binary embeddings.',
-          createdAt: new Date('2026-08-04T00:00:00.000Z'),
-          completedAt: null,
-        },
-      ]
-    })
+    // The capped metadata list feeds diagnostics; results come from a direct
+    // latest-COMPLETED findFirst per rendered stage.
+    runFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        stage: 'DIMENSION_MAP',
+        status: 'COMPLETED',
+        scopeVersion: 4,
+        durationMs: 62_000,
+        lastError: null,
+        createdAt: new Date('2026-08-05T00:00:00.000Z'),
+        completedAt: new Date('2026-08-05T00:01:02.000Z'),
+      },
+      {
+        id: 'run-0',
+        stage: 'CLUSTER',
+        status: 'FAILED',
+        scopeVersion: 4,
+        durationMs: null,
+        lastError: 'Clustering requires binary embeddings.',
+        createdAt: new Date('2026-08-04T00:00:00.000Z'),
+        completedAt: null,
+      },
+    ] as never)
+    runFindFirst.mockImplementation(async (args: { where?: { stage?: string } }) =>
+      args.where?.stage === 'DIMENSION_MAP'
+        ? { stage: 'DIMENSION_MAP', results: DIMENSION_RESULTS, scopeVersion: 4 }
+        : null
+    )
   })
 
   it('returns a downloadable Word document named from the study id', async () => {
@@ -324,12 +327,51 @@ describe('Whitespace study report', () => {
     )
   })
 
-  it('loads run results only for the latest completed run of each rendered stage', async () => {
+  it('queries the latest COMPLETED run per rendered stage directly, keeping results out of the metadata list', async () => {
     await get()
-    const resultCall = runFindMany.mock.calls.find(
-      call => (call[0] as { select?: Record<string, boolean> }).select?.results
-    )
-    expect(resultCall?.[0]).toMatchObject({ where: { id: { in: ['run-1'] } } })
+
+    // The diagnostics list never loads result payloads.
+    for (const call of runFindMany.mock.calls) {
+      expect((call[0] as { select?: Record<string, boolean> }).select?.results).toBeUndefined()
+    }
+
+    // One direct latest-COMPLETED query per rendered stage.
+    const stages = runFindFirst.mock.calls.map(call => (call[0] as { where: { stage: string } }).where.stage)
+    expect(stages.sort()).toEqual(['DIMENSION_MAP', 'FIELD_MAP', 'SIGNALS'])
+    for (const call of runFindFirst.mock.calls) {
+      expect(call[0]).toMatchObject({
+        where: expect.objectContaining({ studyId: STUDY.id, status: 'COMPLETED' }),
+        orderBy: { createdAt: 'desc' },
+      })
+    }
+  })
+
+  it('still renders a completed stage whose run has aged past the capped metadata list', async () => {
+    // The metadata list no longer mentions the DIMENSION_MAP run at all.
+    runFindMany.mockResolvedValue([
+      {
+        id: 'run-9',
+        stage: 'CLUSTER',
+        status: 'FAILED',
+        scopeVersion: 4,
+        durationMs: null,
+        lastError: 'Clustering requires binary embeddings.',
+        createdAt: new Date('2026-08-06T00:00:00.000Z'),
+        completedAt: null,
+      },
+    ] as never)
+
+    const text = await textOf(await get())
+    expect(text).toContain('optical (Sensing modality) × disposable (Housing)')
+  })
+
+  it('answers an unexpected failure with a generic 500, not the internal message', async () => {
+    loadFirmBranding.mockRejectedValue(new Error('connect ECONNREFUSED 10.0.0.7:5432') as never)
+    const response = await get()
+    const payload = await response.json()
+
+    expect(response.status).toBe(500)
+    expect(payload.error).not.toContain('ECONNREFUSED')
   })
 
   it('still builds a report when the tenant has no firm profile', async () => {
@@ -346,5 +388,6 @@ describe('Whitespace study report', () => {
 
     expect(response.status).toBe(404)
     expect(runFindMany).not.toHaveBeenCalled()
+    expect(runFindFirst).not.toHaveBeenCalled()
   })
 })

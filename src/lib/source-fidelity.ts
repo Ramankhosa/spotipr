@@ -130,6 +130,6 @@ ${body}${truncated ? '\n[TRUNCATED: disclosure exceeds the prompt budget; rely o
  */
 export function buildSourceFidelityModeLine(mode: SourceFidelityMode): string {
   return mode === 'PRESERVE'
-    ? 'SOURCE FIDELITY MODE: PRESERVE — the user asked to keep their idea exactly as provided.'
+    ? 'SOURCE FIDELITY MODE: PRESERVE — the user asked to keep their idea exactly as provided. Stay strictly inside the inventor\'s stated idea scope and terminology.'
     : 'SOURCE FIDELITY MODE: STRUCTURE_ONLY — wording may be structured and polished, but no technical facts may be added.'
 }

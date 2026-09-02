@@ -390,6 +390,11 @@ function num(value: number | null | undefined, digits = 2): string {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—'
 }
 
+/** Whole-number formatting that survives a legacy row missing the field. */
+function count(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value).toLocaleString() : '—'
+}
+
 /**
  * Trail actors are anonymised exactly as the trail API does: a report is often
  * the first thing to leave the firm, and user ids are not for the reader.
@@ -691,7 +696,7 @@ export function buildWhitespaceReportModel(input: WhitespaceReportInput): Whites
       })),
       rounds: (dimensionResult.rounds || []).map(round => ({
         round: round.round,
-        sliceLine: `${round.slice.families.toLocaleString()} families (${round.slice.basis === 'residual' ? 'documents no axis yet placed' : 'sample'})`,
+        sliceLine: `${count(round.slice?.families)} families (${round.slice?.basis === 'residual' ? 'documents no axis yet placed' : 'sample'})`,
         accepted: [
           ...round.acceptedDimensions.map(label => `axis: ${label}`),
           ...round.acceptedValues.map(entry => `${entry.dimension} → ${entry.value}`),
@@ -889,10 +894,10 @@ const REJECTION_REASON: Record<string, string> = {
 function nearMissLine(gap: DimensionGap): string | null {
   const bits: string[] = []
   if (gap.nearMissB) {
-    bits.push(`${gap.aValueLabel} appears ${gap.nearMissB.families.toLocaleString()} times with ${gap.nearMissB.valueLabel}`)
+    bits.push(`${gap.aValueLabel} appears ${count(gap.nearMissB.families)} times with ${gap.nearMissB.valueLabel}`)
   }
   if (gap.nearMissA) {
-    bits.push(`${gap.bValueLabel} appears ${gap.nearMissA.families.toLocaleString()} times with ${gap.nearMissA.valueLabel}`)
+    bits.push(`${gap.bValueLabel} appears ${count(gap.nearMissA.families)} times with ${gap.nearMissA.valueLabel}`)
   }
   return bits.length ? `${bits.join('; ')} — so the cell was reachable and was not taken.` : null
 }

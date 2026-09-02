@@ -17,7 +17,7 @@ export async function convertHypothesis(input: {
   studyId: string
   hypothesisId: string
   userId: string
-}): Promise<{ conceptId: string; title: string }> {
+}): Promise<{ conceptId: string; title: string; existing: boolean }> {
   const hypothesis = await prisma.whitespaceHypothesis.findUnique({
     where: { id: input.hypothesisId },
     include: { evidence: { where: { stance: 'CONTRADICTORY' }, take: 10 } },
@@ -62,6 +62,17 @@ export async function convertHypothesis(input: {
       .map(gate => `${gate.basis}`),
   ].slice(0, 8)
 
+  // Conversion is deliberately open to DRAFT and INCONCLUSIVE hypotheses — the
+  // attorney's judgment outranks the gate ladder — but a concept promoted past
+  // an unrun or unresolved validation must say so, or it leaves the system
+  // looking validated.
+  const validationNote =
+    hypothesis.status === 'INCONCLUSIVE'
+      ? 'Validation of this hypothesis was inconclusive. The whitespace claim behind this concept is unconfirmed; it was promoted on attorney judgment, not on a validation result.'
+      : !validation
+        ? 'Validation was never run against this hypothesis. The whitespace claim behind this concept is untested; it was promoted on attorney judgment, not on a validation result.'
+        : null
+
   const features = {
     // The shape the novelty/drafting handoffs read.
     inventionFeatures: elements,
@@ -84,21 +95,34 @@ export async function convertHypothesis(input: {
           validatedAt: validation.validatedAt,
         }
       : null,
+    validationNote,
     coverageLimitations: limitations,
   }
 
-  const concept = await prisma.whitespaceConcept.create({
-    data: {
-      studyId: input.studyId,
-      hypothesisId: hypothesis.id,
-      title,
-      summary: `${hypothesis.statement}\n\n${hypothesis.rationale}`.slice(0, 4000),
-      features: features as unknown as Prisma.InputJsonValue,
-      status: 'DRAFT',
-    },
+  // Check-then-create inside one transaction: a double-click (or a retried
+  // request) must return the concept the hypothesis already became, not mint a
+  // duplicate row.
+  const concept = await prisma.$transaction(async tx => {
+    const current = await tx.whitespaceConcept.findFirst({
+      where: { studyId: input.studyId, hypothesisId: hypothesis.id },
+      select: { id: true, title: true },
+    })
+    if (current) return { id: current.id, title: current.title, existing: true }
+
+    const created = await tx.whitespaceConcept.create({
+      data: {
+        studyId: input.studyId,
+        hypothesisId: hypothesis.id,
+        title,
+        summary: `${hypothesis.statement}\n\n${hypothesis.rationale}`.slice(0, 4000),
+        features: features as unknown as Prisma.InputJsonValue,
+        status: 'DRAFT',
+      },
+    })
+    return { id: created.id, title: created.title, existing: false }
   })
 
-  return { conceptId: concept.id, title }
+  return { conceptId: concept.id, title: concept.title, existing: concept.existing }
 }
 
 /** "X combined with Y for Z appears absent…" → "X combined with Y for Z". */

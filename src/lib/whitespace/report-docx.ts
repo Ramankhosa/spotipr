@@ -183,6 +183,8 @@ function table(headers: string[], rows: string[][], accent: string, widths?: num
 const int = (value: number) => (Number.isFinite(value) ? Math.round(value).toLocaleString() : '—')
 const pct1 = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—'
+const dec1 = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : '—'
 
 /**
  * Decode a stored firm logo for embedding. Anything unreadable returns null and
@@ -662,8 +664,8 @@ function renderAreas(children: (Paragraph | Table)[], areas: ReportAreaBlock[], 
             area.deepDive.rarePairs.slice(0, 15).map(pair => [
               `${pair.a} + ${pair.b}`,
               int(pair.observed),
-              pair.expected.toFixed(1),
-              pair.surprisal.toFixed(1),
+              dec1(pair.expected),
+              dec1(pair.surprisal),
             ]),
             accent,
             [52, 14, 17, 17]
@@ -791,10 +793,10 @@ function renderDimensionMap(children: (Paragraph | Table)[], map: ReportDimensio
       children.push(h3(gap.title))
       children.push(
         para(
-          `Seen ${gap.observed === 1 ? 'once' : `${int(gap.observed)} times`} where ${gap.expected.toFixed(
-            1
-          )} were expected. Margins: ${int(gap.marginA)} × ${int(gap.marginB)} families. Surprisal ${gap.surprisal.toFixed(
-            1
+          `Seen ${gap.observed === 1 ? 'once' : `${int(gap.observed)} times`} where ${dec1(
+            gap.expected
+          )} were expected. Margins: ${int(gap.marginA)} × ${int(gap.marginB)} families. Surprisal ${dec1(
+            gap.surprisal
           )} decibans.`
         )
       )

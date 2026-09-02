@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Hint } from '@/components/ui/hint'
 import { hueFor, type DimensionMapResult, type DimensionMatrix } from './types'
 
@@ -18,6 +18,11 @@ export function CoOccupancyGrid({ result }: { result: DimensionMapResult }) {
   const harvested = result.matrices.filter(matrix => matrix.harvested)
   const skipped = result.matrices.filter(matrix => !matrix.harvested)
   const [activeIndex, setActiveIndex] = useState(0)
+  // A recount replaces the matrices wholesale; a stale index would silently
+  // show a different pair (or none) under the previously active chip.
+  useEffect(() => {
+    setActiveIndex(0)
+  }, [result])
   const matrix = harvested[activeIndex] ?? harvested[0] ?? null
 
   if (!result.matrices.length) {

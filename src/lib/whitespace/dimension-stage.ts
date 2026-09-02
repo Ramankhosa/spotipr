@@ -55,6 +55,7 @@ import {
 import { rarePairFromCounts } from './rarity'
 import { parseModelJson, runWhitespaceLLM, type WhitespaceLLMContext } from './llm'
 import { heartbeatRun, WhitespacePermanentError } from './run-lease'
+import { CORPUS_FIRST_YEAR } from './types'
 import {
   buildDimensionGrowPrompt,
   buildDimensionSeedPrompt,
@@ -209,8 +210,8 @@ async function withTimeout<T>(query: Prisma.Sql, ms: number): Promise<T[]> {
  * touched `heartbeatAt` would let the lease lapse mid-run and invite a second
  * worker to start the same dimension map over.
  */
-async function progress(runId: string, phase: string, detail: string, round?: number): Promise<void> {
-  await heartbeatRun(runId, { phase, detail, ...(round !== undefined ? { round } : {}) })
+async function progress(runId: string, workerId: string, phase: string, detail: string, round?: number): Promise<void> {
+  await heartbeatRun(runId, workerId, { phase, detail, ...(round !== undefined ? { round } : {}) })
 }
 
 function normaliseLabel(value: string): string {
@@ -546,12 +547,13 @@ function tooNarrowMessage(
 
 export async function runDimensionMapStage(input: {
   runId: string
+  workerId: string
   studyId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
   suppliedRegistry?: SuppliedDimensionRegistry | null
 }): Promise<DimensionMapResult> {
-  const { runId, studyId, scope } = input
+  const { runId, workerId, studyId, scope } = input
   // Outside any transaction: a scope whose concepts stem away must fail with
   // the concept named, not census a silently different field. Checked on the
   // loosest plan — every rung searches the same groups.
@@ -562,7 +564,7 @@ export async function runDimensionMapStage(input: {
   // PRODUCER and fits the rule fresh; a re-census over a user-edited registry
   // reuses the rule the discovery run persisted, so the user's edit recounts
   // the same field rather than a re-fitted one.
-  await progress(runId, 'precheck', 'Sizing the field')
+  await progress(runId, workerId, 'precheck', 'Sizing the field')
   const field = await resolveFieldDefinition(scope, { studyId, reuse: Boolean(input.suppliedRegistry) })
   const { candidates, rule } = field
   const where = field.where
@@ -622,6 +624,7 @@ export async function runDimensionMapStage(input: {
   // a full DISTINCT ON tiebreak, so the same scope always draws the same sample.
   await progress(
     runId,
+    workerId,
     'sample',
     `Drawing a ${SAMPLE_FAMILIES.toLocaleString()}-family sample of ${familyCount.toLocaleString()} families`
   )
@@ -655,12 +658,13 @@ export async function runDimensionMapStage(input: {
   let settledReason: DimensionSettledReason
 
   if (input.suppliedRegistry) {
-    registry = await compileSuppliedRegistry(input.suppliedRegistry, sampleIds, idToFamily, valueLane)
+    registry = await compileSuppliedRegistry(input.suppliedRegistry, sampleIds, idToFamily, valueLane, coverageNotes)
     settledReason = 'REGISTRY_SUPPLIED'
     coverageNotes.push('Viewpoints were supplied by the user (registry edit); discovery did not re-run.')
   } else {
     const discovered = await discoverRegistry({
       runId,
+      workerId,
       studyId,
       scope,
       llmContext: input.llmContext,
@@ -675,9 +679,15 @@ export async function runDimensionMapStage(input: {
   }
 
   if (!registry.length || totalValues(registry) < 4) {
+    // Two different audiences: discovery failed on its own proposals, but a
+    // supplied registry failed on the USER'S edit — telling that user to
+    // "sharpen the invention description" points at a dial they did not touch.
     throw new WhitespacePermanentError(
-      'The field sample did not organise into measurable viewpoints — too few proposals survived counting. ' +
-        'Sharpen the invention description (what problem, what mechanism) and re-run, or use the landscape pipeline for this field.'
+      input.suppliedRegistry
+        ? 'The edited registry compiles to fewer than four measurable values — each viewpoint needs at least two values ' +
+            'whose vocabulary survives common-word removal. Add or reword values in the registry editor, then re-count.'
+        : 'The field sample did not organise into measurable viewpoints — too few proposals survived counting. ' +
+            'Sharpen the invention description (what problem, what mechanism) and re-run, or use the landscape pipeline for this field.'
     )
   }
 
@@ -692,8 +702,7 @@ export async function runDimensionMapStage(input: {
   })
 
   // --- The exact census + gap detection (one transaction) ---------------------
-  await progress(runId, 'census', `Counting ${flatValues.length} values across ${familyCount.toLocaleString()} families`)
-  const marginFloor = Math.max(30, Math.ceil(0.02 * familyCount))
+  await progress(runId, workerId, 'census', `Counting ${flatValues.length} values across ${familyCount.toLocaleString()} families`)
   // Outside the transaction, deliberately: the discovery rounds already cached
   // these literals, so this is normally a pure cache read — but a cold miss is
   // an embedding API call, and an API call must never hold the census
@@ -743,6 +752,11 @@ export async function runDimensionMapStage(input: {
         )
       }
 
+      // 2% of the CENSUS denominator, not the pre-check familyCount: gaps are
+      // measured against censusFamilies, and a floor computed off a different
+      // (estimated or stale) total silently loosens or tightens every margin.
+      const marginFloor = Math.max(30, Math.ceil(0.02 * censusFamilies))
+
       // How much of the field the semantic arm can actually see. Families with
       // no comparable vector are matchable by wording only, and if that share
       // is large the reader must know it before trusting cell emptiness.
@@ -766,7 +780,7 @@ export async function runDimensionMapStage(input: {
       await setStatementTimeout(tx, CENSUS_TIMEOUT_MS)
       await tx.$executeRaw(Prisma.sql`CREATE INDEX ws_dim_census_doc_idx ON ws_dim_census USING gin(doc)`)
       await tx.$executeRawUnsafe(`ANALYZE ws_dim_census`)
-      await progress(runId, 'census', `Matching ${flatValues.length} value vocabularies`)
+      await progress(runId, workerId, 'census', `Matching ${flatValues.length} value vocabularies`)
 
       // Hit extraction: one bounded probe per value. Bare — a value that cannot
       // be counted fails the census; counting it as zero would fabricate a gap.
@@ -804,7 +818,7 @@ export async function runDimensionMapStage(input: {
               FROM ws_dim_census
               WHERE doc @@ websearch_to_tsquery('english'::regconfig, ${flatValues[m].query})`)
           }
-          if (m % 8 === 7) await progress(runId, 'census', `Matched ${m + 1} of ${flatValues.length} values`)
+          if (m % 8 === 7) await progress(runId, workerId, 'census', `Matched ${m + 1} of ${flatValues.length} values`)
         }
       } catch (error) {
         if (isStatementTimeout(error)) {
@@ -827,7 +841,7 @@ export async function runDimensionMapStage(input: {
       // Every cell of every matrix, one self-join. Volume is sum(k^2) over
       // families, which MAX_TOTAL_VALUES bounds — this is the second long pole.
       await setStatementTimeout(tx, CENSUS_TIMEOUT_MS)
-      await progress(runId, 'census', 'Computing pairwise co-occupancy')
+      await progress(runId, workerId, 'census', 'Computing pairwise co-occupancy')
       const pairRows = await tx.$queryRaw<Array<{ a_idx: number; b_idx: number; families: bigint }>>(Prisma.sql`
         SELECT a.value_idx AS a_idx, b.value_idx AS b_idx, COUNT(*)::bigint AS families
         FROM ws_dim_hits a
@@ -915,13 +929,14 @@ export async function runDimensionMapStage(input: {
         gaps,
         armClaimsAvailable,
         embeddedFamilies,
+        marginFloor,
       }
     },
     { timeout: censusTxTimeout, maxWait: 20_000 }
   )
 
   // --- Assemble the result (pure arithmetic from here) ------------------------
-  await progress(runId, 'assemble', 'Assembling the registry and gap list')
+  await progress(runId, workerId, 'assemble', 'Assembling the registry and gap list')
 
   let flatCursor = 0
   const resultRegistry: Dimension[] = registry.map((dimension, dimIdx) => {
@@ -1023,11 +1038,11 @@ export async function runDimensionMapStage(input: {
     'Emptiness is measured against this corpus at title-and-abstract level — an empty cell is a strong lead, not a freedom-to-operate conclusion.',
     'A family can occupy several values of one viewpoint, so value counts are vocabulary matches, never shares of a whole.',
     'No citation data, legal status or commercial evidence is available to this analysis.',
-    `No art before ${Math.max(scope.filters.yearFrom, 2000)} was searched — outside the scope's filing window.`,
+    `No art before ${Math.max(scope.filters.yearFrom, CORPUS_FIRST_YEAR)} was searched — outside the scope's filing window.`,
   ]
 
   const unclassifiedFamilies = census.familyCount - census.assignedAnyFamilies
-  await progress(runId, 'done', `${resultRegistry.length} viewpoints, ${census.gaps.length} candidate gaps`)
+  await progress(runId, workerId, 'done', `${resultRegistry.length} viewpoints, ${census.gaps.length} candidate gaps`)
 
   return {
     familyCount: census.familyCount,
@@ -1044,7 +1059,7 @@ export async function runDimensionMapStage(input: {
     matrices: census.matrices,
     gaps: census.gaps,
     thresholds: {
-      marginFloor,
+      marginFloor: census.marginFloor,
       expectedFloor: EXPECTED_FLOOR,
       residualCeiling: RESIDUAL_CEILING,
       redundancyCeiling: REDUNDANCY_CEILING,
@@ -1064,6 +1079,7 @@ export async function runDimensionMapStage(input: {
 
 async function discoverRegistry(input: {
   runId: string
+  workerId: string
   studyId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
@@ -1073,7 +1089,7 @@ async function discoverRegistry(input: {
   rounds: DimensionRound[]
   valueLane: ValueSemanticLane
 }): Promise<{ registry: WorkingDimension[]; settledReason: DimensionSettledReason }> {
-  const { runId, sampleRows, sampleIds, idToFamily, rounds, valueLane } = input
+  const { runId, workerId, sampleRows, sampleIds, idToFamily, rounds, valueLane } = input
   const sampleN = sampleRows.length
   /**
    * A position on an axis has to cover a meaningful slice of the field. At 1%
@@ -1121,6 +1137,7 @@ async function discoverRegistry(input: {
 
     await progress(
       runId,
+      workerId,
       'discover',
       round === 1
         ? `Round 1: proposing viewpoints from ${slice.length} sampled families`
@@ -1225,6 +1242,10 @@ async function discoverRegistry(input: {
       texts: allCandidateValues.map(value => valueEmbeddingText(value.label, value.synonyms)),
     })
 
+    // Grown as values are ACCEPTED within the round, not snapshotted up front:
+    // a snapshot let two restatements of the same value in one proposal both
+    // pass the Jaccard dedup, and let a value added to an existing axis land
+    // unseen by every later candidate in the same round.
     const existingValues = registry.flatMap(dimension => dimension.values.map(value => ({ dimension, value })))
     const residualSet = new Set(residualRows.map(row => row.familyKey))
     let acceptedThisRound = 0
@@ -1245,6 +1266,12 @@ async function discoverRegistry(input: {
             reason: 'QUERY_STEMS_TO_NOTHING',
             detail:
               'Every term stems away to nothing under common-word removal; the value could never match a document and its emptiness would be fabricated.',
+          })
+          // Fed back to the prompt like every other rejection: without it the
+          // model re-proposed the same dead vocabulary round after round.
+          rejectedForPrompt.push({
+            label: value.label,
+            detail: 'every term stems away to nothing under common-word removal — different wording is needed',
           })
           continue
         }
@@ -1272,7 +1299,12 @@ async function discoverRegistry(input: {
             value.label,
             ...value.synonyms,
           ])
-          duplicate.value.synonyms = merged.filter(term => labelKeyOf(term) !== labelKeyOf(duplicate.value.label))
+          // Capped at the same 10 the creation paths apply — an incumbent
+          // absorbing every restatement grew its vocabulary unbounded across
+          // rounds, and with it the census cost and match breadth.
+          duplicate.value.synonyms = merged
+            .filter(term => labelKeyOf(term) !== labelKeyOf(duplicate.value.label))
+            .slice(0, 10)
           duplicate.value.query = compileValueQuery(duplicate.value.label, duplicate.value.synonyms)
           record.rejected.push({
             kind: 'value',
@@ -1299,7 +1331,7 @@ async function discoverRegistry(input: {
             })
             continue
           }
-          candidate.existing.values.push({
+          const grown: WorkingValue = {
             id: `${candidate.existing.id}v${candidate.existing.values.length + 1}`,
             label: value.label,
             synonyms: value.synonyms,
@@ -1307,7 +1339,9 @@ async function discoverRegistry(input: {
             round,
             provenance: 'grow',
             sampleSet: value.sampleSet,
-          })
+          }
+          candidate.existing.values.push(grown)
+          existingValues.push({ dimension: candidate.existing, value: grown })
           record.acceptedValues.push({ dimension: candidate.existing.label, value: value.label })
           acceptedThisRound++
         }
@@ -1394,6 +1428,7 @@ async function discoverRegistry(input: {
       }
 
       registry.push(working)
+      for (const value of working.values) existingValues.push({ dimension: working, value })
       record.acceptedDimensions.push(working.label)
       for (const value of working.values) record.acceptedValues.push({ dimension: working.label, value: value.label })
       acceptedThisRound += working.values.length
@@ -1424,7 +1459,12 @@ async function discoverRegistry(input: {
       settledReason = 'RESIDUAL_UNDER_FLOOR'
       break
     }
-    if (registry.length >= MAX_DIMENSIONS && totalValues(registry) >= MAX_TOTAL_VALUES) {
+    // Either cap alone ends the loop. Requiring BOTH burned a full LLM round
+    // when only the total-values cap was saturated — a round whose every
+    // acceptance path was already guaranteed to reject. At the dimensions cap
+    // the only move left is growing incumbent axes, which the next map's editor
+    // serves better than another discovery round does.
+    if (registry.length >= MAX_DIMENSIONS || totalValues(registry) >= MAX_TOTAL_VALUES) {
       settledReason = 'REGISTRY_FULL'
       break
     }
@@ -1440,17 +1480,32 @@ async function discoverRegistry(input: {
   return { registry, settledReason }
 }
 
-/** Compiles a user-edited registry for a re-census; discovery is skipped. */
+/**
+ * Compiles a user-edited registry for a re-census; discovery is skipped.
+ * Everything the caps or the two-values rule drop is NAMED in coverageNotes —
+ * a user who edited a registry is owed an account of which edits were not
+ * counted, not a silently smaller grid.
+ */
 async function compileSuppliedRegistry(
   supplied: SuppliedDimensionRegistry,
   sampleIds: number[],
   idToFamily: Map<number, string>,
-  valueLane: ValueSemanticLane
+  valueLane: ValueSemanticLane,
+  coverageNotes: string[]
 ): Promise<WorkingDimension[]> {
   const registry: WorkingDimension[] = []
-  for (const rawDimension of (supplied.dimensions ?? []).slice(0, MAX_DIMENSIONS)) {
+  const suppliedDimensions = Array.isArray(supplied.dimensions) ? supplied.dimensions : []
+  if (suppliedDimensions.length > MAX_DIMENSIONS) {
+    coverageNotes.push(
+      `The supplied registry named ${suppliedDimensions.length} viewpoints; only the first ${MAX_DIMENSIONS} were counted (the viewpoint cap).`
+    )
+  }
+  for (const rawDimension of suppliedDimensions.slice(0, MAX_DIMENSIONS)) {
     const label = normaliseLabel(String(rawDimension.label ?? '')).slice(0, 80)
-    if (!label) continue
+    if (!label) {
+      coverageNotes.push('One supplied viewpoint had no label and was dropped.')
+      continue
+    }
     const working: WorkingDimension = {
       id: `d${registry.length + 1}`,
       label,
@@ -1461,10 +1516,18 @@ async function compileSuppliedRegistry(
       round: 0,
       values: [],
     }
-    for (const rawValue of (rawDimension.values ?? []).slice(0, MAX_VALUES_PER_DIM)) {
+    const rawValues = Array.isArray(rawDimension.values) ? rawDimension.values : []
+    if (rawValues.length > MAX_VALUES_PER_DIM) {
+      coverageNotes.push(
+        `Viewpoint "${label}" supplied ${rawValues.length} values; only the first ${MAX_VALUES_PER_DIM} were counted (the per-viewpoint cap).`
+      )
+    }
+    for (const rawValue of rawValues.slice(0, MAX_VALUES_PER_DIM)) {
       const valueLabel = normaliseLabel(String(rawValue.label ?? '')).slice(0, 80)
       if (!valueLabel) continue
-      const synonyms = (rawValue.synonyms ?? [])
+      // Array.isArray, not `?? []`: a registry edit arrives as JSON, and a
+      // non-array synonyms field (a string, an object) threw here mid-stage.
+      const synonyms = (Array.isArray(rawValue.synonyms) ? rawValue.synonyms : [])
         .filter((synonym): synonym is string => typeof synonym === 'string')
         .map(synonym => normaliseLabel(synonym).slice(0, 80))
         .filter(Boolean)
@@ -1481,8 +1544,23 @@ async function compileSuppliedRegistry(
         sampleSet: new Set(),
       })
     }
-    if (working.values.length >= 2) registry.push(working)
-    if (totalValues(registry) >= MAX_TOTAL_VALUES) break
+    if (working.values.length < 2) {
+      coverageNotes.push(
+        `Viewpoint "${label}" was dropped — a viewpoint needs at least two measurable values and ${
+          working.values.length === 1 ? 'only one' : 'none'
+        } of its values survived compilation.`
+      )
+      continue
+    }
+    // Checked BEFORE the push: checking after let the registry exceed the cap
+    // by up to MAX_VALUES_PER_DIM - 1 values.
+    if (totalValues(registry) + working.values.length > MAX_TOTAL_VALUES) {
+      coverageNotes.push(
+        `Viewpoint "${label}" was dropped — counting its ${working.values.length} values would exceed the registry cap of ${MAX_TOTAL_VALUES} total values.`
+      )
+      continue
+    }
+    registry.push(working)
   }
 
   const allValues = registry.flatMap(dimension => dimension.values)

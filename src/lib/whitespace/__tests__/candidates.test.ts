@@ -111,7 +111,11 @@ describe('candidateCoverageNote', () => {
       maxDistance: 0.35,
     })
 
-    expect(note).toContain('2 documents were admitted by meaning')
+    // "fell within", not "admitted by meaning rather than wording" — the ids
+    // overlap the lexical arm, and the note must not claim a split this module
+    // never measures.
+    expect(note).toContain('2 documents fell within')
+    expect(note).toContain('some may also match the concept wording')
     expect(note).toContain('0.35')
   })
 

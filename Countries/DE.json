@@ -1,4 +1,5 @@
 {
+  "_authorNotes": "Germany (DPMA) national patent application profile. PRIMARY SOURCES: Patentgesetz (PatG), in particular §§ 3, 5, 9, 14, 34, 35a, 36, 38, 40, 52, 126; Patentverordnung (PatV), in particular §§ 4, 6, 9, 10, 12, 13 and Annexes 1 and 2; Patentkostengesetz fee schedule. NOTABLE POINTS THAT DIFFER FROM OTHER JURISDICTIONS IN THIS PLATFORM: (1) PARAGRAPH NUMBERING IS PROHIBITED — § 6(3) PatV provides that line and paragraph counters or similar numbering shall not be used, the direct opposite of Korean, Chinese and Brazilian practice, so [0001]-style numbering inherited from a foreign priority text must be stripped before filing; addParagraphNumbers is accordingly set to false. (2) The 1,500-character abstract limit comes from § 13(1) PatV, not from § 36 PatG, and is a 'soll' provision rather than an absolute cap — it is therefore modelled as an error-level check reflecting DPMA practice while the underlying norm is a strong should. (3) The two-part claim form is OPTIONAL: § 9(1) PatV says claims 'kann' be drafted in one part or divided into Oberbegriff and kennzeichnender Teil, so twoPartFormPreferred here records German drafting custom rather than a legal obligation. (4) There is no general grace period; § 3(5) PatG offers only six-month exceptions for evident abuse and officially recognised exhibitions, the latter requiring a declaration on filing and a certificate within four months. FEES: filing includes 10 claims at EUR 40 electronic (EUR 60 paper), with EUR 20 (EUR 30 paper) per claim from the 11th; examination request EUR 350, or EUR 150 where a EUR 300 search was requested first. UNCERTAIN VALUES: fee amounts were current as of the DPMA fee page in March 2026 and should be re-checked before quoting to a client; the § 10(2) PatV item numbers used in the section help texts follow the seven-item enumeration of that provision. NO UNMAPPED SECTIONS.",
   "meta": {
     "id": "DE",
     "code": "DE",
@@ -113,7 +114,7 @@
             "maxLengthChars": 12000,
             "ui": {
               "placeholder": "State the objective technical problem (Aufgabe) and its solution by the claimed features",
-              "helpText": "German drafting practice per § 10(2) No. 3 PatV: state the technical problem (Aufgabe) arising from the prior art, then the solution ('Diese Aufgabe wird gelöst durch ...') by reciting the features of the independent claims, followed by the advantageous effects of the invention. Keep the wording consistent with the claims."
+              "helpText": "German drafting practice per § 10(2) Nos. 3, 4 and 6 PatV, which require the description to state the problem (Aufgabe), the invention as solved (Lösung), and the advantageous effects relative to the prior art: state the technical problem arising from the prior art, then the solution ('Diese Aufgabe wird gelöst durch ...') by reciting the features of the independent claims, followed by the advantageous effects. Keep the wording consistent with the claims."
             },
             "rules": {
               "mustIncludeProblemSolution": true,
@@ -133,7 +134,7 @@
             "maxLengthChars": 8000,
             "ui": {
               "placeholder": "List each figure briefly (e.g., 'Fig. 1 shows a schematic view of ...')",
-              "helpText": "Per § 10(2) No. 4 PatV, briefly describe each figure of the drawings. Provide one sentence per figure identifying the view type and subject. Drawings must comply with Annex 2 to the PatV (black lines, A4, prescribed margins)."
+              "helpText": "Per § 10(2) No. 7 PatV, briefly describe each figure of the drawings. Provide one sentence per figure identifying the view type and subject. Drawings must comply with Annex 2 to the PatV (black lines, A4, prescribed margins)."
             }
           },
           {
@@ -239,12 +240,12 @@
       "requiresAbstract": true,
       "requiresDrawingsIfReferenced": true,
       "paragraphNumberingRequired": false,
-      "paragraphNumberFormat": "[0001]",
       "maxPagesRecommended": 100,
       "allowEquations": true,
       "allowTables": true,
       "notes": [
-        "Paragraph numbering in the format [0001] is not mandatory before the DPMA but is standard professional practice and simplifies later amendment and citation.",
+        "Paragraph numbering must NOT be used before the DPMA. § 6(3) PatV provides that line and paragraph counters or similar numbering shall not be used ('Zeilen- und Absatzzähler oder ähnliche Nummerierungen sollen nicht verwendet werden'). This is the opposite of Korean, Chinese and Brazilian practice — do not carry [0001]-style numbering over from a foreign priority document into a German filing.",
+        "Sheets are numbered consecutively in Arabic numerals at the top centre of the page.",
         "There is no per-page surcharge for German patent applications; the filing fee under the Patentkostengesetz depends on the number of claims (10 included).",
         "The abstract (§ 36 PatG) may be filed up to fifteen months after the filing date or priority date if not submitted with the application."
       ]
@@ -277,7 +278,7 @@
       "allowComparativeExamples": true,
       "notes": [
         "§ 34(4) PatG: the invention must be disclosed in the application clearly and completely enough for a person skilled in the art to carry it out (Ausführbarkeit).",
-        "§ 10(2) PatV prescribes the customary order of the description: technical field, prior art with citations, problem (Aufgabe), solution and advantages, brief description of drawings, and at least one detailed embodiment (Ausführungsbeispiel).",
+        "§ 10(2) PatV enumerates the content of the description in order: (1) the technical field; (2) the prior art known to the applicant, with citation of the sources; (3) the problem (Aufgabe); (4) the invention as the solution; (5) industrial applicability, where this is not obvious; (6) the advantageous effects relative to the prior art; and (7) a brief listing of the figures — followed by at least one detailed way of carrying out the invention (Ausführungsbeispiel) with reference signs to the drawings.",
         "There is no best-mode requirement under German law; one enabling embodiment suffices, but broader claims should be backed by additional variants.",
         "§ 38 PatG: amendments after filing must not extend beyond the content of the original application; extensive fallback disclosure is therefore advisable."
       ]
@@ -302,7 +303,7 @@
       "feeModel": {
         "extraFeeBasedOnIndependents": false,
         "extraFeeBasedOnTotalClaims": true,
-        "note": "Under the Patentkostengesetz the filing fee includes 10 claims; a per-claim surcharge applies to the 11th and each further claim. There is no separate fee based on the number of independent claims, so maxIndependentClaimsBeforeExtraFee mirrors the 10-claim total threshold."
+        "note": "Under the Patentkostengesetz the filing fee includes 10 claims: EUR 40 for electronic filing plus EUR 20 for each claim from the 11th, or EUR 60 on paper plus EUR 30 per additional claim. The examination request is EUR 350, reduced to EUR 150 where a EUR 300 search request was filed first. There is no separate fee based on the number of independent claims, so maxIndependentClaimsBeforeExtraFee mirrors the 10-claim total threshold."
       },
       "notes": [
         "§ 9(1) PatV: claims may be drafted in one-part or two-part form; the two-part form (Oberbegriff + kennzeichnender Teil introduced by 'dadurch gekennzeichnet, dass') is customary where the invention builds on identifiable prior art.",
@@ -323,7 +324,7 @@
       "forbidMarketingLanguage": true,
       "notes": [
         "§ 36(1) PatG: the abstract is a concise summary of the disclosure contained in the application; it serves exclusively for the purpose of technical information.",
-        "DPMA practice limits the abstract to 1,500 characters including spaces; the word limit of ~150 words is a drafting guideline consistent with that character cap.",
+        "The 1,500-character limit is set by § 13(1) PatV, not by § 36 PatG itself, and is expressed as a 'soll' provision ('soll aus nicht mehr als 1.500 Zeichen bestehen') — a strong should rather than an absolute cap. The word limit of ~150 words is a drafting guideline consistent with that character figure.",
         "The abstract should state the technical field, the problem, the solution and the principal use(s), may indicate the most illustrative figure, and should follow main technical features with their reference signs in parentheses."
       ]
     },
@@ -374,7 +375,7 @@
       "priorArtDisclosureThreshold": "on_dpma_request_para_34_7_patg",
       "allowProvisionalPriority": true,
       "notes": [
-        "There is no general grace period under German law: any disclosure before the filing/priority date is prior art (§ 3(1) PatG). § 3(5) PatG provides only narrow six-month exceptions for evident abuse and display at officially recognised exhibitions.",
+        "There is no general grace period under German law: any disclosure before the filing/priority date is prior art (§ 3(1) PatG). § 3(5) PatG provides only narrow six-month exceptions for evident abuse against the applicant and display at officially recognised exhibitions, and the exhibition exception must be invoked by a declaration on filing with the supporting certificate furnished within four months.",
         "No US-style IDS obligation exists, but under § 34(7) PatG the applicant must, at the DPMA's request, state the prior art fully and truthfully to the best of their knowledge.",
         "No foreign-filing licence is required for German residents; note, however, § 52 PatG secrecy provisions for inventions containing state secrets before filing abroad.",
         "Paris Convention priority (12 months) may be claimed from any regular first filing, including US provisional applications; domestic priority from an earlier German application is available under § 40 PatG."
@@ -406,7 +407,7 @@
           "type": "maxChars",
           "limit": 1500,
           "severity": "error",
-          "message": "Abstract exceeds 1,500 characters. DPMA practice under § 36 PatG limits the Zusammenfassung to 1,500 characters; shorten it to the technical field, problem, solution and principal use."
+          "message": "Abstract exceeds 1,500 characters. § 13(1) PatV provides that the Zusammenfassung should consist of no more than 1,500 characters; shorten it to the technical field, problem, solution and principal use."
         },
         {
           "id": "abstract_word_guideline",
@@ -450,7 +451,7 @@
         "from": "claims",
         "mustBeConsistentWith": ["summary_of_invention"],
         "severity": "warning",
-        "message": "The Aufgabe-Lösung statement does not mirror the independent claims. Per § 10(2) No. 3 PatV the description must state the solution using the features of the claims; align the wording."
+        "message": "The Aufgabe-Lösung statement does not mirror the independent claims. Per § 10(2) Nos. 3 and 4 PatV the description must state the problem and the solution using the features of the claims; align the wording."
       },
       {
         "id": "abstract_vs_claims_consistency",
@@ -530,7 +531,7 @@
         "topUp": {
           "instruction": "Draft the Summary per § 10(2) No. 3 PatV using the classical German Aufgabe-Lösung structure: (1) derive the objective technical problem (Aufgabe) from the drawbacks of the Stand der Technik — phrase it as what is to be achieved, not as a pointer to the solution; (2) state the solution with the canonical formula 'Diese Aufgabe wird erfindungsgemäß gelöst durch ...' reciting the features of each independent claim essentially verbatim (consistory clauses); (3) introduce advantageous refinements corresponding to key dependent claims with non-limiting language ('In einer vorteilhaften Ausgestaltung ...' / 'In an advantageous embodiment ...'); and (4) state the advantageous technical effects, each tied causally to a claimed feature. Effects must be technical and plausible, not commercial or speculative. Keep the wording strictly aligned with the Patentansprüche so the description supports the claims and later amendments do not violate § 38 PatG (no extension beyond the original disclosure).",
           "constraints": [
-            "Aufgabe-Lösung structure per § 10(2) No. 3 PatV",
+            "Aufgabe-Lösung structure per § 10(2) Nos. 3, 4 and 6 PatV",
             "Solution statement recites the independent claim features verbatim",
             "Advantageous effects tied to specific claimed features",
             "Technical effects only; no commercial or speculative benefits"
@@ -559,7 +560,7 @@
         "topUp": {
           "instruction": "Draft the Ausführungsbeispiele per § 10(2) No. 5 PatV and § 34(4) PatG: describe at least one embodiment of the invention in detail, referring to the drawings by figure number and reference sign (Bezugszeichen), so that a person skilled in the art can carry out the invention without inventive effort (Ausführbarkeit). Every feature of every claim — independent and dependent — should be described with at least one concrete implementation; broad claims should be backed by several variants so the claimed breadth is enabled. Draft defensively against § 38 PatG (and § 21(1) No. 4 PatG revocation for inadmissible extension): spell out intermediate generalisations, state explicitly that features of different embodiments can be combined where technically sensible, and provide literal basis for foreseeable claim amendments. Use consistent reference numerals matching the drawings, avoid claim-style language, and note that German law imposes no best-mode requirement. Give nested preferred ranges for parameters ('bevorzugt ... besonders bevorzugt ...') as fallback positions. Close by stating that the invention is not restricted to the embodiments shown but is defined by the claims.",
           "constraints": [
-            "At least one detailed embodiment (§ 10(2) No. 5 PatV)",
+            "At least one detailed embodiment (Ausführungsbeispiel) as required by § 10 PatV",
             "Enabling disclosure for the skilled person (§ 34(4) PatG)",
             "Every claim feature backed by a described implementation",
             "Explicit basis for foreseeable amendments (§ 38 PatG)",
@@ -567,7 +568,7 @@
           ],
           "additions": [
             "No best-mode requirement under German law",
-            "Number paragraphs in the format [0001] per standard practice",
+            "Do NOT number paragraphs: § 6(3) PatV states that line and paragraph counters or similar numbering shall not be used — strip any [0001]-style numbering inherited from a foreign priority text",
             "State expressly that embodiments and their features may be combined"
           ]
         }
@@ -645,7 +646,7 @@
         "fontSizePt": 12,
         "lineSpacing": 1.5,
         "addPageNumbers": true,
-        "addParagraphNumbers": true
+        "addParagraphNumbers": false
       }
     ],
     "sectionHeadings": {

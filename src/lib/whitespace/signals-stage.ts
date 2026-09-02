@@ -70,6 +70,7 @@ export function filingCagrPct(byYear: Map<number, number>, lastCompleteYear: num
 
 export async function runSignalsStage(input: {
   runId: string
+  workerId: string
   studyId: string
   scope: WhitespaceScope
 }): Promise<SignalsStageResult> {
@@ -184,7 +185,7 @@ export async function runSignalsStage(input: {
     })
   }
 
-  await heartbeatRun(input.runId)
+  await heartbeatRun(input.runId, input.workerId)
 
   // --- terminology-divergence probe ----------------------------------------
   const divergence = await terminologyProbe(input.scope, coverageNotes)
@@ -250,6 +251,24 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
     // arms the census uses — so the two lanes disagree only in vocabulary,
     // never in which corpus slice they were allowed to see.
     const tsquery = terms.map(term => `"${term.replace(/["\\]/g, ' ').trim()}"`).join(' OR ')
+    // A concept whose label and synonyms all stem away to nothing produces an
+    // EMPTY tsquery, which matches zero rows under @@ — so the agreement test
+    // would read 0% overlap and publish divergent:true ("the field uses
+    // vocabulary your scope does not") for a query that could never have
+    // matched anything. Same discipline as every other text lane
+    // (tsqueryHasTerms in validate-stage, assertConceptQueryUsable in the
+    // census): unmeasured, never divergent.
+    if (!(await probeQueryHasTerms(tsquery))) {
+      results.push({
+        concept: concept.label,
+        lexicalCount: 0,
+        semanticCount: null,
+        overlapPct: null,
+        semanticOnlyVocabulary: null,
+        divergent: false,
+      })
+      continue
+    }
     // One required group, no optional ones: never null.
     const textPredicate = textMatchPredicate({
       required: [tsquery],
@@ -372,6 +391,19 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
   }
 
   return results
+}
+
+/** numnode() > 0 — the probe's tsquery survives common-word removal at all. */
+async function probeQueryHasTerms(query: string): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ nodes: number }>>(
+      Prisma.sql`SELECT numnode(websearch_to_tsquery('english'::regconfig, ${query}))::int AS nodes`
+    )
+    return Number(rows[0]?.nodes ?? 0) > 0
+  } catch (error) {
+    console.error('[Whitespace] Terminology probe query check failed:', error instanceof Error ? error.message : error)
+    return false
+  }
 }
 
 const STOP_WORDS = new Set([

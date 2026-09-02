@@ -1,0 +1,955 @@
+{
+  "_authorNotes": "Russian Federation (Rospatent) invention patent profile. PRIMARY SOURCES: Civil Code of the Russian Federation, Part IV (Arts. 1345-1407, in particular Arts. 1350, 1374, 1375, 1384, 1395); Requirements for the documents of an application for the grant of a patent for an invention, approved by Order of the Ministry of Economic Development of the Russian Federation No. 107 of 21 February 2023 'On the state registration of inventions' (in force 29 April 2023, as subsequently amended) — this Order REPEALED and REPLACED the earlier Order No. 316 of 25 May 2016, whose substantive requirements it materially carries over with different paragraph numbering; Government Decree No. 941 of 10 December 2008 on patent fees, as amended by Decree No. 1278 of 18 September 2024 (in force 5 October 2024). STRUCTURE NOTE: the Requirements prescribe a single description section 'Раскрытие сущности изобретения' (Disclosure of the essence of the invention) whose mandatory contents are the technical problem, the set of essential features, and the technical result. This profile splits that section into four drafting sections (summary lead-in, technical problem, essential features/technical solution, technical result) so each mandatory component is drafted and validated separately, mirroring the treatment used for CN and KR in this platform; on export they print as the Russian sub-headings of Раскрытие сущности изобретения. NO UNMAPPED SECTIONS. UNCERTAIN VALUES: the Requirements set no character limit for the title (the 300-character check below is a drafting guardrail, not a statutory limit); the abstract's 1,000-printed-character figure is expressly 'recommended' in the Requirements, not a hard cap, and is therefore modelled as a warning; there is no fixed statutory deadline for filing the Russian translation of a foreign-language application under Art. 1374(2) — in practice it is requested during formal examination with a 3-month response period under Art. 1384. Sequence listings, pre-clinical/clinical data annexes and priority claims are handled outside the description sections (rules.sequenceListing and the request form 'заявление' respectively) and are therefore not modelled as structure sections.",
+  "meta": {
+    "id": "RU",
+    "code": "RU",
+    "name": "Russia",
+    "continent": "Europe",
+    "office": "Federal Service for Intellectual Property (Rospatent)",
+    "officeUrl": "https://rospatent.gov.ru",
+    "applicationTypes": [
+      "standard",
+      "divisional",
+      "PCT national phase"
+    ],
+    "languages": [
+      "ru"
+    ],
+    "version": 1,
+    "status": "draft",
+    "inheritsFrom": null,
+    "tags": [
+      "national_office",
+      "pct_national_phase",
+      "paris_convention",
+      "eurasian_route_available",
+      "two_part_claims",
+      "technical_result_doctrine",
+      "first_filing_restriction",
+      "russian_language_filing",
+      "six_month_grace_period"
+    ],
+    "createdAt": "2026-09-02T00:00:00Z",
+    "updatedAt": "2026-09-02T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Russian Invention Patent Application (Заявка на выдачу патента на изобретение)",
+        "description": "Standard Russian national application for a patent for an invention before Rospatent under Part IV of the Civil Code of the Russian Federation and the Requirements for application documents approved by Order of the Ministry of Economic Development No. 107 of 21 February 2023 (successor to Order No. 316 of 25 May 2016). The description follows the mandatory sequence: field of technology, level of the art, disclosure of the essence of the invention (technical problem, essential features, technical result), brief description of the drawings, and implementation of the invention.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Название изобретения",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Краткое и точное название, отражающее назначение изобретения",
+              "helpText": "The title (название изобретения) must indicate the purpose (назначение) of the invention, correspond to its essence, be clear, precise and concise, and normally coincide with the generic concept (родовое понятие) opening the independent claim. It is stated in the singular, save for established exceptions. Trademarks, personal names, promotional and misleading wording are not permitted; chemical compounds are named per accepted nomenclature or by class."
+            },
+            "rules": {
+              "mustIndicatePurpose": true,
+              "mustMatchGenericConceptOfIndependentClaim": true,
+              "singularForm": true,
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true,
+              "notes": [
+                "The Requirements prescribe no character limit for the title; brevity is a practice norm, and the title is repeated verbatim at the start of the abstract.",
+                "The title is preceded in the description by the IPC index of the field to which the invention relates."
+              ]
+            }
+          },
+          {
+            "id": "field_of_technology",
+            "label": "Область техники, к которой относится изобретение",
+            "order": 2,
+            "canonicalKeys": [
+              "fieldOfInvention",
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "Укажите область техники и, при необходимости, область применения изобретения",
+              "helpText": "State the field of technology to which the invention relates and, where several are possible, the preferred fields of application. Conventionally opened with 'Изобретение относится к ... и может быть использовано в ...'. This statement also carries the industrial-applicability signal required by Art. 1350(4) of the Civil Code, since Russian practice has no separate industrial applicability section."
+            }
+          },
+          {
+            "id": "prior_art",
+            "label": "Уровень техники",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Опишите аналоги и прототип (наиболее близкий аналог) со ссылками на источники",
+              "helpText": "Describe the analogues (аналоги) known to the applicant with bibliographic citations, then designate the closest analogue — the prototype (прототип) — and set out its features that coincide with the claimed invention, followed by the technical causes preventing the prototype from achieving the technical result. The features attributed to the prototype here become the restrictive part (ограничительная часть) of the two-part independent claim, so the prototype must be chosen and characterised with care."
+            },
+            "rules": {
+              "requireAnalogues": true,
+              "requirePrototypeDesignation": true,
+              "citeDocumentsRequired": true,
+              "requireCausesPreventingTechnicalResult": true,
+              "avoidDisparagingPriorArt": true
+            }
+          },
+          {
+            "id": "disclosure_of_essence",
+            "label": "Раскрытие сущности изобретения",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Вводная часть раскрытия сущности; задача, признаки и технический результат — в следующих разделах",
+              "helpText": "Lead-in of the mandatory 'Раскрытие сущности изобретения' section. Under the Requirements this section must reveal the essence of the invention as the set of essential features sufficient to achieve the technical result, and must state the technical problem and the technical result. In this profile those three components are drafted in the dedicated sections that follow; use this section to introduce the invention and each independent claim in claim-consistent wording."
+            },
+            "rules": {
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true,
+              "componentsInDedicatedSections": [
+                "technicalProblem",
+                "technicalSolution",
+                "advantageousEffects"
+              ]
+            }
+          },
+          {
+            "id": "technical_problem",
+            "label": "Техническая проблема (задача)",
+            "order": 5,
+            "canonicalKeys": [
+              "technicalProblem",
+              "technical_problem"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "Сформулируйте техническую проблему (задачу), решаемую изобретением",
+              "helpText": "State the technical problem (техническая проблема / задача) that the invention solves, derived from the deficiencies of the prototype identified in Уровень техники. The problem must be technical, must be genuinely solved by the claimed set of features, and must be distinct from the technical result it produces."
+            }
+          },
+          {
+            "id": "essence_of_invention",
+            "label": "Сущность изобретения (существенные признаки)",
+            "order": 6,
+            "canonicalKeys": [
+              "technicalSolution",
+              "technical_solution"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Изложите совокупность существенных признаков, достаточную для достижения технического результата",
+              "helpText": "Set out the set of essential features (совокупность существенных признаков) sufficient to achieve the technical result, reciting each independent claim in wording consistent with — conventionally near-verbatim to — the Формула изобретения, followed by the features of the dependent claims as particular embodiments ('В частном случае выполнения ...'). A feature is essential when it is in a causal relationship with the technical result."
+            },
+            "rules": {
+              "alignWithIndependentClaims": true,
+              "requireCausalLinkToTechnicalResult": true
+            }
+          },
+          {
+            "id": "technical_result",
+            "label": "Технический результат",
+            "order": 7,
+            "canonicalKeys": [
+              "advantageousEffects",
+              "advantageous_effects"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 6000,
+            "ui": {
+              "placeholder": "Укажите технический результат, достигаемый изобретением",
+              "helpText": "State the technical result (технический результат) — the phenomenon, property or technical effect objectively manifested when the invention is carried out, expressed in physical, chemical, biological or other technical parameters. The technical result is the pivot of Russian inventive-step assessment: it must be causally linked to the distinguishing features and must be confirmed by data in Осуществление изобретения. Purely economic, commercial, aesthetic or informational advantages do not qualify as a technical result."
+            },
+            "rules": {
+              "mustBeObjectivelyManifested": true,
+              "mustBeExpressibleInTechnicalParameters": true,
+              "requireCausalLinkToDistinguishingFeatures": true,
+              "forbidEconomicOrCommercialResults": true,
+              "mustBeConfirmedByImplementationData": true
+            }
+          },
+          {
+            "id": "brief_description_of_drawings",
+            "label": "Краткое описание чертежей",
+            "order": 8,
+            "canonicalKeys": [
+              "briefDescriptionOfDrawings",
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Перечислите фигуры с кратким указанием их содержания (например, 'на фиг. 1 показано ...')",
+              "helpText": "Where drawings or other illustrative materials are filed, give a list of the figures with a brief indication of what each depicts, in the conventional form 'На фиг. 1 показана схема ...'. Figures are designated фиг. 1, фиг. 2 (a single figure is not numbered). Omit this section entirely when no drawings accompany the application."
+            }
+          },
+          {
+            "id": "implementation",
+            "label": "Осуществление изобретения",
+            "order": 9,
+            "canonicalKeys": [
+              "detailedDescription",
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Приведите подробное описание не менее одного примера осуществления с данными, подтверждающими технический результат",
+              "helpText": "Show that the invention can be carried out with realisation of its stated purpose, and give a detailed description of at least one example of implementation with references to the drawings. Objective data — experimental results, measurements, or theoretical substantiation — must confirm that the claimed technical result is actually achieved. Russian law imposes no best-mode requirement, but a technical result unsupported by data here cannot be relied upon during examination."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireAtLeastOneExample": true,
+              "requireDataConfirmingTechnicalResult": true,
+              "requireSupportForAllClaims": true,
+              "requireBestModeDisclosure": false,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true,
+              "notes": [
+                "For inventions relating to devices, the description is given in the static state first, then the operation or method of use with references to the position numerals of the figures.",
+                "For medicinal products, the 31 March 2021 amendment added a requirement to furnish pre-clinical and clinical study data where relevant."
+              ]
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Формула изобретения",
+            "order": 10,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Составьте формулу: ограничительная часть, 'отличающийся тем, что', отличительная часть",
+              "helpText": "The claims (формула изобретения) express the essence of the invention, must be fully based on the description, and define the scope of legal protection (Art. 1354(2) of the Civil Code). Each claim is set out as a SINGLE SENTENCE. An independent claim normally uses the two-part form: a generic concept reflecting the purpose plus the restrictive part (features shared with the prototype), then 'отличающийся тем, что' introducing the distinguishing part. Multiple dependency by alternatives is permitted, but a multiple-dependent claim may not serve as the basis for another multiple-dependent claim."
+            },
+            "rules": {
+              "twoPartFormPreferred": true,
+              "mandatoryExpression": "отличающийся тем, что",
+              "singleSentencePerClaim": true,
+              "mustStartWithGenericConcept": true,
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "prohibitMultipleDependentOnMultipleDependent": true,
+              "mustBeFullyBasedOnDescription": true,
+              "oneParteFormAllowedFor": [
+                "individual chemical compounds",
+                "strains of microorganisms and cell lines",
+                "use of a product or process for a specified purpose (применение)",
+                "inventions having no analogues"
+              ],
+              "notes": [
+                "Filing and formal examination fees add a surcharge for each claim beyond the tenth; substantive examination adds a surcharge for each independent claim beyond the first — the Russian fee structure penalises multiple independent claims far more sharply than dependent ones."
+              ]
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Реферат",
+            "order": 11,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 1000,
+            "ui": {
+              "placeholder": "Сокращённое изложение описания: название, область, сущность, технический результат (рекомендуется до 1000 знаков)",
+              "helpText": "The abstract (реферат) is a condensed statement of the description: it begins with the title, states the field of technology and, where necessary, the field of application, and reveals the essence of the invention with an indication of the technical result achieved. The Requirements recommend a volume of up to 1,000 printed characters. It serves information purposes only and does not define the scope of protection."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "mustStartWithTitle": true,
+              "recommendedMaxPrintedCharacters": 1000,
+              "mustStateTechnicalResult": true,
+              "mayIncludeFigureReference": true,
+              "forbidMarketingLanguage": true,
+              "notForClaimConstruction": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "The description must follow the prescribed order of sections: Область техники — Уровень техники — Раскрытие сущности изобретения — Краткое описание чертежей — Осуществление изобретения, preceded by the IPC index and the title.",
+        "Bracketed paragraph numbering is not required by the Requirements and is not customary in Russian applications; sheets are numbered consecutively in Arabic numerals and each document (description, claims, abstract, drawings) begins on a separate sheet.",
+        "A sequence listing section (Перечень последовательностей) is added only where nucleotide or amino acid sequences are used, and pre-clinical/clinical study data are furnished for medicinal-product inventions.",
+        "Amendments may not change the essence of the claimed invention or add matter absent from the application documents as originally filed (Art. 1378 of the Civil Code) — draft fallback positions into the original text."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "Sheets of 210 x 297 mm (A4), used on one side only. Minimum margins for the description, claims and abstract: left 25 mm, top 20 mm, right 20 mm, bottom 20 mm.",
+        "Text is typed in black indelible characters with line spacing of at least 1.5; capital letters must be at least 2.1 mm high; text may not be set in columns.",
+        "Electronic filing through the Rospatent portal accepts DOC/RTF text and TIFF images at 300 dpi."
+      ]
+    },
+    "description": {
+      "requireEnablement": true,
+      "requireBestModeDisclosure": false,
+      "requireSupportForClaims": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "allowReferenceNumerals": true,
+      "avoidClaimLanguage": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "The description must disclose the invention with sufficient completeness for it to be carried out by a person skilled in the art (Art. 1375(2) of the Civil Code).",
+        "Russian law has no best-mode requirement. Instead, Осуществление изобретения must contain at least one detailed example and objective data confirming that the declared technical result is achieved.",
+        "The technical result is defined as a phenomenon, property or technical effect that is objectively manifested when the invention is carried out and is expressible in physical, chemical, biological or other technical parameters; economic and consumer advantages are not technical results.",
+        "Industrial applicability under Art. 1350(4) covers use in industry, agriculture, healthcare, other sectors of the economy or the social sphere; it is evidenced by the field statement and the implementation examples rather than by a dedicated section.",
+        "Non-patentable subject matter under Art. 1350(5)-(6) (discoveries, scientific theories, mathematical methods, rules of games and mental acts, computer programs as such, presentations of information, and solutions contrary to public interest and morality) must not be presented as the claimed invention."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": true,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": true,
+      "preferredConnectors": [
+        "отличающийся тем, что",
+        "characterized in that",
+        "содержащий"
+      ],
+      "discouragedConnectors": [
+        "состоящий из (closes the claim; use only when a closed set is intended)"
+      ],
+      "forbiddenPhrases": [
+        "как описано в описании",
+        "как показано на чертеже",
+        "и тому подобное",
+        "например (in the characterizing part)"
+      ],
+      "maxIndependentClaimsBeforeExtraFee": 1,
+      "maxTotalClaimsRecommended": 10,
+      "countBeforeExtraFee": 10,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_inventive_concept_art_1375_group_of_inventions",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": true,
+        "extraFeeBasedOnTotalClaims": true,
+        "claimsIncludedInFilingFee": 10,
+        "independentClaimsIncludedInExaminationFee": 1,
+        "note": "Under Government Decree No. 941 of 10.12.2008 as amended by Decree No. 1278 of 18.09.2024 (in force 05.10.2024): filing and formal examination cost 4,000 RUB plus 1,000 RUB for each claim in excess of ten; substantive examination costs 14,000 RUB for an application with one independent claim plus 10,000 RUB for each additional independent claim. The former 30% electronic-filing discount was abolished on 5 October 2024. Reduced rates apply to individual inventors and certain small entities."
+      },
+      "notes": [
+        "Each claim is stated as ONE sentence; the claim set is numbered consecutively in Arabic numerals.",
+        "An independent claim opens with a generic concept (родовое понятие) reflecting the purpose of the invention, then the restrictive part with the features shared with the prototype, then 'отличающийся тем, что' and the distinguishing features.",
+        "The one-part (undivided) form is permitted for individual chemical compounds, strains of microorganisms and cell lines, use claims (применение ... в качестве ...), and inventions having no analogues.",
+        "Dependent claims begin with an abbreviated generic concept and a reference to the claim or claims they develop; they may not replace or exclude features of the claim referred to.",
+        "A dependent claim may refer to several claims in the alternative, but a multiple-dependent claim may not serve as the basis for another multiple-dependent claim.",
+        "A group of inventions may be claimed in one application where the inventions are so linked as to form a single inventive concept (e.g. a product and a method of its manufacture, and a method of its use)."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "recommendedMaxPrintedCharacters": 1000,
+      "mustStartWithTitle": true,
+      "mustStateTechnicalResult": true,
+      "notes": [
+        "The Requirements state that the recommended volume of the abstract is up to 1,000 printed characters — a recommendation rather than a statutory cap, so an overrun is a warning and not a filing defect.",
+        "Content: the title, the field of technology and where necessary the field of application, the essence of the invention with an indication of the technical result, and, if required for understanding, a reference to a figure.",
+        "The abstract is published for information purposes and has no effect on the scope of legal protection, which is determined by the claims (Art. 1354(2) of the Civil Code).",
+        "Roughly 150 English words corresponds to the recommended 1,000-character Russian volume; keep the English draft compact so the Russian text stays within it."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 9,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "shadingAllowed": false,
+      "grayscaleAllowed": false,
+      "minTextHeightMm": 3.2,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "table",
+        "exploded_view"
+      ],
+      "notes": [
+        "Drawings are executed in black indelible lines of uniform thickness without colouring or shading, and must remain legible when reduced to two thirds.",
+        "Margins for drawing sheets: left 25 mm, top 25 mm, right 15 mm, bottom 10 mm.",
+        "Numerals and letters on the drawings must be at least 3.2 mm high.",
+        "Figures are designated 'фиг. 1', 'фиг. 2' and so on; where the application contains a single figure it is not numbered.",
+        "Position numerals (позиции) are given in Arabic numerals consistent with the description; the same element carries the same numeral in every figure, and numerals not mentioned in the description must not appear on the drawings."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "ru"
+      ],
+      "requiresOfficialTranslation": true,
+      "notes": [
+        "Art. 1374(2) of the Civil Code: the request (заявление) must be in Russian; other application documents may be filed in Russian or in another language, in which case a Russian translation must be attached.",
+        "Where the translation is missing, Rospatent issues a formal-examination request; the response period under Art. 1384 is three months from receipt.",
+        "For PCT national phase entry a Russian translation of the international application is furnished at entry (31 months from the earliest priority date).",
+        "The Russian text governs; terminology must follow accepted Russian scientific and technical usage, and units must be given in the SI system."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 6,
+      "foreignFilingLicenseRequired": true,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "prototype_and_analogues_cited_in_description",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "Art. 1350(3): a disclosure by the author, the applicant, or any person who obtained the information from them directly or indirectly does not defeat patentability if the application is filed within six months of the disclosure. The burden of proving the circumstances rests on the applicant.",
+        "Art. 1395: an invention created in the Russian Federation may be filed abroad or with an international organisation only after six months from the filing of a Russian application, unless Rospatent has completed an expedited secrecy check earlier; an international or Eurasian application filed through Rospatent designating the Russian Federation satisfies this requirement. Violation carries administrative fines under Art. 7.28 of the Code of Administrative Offences.",
+        "There is no US-style information disclosure statement; the statutory equivalent is the obligation to describe the analogues and designate the prototype with citations in Уровень техники.",
+        "Russia has no domestic provisional application, but Paris Convention priority may be claimed from a foreign first filing including a US provisional; internal priority from an earlier Russian application is available within twelve months.",
+        "Substantive examination must be requested within three years of the filing date; annual maintenance fees run from the third year, with the first through fifth years now bundled into the grant fee under the 2024 fee reform.",
+        "PCT national phase entry deadline: 31 months from the earliest priority date under both Chapter I and Chapter II."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "A missing or defective sequence listing is remedied on invitation during formal examination, provided nothing is added beyond the original disclosure (Art. 1378).",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": [
+        "XML",
+        "TXT"
+      ],
+      "notes": [
+        "Where nucleotide or amino acid sequences are used in the invention, a sequence listing forms a separate part of the description (Перечень последовательностей) in WIPO Standard ST.26 XML format.",
+        "Biological material that cannot be sufficiently described must be deposited with a recognised depositary institution no later than the filing date, with the deposit particulars stated in the description."
+      ]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 300,
+          "severity": "warning",
+          "message": "Title is unusually long. The Requirements demand a clear, precise and concise название изобретения that indicates the purpose and coincides with the generic concept of the independent claim."
+        }
+      ],
+      "prior_art": [
+        {
+          "id": "prior_art_min_substance",
+          "type": "minWords",
+          "limit": 60,
+          "severity": "warning",
+          "message": "Уровень техники appears too thin. The Requirements expect the analogues to be described with citations, the closest analogue (prototype) to be designated, and the causes preventing it from achieving the technical result to be stated."
+        }
+      ],
+      "technical_result": [
+        {
+          "id": "technical_result_min_substance",
+          "type": "minWords",
+          "limit": 25,
+          "severity": "warning",
+          "message": "The технический результат is not stated with enough substance. Russian examination assesses inventive step through the technical result, which must be objectively manifested and expressed in technical parameters."
+        }
+      ],
+      "implementation": [
+        {
+          "id": "implementation_min_length",
+          "type": "minWords",
+          "limit": 300,
+          "severity": "warning",
+          "message": "Осуществление изобретения appears too short. It must contain at least one detailed example of implementation together with data confirming that the declared technical result is achieved."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_excess_fee",
+          "type": "maxCount",
+          "limit": 10,
+          "severity": "info",
+          "message": "More than 10 claims: the filing and formal examination fee adds 1,000 RUB for each claim above the tenth. Note separately that substantive examination adds 10,000 RUB for each independent claim beyond the first."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_recommended_chars",
+          "type": "maxChars",
+          "limit": 1000,
+          "severity": "warning",
+          "message": "Abstract exceeds the recommended 1,000 printed characters set by the Requirements. Condense to the title, field, essence and technical result."
+        },
+        {
+          "id": "abstract_words_proxy",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "info",
+          "message": "Keep the English draft to about 150 words so the Russian реферат remains within the recommended 1,000-character volume."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_based_on_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "implementation",
+          "essence_of_invention"
+        ],
+        "severity": "error",
+        "message": "The claims must be fully based on the description. Every feature recited after 'отличающийся тем, что' must appear in the essence section and be implemented in Осуществление изобретения."
+      },
+      {
+        "id": "claims_vs_essence_consistency",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "essence_of_invention"
+        ],
+        "severity": "warning",
+        "message": "The set of essential features in Раскрытие сущности изобретения does not mirror the independent claims. Russian practice expects near-verbatim correspondence between the claims and the essence statement."
+      },
+      {
+        "id": "technical_result_supported_by_data",
+        "type": "support",
+        "from": "technical_result",
+        "mustBeSupportedBy": [
+          "implementation"
+        ],
+        "severity": "error",
+        "message": "The declared technical result is not confirmed by objective data in Осуществление изобретения. An unsupported technical result cannot be relied upon during examination of inventive step."
+      },
+      {
+        "id": "problem_result_alignment",
+        "type": "consistency",
+        "from": "technical_problem",
+        "mustBeConsistentWith": [
+          "essence_of_invention",
+          "technical_result"
+        ],
+        "severity": "warning",
+        "message": "The technical problem, the essential features and the technical result are not aligned. The stated problem must be solved by the recited features, and the technical result must follow causally from them."
+      },
+      {
+        "id": "prototype_vs_restrictive_part",
+        "type": "consistency",
+        "from": "prior_art",
+        "mustBeConsistentWith": [
+          "claims"
+        ],
+        "severity": "warning",
+        "message": "The features attributed to the prototype in Уровень техники do not correspond to the restrictive part (ограничительная часть) of the independent claim. The two must match for the two-part claim form to be formally correct."
+      },
+      {
+        "id": "abstract_vs_essence_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "disclosure_of_essence",
+          "technical_result"
+        ],
+        "severity": "warning",
+        "message": "The реферат does not reflect the essence of the invention and the technical result as disclosed. Align the abstract with the description."
+      },
+      {
+        "id": "drawing_reference_check",
+        "type": "reference",
+        "from": "brief_description_of_drawings",
+        "mustReference": [
+          "implementation"
+        ],
+        "severity": "error",
+        "message": "One or more figures or position numerals listed in Краткое описание чертежей are not explained in Осуществление изобретения. Position numerals must be consistent between the drawings and the description."
+      }
+    ]
+  },
+  "prompts": {
+    "systemPrompt": "You are an expert Russian patent attorney (патентный поверенный) drafting an application for a patent for an invention for filing with Rospatent under Part IV of the Civil Code of the Russian Federation and the Requirements approved by Order of the Ministry of Economic Development No. 107 of 21 February 2023. Follow the mandatory description sequence, build the entire disclosure around the технический результат (technical result) and its causal link to the essential features, keep the claims fully based on the description, and observe the single-sentence and two-part claim formalities. The Russian text is the authentic legal text; if drafting in English, write precise, directly translatable sentences and use SI units.",
+    "promptMergeStrategy": "append",
+    "baseStyle": {
+      "tone": "technical, neutral, precise, formal Russian scientific-technical register",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing or advertising language",
+        "economic or consumer advantages presented as a technical result",
+        "unsupported assertions of effects",
+        "disparagement of specific prior patents",
+        "vague qualifiers such as 'примерно', 'и тому подобное' in claim language"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft the название изобретения per the Requirements: it must indicate the purpose (назначение) of the invention, correspond to its essence, and be clear, precise and concise. The title should coincide with the generic concept (родовое понятие) that opens the independent claim, so that claim 1 can begin with the same wording — for a group of inventions, name every category claimed (e.g. 'Способ очистки сточных вод и устройство для его осуществления'). Use the singular form except where established usage requires otherwise. Name chemical compounds according to accepted nomenclature or by the class to which they belong. Do not use trademarks, personal names, model designations, promotional or evaluative words, or wording that misleads as to the invention's nature or purpose. The same title opens the abstract verbatim.",
+          "constraints": [
+            "Output in Russian",
+            "Must indicate the purpose of the invention",
+            "Must coincide with the generic concept opening the independent claim",
+            "Singular form; no trademarks, personal names or model numbers",
+            "No promotional or evaluative wording",
+            "Name every claim category present for a group of inventions"
+          ],
+          "additions": [
+            "Legal basis: Requirements approved by Order of the Ministry of Economic Development No. 107 of 21.02.2023 (successor to Order No. 316 of 25.05.2016).",
+            "The description opens with the IPC index followed by this title; the реферат repeats it verbatim."
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the section 'Область техники, к которой относится изобретение'. State the field of technology to which the invention relates and, where the invention may be used in several fields, indicate the preferred fields of application. Use the conventional formula 'Изобретение относится к области ... и может быть использовано в ...'. Keep it to one or two sentences of neutral, classification-oriented terminology consistent with the IPC index stated above the title. This statement carries the industrial-applicability signal required by Art. 1350(4) of the Civil Code, because Russian descriptions contain no separate industrial applicability section — so name concrete branches of industry, agriculture, healthcare or the social sphere where the invention is usable. Do not discuss the prior art, the problem, the essential features or the technical result here.",
+          "constraints": [
+            "Output in Russian",
+            "One or two sentences; state the field and the preferred fields of application",
+            "Name concrete sectors of use to evidence industrial applicability (Art. 1350(4))",
+            "No prior art discussion, no problem statement, no technical result",
+            "Terminology consistent with the IPC index and the claims"
+          ],
+          "additions": [
+            "Corresponds to the mandatory first section of the description under the Requirements."
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the section 'Уровень техники'. First describe the analogues (аналоги) of the invention known to the applicant — technical solutions of the same purpose — each with a bibliographic citation (patent documents by country, number and publication date; literature by author, title, publisher and year) and a statement of the features that coincide with those of the claimed invention. Then designate the closest analogue, the прототип, and set out its features that coincide with the essential features of the claimed invention, followed by the technical causes that prevent the prototype from achieving the technical result the invention delivers. This section is load-bearing in Russian practice for two reasons: the features you attribute to the prototype become the ограничительная часть (restrictive part) of the two-part independent claim, and the deficiencies you identify define the technical problem. Characterise the prototype accurately but do not over-admit, and never disparage specific patents or their proprietors. Do not disclose the invention's own solution or its technical result here. Remember that Russia grants only a six-month grace period under Art. 1350(3) of the Civil Code, so any earlier disclosure by the applicant may itself be citable prior art.",
+          "constraints": [
+            "Output in Russian",
+            "Describe analogues with full bibliographic citations",
+            "Designate the prototype and list its coinciding features explicitly",
+            "State the technical causes preventing the prototype from achieving the technical result",
+            "Prototype features must match the intended restrictive part of claim 1",
+            "Do not reveal the invention's solution or technical result here",
+            "No disparagement; avoid unnecessary admissions"
+          ],
+          "additions": [
+            "Legal basis: the Requirements (Уровень техники); Art. 1350(2)-(3) of the Civil Code (prior art and the six-month grace period).",
+            "Russia has no IDS duty; this citation of analogues and the prototype is the statutory disclosure mechanism."
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the lead-in of the mandatory section 'Раскрытие сущности изобретения'. Under the Requirements this section must reveal the essence of the invention as the set of essential features sufficient to achieve the technical result, and must state both the technical problem and the technical result; in this platform those components are drafted in the dedicated Техническая проблема, Сущность изобретения and Технический результат sections that follow. Use this lead-in to introduce the invention and each independent claim in wording that mirrors the Формула изобретения — conventionally 'Задачей настоящего изобретения является ... Указанная задача решается тем, что ...' — and, for a group of inventions, to introduce each object of the group in claim order. Keep every term identical to the claims: the claims must be fully based on the description, and post-filing amendments may not change the essence of the claimed invention (Art. 1378 of the Civil Code).",
+          "constraints": [
+            "Output in Russian",
+            "Overview only; problem, essential features and technical result go in their dedicated sections",
+            "Introduce each independent claim in claim-consistent wording",
+            "Cover every object of a group of inventions in claim order",
+            "Terminology identical to the Формула изобретения",
+            "No new subject matter beyond the claims and the implementation examples"
+          ],
+          "additions": [
+            "Corresponds to the opening of Раскрытие сущности изобретения.",
+            "Amendments after filing may not change the essence of the claimed invention (Art. 1378 CC) — state fallback positions now."
+          ]
+        }
+      },
+      "technicalProblem": {
+        "topUp": {
+          "instruction": "Draft the technical problem (техническая проблема, traditionally задача изобретения) component of Раскрытие сущности изобретения. Formulate the problem that the invention solves directly from the deficiencies of the prototype identified in Уровень техники, in objective technical terms that a person skilled in the art would recognise. Keep the problem strictly distinct from the technical result: the problem is what needed solving (e.g. 'создание способа очистки, обеспечивающего удаление примесей без применения реагентов'), whereas the technical result is the objectively manifested effect achieved (e.g. 'повышение степени очистки на 15%'). The problem must be genuinely solved by the set of essential features that follows — a stated problem the disclosure does not solve invites an objection on sufficiency. State one coherent problem, or a tightly linked cluster where a group of inventions is claimed, so that unity of the single inventive concept is preserved.",
+          "constraints": [
+            "Output in Russian",
+            "Derived directly from the prototype's deficiencies in Уровень техники",
+            "Objective and technical; no commercial, economic or aesthetic objectives",
+            "Kept distinct from the технический результат stated in the next section",
+            "Actually solved by the disclosed essential features",
+            "One coherent problem, or a linked cluster for a group of inventions"
+          ],
+          "additions": [
+            "Corresponds to the техническая проблема component of Раскрытие сущности изобретения."
+          ]
+        }
+      },
+      "technicalSolution": {
+        "topUp": {
+          "instruction": "Draft the essence component (сущность изобретения — совокупность существенных признаков) of Раскрытие сущности изобретения. Set out the set of essential features sufficient to achieve the technical result, reciting each independent claim near-verbatim in the canonical Russian form 'Поставленная задача решается тем, что в [родовое понятие], содержащем [ограничительная часть], согласно изобретению, [отличительная часть]'. A feature is essential only when it stands in a causal relationship with the technical result, so make that causal link explicit for each distinguishing feature — Russian examiners test essentiality directly, and features presented without a link to the technical result are treated as optional. Then present the features of the dependent claims as particular cases of embodiment ('В частном случае выполнения изобретения ...'), each in its own paragraph, and cover every object of a group of inventions in claim order. Because Art. 1378 of the Civil Code forbids amendments that change the essence of the claimed invention, this section together with the implementation examples is the only safe basis for later claim amendments: spell out intermediate generalisations and alternative feature combinations now.",
+          "constraints": [
+            "Output in Russian",
+            "Recite each independent claim near-verbatim as the set of essential features",
+            "Make the causal link between each distinguishing feature and the technical result explicit",
+            "Present dependent-claim features as 'частные случаи выполнения'",
+            "Cover every object of a group of inventions in claim order",
+            "Provide intermediate generalisations as amendment fallbacks (Art. 1378 CC)",
+            "Describe the solution by its technical features, never by its result alone"
+          ],
+          "additions": [
+            "Corresponds to the совокупность существенных признаков component of Раскрытие сущности изобретения.",
+            "Essentiality in Russian practice is defined by the causal link between the feature and the technical result."
+          ]
+        }
+      },
+      "advantageousEffects": {
+        "topUp": {
+          "instruction": "Draft the технический результат component of Раскрытие сущности изобретения — the single most important statement in a Russian patent application. The technical result is a phenomenon, property or technical effect that is objectively manifested when the invention is carried out and is expressible in physical, chemical, biological or other technical parameters; state it in exactly those terms ('повышение прочности сцепления', 'снижение энергопотребления', 'расширение арсенала технических средств'). Tie each result causally to the distinguishing features that produce it, and quantify wherever data exists. Do not present economic savings, cost reduction, convenience, aesthetic appeal, or increased consumer appeal as a technical result — Rospatent rejects such formulations, and an application whose only asserted advantage is non-technical will fail the inventive-step assessment, which in Russian practice turns entirely on whether the prior art discloses the distinguishing features with the same technical result. Every result stated here must be confirmed by objective data in Осуществление изобретения; a result asserted without confirming data cannot be relied on during examination and cannot be cured by later-filed evidence.",
+          "constraints": [
+            "Output in Russian",
+            "Express the result as an objectively manifested effect in technical parameters",
+            "Link each result causally to specific distinguishing features",
+            "Quantify where data exists",
+            "Never state economic, commercial, aesthetic or consumer advantages as a technical result",
+            "Every result must be confirmed by data in Осуществление изобретения"
+          ],
+          "additions": [
+            "Corresponds to the технический результат component of Раскрытие сущности изобретения.",
+            "The technical result is the pivot of inventive-step assessment under Art. 1350(2) of the Civil Code.",
+            "'Расширение арсенала технических средств' is an accepted fallback technical result where no improvement over the prototype can be demonstrated."
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the section 'Краткое описание чертежей', included whenever drawings or other illustrative materials accompany the application. Give a list of the figures with a brief indication of what each depicts, one sentence per figure in the conventional Russian form 'На фиг. 1 показана схема устройства; на фиг. 2 — разрез по А-А; на фиг. 3 приведён график зависимости ...'. Identify the type of representation (схема, разрез, вид в перспективе, блок-схема, график, диаграмма) and its subject only; operation and position numerals belong in Осуществление изобретения. Figures are designated фиг. 1, фиг. 2 and so on, and a single figure is not numbered at all. Every filed figure must appear in this list and every listed figure must be filed.",
+          "constraints": [
+            "Output in Russian",
+            "One sentence per figure in the form 'На фиг. N показано/приведено ...'",
+            "State the type of representation and its subject only",
+            "A single figure is left unnumbered",
+            "Complete one-to-one correspondence with the filed drawings",
+            "Omit the section entirely when there are no drawings"
+          ],
+          "additions": [
+            "Drawings are executed in black lines of uniform thickness without colouring or shading, legible at two-thirds reduction."
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the section 'Осуществление изобретения'. It must show that the invention can be carried out with realisation of the purpose stated in the field section, and must contain a detailed description of at least one example of implementation, with objective data — experimental results, measurements, or theoretical substantiation — confirming that the declared технический результат is actually achieved. This confirming data is not optional decoration: an asserted technical result without supporting data is disregarded during examination and cannot be rescued by evidence filed later. For a device, first describe its construction in the static state, listing every element with its position numeral matching the drawings, and then describe its operation or method of use. For a method, describe the operations in sequence with the conditions, regimes, parameters and apparatus used. Where the claims recite ranges, give examples at the boundaries and inside the range, and where they recite generalised or functional features, give several varied embodiments — Russian practice tests whether the whole claimed breadth is realisable. Include comparative examples against the prototype demonstrating the technical result in quantitative terms whenever the art permits. Russian law imposes no best-mode requirement, so there is no obligation to identify a preferred embodiment as best, but every claimed feature must be implemented somewhere in this section. Draft defensively against Art. 1378 of the Civil Code: amendments may not change the essence of the claimed invention, so include all fallback positions, intermediate generalisations and alternative combinations now.",
+          "constraints": [
+            "Output in Russian",
+            "At least one detailed example of implementation, referenced to the figures",
+            "Objective data confirming the declared technical result is mandatory",
+            "Devices: static construction with position numerals first, then operation",
+            "Methods: operations in sequence with conditions, regimes and parameters",
+            "Examples at and within the boundaries of every claimed range",
+            "Several embodiments where claims use generalised or functional features",
+            "Comparative data against the prototype where the art permits",
+            "All fallback positions stated now (Art. 1378 CC amendment limits)",
+            "No claim-style language; no best-mode designation required"
+          ],
+          "additions": [
+            "Corresponds to Осуществление изобретения, the final mandatory section of the description.",
+            "For medicinal-product inventions, pre-clinical and clinical study data are required following the 31 March 2021 amendment.",
+            "Position numerals must be Arabic and identical across all figures and the description."
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the Формула изобретения. The claims express the essence of the invention, must be fully based on the description, and determine the scope of legal protection (Art. 1354(2) of the Civil Code). FORMAL RULES: each claim is set out as a SINGLE SENTENCE — this is mandatory, not stylistic; claims are numbered consecutively in Arabic numerals. An independent claim opens with a generic concept (родовое понятие) reflecting the purpose and coinciding with the title, continues with the ограничительная часть reciting the features it shares with the prototype designated in Уровень техники, and then introduces the distinguishing features with the mandatory expression 'отличающийся тем, что' (inflected to agree: 'отличающаяся', 'отличающееся'). The undivided one-part form is permitted only for individual chemical compounds, strains of microorganisms and cell lines, use claims ('Применение ... в качестве ...'), and inventions having no analogues. Dependent claims begin with an abbreviated generic concept plus a reference to the claim they develop ('Устройство по п. 1, отличающееся тем, что ...'); they may not replace or exclude features of the claim referred to. A claim may refer to several claims in the alternative ('по любому из пп. 1-3'), but such a multiple-dependent claim may not itself serve as the basis for another multiple-dependent claim. A group of inventions is permissible where linked by a single inventive concept (typically a product, a method of making it, and a method of using it). Do not use references to the description or drawings in place of features, and avoid indefinite expressions such as 'примерно', 'и тому подобное' or 'например' in the characterizing part. Position numerals may be added in parentheses and do not limit scope. Watch the fee structure closely: each claim above the tenth adds 1,000 RUB at filing, but each independent claim beyond the FIRST adds 10,000 RUB at substantive examination — so Russian claim sets are conventionally lean on independent claims. Do not claim subject matter excluded by Art. 1350(5)-(6) (mathematical methods, computer programs as such, rules of mental acts, presentations of information); recast software inventions as a method or system producing a technical result.",
+          "constraints": [
+            "Output in Russian",
+            "Each claim is ONE sentence, numbered consecutively",
+            "Independent claims open with the generic concept matching the title",
+            "Two-part form with 'отличающийся тем, что' unless an exception applies",
+            "Restrictive part must match the prototype's features from Уровень техники",
+            "Dependent claims: abbreviated generic concept plus reference to the preceding claim",
+            "Multiple dependency by alternatives allowed, never on another multiple-dependent claim",
+            "Claims fully based on the description; every feature supported",
+            "No references to the description or drawings as a substitute for features",
+            "No indefinite qualifiers in the characterizing part",
+            "Minimise independent claims — 10,000 RUB each beyond the first at examination",
+            "Avoid subject matter excluded under Art. 1350(5)-(6)"
+          ],
+          "additions": [
+            "Legal basis: Art. 1354(2), Art. 1375 of the Civil Code; the Requirements, section on the Формула изобретения.",
+            "One-part form is permitted for individual chemical compounds, strains, use claims and inventions without analogues.",
+            "Position numerals in parentheses are permitted and non-limiting.",
+            "Fees (Decree No. 941 as amended 05.10.2024): 4,000 RUB filing plus 1,000 RUB per claim over ten; 14,000 RUB examination plus 10,000 RUB per additional independent claim."
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Реферат as a condensed statement of the description. Begin with the title of the invention exactly as it appears in the description, then state the field of technology to which the invention relates and, where necessary for understanding, its field of application. Reveal the essence of the invention by reciting the essential features of the independent claim in prose, and — this is specific to Russian practice and must not be omitted — expressly state the технический результат achieved, conventionally closing with 'Технический результат заключается в ...' or 'Технический результат — повышение ...'. Where a figure is needed to understand the invention, a reference to it may be included. The Requirements recommend a volume of up to 1,000 printed characters; write a single continuous paragraph within that recommendation. The abstract serves information purposes only and does not define the scope of protection, so avoid claim-style formalities such as 'отличающийся тем, что', avoid promotional language, and do not include commercial or economic advantages.",
+          "constraints": [
+            "Output in Russian",
+            "Must begin with the title of the invention verbatim",
+            "Must state the field of technology and the essence of the invention",
+            "Must expressly state the технический результат",
+            "Single paragraph, recommended maximum 1,000 printed characters",
+            "No claim-style formalities, no promotional or commercial language",
+            "May include a reference to a figure where needed for understanding"
+          ],
+          "additions": [
+            "The abstract is published for information only and has no effect on the scope of protection (Art. 1354(2) CC).",
+            "This platform validates the recommended 1,000-character volume as a warning, not a hard error."
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "Описание изобретения (Rospatent-compliant PDF)",
+        "includesSections": [
+          "title",
+          "field_of_technology",
+          "prior_art",
+          "disclosure_of_essence",
+          "technical_problem",
+          "essence_of_invention",
+          "technical_result",
+          "brief_description_of_drawings",
+          "implementation",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "lineSpacing": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0
+      }
+    ],
+    "sectionHeadings": {
+      "title": "НАЗВАНИЕ ИЗОБРЕТЕНИЯ",
+      "field_of_technology": "ОБЛАСТЬ ТЕХНИКИ, К КОТОРОЙ ОТНОСИТСЯ ИЗОБРЕТЕНИЕ",
+      "prior_art": "УРОВЕНЬ ТЕХНИКИ",
+      "disclosure_of_essence": "РАСКРЫТИЕ СУЩНОСТИ ИЗОБРЕТЕНИЯ",
+      "technical_problem": "Техническая проблема",
+      "essence_of_invention": "Сущность изобретения",
+      "technical_result": "Технический результат",
+      "brief_description_of_drawings": "КРАТКОЕ ОПИСАНИЕ ЧЕРТЕЖЕЙ",
+      "implementation": "ОСУЩЕСТВЛЕНИЕ ИЗОБРЕТЕНИЯ",
+      "claims": "ФОРМУЛА ИЗОБРЕТЕНИЯ",
+      "abstract": "РЕФЕРАТ"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "table",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "фиг. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for units and arrows for signal, data or material flow, drawn in black indelible lines of uniform thickness without shading or colour. Label each block with an Arabic position numeral matching Осуществление изобретения; text inside blocks is limited to indispensable Russian keywords.",
+      "flowchart": "Use standard flowchart symbols for the operations of the claimed method, with brief Russian captions. Number the operations to correspond to the sequence described in Осуществление изобретения so each step of the method claim is traceable.",
+      "schematic": "Use conventional Russian technical or circuit symbols in clean black linework legible at two-thirds reduction. Every element carries a position numeral consistent across all figures and the description.",
+      "perspective_view": "Show the overall construction of the device in black solid lines without surface shading; assign each structural element referred to in the claims its own position numeral, with numerals and letters at least 3.2 mm high.",
+      "cross_section": "Indicate the section by hatching that does not obscure position numerals or leader lines, and mark the cutting plane on the related overview figure (e.g. 'разрез по А-А').",
+      "graph": "Label both axes with the quantity and SI units and distinguish curves by line style rather than colour; graphs presenting comparative data against the prototype directly support the declared technical result.",
+      "table": "Use tables for parameters, regimes and comparative experimental results confirming the technical result; keep each table within the A4 printable area and do not split a table across sheets.",
+      "exploded_view": "Show assembly relationships with parts separated along a common axis, each part bearing a unique position numeral explained in Осуществление изобретения."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure every figure and position numeral listed in Краткое описание чертежей is defined and explained in Осуществление изобретения, and that the same element carries the same numeral in every figure.",
+        "from": "brief_description_of_drawings",
+        "mustBeExplainedIn": [
+          "implementation"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure the structural elements recited in the claims appear in at least one figure when drawings are present, so parenthetical position numerals in the Формула изобретения can be traced through Краткое описание чертежей.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_description_of_drawings"
+        ]
+      },
+      {
+        "id": "claims_based_on_description",
+        "description": "Ensure every feature of the Формула изобретения, in particular each feature following 'отличающийся тем, что', is set out in Сущность изобретения and implemented in Осуществление изобретения — the claims must be fully based on the description.",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "essence_of_invention",
+          "implementation"
+        ]
+      },
+      {
+        "id": "technical_result_confirmed",
+        "description": "Ensure the технический результат declared in Раскрытие сущности изобретения is confirmed by objective experimental or theoretical data in Осуществление изобретения, since an unconfirmed result is disregarded during examination.",
+        "from": "technical_result",
+        "mustBeSupportedBy": [
+          "implementation"
+        ]
+      },
+      {
+        "id": "prototype_vs_restrictive_part",
+        "description": "Ensure the features attributed to the prototype in Уровень техники correspond to the restrictive part of the independent claims preceding 'отличающийся тем, что'.",
+        "from": "prior_art",
+        "mustBeExplainedIn": [
+          "claims"
+        ]
+      }
+    ]
+  }
+}

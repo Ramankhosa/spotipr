@@ -19,6 +19,7 @@ import { runFieldMap } from './field-map'
 import { type WhitespaceLLMContext } from './llm'
 import { buildFieldNarrationPrompt, buildScopeCompilePrompt, WS_SCOPE_STAGE_CODE } from './prompts'
 import {
+  isLeaseLost,
   isPermanentFailure,
   retryDelayMs,
   RUN_LEASE_MS,
@@ -88,6 +89,22 @@ export async function appendTrail(
 export function readScope(value: Prisma.JsonValue | null): WhitespaceScope {
   const parsed = validateWhitespaceScope(value)
   return parsed.success ? parsed.scope : emptyWhitespaceScope()
+}
+
+/**
+ * Executor-side scope read. Display paths may fall back to an empty scope, but
+ * a stage run against one would count nothing and present that as a result —
+ * an invalid snapshot must refuse, and permanently: the snapshot will not
+ * repair itself between retries.
+ */
+function readScopeStrict(value: Prisma.JsonValue | null): WhitespaceScope {
+  const parsed = validateWhitespaceScope(value)
+  if (!parsed.success) {
+    throw new WhitespacePermanentError(
+      'The scope saved with this run could no longer be read. Start the stage again from the current scope.'
+    )
+  }
+  return parsed.scope
 }
 
 // ---------------------------------------------------------------------------
@@ -404,8 +421,18 @@ export async function resolveStaleRun<
   if (!leaseExpired || !silent) return row
 
   const attemptsLeft = (row.attemptCount ?? 1) < (row.maxAttempts ?? 1)
-  const updated = await prisma.whitespaceRun.update({
-    where: { id: row.id },
+  const finalMessage =
+    'This stage stopped before finishing and has used up its retries — run it again when you are ready.'
+  // Guarded, not blind: `row` is a snapshot, and the run may have completed,
+  // failed or been reclaimed since it was read. Only a row still PROCESSING on
+  // an expired (or never-set) lease may be touched; anything else is returned
+  // as it stands now, unmodified.
+  const { count } = await prisma.whitespaceRun.updateMany({
+    where: {
+      id: row.id,
+      status: 'PROCESSING',
+      OR: [{ lockedUntil: null }, { lockedUntil: { lt: new Date() } }],
+    },
     data: attemptsLeft
       ? {
           // Hand it back to the queue rather than burying it. A worker restart is
@@ -420,12 +447,16 @@ export async function resolveStaleRun<
           status: 'FAILED',
           lockedBy: null,
           lockedUntil: null,
-          lastError:
-            'This stage stopped before finishing and has used up its retries — run it again when you are ready.',
+          lastError: finalMessage,
           completedAt: new Date(),
         },
   })
-  return updated as unknown as T
+  const fresh = await prisma.whitespaceRun.findUnique({ where: { id: row.id } })
+  if (!fresh) return row
+  if (count > 0 && !attemptsLeft) {
+    await finalizeRunFailure(fresh, finalMessage)
+  }
+  return fresh as unknown as T
 }
 
 /**
@@ -460,8 +491,13 @@ export async function startWhitespaceRun(input: {
     // jsonb, which reorders object keys, so a plain stringify comparison let
     // identical multi-key params (a dimension re-census registry) through as
     // "different work" and started duplicate live runs.
+    //
+    // Same scope version too: after a scope edit, a live run over the OLD scope
+    // is different work — attaching to it would silently answer the new scope
+    // with the old scope's results.
     if (
       (resolved.status === 'QUEUED' || resolved.status === 'PROCESSING') &&
+      resolved.scopeVersion === input.scopeVersion &&
       stableJson(resolved.params ?? null) === stableJson(input.params ?? null)
     ) {
       return { runId: resolved.id, existing: true }
@@ -484,7 +520,7 @@ export async function startWhitespaceRun(input: {
   // Drain in-process too, so an installation with no worker deployed behaves
   // exactly as it did before. It competes for the same lease as the worker, so
   // the two can never execute the same run.
-  kickInlineDrain(input.requestHeaders)
+  kickInlineDrain({ studyId: input.studyId, headers: input.requestHeaders })
 
   return { runId: run.id, existing: false }
 }
@@ -513,18 +549,25 @@ type ClaimedRun = {
  */
 export async function claimWhitespaceRun(workerId: string): Promise<ClaimedRun | null> {
   const now = new Date()
+  // The claim starts a fresh attempt, so the previous attempt's error and
+  // narration are cleared — a reclaimed run must not show them as its own.
+  // The reclaim branch respects the attempt budget: a run whose worker died on
+  // its last attempt belongs to the dead-run sweep, not to another claim.
   const rows = await prisma.$queryRaw<ClaimedRun[]>(Prisma.sql`
     UPDATE "whitespace_runs" r
     SET "status"       = 'PROCESSING',
         "lockedBy"     = ${workerId},
         "lockedUntil"  = ${new Date(now.getTime() + RUN_LEASE_MS)},
         "heartbeatAt"  = ${now},
-        "attemptCount" = r."attemptCount" + 1
+        "attemptCount" = r."attemptCount" + 1,
+        "progress"     = NULL,
+        "lastError"    = NULL
     WHERE r."id" = (
       SELECT c."id"
       FROM "whitespace_runs" c
       WHERE (c."status" = 'QUEUED' AND c."nextAttemptAt" <= ${now})
-         OR (c."status" = 'PROCESSING' AND c."lockedUntil" IS NOT NULL AND c."lockedUntil" < ${now})
+         OR (c."status" = 'PROCESSING' AND c."lockedUntil" IS NOT NULL AND c."lockedUntil" < ${now}
+             AND c."attemptCount" < c."maxAttempts")
       ORDER BY c."nextAttemptAt" ASC, c."createdAt" ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -587,8 +630,10 @@ async function resolveStudyLlmContext(
 export async function drainWhitespaceRuns(
   workerId: string,
   batch = 1,
-  fallbackHeaders?: Record<string, string>
+  fallback?: { studyId: string; headers: Record<string, string> }
 ): Promise<string[]> {
+  await sweepDeadRuns()
+
   const handled: string[] = []
   for (let i = 0; i < batch; i++) {
     const run = await claimWhitespaceRun(workerId)
@@ -604,24 +649,99 @@ export async function drainWhitespaceRuns(
       try {
         llmContext = await resolveStudyLlmContext(run.studyId)
       } catch (contextError) {
-        if (!fallbackHeaders) throw contextError
-        llmContext = { headers: fallbackHeaders }
+        // The header fallback belongs ONLY to the study whose request kicked
+        // this drain: another study's run billed against these headers would
+        // charge the wrong tenant, and a permanent refusal (no active plan)
+        // must stay a refusal rather than run on borrowed credentials.
+        if (!fallback || fallback.studyId !== run.studyId) throw contextError
+        llmContext = { headers: fallback.headers }
       }
 
       await executeRun({
         runId: run.id,
         studyId: run.studyId,
         stage: run.stage as WhitespaceRunStage,
-        scope: readScope(run.scopeSnapshot),
+        scope: readScopeStrict(run.scopeSnapshot),
         params: run.params ?? undefined,
         llmContext,
         startedAt,
+        workerId,
       })
     } catch (error) {
+      // A lost lease means another worker legitimately holds the run now;
+      // recording a failure here would clobber that worker's live attempt.
+      if (isLeaseLost(error)) {
+        console.warn(`[Whitespace] Run ${run.id} lost its lease mid-stage; the current holder's attempt stands.`)
+        continue
+      }
       await recordRunFailure(run, error)
     }
   }
   return handled
+}
+
+/**
+ * Fails expired-lease runs whose attempt budget is already spent.
+ *
+ * The claim's reclaim branch refuses them (attemptCount < maxAttempts), so
+ * without this sweep a run whose worker died on its LAST attempt would sit
+ * PROCESSING forever — invisible to the queue and stuck "running" for the user.
+ */
+async function sweepDeadRuns(): Promise<void> {
+  const message =
+    'The worker running this stage stopped and its retries are spent — run it again when you are ready.'
+  try {
+    // attemptCount >= maxAttempts is a column-to-column comparison, which the
+    // query builder cannot express; expired leases are rare enough to filter here.
+    const expired = await prisma.whitespaceRun.findMany({
+      where: { status: 'PROCESSING', lockedUntil: { lt: new Date() } },
+      select: { id: true, studyId: true, stage: true, params: true, attemptCount: true, maxAttempts: true },
+    })
+    for (const run of expired) {
+      if (run.attemptCount < run.maxAttempts) continue
+      const { count } = await prisma.whitespaceRun.updateMany({
+        // Re-guarded per row: a racing claim or completion since the read wins.
+        where: { id: run.id, status: 'PROCESSING', lockedUntil: { lt: new Date() } },
+        data: {
+          status: 'FAILED',
+          lockedBy: null,
+          lockedUntil: null,
+          lastError: message,
+          completedAt: new Date(),
+        },
+      })
+      if (count > 0) await finalizeRunFailure(run, message)
+    }
+  } catch (sweepError) {
+    console.error('[Whitespace] Dead-run sweep failed:', sweepError)
+  }
+}
+
+/**
+ * The bookkeeping every FINAL failure owes, wherever it is decided — the retry
+ * budget running out, a stale-run resolution, or the dead-worker sweep. A
+ * VALIDATE run's hypothesis left VALIDATING would sit "Being tested" forever,
+ * and the trail entry is how the user learns the stage died at all.
+ */
+async function finalizeRunFailure(
+  run: { id: string; studyId: string; stage: string; params: Prisma.JsonValue | null },
+  message: string
+): Promise<void> {
+  try {
+    if (run.stage === 'VALIDATE') {
+      const params = (run.params ?? {}) as Record<string, unknown>
+      const hypothesisId = typeof params.hypothesisId === 'string' ? params.hypothesisId : ''
+      if (hypothesisId) {
+        await prisma.whitespaceHypothesis.updateMany({
+          where: { id: hypothesisId, studyId: run.studyId, status: 'VALIDATING' },
+          data: { status: 'INCONCLUSIVE' },
+        })
+      }
+    }
+    await appendTrail(run.studyId, 'RUN', 'system', `${run.stage} failed: ${message.slice(0, 200)}`)
+  } catch (finalizeError) {
+    console.error('[Whitespace] Could not finalize run failure:', finalizeError)
+  }
 }
 
 /** Applies the retry budget, or gives up and says so. */
@@ -639,19 +759,7 @@ async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> 
   })
 
   try {
-    // A hypothesis left VALIDATING would sit "Being tested" forever. Only released
-    // once the run is genuinely finished with — a pending retry is still testing.
-    if (run.stage === 'VALIDATE' && !willRetry) {
-      const params = (run.params ?? {}) as Record<string, unknown>
-      const hypothesisId = typeof params.hypothesisId === 'string' ? params.hypothesisId : ''
-      if (hypothesisId) {
-        await prisma.whitespaceHypothesis.updateMany({
-          where: { id: hypothesisId, studyId: run.studyId, status: 'VALIDATING' },
-          data: { status: 'INCONCLUSIVE' },
-        })
-      }
-    }
-
+    const delayMs = retryDelayMs(run.attemptCount)
     await prisma.whitespaceRun.update({
       where: { id: run.id },
       data: willRetry
@@ -659,7 +767,7 @@ async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> 
             status: 'QUEUED',
             lockedBy: null,
             lockedUntil: null,
-            nextAttemptAt: new Date(Date.now() + retryDelayMs(run.attemptCount)),
+            nextAttemptAt: new Date(Date.now() + delayMs),
             lastError: message.slice(0, 2000),
           }
         : {
@@ -671,8 +779,19 @@ async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> 
           },
     })
 
-    if (!willRetry) {
-      await appendTrail(run.studyId, 'RUN', 'system', `${run.stage} failed: ${message.slice(0, 200)}`)
+    if (willRetry) {
+      // With no standalone worker, nothing drains later: the inline drain exits
+      // when a claim comes back empty, and is only kicked by new POSTs — so a
+      // backoff with nobody scheduled to return is a retry that never runs.
+      // Exactly one re-kick per recorded failure keeps the chain bounded, and
+      // no fallback headers on purpose: the kicking request is long gone.
+      const timer = setTimeout(() => kickInlineDrain(), delayMs + 1_000)
+      timer.unref?.()
+    } else {
+      // A hypothesis left VALIDATING would sit "Being tested" forever. Only
+      // released once the run is genuinely finished with — a pending retry is
+      // still testing.
+      await finalizeRunFailure(run, message)
     }
   } catch (persistError) {
     console.error('[Whitespace] Could not record run failure:', persistError)
@@ -688,7 +807,7 @@ async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> 
  * bound.
  */
 let inlineDrainRunning = false
-function kickInlineDrain(fallbackHeaders?: Record<string, string>): void {
+function kickInlineDrain(fallback?: { studyId: string; headers: Record<string, string> }): void {
   if (inlineDrainRunning) return
   inlineDrainRunning = true
   const workerId = `inline-${process.pid}`
@@ -698,7 +817,7 @@ function kickInlineDrain(fallbackHeaders?: Record<string, string>): void {
         // Keep draining while there is work, so a queued second stage does not
         // wait for the next request to arrive.
         for (let pass = 0; pass < 20; pass++) {
-          const handled = await drainWhitespaceRuns(workerId, 1, fallbackHeaders)
+          const handled = await drainWhitespaceRuns(workerId, 1, fallback)
           if (!handled.length) break
         }
       } catch (error) {
@@ -720,6 +839,7 @@ async function executeRun(input: {
   llmContext: LlmContext
   params?: Prisma.InputJsonValue
   startedAt: number
+  workerId: string
 }): Promise<void> {
   const params = (input.params ?? {}) as Record<string, unknown>
 
@@ -755,6 +875,7 @@ async function executeRun(input: {
       const { runClusterStage } = await import('./cluster-stage')
       const result = await runClusterStage({
         runId: input.runId,
+        workerId: input.workerId,
         studyId: input.studyId,
         scope: input.scope,
         llmContext: input.llmContext,
@@ -767,6 +888,7 @@ async function executeRun(input: {
       const { runSignalsStage } = await import('./signals-stage')
       const result = await runSignalsStage({
         runId: input.runId,
+        workerId: input.workerId,
         studyId: input.studyId,
         scope: input.scope,
       })
@@ -782,6 +904,7 @@ async function executeRun(input: {
       const { runDeepDiveStage } = await import('./deep-dive-stage')
       const result = await runDeepDiveStage({
         runId: input.runId,
+        workerId: input.workerId,
         studyId: input.studyId,
         clusterId,
         llmContext: input.llmContext,
@@ -796,6 +919,7 @@ async function executeRun(input: {
       const { runValidateStage } = await import('./validate-stage')
       const result = await runValidateStage({
         runId: input.runId,
+        workerId: input.workerId,
         studyId: input.studyId,
         hypothesisId,
         scope: input.scope,
@@ -817,6 +941,7 @@ async function executeRun(input: {
           : null
       const result = await runDimensionMapStage({
         runId: input.runId,
+        workerId: input.workerId,
         studyId: input.studyId,
         scope: input.scope,
         llmContext: input.llmContext,
@@ -842,8 +967,11 @@ async function executeRun(input: {
       throw new Error(`Stage ${input.stage} is not implemented yet.`)
   }
 
-  await prisma.whitespaceRun.update({
-    where: { id: input.runId },
+  // Fenced on the lease, like the heartbeat: if another worker reclaimed this
+  // run mid-stage, its attempt is the live one, and writing our snapshot over
+  // it would bury whatever that worker goes on to produce.
+  const completion = await prisma.whitespaceRun.updateMany({
+    where: { id: input.runId, lockedBy: input.workerId, status: 'PROCESSING' },
     data: {
       status: 'COMPLETED',
       results,
@@ -851,10 +979,23 @@ async function executeRun(input: {
       durationMs: Date.now() - input.startedAt,
       completedAt: new Date(),
       heartbeatAt: new Date(),
+      lastError: null,
+      progress: Prisma.DbNull,
     },
   })
+  if (completion.count === 0) {
+    console.warn(
+      `[Whitespace] Run ${input.runId} finished after its lease was lost — result discarded, the current holder's attempt stands.`
+    )
+    return
+  }
 
-  await appendTrail(input.studyId, 'RUN', 'system', trailSummary)
+  try {
+    await appendTrail(input.studyId, 'RUN', 'system', trailSummary)
+  } catch (trailError) {
+    // The run is COMPLETED; a failed trail insert must not requeue or fail it.
+    console.error('[Whitespace] Could not append run trail entry:', trailError)
+  }
 }
 
 /** Client-facing shape for a run row, used by both the start and poll routes. */

@@ -37,22 +37,27 @@ export function TrailPanel({ studyId }: { studyId: string }) {
   const [open, setOpen] = useState(false)
   const [entries, setEntries] = useState<TrailEntry[] | null>(null)
   const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
+    setFailed(false)
     try {
       const data = await wsApi<{ entries: TrailEntry[] }>(`/api/whitespace/studies/${studyId}/trail`)
       setEntries(data.entries)
     } catch {
-      setEntries([])
+      // A failed fetch is not an empty trail — offer a retry instead of
+      // caching [] as "Nothing recorded yet" for the rest of the session.
+      setFailed(true)
     } finally {
       setLoading(false)
     }
   }, [studyId])
 
+  // Refetch on every open: the trail grows as the study is worked on.
   useEffect(() => {
-    if (open && entries === null && !loading) void load()
-  }, [open, entries, loading, load])
+    if (open) void load()
+  }, [open, load])
 
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -75,6 +80,17 @@ export function TrailPanel({ studyId }: { studyId: string }) {
             <p className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Loading the trail…
+            </p>
+          ) : failed ? (
+            <p className="text-xs text-muted-foreground">
+              The trail could not be loaded.{' '}
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Retry
+              </button>
             </p>
           ) : !entries?.length ? (
             <p className="text-xs text-muted-foreground">Nothing recorded yet.</p>

@@ -1,4 +1,5 @@
 {
+  "_authorNotes": "South Korea (KIPO) patent application profile. PRIMARY SOURCES: Korean Patent Act (in particular Arts. 29, 30, 41, 42, 42-3, 43, 45, 47, 59); Enforcement Decree of the Patent Act (Art. 5, claim dependency); Enforcement Rule of the Patent Act, Form 15 (별지 제15호서식), which prescribes the specification layout; KIPO fee schedule as revised 1 August 2023. STRUCTURE NOTES: Form 15 orders the description as 발명의 명칭 → 기술분야 → 발명의 배경이 되는 기술 → (선행기술문헌) → 발명의 내용 (해결하려는 과제 / 과제의 해결 수단 / 발명의 효과) → 도면의 간단한 설명 → 발명을 실시하기 위한 구체적인 내용 → (부호의 설명). The 선행기술문헌 (Prior Art Documents) item, with its 특허문헌 / 비특허문헌 sub-headings, has no counterpart among the platform's superset sections and is therefore NOT modelled as a separate structure section; it is folded into the Background Art section, whose top-up instructs the drafter to gather the citations under that heading. The statutory duty is the background-art statement itself under Art. 42(3)(ii), in force since 1 July 2011, whose omission is a ground of rejection though not of invalidation. The optional 부호의 설명 item IS modelled, mapped to the listOfNumerals superset section. PARAGRAPH NUMBERING: Form 15 requires every paragraph from 기술분야 onward to carry a four-digit identification code 【0001】; e-filing assigns these automatically and paper filings have them assigned on digitization, so paragraphNumberingRequired is set to true — note this is the exact opposite of German practice, where § 6(3) PatV forbids paragraph counters. ABSTRACT: no statutory cap exists; KIPO drafting guidance asks for the 요약서 to fit within 400 characters, modelled here as an info-level check alongside the ~150-word publication-practice guideline. FEES: examination request KRW 166,000 + 51,000 per claim since 1 August 2023, and annuities carry a per-claim component from the first claim, so claim count drives lifetime cost. BEST MODE is not required in Korea. NO UNMAPPED SECTIONS.",
   "meta": {
     "id": "KR",
     "code": "KR",
@@ -204,9 +205,30 @@
             }
           },
           {
+            "id": "listOfNumerals",
+            "label": "Explanation of Reference Numerals",
+            "order": 10,
+            "canonicalKeys": [
+              "listOfNumerals",
+              "reference_numerals"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 6000,
+            "ui": {
+              "placeholder": "List each reference numeral against the element it designates (include only when drawings are filed)",
+              "helpText": "Optional identification item 부호의 설명 in KIPO's Enforcement Rule Form 15, placed after the Detailed Description. Where drawings are filed, list each reference numeral against the element it designates, one entry per line (e.g. '100: 제어부 (controller)'). KIPO treats this as an optional item, but Korean practice commonly includes it because it helps the examiner map the claims onto the figures."
+            },
+            "rules": {
+              "onlyWhenDrawingsPresent": true,
+              "mustMatchDrawingsAndDescription": true,
+              "oneEntryPerNumeral": true
+            }
+          },
+          {
             "id": "claims",
             "label": "Claims",
-            "order": 10,
+            "order": 11,
             "canonicalKeys": [
               "claims"
             ],
@@ -230,7 +252,7 @@
           {
             "id": "abstract",
             "label": "Abstract",
-            "order": 11,
+            "order": 12,
             "canonicalKeys": [
               "abstract"
             ],
@@ -259,13 +281,14 @@
       "requiresClaims": true,
       "requiresAbstract": true,
       "requiresDrawingsIfReferenced": true,
-      "paragraphNumberingRequired": false,
+      "paragraphNumberingRequired": true,
+      "paragraphNumberFormat": "【0001】",
       "maxPagesRecommended": 100,
       "allowEquations": true,
       "allowTables": true,
       "notes": [
-        "KIPO's standard specification form uses the headings 발명의 명칭 (Title), 기술분야 (Technical Field), 배경기술 (Background Art), 발명의 내용 (Content of Invention, comprising 해결하려는 과제 / 과제의 해결 수단 / 발명의 효과), 도면의 간단한 설명 (Brief Description of Drawings), and 발명을 실시하기 위한 구체적인 내용 (Detailed Description).",
-        "Filing is almost exclusively electronic via KIPO's e-filing software (통합서식작성기/특허로), which applies identifier tags and paragraph numbering automatically; manual paragraph numbering is not required at drafting stage.",
+        "KIPO's standard specification form (Enforcement Rule Form 15, 별지 제15호서식) uses the headings 발명의 명칭 (Title), 기술분야 (Technical Field), 발명의 배경이 되는 기술 (Background Art), 선행기술문헌 (Prior Art Documents, with 특허문헌 / 비특허문헌 sub-headings), 발명의 내용 (Content of Invention, comprising 해결하려는 과제 / 과제의 해결 수단 / 발명의 효과), 도면의 간단한 설명 (Brief Description of Drawings), 발명을 실시하기 위한 구체적인 내용 (Detailed Description), and the optional 부호의 설명 (Explanation of Reference Numerals).",
+        "Form 15 requires every paragraph from 기술분야 onward to carry a sequential four-digit identification code in the form 【0001】, 【0002】 and so on. In e-filing the codes are assigned automatically, and a paper-filed specification without them has them assigned by the Commissioner on digitization — so paragraph numbering is effectively universal and the drafted text should be written numbering-ready.",
         "Claims may be filed after the description under the delayed-claim-filing system, but must be present before the request for examination takes effect.",
         "Amendments must remain within the scope of the original specification and drawings (Article 47(2)); draft with explicit fallback positions."
       ]
@@ -328,11 +351,11 @@
         "extraFeeBasedOnIndependents": false,
         "extraFeeBasedOnTotalClaims": true,
         "perClaimFeeFromFirstClaim": true,
-        "note": "KIPO's examination-request fee and annuities include a per-claim add-on counted from the first claim (not a free allowance followed by excess fees), so every claim — independent or dependent — carries a recurring cost. maxIndependentClaimsBeforeExtraFee is set to 0 to reflect that no claim is fee-free."
+        "note": "KIPO's examination-request fee and annuities include a per-claim add-on counted from the first claim (not a free allowance followed by excess fees), so every claim — independent or dependent — carries a recurring cost. Since 1 August 2023 the substantive examination request is KRW 166,000 plus KRW 51,000 per claim; electronic filing is KRW 46,000. Annuities are also per-claim and escalate by tier: years 1-3 KRW 13,000 + 12,000 per claim per year; years 4-6 36,000 + 20,000; years 7-9 90,000 + 34,000; years 10-12 216,000 + 49,000; year 13 onward 324,000 + 49,000. A ten-claim set therefore carries a materially larger lifetime cost than a five-claim set. maxIndependentClaimsBeforeExtraFee is set to 0 to reflect that no claim is fee-free."
       },
       "notes": [
         "Article 42(4): claims must (i) be supported by the detailed description and (ii) define the invention clearly and concisely.",
-        "Claim-drafting method (Article 42(8) and the Enforcement Decree): a claim referring to two or more claims must refer to them in the alternative; a claim referring to two or more claims must not refer to another claim that itself refers to two or more claims (no multiple-dependent-on-multiple-dependent); a dependent claim must not refer to a following (higher-numbered) claim.",
+        "Claim-drafting method (Article 42(8) with Article 5 of the Enforcement Decree of the Patent Act): a claim referring to two or more claims must refer to them in the alternative; a claim that quotes two or more claims must not quote another claim that itself quotes two or more claims (no multiple-dependent-on-multiple-dependent); a dependent claim must not refer to a following (higher-numbered) claim.",
         "Article 45 and Enforcement Decree Article 6: one application per invention or per group of inventions so linked as to form a single general inventive concept (same or corresponding special technical features).",
         "Independent claims in any style (single-part or Jepson-like two-part) are acceptable; KIPO practice does not prefer two-part form.",
         "Reference numerals in parentheses are permitted and do not limit claim scope, but are less customary than in Japan.",
@@ -348,8 +371,8 @@
       "hardCapWordsUI": 200,
       "notes": [
         "Article 43 requires an abstract; it serves technical-information purposes only and may not be used to interpret the scope of protection.",
-        "KIPO may re-prepare a non-compliant abstract ex officio. Keep it a single concise paragraph covering the technical field, the problem, the gist of the solution, and the principal use.",
-        "There is no statutory word cap, but roughly 150 English words (a few hundred Korean characters) matches KIPO publication practice; a representative figure is designated separately in the e-filing form."
+        "KIPO may re-prepare a non-compliant abstract ex officio. Keep it a single concise paragraph covering the technical field, the problem, the gist of the solution, and the effects.",
+        "There is no statutory word cap. KIPO's drafting guidance asks for the whole abstract to sit within 400 characters, which corresponds to roughly 150 English words; a representative drawing (대표도) is designated separately in the e-filing form."
       ]
     },
     "drawings": {
@@ -448,6 +471,13 @@
           "limit": 200,
           "severity": "warning",
           "message": "Abstract exceeds 200 words. KIPO publication practice favors a concise single-paragraph abstract (~150 words); overly long abstracts may be re-prepared ex officio."
+        },
+        {
+          "id": "abstract_chars_guidance",
+          "type": "maxChars",
+          "limit": 400,
+          "severity": "info",
+          "message": "KIPO drafting guidance asks for the whole 요약서 to fit within 400 characters. Condense so the Korean text stays within that guidance."
         }
       ],
       "claims": [
@@ -687,6 +717,22 @@
           ]
         }
       },
+      "listOfNumerals": {
+        "topUp": {
+          "instruction": "Draft the Explanation of Reference Numerals (부호의 설명), the optional identification item that follows the Detailed Description in KIPO's Enforcement Rule Form 15. Include it whenever drawings are filed. List every reference numeral used in the drawings against the element it designates, in ascending numerical order, one entry per line in the form '100: control unit' (Korean filings use '100: 제어부'). Include only numerals that actually appear in both the drawings and the Detailed Description — a numeral listed here but absent from the figures, or a numeral in the figures missing from this list, is a formality inconsistency. Do not add explanatory prose, function descriptions, or claim language; this is a lookup table, not narrative. Omit the section entirely when the application has no drawings.",
+          "constraints": [
+            "Include only when drawings are filed",
+            "One entry per numeral, ascending numerical order",
+            "Format '100: element name'; no prose or functional explanation",
+            "Every numeral must appear in both the drawings and the Detailed Description",
+            "No claim language and no advantages"
+          ],
+          "additions": [
+            "Corresponds to 부호의 설명, an optional item of Form 15 that Korean practice commonly includes.",
+            "Helps the examiner map claim elements onto the figures; keep it strictly consistent with the drawings."
+          ]
+        }
+      },
       "claims": {
         "topUp": {
           "instruction": "Draft the claims (청구범위) per Article 42(4) of the Korean Patent Act: each claim must be supported by the detailed description and must define the invention clearly and concisely. Observe the statutory claim-drafting method under Article 42(8) and the Enforcement Decree: number claims consecutively; a claim citing two or more claims must cite them in the alternative ('claim 1 or claim 2', 'any one of claims 1 to 3'); a claim citing two or more claims must NOT cite another claim that itself cites two or more claims (multiple-dependent-on-multiple-dependent is prohibited and is a formality rejection); and a claim may only refer to preceding claims. Independent claims may be in any form — two-part form is not preferred in Korean practice; recite the elements with their structural or operational interrelationships, since Korean examination treats a mere aggregation of elements without interconnection as a clarity defect. Keep unity under Article 45 (single general inventive concept via same or corresponding special technical features); parallel independent claims for apparatus, method, system, and computer-readable medium are standard where linked. Note fee economics: examination-request fees and annuities include a per-claim component for every claim, so prune low-value claims. Avoid claiming methods of medical treatment of humans (industrially inapplicable under Article 29(1)); claim compositions, apparatus, or non-therapeutic methods instead. For software, claim an apparatus, a method, and a computer program stored on a medium / computer-readable recording medium — claims to a program signal or the program per se without a medium are not accepted.",
@@ -739,6 +785,7 @@
           "advantageousEffects",
           "briefDescriptionOfDrawings",
           "detailedDescription",
+          "listOfNumerals",
           "claims",
           "abstract"
         ],
@@ -751,7 +798,7 @@
         "fontSizePt": 12,
         "lineSpacing": 1.5,
         "addPageNumbers": true,
-        "addParagraphNumbers": false
+        "addParagraphNumbers": true
       }
     ],
     "sectionHeadings": {
@@ -764,6 +811,7 @@
       "advantageousEffects": "ADVANTAGEOUS EFFECTS",
       "briefDescriptionOfDrawings": "BRIEF DESCRIPTION OF DRAWINGS",
       "detailedDescription": "DETAILED DESCRIPTION OF THE INVENTION",
+      "listOfNumerals": "EXPLANATION OF REFERENCE NUMERALS",
       "claims": "CLAIMS",
       "abstract": "ABSTRACT"
     }

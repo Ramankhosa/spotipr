@@ -23,6 +23,7 @@ import { resolveFieldDefinition } from './field-definition'
 import { semanticNeighbors, semanticNoveltyScore } from './embedding'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
 import { buildHypothesizePrompt, WS_HYPOTHESIZE_STAGE_CODE } from './prompts'
+import { CORPUS_FIRST_YEAR } from './types'
 import type {
   DeepDiveResult,
   HypothesisScores,
@@ -160,7 +161,14 @@ export async function generateHypotheses(input: {
     if (!statement || !rationale) continue
     const strategy = typeof raw.strategy === 'string' ? raw.strategy : 'RARE_COMBINATION'
     const clusterLabel = typeof raw.clusterLabel === 'string' ? raw.clusterLabel : null
-    const cluster = clusterSummaries.find(summary => summary.label === clusterLabel) ?? null
+    // Matched trimmed and case-insensitively: the model echoes labels back with
+    // drifted case and stray whitespace, and a strict === yielded clusterId
+    // null — which later guarantees gate G1 fails and mistypes the hypothesis
+    // as DATA_WHITESPACE.
+    const clusterLabelKey = clusterLabel?.trim().toLowerCase() || null
+    const cluster = clusterLabelKey
+      ? clusterSummaries.find(summary => summary.label.trim().toLowerCase() === clusterLabelKey) ?? null
+      : null
     const elements = Array.isArray(raw.elements)
       ? raw.elements.filter((element): element is string => typeof element === 'string').slice(0, 5)
       : []
@@ -302,7 +310,7 @@ async function fieldNeighborPercentiles(studyId: string): Promise<{ p05: number;
 /** The corpus facts every hypothesis carries from birth. */
 function buildCoverageLimitations(scope: WhitespaceScope): string[] {
   const limitations = [
-    'No art before 2000 was searched — outside corpus.',
+    `No art before ${CORPUS_FIRST_YEAR} was searched — outside corpus.`,
     'No citation data, legal status, or commercial evidence is available to this analysis.',
     'Semantic analysis is based on title and abstract embeddings, not full claim scope.',
     'Trade-secret protection is undetectable in patent data.',

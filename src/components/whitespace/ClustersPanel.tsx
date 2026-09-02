@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BookOpen, Grid2x2, Loader2, SignalHigh } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/toast'
-import { isPollAborted, pollRun, wsApi } from './api'
+import { conflictRunId, isPollAborted, pollRun, wsApi } from './api'
 
 interface ClusterRow {
   id: string
@@ -71,6 +71,7 @@ export function ClustersPanel({
   const [clusters, setClusters] = useState<ClusterRow[]>([])
   const [divergence, setDivergence] = useState<Divergence[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState<string | null>(null)
   const [mapping, setMapping] = useState(false)
   const [scoring, setScoring] = useState(false)
   const [divingClusterId, setDivingClusterId] = useState<string | null>(null)
@@ -82,8 +83,13 @@ export function ClustersPanel({
       )
       setClusters(data.clusters)
       setDivergence(data.signals?.divergence ?? [])
-    } catch {
-      // The section renders its empty state; the study page surfaces auth errors.
+      setLoadFailed(null)
+    } catch (error) {
+      // Auth errors surface on the study page; anything else must not pass
+      // itself off as a genuinely empty area list.
+      if ((error as { status?: number })?.status !== 401) {
+        setLoadFailed(error instanceof Error ? error.message : 'Could not load the areas.')
+      }
     } finally {
       setLoading(false)
     }
@@ -116,11 +122,21 @@ export function ClustersPanel({
       const controller = new AbortController()
       pollAbort.current = controller
       try {
-        const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
-          method: 'POST',
-          body: JSON.stringify({ stage, params }),
-        })
-        const final = await pollRun(studyId, started.runId, undefined, controller.signal)
+        let runId: string
+        try {
+          const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
+            method: 'POST',
+            body: JSON.stringify({ stage, params }),
+          })
+          runId = started.runId
+        } catch (error) {
+          // 409 means this exact stage+params is already in flight — attach to
+          // that run rather than reporting a failure for work under way.
+          const liveRunId = conflictRunId(error)
+          if (!liveRunId) throw error
+          runId = liveRunId
+        }
+        const final = await pollRun(studyId, runId, undefined, controller.signal)
         if (final.status === 'FAILED') {
           toast({ variant: 'error', title: failTitle, description: final.error || 'The stage did not complete.' })
         }
@@ -191,7 +207,24 @@ export function ClustersPanel({
           </div>
         )}
 
-        {fieldMapReady && !loading && !clusters.length && !mapping && (
+        {fieldMapReady && !loading && loadFailed && !clusters.length && !mapping && (
+          <p className="text-sm text-muted-foreground">
+            The areas could not be loaded — {loadFailed}{' '}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-2"
+              onClick={() => {
+                setLoading(true)
+                void load()
+              }}
+            >
+              Retry
+            </Button>
+          </p>
+        )}
+
+        {fieldMapReady && !loading && !loadFailed && !clusters.length && !mapping && (
           <p className="text-sm text-muted-foreground">
             No areas yet. Mapping reads the field&apos;s embedding vectors and groups families that describe similar
             work — it costs nothing to run.
@@ -272,11 +305,16 @@ export function ClustersPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => {
-                        setDivingClusterId(cluster.id)
                         void startStage(
                           'DEEP_DIVE',
                           { clusterId: cluster.id },
-                          busy => setDivingClusterId(busy ? cluster.id : null),
+                          // Clear only if still the owner: starting dive B aborts
+                          // dive A, whose finally must not wipe B's spinner and
+                          // re-enable its button mid-run.
+                          busy =>
+                            setDivingClusterId(current =>
+                              busy ? cluster.id : current === cluster.id ? null : current
+                            ),
                           'Could not read the claims'
                         )
                       }}

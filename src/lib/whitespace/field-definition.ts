@@ -32,6 +32,7 @@ import {
   CENSUS_ROW_CAP,
   isStatementTimeout,
   minimumOptionalBounds,
+  ruleLoosenedNote,
 } from './field-map'
 import { candidateCoverageNote, resolveFieldCandidates, type FieldCandidates } from './candidates'
 import {
@@ -262,7 +263,13 @@ export async function resolveFieldDefinition(
 ): Promise<FieldDefinition> {
   const band = options.band ?? resolveFieldBand()
   const key = cacheKey(scope, band)
-  const hit = cache.get(key)
+  // The memo key deliberately ignores the resolve mode, so a PRODUCER
+  // (reuse !== true — its contract is to fit fresh against today's corpus)
+  // could otherwise inherit a consumer's remembered reuse of a stale persisted
+  // rule within the TTL and skip the very fit it exists to run. Producers
+  // therefore bypass the memo READ and only write; consumers still reuse
+  // whatever the newest resolution remembered.
+  const hit = options.reuse === true ? cache.get(key) : undefined
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value
 
   const plan = buildConceptQuery(scope)
@@ -281,13 +288,22 @@ export async function resolveFieldDefinition(
       where: buildScopeFilter(scope, candidates.ids, rule.minimumOptional),
       coverageNotes: [
         fieldRuleNote(rule),
+        ...(ruleLoosenedNote(scope, rule) ? [ruleLoosenedNote(scope, rule)!] : []),
         candidateCoverageNote(candidates),
         ...(splitNote(measured, measuredLexical) ? [splitNote(measured, measuredLexical)!] : []),
       ],
       measured,
       measuredLexical,
     }
-    remember(key, value)
+    // Never remember a definition whose semantic arm failed TRANSIENTLY.
+    // candidates.ts deliberately refuses to memoise those (one embed hiccup or
+    // ANN timeout must not pin a study to a lexical-only field for the TTL) —
+    // and remembering the composed definition here reintroduced exactly that
+    // bug one layer up. A PERMANENT refusal (no concepts, kill switch, no API
+    // key) is a property of the configuration, not the attempt, and stays
+    // memoisable; the flag comes from candidates.ts rather than being sniffed
+    // out of the prose reason.
+    if (candidates.available || candidates.permanent) remember(key, value)
     return value
   }
 

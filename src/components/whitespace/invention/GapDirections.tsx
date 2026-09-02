@@ -8,6 +8,12 @@ import { Hint } from '@/components/ui/hint'
 import type { DimensionGap, DimensionMapResult } from './types'
 
 /**
+ * Mirrors MAX_PROMOTIONS_PER_CALL in api/whitespace/.../gaps/promote — the
+ * server silently drops anything beyond it, so the client must not offer more.
+ */
+export const MAX_ATTACKS_PER_ROUND = 5
+
+/**
  * Candidate directions — empty cells that survived the margin, expectation and
  * axis-quality tests, ranked.
  *
@@ -47,6 +53,7 @@ export function GapDirections({
 
   const pending = result.gaps.filter(gap => !gap.hypothesisId)
   const promoted = result.gaps.filter(gap => gap.hypothesisId)
+  const atCap = selected.size >= MAX_ATTACKS_PER_ROUND
 
   return (
     <div>
@@ -71,7 +78,7 @@ export function GapDirections({
               familyCount={result.familyCount}
               selected={selected.has(gap.id)}
               onToggle={() => onToggle(gap.id)}
-              disabled={attacking}
+              disabled={attacking || (atCap && !selected.has(gap.id))}
             />
           </li>
         ))}
@@ -82,8 +89,8 @@ export function GapDirections({
           {attacking
             ? attackingLabel || 'Attacking…'
             : selected.size
-              ? `${selected.size} selected. Each runs a full adversarial search that tries to refute it.`
-              : 'Select the directions worth the search budget.'}
+              ? `${selected.size} of ${MAX_ATTACKS_PER_ROUND} selected. Each runs a full adversarial search that tries to refute it.`
+              : `Select the directions worth the search budget — up to ${MAX_ATTACKS_PER_ROUND} per attack round.`}
         </p>
         <Button size="sm" onClick={onAttack} disabled={attacking || selected.size === 0}>
           {attacking ? (

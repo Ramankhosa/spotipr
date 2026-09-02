@@ -1,4 +1,5 @@
 {
+  "_authorNotes": "Brazil (INPI) invention patent profile. PRIMARY SOURCES: Industrial Property Law No. 9.279 of 14 May 1996 (LPI), in particular Arts. 8, 10, 11, 12, 13, 15, 16, 18, 19, 22, 24, 25, 26, 32, 34, 41, 84; and Portaria/INPI/DIRPA no. 14 of 29 August 2024, published in RPI 2800 and IN FORCE FROM 3 OCTOBER 2024. CRITICAL CURRENCY NOTE: Portaria 14/2024 REVOKED AND REPLACED INPI Normative Instructions 30/2013 and 31/2013, which had governed the presentation of the specification, claims, drawings and abstract. Every citation in this profile has been retargeted to the Portaria; any source citing IN 30/2013 is quoting a revoked instrument. SUBSTANTIVE CHANGES UNDER THE NEW PORTARIA THAT THIS PROFILE REFLECTS: (1) Art. 26(II) makes bracketed sequential paragraph numbering of the relatório descritivo MANDATORY, in the form [003], [015] placed at the left of the text — IN 30/2013 required only sequential line or paragraph numbering without prescribing the form. (2) Art. 40 restates the abstract rule: the title is carried as a centered heading SEPARATE from the body text (not run into the opening words as IN 30/2013 required), the 50-200 word range is now expressed as a PREFERENCE rather than a hard limit, the former 20-line cap is abolished, and a one-page ceiling applies — so the word-count checks here are warnings while the one-page limit is the real formality constraint. (3) Art. 24 caps the title at 500 characters, which is now a statutory limit rather than a practice norm, so the title check is error-level. (4) Art. 28 restates the claim formalities: consecutive Arabic numbering, a SINGLE occurrence of 'caracterizado por' per claim, and no interruption by full stops. (5) Arts. 16-17 prescribe separate documents with '1/3'-style page numbering centered in the top margin, type of at least 12 points, 1.5 line spacing, 20-35 lines per page, and justified or left-aligned black text. FEES: the examination request covers up to 10 claims, with an escalating per-claim surcharge above that (steeper from the 16th and again from the 31st claim), per the table in force from 7 August 2025. UNCERTAIN VALUES: fee amounts should be re-checked against the current INPI table before being quoted to a client; article numbers within Portaria 14/2024 were verified through INPI's published PDF and Brazilian firm analyses rather than a clause-by-clause reading. BEST MODE remains required in Brazil under Art. 24 LPI ('melhor forma de execução'), unlike in Europe, Korea and China. NO UNMAPPED SECTIONS.",
   "meta": {
     "id": "BR",
     "code": "BR",
@@ -32,7 +33,7 @@
       {
         "id": "standard",
         "label": "Standard Brazilian Patent Application (Patente de Invenção)",
-        "description": "Standard Brazilian invention patent application under the Industrial Property Law (Lei No. 9.279 of 14 May 1996, 'LPI') and INPI Normative Instruction No. 30/2013 governing the presentation of the specification, claims, drawings and abstract.",
+        "description": "Standard Brazilian invention patent application under the Industrial Property Law (Lei No. 9.279 of 14 May 1996, 'LPI') and Portaria/INPI/DIRPA no. 14 of 29 August 2024, in force from 3 October 2024, which governs the presentation of the specification, claims, drawings and abstract and which revoked the former Normative Instructions 30/2013 and 31/2013.",
         "sections": [
           {
             "id": "title",
@@ -46,7 +47,7 @@
             "maxLengthChars": 500,
             "ui": {
               "placeholder": "Insira um título conciso e tecnicamente preciso da invenção",
-              "helpText": "Provide a concise, clear and precise technical title in Portuguese that identifies the subject matter of the invention (IN 30/2013). Do not use trade names, trademarks, fancy names, personal names or vague expressions such as 'novo' (new) or 'melhorado' (improved)."
+              "helpText": "Provide a concise, clear and precise technical title in Portuguese that identifies the subject matter of the invention (Portaria/INPI/DIRPA no. 14/2024). Do not use trade names, trademarks, fancy names, personal names or vague expressions such as 'novo' (new) or 'melhorado' (improved)."
             },
             "rules": {
               "forbidTradeMarks": true,
@@ -73,7 +74,7 @@
             "maxLengthChars": 4000,
             "ui": {
               "placeholder": "Descreva o campo técnico ao qual a invenção pertence",
-              "helpText": "State the technical field (setor técnico) to which the invention relates, as required by IN 30/2013 for the relatório descritivo. Use neutral technical language in Portuguese; classification-style wording (e.g., aligned with IPC terms) is acceptable."
+              "helpText": "State the technical field (setor técnico) to which the invention relates, as required by Portaria/INPI/DIRPA no. 14/2024 for the relatório descritivo. Use neutral technical language in Portuguese; classification-style wording (e.g., aligned with IPC terms) is acceptable."
             }
           },
           {
@@ -167,7 +168,7 @@
             "maxLengthChars": 30000,
             "ui": {
               "placeholder": "Redija as reivindicações usando a expressão 'caracterizado por'",
-              "helpText": "Draft claims in Portuguese, each in a single sentence, beginning with the title (or the part of the title corresponding to its category), followed by a preamble stating the known features and the expression 'caracterizado por' introducing the characterizing technical features (IN 30/2013). Claims must be grounded in the description (Art. 25 LPI). Include reference numerals in parentheses when drawings exist."
+              "helpText": "Draft claims in Portuguese, each in a single sentence, beginning with the title (or the part of the title corresponding to its category), followed by a preamble stating the known features and the expression 'caracterizado por' introducing the characterizing technical features (Portaria/INPI/DIRPA no. 14/2024). Claims must be grounded in the description (Art. 25 LPI). Include reference numerals in parentheses when drawings exist."
             },
             "rules": {
               "twoPartFormRequired": true,
@@ -181,7 +182,7 @@
               "mustBeSupportedByDescription": true,
               "referenceNumeralsInParenthesesWhenDrawings": true,
               "notes": [
-                "IN 30/2013 makes the expression 'caracterizado por' mandatory in every claim, separating the preamble (state-of-the-art features) from the characterizing part.",
+                "Portaria/INPI/DIRPA no. 14/2024 makes the expression 'caracterizado por' mandatory in every claim, separating the preamble (state-of-the-art features) from the characterizing part.",
                 "Claims must not rely on references to the description or drawings in place of technical features (e.g., 'como descrito na descrição' is not allowed).",
                 "Excess claim fees apply for each claim above the 10th at filing."
               ]
@@ -199,13 +200,14 @@
             "maxLengthChars": 2000,
             "ui": {
               "placeholder": "Resumo técnico conciso da invenção (50 a 200 palavras)",
-              "helpText": "Write a concise technical summary (Resumo) in Portuguese of 50 to 200 words, in a single paragraph, starting with the title of the invention (IN 30/2013). Summarize the technical field, the problem and the essence of the solution. Do not include advantages, commercial statements or claim references."
+              "helpText": "Write a concise technical summary (Resumo) in Portuguese, preferably of 50 to 200 words and never exceeding one page, headed by the title of the invention set centered and separate from the body text (Arts. 40-41 of Portaria/INPI/DIRPA no. 14/2024). Summarize the technical sector, the problem and the essence of the solution, indicating the principal use. Do not include statements of merit, commercial statements or claim references."
             },
             "rules": {
               "singleParagraph": true,
-              "mustStartWithTitle": true,
-              "minWords": 50,
-              "maxWords": 200,
+              "titleAsSeparateCenteredLine": true,
+              "minWordsPreferred": 50,
+              "maxWordsPreferred": 200,
+              "maxOnePage": true,
               "forbidAdvantages": true,
               "forbidMarketingLanguage": true,
               "forbidClaimReferences": true
@@ -221,13 +223,15 @@
       "requiresAbstract": true,
       "requiresDrawingsIfReferenced": true,
       "paragraphNumberingRequired": true,
-      "paragraphNumberFormat": "[0001]",
+      "paragraphNumberFormat": "[003]",
       "maxPagesRecommended": 100,
       "allowEquations": true,
       "allowTables": true,
       "notes": [
         "All application documents must be filed in Portuguese (Art. 19 LPI and INPI practice); documents originally in another language require translation.",
-        "IN 30/2013 requires the sheets of the specification, claims and abstract to be sequentially numbered, with lines or paragraphs numbered sequentially; the widely adopted e-filing practice is bracketed paragraph numbering in the form [0001].",
+        "Art. 26(II) of Portaria/INPI/DIRPA no. 14/2024 makes bracketed paragraph numbering MANDATORY: every paragraph of the relatório descritivo must be numbered sequentially in Arabic numerals placed at the left of the text, in the form [003], [015]. This is a change from IN 30/2013, which required only sequential line or paragraph numbering without prescribing the bracketed form.",
+        "Art. 16: the specification, claims, drawings and abstract are filed as separate documents, each with its pages numbered in the form '1/3' centered in the top margin.",
+        "Art. 26(I): the title appears only on the first page of the relatório descritivo, centered. Art. 26(III): a list of figures is required where drawings are filed.",
         "There is no statutory page limit, but INPI charges additional fees for specifications exceeding the basic page allowance; keep the document as concise as full sufficiency permits.",
         "The title must be identical across the request form, specification and abstract."
       ]
@@ -245,7 +249,8 @@
       "recommendedFontSizePt": 12,
       "recommendedLineSpacing": 1.5,
       "notes": [
-        "IN 30/2013 follows PCT-style formatting: A4 sheets, used in portrait orientation, written on one side only, in dark indelible characters.",
+        "Portaria/INPI/DIRPA no. 14/2024 follows PCT-style formatting: A4 sheets, used in portrait orientation, written on one side only, in dark indelible characters.",
+        "Art. 17 prescribes type of at least 12 points, 1.5 line spacing, between 20 and 35 lines per page, black characters, and justified or left-aligned text.",
         "Sheets must be free of erasures, corrections and interlineations; text should use 1.5 line spacing for legibility."
       ]
     },
@@ -288,10 +293,11 @@
         "extraFeeBasedOnIndependents": false,
         "extraFeeBasedOnTotalClaims": true,
         "extraFeeThresholdTotalClaims": 10,
-        "note": "INPI charges an additional fee per claim above the 10th claim (total claim count), assessed at filing and on later claim additions."
+        "note": "The INPI examination-request fee for an invention covers up to 10 claims (R$ 870, or R$ 435 at the reduced rate). Beyond that the surcharge escalates in tiers: about R$ 140 per claim for the 11th to 15th, R$ 290 per claim for the 16th to 30th, and R$ 740 per claim from the 31st, with reduced rates at half those figures. Amounts follow the fee table in force from 7 August 2025 and should be re-checked before quoting to a client."
       },
       "notes": [
-        "The two-part form with the mandatory expression 'caracterizado por' is required in every claim under IN 30/2013; this is a formal requirement, not merely a preference.",
+        "Art. 28 of Portaria/INPI/DIRPA no. 14/2024 sets the claim formalities: claims are numbered consecutively in Arabic numerals, each claim contains a single occurrence of the expression 'caracterizado por', and each claim is written without interruption by full stops.",
+        "The two-part form with the mandatory expression 'caracterizado por' is required in every claim; this is a formal requirement, not merely a preference.",
         "Each claim must be a single sentence beginning with the title or the part of the title corresponding to its category (e.g., 'Processo...', 'Aparelho...').",
         "Multiple dependent claims are permitted but must not serve as a basis for other multiple dependent claims.",
         "Unity of invention: a group of inventions is acceptable only if interlinked by a single inventive concept (Art. 22 LPI)."
@@ -304,9 +310,12 @@
       "singleParagraph": true,
       "minWords": 50,
       "maxWords": 200,
-      "mustStartWithTitle": true,
+      "titleAsSeparateCenteredLine": true,
+      "maxOnePage": true,
       "notes": [
-        "IN 30/2013: the abstract (Resumo) must be a summary of the technical disclosure of 50 to 200 words, preferably not exceeding 20 lines, starting with the title.",
+        "Art. 40 of Portaria/INPI/DIRPA no. 14/2024: the Resumo must carry the title of the invention centered and separate from the body text, be concise, contain PREFERABLY between 50 and 200 words, and must not exceed one page.",
+        "This supersedes IN 30/2013, under which the 50-200 word range was a hard limit and a further cap of 20 lines applied. The 20-line cap no longer exists, and the word range is now expressed as a preference — so an overrun is a drafting warning rather than a filing defect, while exceeding one page is a real formality problem.",
+        "Art. 41 governs the content: the technical sector, the problem, the essence of the solution and the principal use, without statements of merit.",
         "The abstract serves search purposes only and cannot be used to interpret the scope of protection."
       ]
     },
@@ -333,7 +342,7 @@
         "exploded_view"
       ],
       "notes": [
-        "Drawings must be executed in firm, uniform black lines without color, suitable for direct reproduction (IN 30/2013, PCT-style formality standard).",
+        "Drawings must be executed in firm, uniform black lines without color, suitable for direct reproduction (Portaria/INPI/DIRPA no. 14/2024, PCT-style formality standard).",
         "Drawings must not contain explanatory text beyond short keywords (e.g., 'água', 'vapor') where indispensable for understanding.",
         "Every reference numeral used in the drawings must appear in the detailed description and vice versa."
       ]
@@ -381,8 +390,8 @@
           "id": "title_length",
           "type": "maxChars",
           "limit": 500,
-          "severity": "warning",
-          "message": "Title is unusually long. INPI practice favors a concise, precise technical title without trade names or vague terms."
+          "severity": "error",
+          "message": "Title exceeds 500 characters. Art. 24 of Portaria/INPI/DIRPA no. 14/2024 caps the título at 500 characters, and INPI practice favors a concise, precise technical title without trade names or vague terms."
         }
       ],
       "abstract": [
@@ -391,14 +400,14 @@
           "type": "minWords",
           "limit": 50,
           "severity": "warning",
-          "message": "Abstract is shorter than 50 words. IN 30/2013 requires the Resumo to contain between 50 and 200 words."
+          "message": "Abstract is shorter than 50 words. Art. 40 of Portaria/INPI/DIRPA no. 14/2024 asks for the Resumo to contain preferably between 50 and 200 words."
         },
         {
           "id": "abstract_max_words",
           "type": "maxWords",
           "limit": 200,
-          "severity": "error",
-          "message": "Abstract exceeds 200 words. IN 30/2013 limits the Resumo to a maximum of 200 words (preferably no more than 20 lines)."
+          "severity": "warning",
+          "message": "Abstract exceeds 200 words. Art. 40 of Portaria/INPI/DIRPA no. 14/2024 asks for preferably between 50 and 200 words and caps the Resumo at one page — the word range is a preference, so treat this as a drafting signal rather than a filing defect."
         }
       ],
       "claims": [
@@ -407,7 +416,7 @@
           "type": "maxCount",
           "limit": 10,
           "severity": "info",
-          "message": "More than 10 claims: INPI charges an additional official fee for each claim above the 10th. Consider consolidating dependent claims."
+          "message": "More than 10 claims: the INPI examination-request fee covers up to 10 claims, after which an escalating per-claim surcharge applies (steeper from the 16th and again from the 31st claim). Consider consolidating dependent claims."
         }
       ],
       "detailed_description": []
@@ -466,7 +475,7 @@
     ]
   },
   "prompts": {
-    "systemPrompt": "You are an expert Brazilian patent attorney (agente da propriedade industrial) drafting a patent of invention (patente de invenção) for filing with the INPI under Lei No. 9.279/96 (LPI) and INPI Normative Instruction No. 30/2013. All drafted output must be in formal, technical Brazilian Portuguese suitable for direct filing. Follow the section structure, claim formalities (mandatory 'caracterizado por'), and validation constraints in this configuration. Use neutral, impersonal technical language, ensure sufficiency of disclosure for a técnico no assunto, and maintain strict terminological consistency between claims, summary and detailed description.",
+    "systemPrompt": "You are an expert Brazilian patent attorney (agente da propriedade industrial) drafting a patent of invention (patente de invenção) for filing with the INPI under Lei No. 9.279/96 (LPI) and Portaria/INPI/DIRPA no. 14 of 29 August 2024. All drafted output must be in formal, technical Brazilian Portuguese suitable for direct filing. Follow the section structure, claim formalities (mandatory 'caracterizado por'), and validation constraints in this configuration. Use neutral, impersonal technical language, ensure sufficiency of disclosure for a técnico no assunto, and maintain strict terminological consistency between claims, summary and detailed description.",
     "promptMergeStrategy": "append",
     "baseStyle": {
       "tone": "technical, neutral, precise, formal Brazilian Portuguese",
@@ -482,7 +491,7 @@
     "sections": {
       "title": {
         "topUp": {
-          "instruction": "Draft the title (Título da Invenção) in formal Brazilian Portuguese, per IN 30/2013. The title must be concise, clear and precise, technically identifying the subject matter of the invention without any fancy or commercial denomination. Because Brazilian claim practice requires each claim to open with the title (or the portion of the title corresponding to the claim category), compose the title so it can serve directly as claim preamble openers — e.g., 'Processo e aparelho para tratamento de efluentes industriais' supports both a process claim ('Processo para tratamento...') and an apparatus claim ('Aparelho para tratamento...'). Do not use trademarks, personal names, coined product names, or laudatory/vague words such as 'novo', 'melhorado', 'aperfeiçoado' or 'inovador'. Keep the title identical to the one that will appear in the request form and at the start of the Resumo. Prefer nouns designating the categories actually claimed (produto, processo, aparelho, sistema, uso).",
+          "instruction": "Draft the title (Título da Invenção) in formal Brazilian Portuguese, per Portaria/INPI/DIRPA no. 14/2024. The title must be concise, clear and precise, technically identifying the subject matter of the invention without any fancy or commercial denomination. Because Brazilian claim practice requires each claim to open with the title (or the portion of the title corresponding to the claim category), compose the title so it can serve directly as claim preamble openers — e.g., 'Processo e aparelho para tratamento de efluentes industriais' supports both a process claim ('Processo para tratamento...') and an apparatus claim ('Aparelho para tratamento...'). Do not use trademarks, personal names, coined product names, or laudatory/vague words such as 'novo', 'melhorado', 'aperfeiçoado' or 'inovador'. Keep the title identical to the one that will appear in the request form and at the start of the Resumo. Prefer nouns designating the categories actually claimed (produto, processo, aparelho, sistema, uso).",
           "constraints": [
             "Output in Portuguese",
             "Maximum 500 characters; aim for one line",
@@ -492,14 +501,14 @@
             "Must be usable verbatim as the opening words of each claim"
           ],
           "additions": [
-            "Legal basis: IN 30/2013 (título claro, conciso e preciso); Art. 19 LPI (application content).",
+            "Legal basis: Portaria/INPI/DIRPA no. 14/2024 (título claro, conciso e preciso); Art. 19 LPI (application content).",
             "The same title must appear in the request form, specification and abstract."
           ]
         }
       },
       "fieldOfInvention": {
         "topUp": {
-          "instruction": "Draft the Campo da Invenção section in formal Brazilian Portuguese. State in one or two short paragraphs the technical field (setor técnico) to which the invention pertains, as IN 30/2013 requires the relatório descritivo to begin by specifying the technical field. Open with the conventional formula 'A presente invenção refere-se a...' or 'A presente invenção pertence ao campo de...'. Use neutral, classification-oriented terminology consistent with the International Patent Classification where natural. Do not discuss the prior art's deficiencies, the technical problem, or the invention's advantages here — those belong to Fundamentos and Sumário. Keep scope wording slightly broader than the claims but never inconsistent with them.",
+          "instruction": "Draft the Campo da Invenção section in formal Brazilian Portuguese. State in one or two short paragraphs the technical field (setor técnico) to which the invention pertains, as Portaria/INPI/DIRPA no. 14/2024 requires the relatório descritivo to begin by specifying the technical field. Open with the conventional formula 'A presente invenção refere-se a...' or 'A presente invenção pertence ao campo de...'. Use neutral, classification-oriented terminology consistent with the International Patent Classification where natural. Do not discuss the prior art's deficiencies, the technical problem, or the invention's advantages here — those belong to Fundamentos and Sumário. Keep scope wording slightly broader than the claims but never inconsistent with them.",
           "constraints": [
             "Output in Portuguese",
             "One to two paragraphs, neutral technical terminology",
@@ -507,13 +516,13 @@
             "Terminology must match the claims and detailed description"
           ],
           "additions": [
-            "Legal basis: IN 30/2013 (relatório descritivo must specify the technical field)."
+            "Legal basis: Portaria/INPI/DIRPA no. 14/2024 (relatório descritivo must specify the technical field)."
           ]
         }
       },
       "background": {
         "topUp": {
-          "instruction": "Draft the Fundamentos da Invenção section in formal Brazilian Portuguese. Describe the state of the art (estado da técnica) that can be regarded as useful for the understanding, search and examination of the invention, as required by IN 30/2013, citing, where known to the applicant, the documents that reflect it (patent publications by number, articles by author/journal/year). Explain objectively how existing solutions work and identify their technical limitations, deficiencies or drawbacks in factual, verifiable terms — this framing establishes the technical problem the invention solves and prepares the mandatory two-part claim structure, since features acknowledged here as known belong in the claim preamble before 'caracterizado por'. Never disparage specific competitors or assert that cited documents are invalid. Do not reveal the invention's solution or advantages in this section; end by stating the unmet technical need. Remember that Brazil applies absolute novelty (Art. 11 LPI) subject only to the 12-month grace period of Art. 12 LPI, so treat any inventor disclosure within that window carefully and avoid characterizing the applicant's own prior work as state of the art unless it truly is.",
+          "instruction": "Draft the Fundamentos da Invenção section in formal Brazilian Portuguese. Describe the state of the art (estado da técnica) that can be regarded as useful for the understanding, search and examination of the invention, as required by Portaria/INPI/DIRPA no. 14/2024, citing, where known to the applicant, the documents that reflect it (patent publications by number, articles by author/journal/year). Explain objectively how existing solutions work and identify their technical limitations, deficiencies or drawbacks in factual, verifiable terms — this framing establishes the technical problem the invention solves and prepares the mandatory two-part claim structure, since features acknowledged here as known belong in the claim preamble before 'caracterizado por'. Never disparage specific competitors or assert that cited documents are invalid. Do not reveal the invention's solution or advantages in this section; end by stating the unmet technical need. Remember that Brazil applies absolute novelty (Art. 11 LPI) subject only to the 12-month grace period of Art. 12 LPI, so treat any inventor disclosure within that window carefully and avoid characterizing the applicant's own prior work as state of the art unless it truly is.",
           "constraints": [
             "Output in Portuguese",
             "Describe prior art objectively; cite documents with full identification where available",
@@ -522,7 +531,7 @@
             "No disparagement of third-party patents or products"
           ],
           "additions": [
-            "Legal basis: Arts. 11 and 12 LPI (novelty and grace period); IN 30/2013 (description of the state of the art with citation of known documents).",
+            "Legal basis: Arts. 11 and 12 LPI (novelty and grace period); Portaria/INPI/DIRPA no. 14/2024 (description of the state of the art with citation of known documents).",
             "Brazil has no US-style IDS, but under Art. 34 LPI the INPI may later require prior art search results from corresponding foreign applications — accurate background drafting avoids inconsistencies at that stage."
           ]
         }
@@ -538,7 +547,7 @@
             "No marketing language or unsupported superlatives"
           ],
           "additions": [
-            "Legal basis: Art. 13 LPI (inventive step assessed against the state of the art), Art. 25 LPI (claims grounded in the description); IN 30/2013.",
+            "Legal basis: Art. 13 LPI (inventive step assessed against the state of the art), Art. 25 LPI (claims grounded in the description); Portaria/INPI/DIRPA no. 14/2024.",
             "Consistency between Sumário and Reivindicações is checked by this platform's cross-section validation."
           ]
         }
@@ -554,7 +563,7 @@
             "Omit the section entirely if there are no drawings"
           ],
           "additions": [
-            "Legal basis: IN 30/2013 (list of figures with brief indication of what each represents).",
+            "Legal basis: Portaria/INPI/DIRPA no. 14/2024 (list of figures with brief indication of what each represents).",
             "Drawings themselves must be black-and-white line drawings on A4 without explanatory text beyond indispensable keywords."
           ]
         }
@@ -571,15 +580,15 @@
             "No claim-style language; no unsupported generalizations"
           ],
           "additions": [
-            "Legal basis: Art. 24 LPI (sufficiency and best mode); Art. 25 LPI (claim support); Art. 32 LPI (amendment limits); Art. 15 LPI (industrial application); IN 30/2013.",
-            "Number paragraphs sequentially in the form [0001], [0002], ... per INPI e-filing practice.",
+            "Legal basis: Art. 24 LPI (sufficiency and best mode); Art. 25 LPI (claim support); Art. 32 LPI (amendment limits); Art. 15 LPI (industrial application); Portaria/INPI/DIRPA no. 14/2024.",
+            "Number every paragraph sequentially in Arabic numerals in brackets at the left of the text, in the form [003], [015] — mandatory under Art. 26(II) of Portaria/INPI/DIRPA no. 14/2024.",
             "Do not present subject matter excluded under Arts. 10 and 18 LPI (e.g., therapeutic methods, programs per se) as the invention itself; frame software inventions through their technical effect."
           ]
         }
       },
       "claims": {
         "topUp": {
-          "instruction": "Draft the Reivindicações in formal Brazilian Portuguese in strict compliance with Art. 25 LPI and IN 30/2013. Every claim MUST: (1) be a single sentence; (2) begin with the title or the part of the title corresponding to its category (e.g., 'Processo para...', 'Aparelho para...'); (3) contain a preamble reciting the features already known from the state of the art; and (4) use the mandatory expression 'caracterizado por' (or its inflected form 'caracterizada por' / 'caracterizado pelo fato de que') to introduce the characterizing technical features — this two-part form is a formal requirement in Brazil, not a stylistic preference, and its absence is a formal defect. Claims must be grounded in the description (fundamentadas no relatório descritivo, Art. 25 LPI), define the matter precisely, and must not refer to the description or drawings in place of features ('como descrito no relatório' is prohibited). Include reference numerals in parentheses after structural features when the application has drawings; the numerals do not limit the claim. Dependent claims start with the claim category word plus 'de acordo com a reivindicação N', followed by 'caracterizado por' and the additional features. Multiple dependencies are allowed ('de acordo com qualquer uma das reivindicações 1 a 3') but must not depend on other multiple dependent claims. Maintain unity of invention: all claims must be interlinked by a single inventive concept (Art. 22 LPI). Note the fee structure: each claim above the 10th incurs an excess fee, so consolidate where possible. Number claims sequentially in Arabic numerals; end each claim with a period.",
+          "instruction": "Draft the Reivindicações in formal Brazilian Portuguese in strict compliance with Art. 25 LPI and Portaria/INPI/DIRPA no. 14/2024. Every claim MUST: (1) be a single sentence; (2) begin with the title or the part of the title corresponding to its category (e.g., 'Processo para...', 'Aparelho para...'); (3) contain a preamble reciting the features already known from the state of the art; and (4) use the mandatory expression 'caracterizado por' (or its inflected form 'caracterizada por' / 'caracterizado pelo fato de que') to introduce the characterizing technical features — this two-part form is a formal requirement in Brazil, not a stylistic preference, and its absence is a formal defect. Claims must be grounded in the description (fundamentadas no relatório descritivo, Art. 25 LPI), define the matter precisely, and must not refer to the description or drawings in place of features ('como descrito no relatório' is prohibited). Include reference numerals in parentheses after structural features when the application has drawings; the numerals do not limit the claim. Dependent claims start with the claim category word plus 'de acordo com a reivindicação N', followed by 'caracterizado por' and the additional features. Multiple dependencies are allowed ('de acordo com qualquer uma das reivindicações 1 a 3') but must not depend on other multiple dependent claims. Maintain unity of invention: all claims must be interlinked by a single inventive concept (Art. 22 LPI). Note the fee structure: each claim above the 10th incurs an excess fee, so consolidate where possible. Number claims sequentially in Arabic numerals; end each claim with a period.",
           "constraints": [
             "Output in Portuguese",
             "Every claim in two-part form with the mandatory expression 'caracterizado por'",
@@ -592,7 +601,7 @@
             "Prefer at most 10 claims; flag when exceeding (excess fees per claim above 10)"
           ],
           "additions": [
-            "Legal basis: Art. 22 LPI (unity), Art. 25 LPI (claims define the extent of protection and must be grounded in the description), IN 30/2013 (formal claim requirements including 'caracterizado por').",
+            "Legal basis: Art. 22 LPI (unity), Art. 25 LPI (claims define the extent of protection and must be grounded in the description), Portaria/INPI/DIRPA no. 14/2024 (formal claim requirements including 'caracterizado por').",
             "Claim scope is interpreted per Art. 41 LPI (claims interpreted in light of description and drawings) — precise characterizing features matter.",
             "Avoid claiming subject matter excluded by Arts. 10 and 18 LPI (methods of treatment, software per se, business methods); recast as product, apparatus, use ('Uso de... caracterizado por...') or technically-effected process claims."
           ]
@@ -600,17 +609,17 @@
       },
       "abstract": {
         "topUp": {
-          "instruction": "Draft the Resumo in formal Brazilian Portuguese per IN 30/2013. It must be a single paragraph of 50 to 200 words (preferably no more than 20 lines), beginning with the title of the invention exactly as it appears in the specification, followed by a concise summary of the technical disclosure: the technical field, the problem addressed, and the essence of the solution — indicating the principal use where relevant. Write it as a search-oriented technical digest: it must allow a searcher to quickly assess whether the document is relevant. Do not state advantages, commercial value or speculative merits; do not use claim language ('caracterizado por' is unnecessary here), claim references, or legal phrases. Include the reference numerals of the main technical features in parentheses if drawings exist, following INPI publication practice. Remember the abstract does not define protection scope (protection is defined by the claims, Art. 41 LPI).",
+          "instruction": "Draft the Resumo in formal Brazilian Portuguese per Arts. 40 and 41 of Portaria/INPI/DIRPA no. 14 of 29 August 2024, the normative instruction that replaced IN 30/2013 with effect from 3 October 2024. Present the title of the invention as a CENTERED HEADING SEPARATE FROM THE BODY TEXT — under the current rule the title is set apart above the abstract rather than run into the first words of the paragraph, which is how the superseded IN 30/2013 required it. Follow it with a single concise paragraph summarizing the technical disclosure: the technical sector, the problem addressed, and the essence of the solution, indicating the principal use where relevant. The abstract should contain PREFERABLY between 50 and 200 words and must not exceed one page — the word range is now a preference rather than a hard limit, and the former 20-line cap has been abolished, but the one-page ceiling is real. Write it as a search-oriented technical digest that lets a searcher judge relevance quickly. Do not state merits, advantages, commercial value or speculative claims; do not use claim language ('caracterizado por' is unnecessary here), claim references, or legal phrases. Include the reference numerals of the main technical features in parentheses if drawings exist, following INPI publication practice. Remember the abstract does not define protection scope (protection is defined by the claims, Art. 41 LPI).",
           "constraints": [
             "Output in Portuguese",
-            "Single paragraph, 50-200 words (hard limits per IN 30/2013)",
-            "Must begin with the title of the invention",
-            "Technical summary only: field, problem, essence of solution",
-            "No advantages, marketing language, claim references or legal phrasing"
+            "Title as a centered heading separate from the abstract text (Art. 40)",
+            "Single paragraph, preferably 50-200 words, never exceeding one page",
+            "Technical summary only: sector, problem, essence of solution, principal use",
+            "No statements of merit, marketing language, claim references or legal phrasing"
           ],
           "additions": [
-            "Legal basis: IN 30/2013 (Resumo of 50-200 words starting with the title); Art. 41 LPI (abstract has no scope-defining effect).",
-            "This platform validates minWords 50 / maxWords 200 on this section."
+            "Legal basis: Arts. 40-41 of Portaria/INPI/DIRPA no. 14/2024 (in force 3 October 2024, replacing IN 30/2013); Art. 41 LPI (abstract has no scope-defining effect).",
+            "This platform flags fewer than 50 or more than 200 words as warnings, reflecting that the range is now a preference rather than a hard limit."
           ]
         }
       }

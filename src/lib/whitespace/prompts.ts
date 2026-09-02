@@ -201,6 +201,12 @@ export function buildClaimElementsPrompt(
   families: Array<{ familyKey: string; publicationNumber: string; title: string; claimsText: string }>,
   priorVocabulary: string[]
 ): string {
+  // The vocabulary accumulates every batch's new elements, so unbounded it
+  // grows monotonically across a deep dive and eventually crowds out the very
+  // claims text it exists to normalise. 300 terms is more shared vocabulary
+  // than any batch can usefully reuse, and it bounds this input like every
+  // other slice() in this file.
+  const vocabulary = priorVocabulary.slice(0, 300)
   const blocks = families
     .map(
       family => `FAMILY ${family.familyKey} (${family.publicationNumber})
@@ -214,7 +220,7 @@ ${family.claimsText.slice(0, 6000)}
 
   return `You are decomposing patent claims for co-occurrence analysis. For each family, read the broadest independent claim (or the claim set given) and extract its technical elements.
 
-${priorVocabulary.length ? `VOCABULARY ALREADY IN USE — reuse these exact strings whenever a claim recites the same element, and add new elements only when genuinely new:\n${priorVocabulary.map(term => `  - ${term}`).join('\n')}\n` : ''}
+${vocabulary.length ? `VOCABULARY ALREADY IN USE — reuse these exact strings whenever a claim recites the same element, and add new elements only when genuinely new:\n${vocabulary.map(term => `  - ${term}`).join('\n')}\n` : ''}
 ${blocks}
 
 For each family extract:

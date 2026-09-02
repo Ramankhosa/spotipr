@@ -93,6 +93,69 @@ describe('binaryKMeans', () => {
     expect(binaryKMeans(data, 3, 1, { seed: 1 }).k).toBe(1)
     expect(binaryKMeans(new Uint32Array(0), 0, 4).k).toBe(0)
   })
+
+  // Every returned cluster must have at least one member: the caller persists
+  // each one as a real area, and an empty area has no medoids, no metrics, and
+  // a deep dive that fails. A centre re-seeded on the exit iteration (or dead
+  // exactly at maxIterations) used to leak through as a zero-member cluster.
+  const assertNoEmptyClusters = (result: ReturnType<typeof binaryKMeans>, n: number) => {
+    const counts = new Array(result.k).fill(0)
+    for (let i = 0; i < n; i++) {
+      expect(result.assignments[i]).toBeGreaterThanOrEqual(0)
+      expect(result.assignments[i]).toBeLessThan(result.k)
+      counts[result.assignments[i]]++
+    }
+    for (const count of counts) expect(count).toBeGreaterThan(0)
+  }
+
+  it('collapses identical data to a single non-empty cluster instead of returning dead centres', () => {
+    // All points identical: every extra centre is seeded from the same vector,
+    // stays empty forever, and must be dropped rather than persisted.
+    const bits = randomBitString(mulberry32(10))
+    const n = 12
+    const data = new Uint32Array(n * WORDS)
+    for (let i = 0; i < n; i++) data.set(packBitString(bits), i * WORDS)
+
+    const result = binaryKMeans(data, n, 4, { seed: 3 })
+    expect(result.k).toBe(1)
+    expect(result.centroids).toHaveLength(WORDS)
+    expect(result.centroidMeans).toHaveLength(BITS)
+    assertNoEmptyClusters(result, n)
+  })
+
+  it('returns only occupied clusters when k exceeds the number of distinct points', () => {
+    // Two duplicate groups, k=4: at most two clusters can ever hold members.
+    const random = mulberry32(21)
+    const groupA = randomBitString(random)
+    const groupB = randomBitString(random)
+    const n = 30
+    const data = new Uint32Array(n * WORDS)
+    for (let i = 0; i < n; i++) data.set(packBitString(i < 18 ? groupA : groupB), i * WORDS)
+
+    const result = binaryKMeans(data, n, 4, { seed: 9 })
+    expect(result.k).toBe(2)
+    assertNoEmptyClusters(result, n)
+    expect(result.assignments[0]).not.toBe(result.assignments[n - 1])
+  })
+
+  it('never returns a zero-member cluster across seeds, and re-seeded runs stay deterministic', () => {
+    const random = mulberry32(31)
+    const n = 90
+    const data = new Uint32Array(n * WORDS)
+    for (let i = 0; i < n; i++) data.set(packBitString(randomBitString(random)), i * WORDS)
+
+    for (const seed of [1, 2, 7, 13, 29]) {
+      const result = binaryKMeans(data, n, 12, { seed })
+      expect(result.k).toBeGreaterThan(0)
+      expect(result.k).toBeLessThanOrEqual(12)
+      assertNoEmptyClusters(result, n)
+
+      const again = binaryKMeans(data, n, 12, { seed })
+      expect(again.k).toBe(result.k)
+      expect(Array.from(again.assignments)).toEqual(Array.from(result.assignments))
+      expect(Array.from(again.centroids)).toEqual(Array.from(result.centroids))
+    }
+  })
 })
 
 describe('clusterGeometry', () => {

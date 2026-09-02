@@ -29,7 +29,7 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import type { FieldMapResult, FieldRule, LabelledCount, TextCoverage, WhitespaceScope, YearCount } from './types'
-import { CORPUS_FIRST_YEAR } from './types'
+import { CORPUS_FIRST_YEAR, scopeMatching } from './types'
 import { WhitespacePermanentError } from './run-lease'
 import { fieldRuleNote, ladderSummary, minimumRungFor, narrowingAdviceFor, rungPhrase } from './field-rule'
 
@@ -239,6 +239,17 @@ function splitAlternatives(text: string): string[] {
  * hits. It only ever ADDS matchable terms — a term that was already a phrase
  * passes through unchanged.
  */
+/**
+ * Strips the punctuation that breaks a phrase rather than whitelisting letters:
+ * a blocklist keeps accented and non-Latin vocabulary intact, and unicode
+ * property escapes are not available at this compile target.
+ */
+const stripPhrase = (part: string) =>
+  part
+    .replace(/["“”„«»()[\]{}<>|&!*:+=\\/.?_~^$#@%]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
 export function searchableTerms(raw: string): string[] {
   const terms: string[] = []
   const head = raw.replace(/\(([^)]*)\)/g, (_match, inner: string) => {
@@ -247,18 +258,28 @@ export function searchableTerms(raw: string): string[] {
     return ' '
   })
   for (const part of splitAlternatives(head)) {
-    // Strip the punctuation that breaks a phrase rather than whitelisting
-    // letters: a blocklist keeps accented and non-Latin vocabulary intact, and
-    // unicode property escapes are not available at this compile target.
-    const term = part
-      .replace(/["“”„«»()[\]{}<>|&!*:+=\\/.?_~^$#@%]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const term = stripPhrase(part)
     if (!term) continue
     if (term.split(' ').length > MAX_TERM_WORDS) continue
     terms.push(term)
   }
   return terms
+}
+
+/**
+ * The first MAX_TERM_WORDS words of a text after full sanitisation — the
+ * last-resort term for an input whose every searchable term hygiene dropped.
+ * Sanitise FIRST, slice SECOND: slicing the raw text used to keep punctuation
+ * words ("and/or") that sanitisation then rewrote into extra plain words, so
+ * the head grew past the phrase-length cap during cleaning and the fallback
+ * yielded nothing at all — the input silently vanished, which is the exact
+ * failure the fallback exists to prevent.
+ */
+function sanitisedHead(raw: string): string | null {
+  const head = splitAlternatives(raw.replace(/\([^)]*\)/g, ' '))
+    .map(stripPhrase)
+    .find(Boolean)
+  return head ? head.split(' ').slice(0, MAX_TERM_WORDS).join(' ') : null
 }
 
 function conceptTerms(concept: { label: string; synonyms: string[] }): string[] {
@@ -278,10 +299,42 @@ function conceptTerms(concept: { label: string; synonyms: string[] }): string[] 
   // it here would silently change the required/optional split the rule is fitted
   // against. Fall back to the head of the label — a poor term, but a real one.
   if (!terms.length) {
-    const head = searchableTerms(concept.label.split(/\s+/).slice(0, MAX_TERM_WORDS).join(' '))[0]
+    const head = sanitisedHead(concept.label)
     if (head) add(head)
   }
   return terms
+}
+
+/**
+ * The scope's exclusion terms as ONE OR group, after the SAME hygiene pass the
+ * concepts get (searchableTerms). Exclusions used to be quoted raw, so a
+ * prose-style exclusion matched nothing and the excluded subject matter stayed
+ * IN the field — silently, and on BOTH arms, because exclusionMatchPredicate
+ * drives the semantic lane's subtraction too. Hygiene can only WIDEN an
+ * exclusion (splitting an exclusion into its alternatives excludes more),
+ * which is the safe direction for a negative term; a term hygiene would drop
+ * entirely falls back to its sanitised head, like a concept's label, so no
+ * exclusion vanishes at compile time (a stopword-only leftover is surfaced by
+ * assertConceptQueryUsable instead).
+ */
+function exclusionQueryGroup(scope: WhitespaceScope): string | null {
+  const seen = new Set<string>()
+  const terms: string[] = []
+  const add = (term: string) => {
+    const key = term.toLowerCase()
+    if (!term || seen.has(key)) return
+    seen.add(key)
+    terms.push(term)
+  }
+  for (const raw of scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)) {
+    const searchable = searchableTerms(raw)
+    for (const term of searchable) add(term)
+    if (!searchable.length) {
+      const head = sanitisedHead(raw)
+      if (head) add(head)
+    }
+  }
+  return terms.length ? terms.map(quotePhrase).join(' OR ') : null
 }
 
 /**
@@ -314,13 +367,12 @@ export function buildConceptQuery(scope: WhitespaceScope, minimumOptional?: numb
   const bounds = minimumOptionalBounds(scope)
   const k = Math.min(bounds.max, Math.max(bounds.min, Math.floor(minimumOptional ?? bounds.min)))
 
-  const exclusionTerms = scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)
   return {
     required: required.map(concept => concept.terms.map(quotePhrase).join(' OR ')),
     optional: optional.map(concept => concept.terms.map(quotePhrase).join(' OR ')),
     minimumOptional: k,
     groupLabels: [...required, ...optional].map(concept => [concept.label]),
-    exclusions: exclusionTerms.length ? exclusionTerms.map(quotePhrase).join(' OR ') : null,
+    exclusions: exclusionQueryGroup(scope),
   }
 }
 
@@ -435,9 +487,10 @@ export function exclusionPredicate(scope: WhitespaceScope): Prisma.Sql | null {
  * 2 s without it) — which is what kept timing the semantic arm out.
  */
 export function exclusionMatchPredicate(scope: WhitespaceScope): Prisma.Sql | null {
-  const terms = scope.exclusions.map(exclusion => exclusion.term.trim()).filter(Boolean)
-  if (!terms.length) return null
-  const query = terms.map(quotePhrase).join(' OR ')
+  // Same hygiene-passed group the lexical arm negates (exclusionQueryGroup),
+  // so the two arms can never disagree about what an exclusion means.
+  const query = exclusionQueryGroup(scope)
+  if (!query) return null
   return Prisma.sql`(${SEARCH_TSVECTOR} @@ websearch_to_tsquery('english'::regconfig, ${query}))`
 }
 
@@ -446,17 +499,27 @@ export function exclusionMatchPredicate(scope: WhitespaceScope): Prisma.Sql | nu
  * term is stopwords ("the", "of") composes to an EMPTY tsquery, and the tsquery
  * && operator treats empty as identity — the group would silently vanish from
  * the predicate and the census would answer a broader question than the scope
- * states. Refusing loudly is the honest behaviour.
+ * states. Refusing loudly is the honest behaviour for a CONCEPT group.
+ *
+ * The EXCLUSIONS group gets a WARNING (returned for the caller's coverage
+ * notes) rather than a refusal: `!!empty` also composes to identity, so a
+ * stopword-only exclusion silently stops excluding — fail-open — but a
+ * negative term that matches nothing does not invalidate the count the way a
+ * vanished concept does, so the census may still run provided the reader is
+ * told the exclusion was not applied.
  */
-export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<void> {
+export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<string[]> {
   const groups = conceptQueryGroups(plan)
-  if (!groups.length) return
+  // 1-based, matching WITH ORDINALITY; null when the plan excludes nothing.
+  const exclusionsIdx = plan.exclusions ? groups.push(plan.exclusions) : null
+  if (!groups.length) return []
   const checks = await prisma.$queryRaw<Array<{ idx: number; nodes: number }>>(Prisma.sql`
     SELECT idx::int AS idx, numnode(websearch_to_tsquery('english'::regconfig, q))::int AS nodes
     FROM unnest(${groups}::text[]) WITH ORDINALITY AS t(q, idx)`)
   const dead = checks.filter(check => check.nodes === 0)
-  if (dead.length) {
-    const labels = dead.flatMap(check => plan.groupLabels[check.idx - 1] ?? [])
+  const deadConcepts = dead.filter(check => check.idx !== exclusionsIdx)
+  if (deadConcepts.length) {
+    const labels = deadConcepts.flatMap(check => plan.groupLabels[check.idx - 1] ?? [])
     throw new WhitespacePermanentError(
       `The concept${labels.length === 1 ? '' : 's'} ${labels.map(label => `"${label}"`).join(', ')} contain${
         labels.length === 1 ? 's' : ''
@@ -465,6 +528,12 @@ export async function assertConceptQueryUsable(plan: ConceptQueryPlan): Promise<
       } before running.`
     )
   }
+  if (exclusionsIdx !== null && dead.some(check => check.idx === exclusionsIdx)) {
+    return [
+      `The scope's exclusions (${plan.exclusions}) contain no searchable words after common-word removal, so no subject matter was excluded from the text match. Reword or remove them.`,
+    ]
+  }
+  return []
 }
 
 /** Accepted CPC codes, normalised. Empty means "no classification constraint". */
@@ -668,6 +737,55 @@ export function narrowingAdvice(scope: WhitespaceScope, rule?: FieldRule | null)
 }
 
 /**
+ * Says when the rule in force is LOOSER than the scope states. conceptTerms
+ * falls back hard to keep every concept searchable, but a concept can still
+ * die outright (a label of pure punctuation), and when one does the effective
+ * n of "at least k of n" drops — and a pinned k silently clamps down with it
+ * (buildConceptQuery, trivialFieldRule). A field that quietly widened past
+ * what the user pinned is exactly the drift these notes exist to name. Null
+ * when the rule expresses the scope in full.
+ */
+export function ruleLoosenedNote(scope: WhitespaceScope, rule: FieldRule): string | null {
+  const stated = {
+    required: scope.concepts.filter(c => c.required && c.label.trim()).length,
+    optional: scope.concepts.filter(c => !c.required && c.label.trim()).length,
+  }
+  const dropped = Math.max(0, stated.required - rule.requiredCount) + Math.max(0, stated.optional - rule.optionalCount)
+  const pinned = scopeMatching(scope).minimumOptionalConcepts
+  const clampedPin = rule.mode === 'pinned' && typeof pinned === 'number' && rule.minimumOptional < pinned
+  if (!dropped && !clampedPin) return null
+  const parts: string[] = []
+  if (dropped) {
+    parts.push(
+      `${dropped} of the scope's ${stated.required + stated.optional} concepts contain${
+        dropped === 1 ? 's' : ''
+      } no searchable words and could not be matched`
+    )
+  }
+  if (clampedPin) {
+    parts.push(
+      `the pinned minimum of ${pinned} was lowered to ${rule.minimumOptional}, the most the ${rule.optionalCount} remaining optional concept${
+        rule.optionalCount === 1 ? '' : 's'
+      } can express`
+    )
+  }
+  return `Match rule loosened: ${parts.join(', and ')}. This field is broader than the scope states${
+    dropped ? ` — reword or remove the unsearchable concept${dropped === 1 ? '' : 's'}` : ''
+  }.`
+}
+
+/**
+ * Canonical marker candidateCoverageNote (candidates.ts) embeds in its note
+ * whenever the semantic lane did not run. emptyFieldAdvice branches on THIS,
+ * not on the wording of each failure reason — the reason strings are prose and
+ * keep being reworded, and every rewording used to silently defeat the keyword
+ * regex below. Defined here rather than in candidates.ts because candidates.ts
+ * already imports this module and the reverse import would close a cycle.
+ * Lowercase so it can sit mid-sentence in the note.
+ */
+export const SEMANTIC_LANE_DID_NOT_RUN_MARKER = 'the semantic lane did not run'
+
+/**
  * Advice for the opposite failure: a scope that matched nothing at all.
  *
  * Distinct from narrowingAdvice because the two need opposite actions, and an
@@ -679,15 +797,21 @@ export function narrowingAdvice(scope: WhitespaceScope, rule?: FieldRule | null)
  */
 export function emptyFieldAdvice(scope: WhitespaceScope, semanticNote?: string, rule?: FieldRule | null): string {
   const parts: string[] = ['No publication in the readable corpus matches this scope.']
-  // Keyword match over every did-not-run reason the candidate resolver emits:
-  // unconfigured key, embed/retrieval failure, no vector, the deliberate kill
-  // switch, and the no-ceiling refusal — which now reads "could not be
-  // ESTIMATED" (the ceiling is derived per query from a background sample)
-  // rather than "not calibrated". Matching only the old word would have quietly
-  // stopped naming the lane on exactly the installations that need it named.
+  // Structural first: candidateCoverageNote embeds the marker whenever the
+  // lane did not run, branching on FieldCandidates.available rather than on
+  // any reason wording, so a reason nobody has written yet is still named.
+  // The keyword regex survives ONLY for notes minted before the marker
+  // existed (this advice can be regenerated over persisted notes) — it had
+  // missed three reason wordings in a row ("uncalibrated" → "estimated" →
+  // "could not be applied / could not be reached"), each miss silently
+  // un-naming the lane on exactly the installations that needed it named.
   // The "found no additional documents" note must NOT match: there the lane
   // RAN, and blaming it would send the user away from the structural filters.
-  if (semanticNote && /not configured|failed|calibrated|estimated|unavailable|disabled|returned no vector/i.test(semanticNote)) {
+  const laneDidNotRun =
+    semanticNote !== undefined &&
+    (semanticNote.includes(SEMANTIC_LANE_DID_NOT_RUN_MARKER) ||
+      /not configured|failed|calibrated|estimated|unavailable|disabled|returned no vector/i.test(semanticNote))
+  if (laneDidNotRun) {
     parts.push(
       'The semantic lane did not run, so the field was matched on concept wording alone — that is the most likely reason this is empty rather than small.'
     )
@@ -747,8 +871,10 @@ export async function runFieldMap(
   const rule = options.fieldRule ?? null
   const conceptQuery = buildConceptQuery(scope, rule?.minimumOptional)
   // Outside the transaction: a scope whose concepts stem away to nothing must
-  // fail with the concept named, not count a silently different field.
-  if (conceptQuery) await assertConceptQueryUsable(conceptQuery)
+  // fail with the concept named, not count a silently different field. A
+  // stopword-only EXCLUSION comes back as a warning for the coverage notes
+  // instead — the count stands, but the reader must know nothing was excluded.
+  const conceptQueryWarnings = conceptQuery ? await assertConceptQueryUsable(conceptQuery) : []
 
   const where = buildScopeFilter(scope, options.candidateIds, rule?.minimumOptional)
   const sampleCap = options.assigneeSampleCap ?? ASSIGNEE_SAMPLE_CAP
@@ -756,8 +882,13 @@ export async function runFieldMap(
   const rowCap = options.censusRowCap ?? CENSUS_ROW_CAP
   const coverageNotes: string[] = []
   // The rule first: it says what was counted, and everything after it is a
-  // property of that count.
+  // property of that count — including whether it counted less of the scope
+  // than the scope states (ruleLoosenedNote) and whether the exclusions
+  // actually excluded anything (conceptQueryWarnings).
   if (rule) coverageNotes.push(fieldRuleNote(rule))
+  const loosened = rule ? ruleLoosenedNote(scope, rule) : null
+  if (loosened) coverageNotes.push(loosened)
+  coverageNotes.push(...conceptQueryWarnings)
   if (options.candidateNote) coverageNotes.push(options.candidateNote)
   const gaps: string[] = []
 
@@ -1032,7 +1163,11 @@ export async function runFieldMap(
       }, matched as substrings of applicant records — subsidiaries filed under other names are not caught.`
     )
   }
-  if (familyCount > 0) {
+  // Skipped when the textCoverage facet itself failed: its zeros are a gap,
+  // not a measurement, and printing "readable for 0%" plus the below-40%
+  // warning stated a coverage figure nothing ever computed. The gaps note
+  // below already says the facet is missing rather than empty.
+  if (familyCount > 0 && !gaps.includes('textCoverage')) {
     const pct = Math.round((textCoverage.withClaims / familyCount) * 100)
     coverageNotes.push(`Claim text readable for ${pct}% of families in this field.`)
     if (pct < 40) {

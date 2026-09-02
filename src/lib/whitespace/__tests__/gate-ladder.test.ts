@@ -6,8 +6,14 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { decideTypeAndStatus } from '../validate-stage'
-import type { GateOutcome } from '../types'
+import {
+  applyMappingOutcomes,
+  decideTypeAndStatus,
+  selectMappingCandidates,
+  type AttackHit,
+  type MappedCandidate,
+} from '../validate-stage'
+import type { AttackRecord, GateOutcome } from '../types'
 
 const gates = (overrides: Partial<Record<GateOutcome['gate'], GateOutcome['outcome']>>): GateOutcome[] => {
   const base: Record<GateOutcome['gate'], GateOutcome['outcome']> = {
@@ -84,5 +90,131 @@ describe('decideTypeAndStatus', () => {
       type: 'PATENT_WHITESPACE',
       status: 'INCONCLUSIVE',
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Mapping-candidate selection and the unread-art rule. The leak these pin: the
+// old "first 8 hits in insertion order" slice read only the first lexical
+// attack's retrieval, every other attack's art went unread, and
+// applyMappingOutcomes left those attacks CLEAN — survival credited to
+// searches whose results nobody looked at.
+// ---------------------------------------------------------------------------
+
+const hit = (familyKey: string, publicationNumber: string): AttackHit => ({
+  familyKey,
+  publicationNumber,
+  title: publicationNumber,
+  abstract: null,
+  claimsText: null,
+  strategy: 'SYNONYM_SHIFTED',
+})
+
+/** Mirrors keyForAttack in validate-stage: strategy + NUL + query. */
+const attackKey = (strategy: AttackRecord['strategy'], query: string) => `${strategy}\u0000${query}`
+
+describe('selectMappingCandidates', () => {
+  const fixture = () => {
+    const allHits = new Map<string, AttackHit>()
+    const byAttack = new Map<string, Set<string>>()
+    const addAttack = (key: string, families: string[]) => {
+      byAttack.set(key, new Set(families))
+      for (const family of families) {
+        if (!allHits.has(family)) allHits.set(family, hit(family, family.toUpperCase()))
+      }
+    }
+    return { allHits, byAttack, addAttack }
+  }
+
+  it('takes the top hit of every attack before the second of any', () => {
+    const { allHits, byAttack, addAttack } = fixture()
+    addAttack('a', ['a1', 'a2', 'a3', 'a4'])
+    addAttack('b', ['b1', 'b2'])
+    addAttack('c', ['c1'])
+
+    const chosen = selectMappingCandidates(byAttack, allHits, 5).map(entry => entry.familyKey)
+    expect(chosen).toEqual(['a1', 'b1', 'c1', 'a2', 'b2'])
+  })
+
+  it('does not choose a family twice when attacks overlap, and stops at exhaustion', () => {
+    const { allHits, byAttack, addAttack } = fixture()
+    addAttack('a', ['f1', 'f2'])
+    addAttack('b', ['f1', 'f3'])
+
+    const chosen = selectMappingCandidates(byAttack, allHits, 10).map(entry => entry.familyKey)
+    expect(chosen).toEqual(['f1', 'f2', 'f3'])
+  })
+
+  it('respects the limit', () => {
+    const { allHits, byAttack, addAttack } = fixture()
+    addAttack('a', ['a1', 'a2', 'a3'])
+    addAttack('b', ['b1', 'b2', 'b3'])
+    expect(selectMappingCandidates(byAttack, allHits, 4)).toHaveLength(4)
+    expect(selectMappingCandidates(byAttack, allHits, 0)).toHaveLength(0)
+  })
+})
+
+describe('applyMappingOutcomes', () => {
+  const verdict = (
+    publicationNumber: string,
+    fullCombination: MappedCandidate['fullCombination']
+  ): MappedCandidate => ({ publicationNumber, basis: 'claims', fullCombination, elements: [] })
+
+  const world = () => {
+    const allHits = new Map<string, AttackHit>([
+      ['f1', hit('f1', 'P1')],
+      ['f2', hit('f2', 'P2')],
+      ['f3', hit('f3', 'P3')],
+    ])
+    const byAttack = new Map<string, Set<string>>([
+      [attackKey('SYNONYM_SHIFTED', 'q1'), new Set(['f1', 'f2'])],
+      [attackKey('CPC_ADJACENT', 'q2'), new Set(['f3'])],
+      [attackKey('ASSIGNEE_PIVOT', 'q3'), new Set<string>()],
+    ])
+    const attacks: AttackRecord[] = [
+      { strategy: 'SYNONYM_SHIFTED', query: 'q1', hits: 2, outcome: 'CLEAN' },
+      { strategy: 'CPC_ADJACENT', query: 'q2', hits: 1, outcome: 'CLEAN' },
+      // Ran and legitimately found nothing — CLEAN is the truth for this one.
+      { strategy: 'ASSIGNEE_PIVOT', query: 'q3', hits: 0, outcome: 'CLEAN' },
+      { strategy: 'LITERATURE', query: 'q4', hits: 0, outcome: 'NOT_RUN', reason: 'no provider' },
+    ]
+    return { allHits, byAttack, attacks }
+  }
+
+  it('marks an attack whose retrieved art was never mapped NOT_RUN instead of CLEAN', () => {
+    const { allHits, byAttack, attacks } = world()
+    applyMappingOutcomes(attacks, byAttack, allHits, [verdict('P1', 'PARTIAL')])
+
+    expect(attacks[0].outcome).toBe('WEAKENING') // read: a PARTIAL among its hits
+    expect(attacks[1].outcome).toBe('NOT_RUN') // retrieved 1 document, none read
+    expect(attacks[1].reason).toContain('unread')
+    expect(attacks[2].outcome).toBe('CLEAN') // zero hits is a genuine clean run
+    expect(attacks[3].outcome).toBe('NOT_RUN') // untouched
+    expect(attacks[3].reason).toBe('no provider')
+  })
+
+  it('propagates a PRESENT verdict to REFUTING on the retrieving attack', () => {
+    const { allHits, byAttack, attacks } = world()
+    applyMappingOutcomes(attacks, byAttack, allHits, [verdict('P2', 'PRESENT'), verdict('P3', 'ABSENT')])
+
+    expect(attacks[0].outcome).toBe('REFUTING')
+    // ABSENT is still a READ verdict: the CPC attack stays CLEAN, not unread.
+    expect(attacks[1].outcome).toBe('CLEAN')
+  })
+
+  it('keeps unread attacks excluded from the terminology gate the ladder reads', () => {
+    // End to end through decideTypeAndStatus semantics: an unread expansion
+    // attack must not count as vocabulary tested, so a weakened G3 cannot
+    // reach VALIDATED on its strength.
+    const { allHits, byAttack, attacks } = world()
+    applyMappingOutcomes(attacks, byAttack, allHits, [verdict('P3', 'PARTIAL')])
+    // Only the CPC attack was read; the synonym attack is unread → NOT_RUN.
+    expect(attacks[0].outcome).toBe('NOT_RUN')
+    const expansionRan = attacks.some(
+      attack =>
+        (attack.strategy === 'SYNONYM_SHIFTED' || attack.strategy === 'SEMANTIC_PARAPHRASE') &&
+        attack.outcome !== 'NOT_RUN'
+    )
+    expect(expansionRan).toBe(false)
   })
 })

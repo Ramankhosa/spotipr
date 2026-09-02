@@ -63,6 +63,7 @@ function chooseK(n: number): number {
 
 export async function runClusterStage(input: {
   runId: string
+  workerId: string
   studyId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
@@ -101,6 +102,10 @@ export async function runClusterStage(input: {
   // the study already holds. The direct count is only the fallback.
   const censusFamilies = await familyCountFromCensus(input.studyId, input.scope)
 
+  // Hash order over the FAMILY KEY (stable business key), not the autoincrement
+  // id — the same reason the dimension census samples by md5(familyKey): ids
+  // are re-minted by a re-import, and a sample keyed on them redrew the area
+  // map for an identical scope.
   let sampleRows: SampleRow[]
   try {
     sampleRows = await withTimeout<SampleRow>(
@@ -122,7 +127,7 @@ export async function runClusterStage(input: {
           WHERE ${where} AND ${comparableVectorSql()}
           ORDER BY COALESCE(lp."familyId", lp."publicationNumber"), lp."publicationDate" DESC NULLS LAST, lp."publicationNumber"
         ) t
-        ORDER BY md5(t.id::text)
+        ORDER BY md5(t."familyKey")
         LIMIT ${SAMPLE_CAP}`
     )
   } catch (error) {
@@ -187,7 +192,7 @@ export async function runClusterStage(input: {
   const geometry = clusterGeometry(data, n, result)
   const layout = layoutCentroids(result.centroidMeans, result.k)
 
-  await heartbeatRun(input.runId)
+  await heartbeatRun(input.runId, input.workerId)
 
   // --- per-cluster aggregates from the sample -------------------------------
   const memberIndex: number[][] = Array.from({ length: result.k }, () => [])
@@ -264,7 +269,7 @@ export async function runClusterStage(input: {
     console.error('[Whitespace] Cluster labelling failed:', error instanceof Error ? error.message : error)
   }
 
-  await heartbeatRun(input.runId)
+  await heartbeatRun(input.runId, input.workerId)
 
   // --- persist: replace the study's cluster set atomically ------------------
   // Scoped to depth 0: promoted dimension gaps live at depth 1 with their own
@@ -344,8 +349,34 @@ export async function runClusterStage(input: {
       `Areas were computed from a ${SAMPLE_CAP.toLocaleString()}-family sample of a ~${fieldFamilies.toLocaleString()}-family field; per-area sizes are estimates.`
     )
   }
-  const embeddingCoverage = fieldFamilies > 0 ? n / Math.min(fieldFamilies, SAMPLE_CAP) : 0
-  if (embeddingCoverage < 0.7 && fieldFamilies > n) {
+  // Embedding coverage measured against the FIELD, not the sample cap. The old
+  // n / min(fieldFamilies, SAMPLE_CAP) read 1.0 whenever the sample filled, so
+  // in the capped regime the "invisible to the area map" note could never fire
+  // — even with 20% of the field embedded — and fieldEstimate extrapolated over
+  // unembedded families without caveat. When the sample did not fill, n IS the
+  // embedded-family count; when it did, one bounded count over the same field
+  // filter answers it.
+  let embeddedFamilies: number | null = n
+  if (n >= SAMPLE_CAP) {
+    try {
+      const embeddedRows = await withTimeout<{ families: bigint }>(
+        Prisma.sql`
+          SELECT COUNT(DISTINCT COALESCE(lp."familyId", lp."publicationNumber"))::bigint AS families
+          FROM "local_patents" lp
+          JOIN "local_patent_embeddings" e ON e."localPatentId" = lp."id"
+          WHERE ${where} AND ${comparableVectorSql()}`
+      )
+      embeddedFamilies = Number(embeddedRows[0]?.families ?? 0)
+    } catch (error) {
+      if (!isStatementTimeout(error)) throw error
+      embeddedFamilies = null
+    }
+  }
+  if (embeddedFamilies === null) {
+    coverageNotes.push(
+      'Embedding coverage of this field could not be measured within the stage budget — per-area field estimates assume the sample is representative.'
+    )
+  } else if (fieldFamilies > n && embeddedFamilies / Math.max(1, fieldFamilies) < 0.7) {
     coverageNotes.push('A substantial share of this field carries no embedding vector yet and is invisible to the area map.')
   }
 

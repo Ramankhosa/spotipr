@@ -16,8 +16,17 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  // Mirrors getOwnedStudy: a study created under another organisation must not
+  // follow the user across tenants, and only bites when BOTH sides carry a
+  // tenant. Tenantless studies are personal and always list.
   const studies = await prisma.whitespaceStudy.findMany({
-    where: { userId: auth.user.id, status: 'ACTIVE' },
+    where: {
+      userId: auth.user.id,
+      status: 'ACTIVE',
+      ...(auth.user.tenantId
+        ? { OR: [{ tenantId: null }, { tenantId: auth.user.tenantId }] }
+        : {}),
+    },
     orderBy: { updatedAt: 'desc' },
     take: 50,
     select: {
@@ -50,6 +59,22 @@ export async function POST(request: NextRequest) {
   // Invention studies arrive as a structured brief; it is kept verbatim for
   // display and recompiles, and flattened into seedText for the compiler.
   const rawInvention = (body?.invention ?? null) as Record<string, unknown> | null
+  if (kind === 'INVENTION' && rawInvention !== null) {
+    // A string or array here used to truthiness-pass, persist an all-empty
+    // brief, and leave a study that compiles from nothing.
+    const shaped = typeof rawInvention === 'object' && !Array.isArray(rawInvention)
+    const hasSubstance =
+      shaped &&
+      ['problem', 'approach', 'constraints'].some(
+        key => typeof rawInvention[key] === 'string' && (rawInvention[key] as string).trim()
+      )
+    if (!shaped || !hasSubstance) {
+      return NextResponse.json(
+        { error: 'The invention brief must carry at least one of problem, approach or constraints as text.' },
+        { status: 400 }
+      )
+    }
+  }
   const invention =
     kind === 'INVENTION' && rawInvention
       ? {

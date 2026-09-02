@@ -23,7 +23,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { GATE_LABEL, REVIEW_LABEL, STATUS_LABEL, STRATEGY_LABEL, TYPE_LABEL } from '@/lib/whitespace/labels'
 import { HUMAN_REVIEW_VERDICTS, MIN_REVIEW_NOTE, type HumanReviewVerdict } from '@/lib/whitespace/types'
-import { isPollAborted, pollRun, wsApi } from './api'
+import { conflictRunId, isPollAborted, pollRun, wsApi } from './api'
 
 interface HypothesisRow {
   id: string
@@ -76,6 +76,7 @@ export function HypothesesPanel({
   onChanged,
   proposeEnabled = true,
   emptyHint,
+  refreshToken,
 }: {
   studyId: string
   areasReady: boolean
@@ -89,11 +90,18 @@ export function HypothesesPanel({
   proposeEnabled?: boolean
   /** Replaces the landscape-specific empty state when the route differs. */
   emptyHint?: string
+  /**
+   * Bump to refetch data in place. Deliberately a prop rather than a `key`:
+   * remounting on every upstream stage completion destroyed an in-progress
+   * review draft, the open verdict chips and the scroll position.
+   */
+  refreshToken?: number
 }) {
   const { toast } = useToast()
   const [hypotheses, setHypotheses] = useState<HypothesisRow[]>([])
   const [concepts, setConcepts] = useState<ConceptRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [validatingId, setValidatingId] = useState<string | null>(null)
   const [convertingId, setConvertingId] = useState<string | null>(null)
@@ -101,6 +109,7 @@ export function HypothesesPanel({
   const [savingReview, setSavingReview] = useState(false)
   const [draftVerdict, setDraftVerdict] = useState<HumanReviewVerdict | null>(null)
   const [draftNote, setDraftNote] = useState('')
+  const [hasValidating, setHasValidating] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -109,16 +118,23 @@ export function HypothesesPanel({
       )
       setHypotheses(data.hypotheses)
       setConcepts(data.concepts)
-    } catch {
-      // Auth errors surface on the study page; this panel keeps its empty state.
+      setLoadFailed(null)
+      setHasValidating(data.hypotheses.some(hypothesis => hypothesis.status === 'VALIDATING'))
+    } catch (error) {
+      // Auth errors surface on the study page; anything else must not pass
+      // itself off as a genuinely empty hypothesis list.
+      if ((error as { status?: number })?.status !== 401) {
+        setLoadFailed(error instanceof Error ? error.message : 'Could not load the hypotheses.')
+      }
     } finally {
       setLoading(false)
     }
   }, [studyId])
 
+  // `refreshToken` refetches in place — same data path, no state reset.
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, refreshToken])
 
   const generate = useCallback(async () => {
     setGenerating(true)
@@ -154,11 +170,21 @@ export function HypothesesPanel({
       const controller = new AbortController()
       pollAbort.current = controller
       try {
-        const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
-          method: 'POST',
-          body: JSON.stringify({ stage: 'VALIDATE', params: { hypothesisId } }),
-        })
-        const final = await pollRun(studyId, started.runId, undefined, controller.signal)
+        let runId: string
+        try {
+          const started = await wsApi<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
+            method: 'POST',
+            body: JSON.stringify({ stage: 'VALIDATE', params: { hypothesisId } }),
+          })
+          runId = started.runId
+        } catch (error) {
+          // 409 means this hypothesis is already being validated — attach to
+          // that run rather than reporting a failure for work under way.
+          const liveRunId = conflictRunId(error)
+          if (!liveRunId) throw error
+          runId = liveRunId
+        }
+        const final = await pollRun(studyId, runId, undefined, controller.signal)
         if (final.status === 'FAILED') {
           toast({ variant: 'error', title: 'Validation did not finish', description: final.error || 'Run it again.' })
         }
@@ -173,11 +199,51 @@ export function HypothesesPanel({
         })
       } finally {
         if (pollAbort.current === controller) pollAbort.current = null
-        setValidatingId(null)
+        // Clear only if still the owner — validating B aborts A, whose finally
+        // must not wipe B's spinner and re-enable its button mid-run.
+        setValidatingId(current => (current === hypothesisId ? null : current))
       }
     },
     [studyId, toast, load, onChanged]
   )
+
+  /**
+   * Re-attaches after a reload: a hypothesis left VALIDATING has a QUEUED or
+   * PROCESSING VALIDATE run behind it, and without a poll it read "Validating"
+   * forever. Polls every live VALIDATE run and refreshes when they settle; a
+   * failure is not toasted because the user did not just start this work.
+   */
+  const reattachValidation = useCallback(async () => {
+    if (pollAbort.current) return
+    const controller = new AbortController()
+    pollAbort.current = controller
+    try {
+      const data = await wsApi<{ runs: Array<{ id: string; stage: string; status: string }> }>(
+        `/api/whitespace/studies/${studyId}`,
+        { signal: controller.signal }
+      )
+      const live = data.runs.filter(
+        run => run.stage === 'VALIDATE' && (run.status === 'QUEUED' || run.status === 'PROCESSING')
+      )
+      if (!live.length) {
+        // No run to wait on (orphaned status) — stop re-attempting.
+        setHasValidating(false)
+        return
+      }
+      await Promise.all(live.map(run => pollRun(studyId, run.id, undefined, controller.signal)))
+      await load()
+      onChanged?.()
+    } catch (error) {
+      if (isPollAborted(error)) return
+      // Background re-attach; the cards keep their status until the next load.
+    } finally {
+      if (pollAbort.current === controller) pollAbort.current = null
+    }
+  }, [studyId, load, onChanged])
+
+  useEffect(() => {
+    if (hasValidating) void reattachValidation()
+  }, [hasValidating, reattachValidation])
 
   const convert = useCallback(
     async (hypothesisId: string) => {
@@ -268,7 +334,24 @@ export function HypothesesPanel({
           </div>
         )}
 
-        {areasReady && !loading && !hypotheses.length && !generating && (
+        {areasReady && !loading && loadFailed && !hypotheses.length && !generating && (
+          <p className="text-sm text-muted-foreground">
+            The hypotheses could not be loaded — {loadFailed}{' '}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-2"
+              onClick={() => {
+                setLoading(true)
+                void load()
+              }}
+            >
+              Retry
+            </Button>
+          </p>
+        )}
+
+        {areasReady && !loading && !loadFailed && !hypotheses.length && !generating && (
           <p className="text-sm text-muted-foreground">
             {emptyHint ??
               'None yet. Reading claims in a few areas first (above) gives the generator its strongest signal — element combinations the field measurably avoids.'}
@@ -448,10 +531,21 @@ export function HypothesesPanel({
                           : 'Your reasoning, in your words. It appears in the exported report.'
                       }
                     />
+                    {/* The server enforces this floor; saying so before Save
+                        beats an error toast after it. Trimmed, as the server trims. */}
+                    {draftVerdict === 'REJECTED' && draftNote.trim().length < MIN_REVIEW_NOTE && (
+                      <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+                        {draftNote.trim().length} / {MIN_REVIEW_NOTE} characters — a rejection needs your reasoning.
+                      </p>
+                    )}
                     <div className="mt-2 flex items-center gap-2">
                       <Button
                         size="sm"
-                        disabled={!draftVerdict || savingReview}
+                        disabled={
+                          !draftVerdict ||
+                          savingReview ||
+                          (draftVerdict === 'REJECTED' && draftNote.trim().length < MIN_REVIEW_NOTE)
+                        }
                         onClick={() => draftVerdict && void saveReview(hypothesis.id, draftVerdict, draftNote)}
                       >
                         {savingReview ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
