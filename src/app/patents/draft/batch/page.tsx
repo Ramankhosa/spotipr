@@ -137,6 +137,7 @@ export default function PatentDraftBatchPage() {
   const [defaultJurisdictions, setDefaultJurisdictions] = useState('IN')
   const [defaultFilingType, setDefaultFilingType] = useState('utility')
   const [defaultClaimsHandling, setDefaultClaimsHandling] = useState<ClaimsHandling>('draft from brief')
+  const [defaultIdeaHandling, setDefaultIdeaHandling] = useState('structure and polish')
   const [defaultPriorArtHandling, setDefaultPriorArtHandling] = useState<PriorArtHandling>('auto')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([])
@@ -158,8 +159,9 @@ export default function PatentDraftBatchPage() {
     defaultJurisdictions: normalizeJurisdictionText(defaultJurisdictions),
     defaultFilingType,
     defaultClaimsHandling,
+    defaultIdeaHandling,
     defaultPriorArtHandling,
-  }), [defaultClaimsHandling, defaultFilingType, defaultJurisdictions, defaultPriorArtHandling])
+  }), [defaultClaimsHandling, defaultFilingType, defaultIdeaHandling, defaultJurisdictions, defaultPriorArtHandling])
 
   const hasBlockingErrors = previewRows.some(row => row.errors.length > 0)
   const hasDocumentBlockingErrors = documentRows.some(row => row.errors.length > 0)
@@ -627,6 +629,18 @@ export default function PatentDraftBatchPage() {
                     <option value="improve">Improve</option>
                     <option value="auto">Auto</option>
                   </select>
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium text-slate-700">Default idea handling</span>
+                  <select
+                    value={defaultIdeaHandling}
+                    onChange={(event) => setDefaultIdeaHandling(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
+                  >
+                    <option value="structure and polish">Structure and polish</option>
+                    <option value="keep as is">Keep exactly as provided</option>
+                  </select>
+                  <span className="mt-1 block text-xs text-slate-500">Applies to every row unless its ideaHandling column says otherwise.</span>
                 </label>
                 <label className="block">
                   <span className="text-sm font-medium text-slate-700">Default prior-art handling</span>

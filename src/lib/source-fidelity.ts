@@ -133,3 +133,22 @@ export function buildSourceFidelityModeLine(mode: SourceFidelityMode): string {
     ? 'SOURCE FIDELITY MODE: PRESERVE — the user asked to keep their idea exactly as provided. Stay strictly inside the inventor\'s stated idea scope and terminology.'
     : 'SOURCE FIDELITY MODE: STRUCTURE_ONLY — wording may be structured and polished, but no technical facts may be added.'
 }
+
+/**
+ * Wording that means "keep my idea exactly as provided" (PRESERVE mode) in the
+ * free-text entry points: the email "Idea Handling:" label and the batch
+ * spreadsheet's ideaHandling column. Shared so both agree on what counts.
+ */
+export const PRESERVE_REQUEST_PATTERN =
+  /(keep\s*(it|my\s*idea)?\s*as[\s-]*is|as[\s-]*it[\s-]*is|preserve|exactly\s+as\s+provided|verbatim|do\s+not\s+(refine|change|modify))/i
+
+/**
+ * Maps an idea-handling phrase to `allowRefine`. Returns undefined for blank
+ * input so a caller can fall through to a batch-level default rather than
+ * silently choosing structure-and-polish.
+ */
+export function resolveAllowRefineFromIdeaHandling(value: unknown): boolean | undefined {
+  const text = String(value ?? '').trim()
+  if (!text) return undefined
+  return !PRESERVE_REQUEST_PATTERN.test(text)
+}

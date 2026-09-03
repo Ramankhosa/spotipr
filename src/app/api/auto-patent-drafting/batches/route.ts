@@ -23,6 +23,7 @@ function readDefaults(value: Record<string, unknown>): AutoPatentDraftBatchDefau
     defaultFilingType: typeof value.defaultFilingType === 'string' ? value.defaultFilingType : undefined,
     defaultClaimsHandling: typeof value.defaultClaimsHandling === 'string' ? value.defaultClaimsHandling : undefined,
     defaultPriorArtHandling: typeof value.defaultPriorArtHandling === 'string' ? value.defaultPriorArtHandling : undefined,
+    defaultIdeaHandling: typeof value.defaultIdeaHandling === 'string' ? value.defaultIdeaHandling : undefined,
   }
 }
 

@@ -296,3 +296,63 @@ describe('auto patent draft document mode', () => {
     expect(ideas[0].ideaDetails).toBe('Manually typed disclosure.')
   })
 })
+
+describe('idea handling (PRESERVE) reaches batch drafts', () => {
+  const baseIdea = { title: 'Solar dryer', ideaDetails: 'A solar dryer having a clip for the lid handle.' }
+
+  test('a row saying "keep as is" resolves to PRESERVE', () => {
+    const { rows: [row] } = previewAutoPatentDraftBatchIdeas([{ ...baseIdea, ideaHandling: 'keep as is' } as any])
+    expect(row.allowRefine).toBe(false)
+  })
+
+  test('the batch default applies to rows that do not specify one', () => {
+    const { rows: [row] } = previewAutoPatentDraftBatchIdeas([baseIdea as any], { defaultIdeaHandling: 'preserve' })
+    expect(row.allowRefine).toBe(false)
+  })
+
+  test('a row overrides the batch default in both directions', () => {
+    const { rows: [preserveDefaultButPolishRow] } = previewAutoPatentDraftBatchIdeas(
+      [{ ...baseIdea, ideaHandling: 'structure and polish' } as any],
+      { defaultIdeaHandling: 'keep as is' }
+    )
+    expect(preserveDefaultButPolishRow.allowRefine).toBe(true)
+
+    const { rows: [polishDefaultButPreserveRow] } = previewAutoPatentDraftBatchIdeas(
+      [{ ...baseIdea, ideaHandling: 'exactly as provided' } as any],
+      { defaultIdeaHandling: 'structure and polish' }
+    )
+    expect(polishDefaultButPreserveRow.allowRefine).toBe(false)
+  })
+
+  test('an explicit allowRefine from a JSON caller outranks the wording', () => {
+    const { rows: [row] } = previewAutoPatentDraftBatchIdeas(
+      [{ ...baseIdea, allowRefine: false, ideaHandling: 'structure and polish' } as any]
+    )
+    expect(row.allowRefine).toBe(false)
+  })
+
+  test('saying nothing anywhere keeps the historical structure-and-polish behaviour', () => {
+    const { rows: [row] } = previewAutoPatentDraftBatchIdeas([baseIdea as any])
+    expect(row.allowRefine).toBeUndefined()
+  })
+
+  test('the spreadsheet template documents the column', () => {
+    expect(AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS).toContain('ideaHandling')
+    const workbook = XLSX.read(buildAutoPatentDraftBatchTemplate().buffer, { type: 'buffer' })
+    const guide = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[1]], { header: 1 }) as string[][]
+    expect(guide.some(r => r[0] === 'ideaHandling')).toBe(true)
+  })
+
+  test('an uploaded sheet carries the column through to the parsed idea', () => {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['title', 'ideaDetails', 'ideaHandling'],
+      ['Solar dryer', 'A solar dryer having a clip for the lid handle.', 'keep as is'],
+    ])
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Ideas')
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
+    const ideas = parseAutoPatentDraftIdeasFromUpload({ buffer, filename: 'ideas.xlsx' })
+    const { rows: [row] } = previewAutoPatentDraftBatchIdeas(ideas)
+    expect(row.allowRefine).toBe(false)
+  })
+})

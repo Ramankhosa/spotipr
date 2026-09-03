@@ -4,6 +4,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import * as XLSX from 'xlsx'
 import { prisma } from '@/lib/prisma'
+import { resolveAllowRefineFromIdeaHandling } from '@/lib/source-fidelity'
 import { sendEmail, SITE_URL } from '@/lib/mailer'
 import { generateToken, hashToken } from '@/lib/token-utils'
 import {
@@ -70,6 +71,8 @@ export type AutoPatentDraftBatchDefaults = {
   defaultFilingType?: string
   defaultClaimsHandling?: PatentDraftingAutomationPayload['claimsHandling'] | string
   defaultPriorArtHandling?: PatentDraftingAutomationPayload['priorArtHandling'] | string
+  /** 'keep as is' / 'preserve' => PRESERVE mode for rows that do not override it. */
+  defaultIdeaHandling?: string
 }
 
 export type AutoPatentDraftBatchPreviewRow = AutoPatentDraftIdeaInput & {
@@ -115,6 +118,7 @@ export const AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS = [
   'filingType',
   'claimsText',
   'claimsHandling',
+  'ideaHandling',
   'claimsNotes',
   'priorArtHandling',
   'illustrativeData',
@@ -132,6 +136,7 @@ const TEMPLATE_GUIDE_ROWS = [
   ['filingType', 'Optional', 'utility, provisional, or design. Defaults to utility.', 'utility'],
   ['claimsText', 'Optional', 'Existing claims to use/improve depending on claimsHandling.', '1. A dose tracking inhaler comprising...'],
   ['claimsHandling', 'Optional', 'use as is, improve, draft from brief, or auto. Defaults to draft from brief.', 'draft from brief'],
+  ['ideaHandling', 'Optional', 'Keep as is / preserve to draft strictly within the inventor wording; anything else structures and polishes. Defaults to the batch setting.', 'keep as is'],
   ['claimsNotes', 'Optional', 'Specific instructions for claims drafting.', 'Include one broad system claim and dependent sensing claims.'],
   ['priorArtHandling', 'Optional', 'use only, expand with search, or auto. Defaults to auto.', 'auto'],
   ['illustrativeData', 'Optional', 'Additional support data for detailed description.', 'Prototype detected 98% of actuation events over 30 days.'],
@@ -244,6 +249,7 @@ function readIdeaFields(input: AutoPatentDraftIdeaInput, index: number) {
   const illustrativeData = safeString(input.illustrativeData) || firstString(row, ['illustrativeData', 'detailedDescriptionData', 'supportData'])
   const jurisdictions = normalizeJurisdictions(input.jurisdictions ?? row.jurisdictions ?? row.jurisdiction)
   const filingType = safeString(input.filingType) || firstString(row, ['filingType', 'filing_type'])
+  const ideaHandling = firstString(row, ['ideaHandling', 'idea_handling', 'ideaTreatment', 'idea_treatment', 'sourceHandling', 'source_handling'])
 
   return {
     title,
@@ -257,6 +263,7 @@ function readIdeaFields(input: AutoPatentDraftIdeaInput, index: number) {
     illustrativeData,
     jurisdictions,
     filingType,
+    ideaHandling,
     claimsHandling: input.claimsHandling ?? row.claimsHandling ?? row.claims_handling,
     priorArtHandling: input.priorArtHandling ?? row.priorArtHandling ?? row.prior_art_handling,
   }
@@ -271,6 +278,11 @@ function applyBatchDefaults(input: AutoPatentDraftIdeaInput, defaults: AutoPaten
     filingType: fields.filingType || safeString(defaults.defaultFilingType) || 'utility',
     claimsHandling: safeString(fields.claimsHandling) ? fields.claimsHandling as PatentDraftingAutomationPayload['claimsHandling'] : normalizeClaimsHandling(defaults.defaultClaimsHandling),
     priorArtHandling: safeString(fields.priorArtHandling) ? fields.priorArtHandling as PatentDraftingAutomationPayload['priorArtHandling'] : normalizePriorArtHandling(defaults.defaultPriorArtHandling, !!(fields.literatureReviewInstructions || fields.literatureReviewContent)),
+    // Row wording wins; otherwise the batch-level setting decides. An explicit
+    // input.allowRefine (JSON API callers) outranks both.
+    allowRefine: input.allowRefine
+      ?? resolveAllowRefineFromIdeaHandling(fields.ideaHandling)
+      ?? resolveAllowRefineFromIdeaHandling(defaults.defaultIdeaHandling),
   }
 }
 

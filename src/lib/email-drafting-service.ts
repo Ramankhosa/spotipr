@@ -5,6 +5,7 @@ import mammoth from 'mammoth'
 import { simpleParser } from 'mailparser'
 import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { resolveAllowRefineFromIdeaHandling } from '@/lib/source-fidelity'
 import { generateJWT } from '@/lib/auth'
 import { sendEmail, SITE_URL } from '@/lib/mailer'
 import { generateToken, hashToken } from '@/lib/token-utils'
@@ -431,8 +432,8 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
 
   // "Idea Handling: keep as is / preserve / exactly as provided" opts the draft into
   // PRESERVE mode; anything else keeps the historical structure-and-polish default.
-  const ideaHandlingRaw = (sections['Idea Handling'] || sections['Idea Treatment'] || '').trim().toLowerCase()
-  const allowRefine = !/(keep\s*(it|my\s*idea)?\s*as[\s-]*is|as[\s-]*it[\s-]*is|preserve|exactly\s+as\s+provided|verbatim|do\s+not\s+(refine|change|modify))/i.test(ideaHandlingRaw)
+  const ideaHandlingRaw = sections['Idea Handling'] || sections['Idea Treatment'] || ''
+  const allowRefine = resolveAllowRefineFromIdeaHandling(ideaHandlingRaw) ?? true
 
   const priorArtHandling = sections['Prior Art Handling']
     ? parsePriorArtHandling(sections['Prior Art Handling'])
