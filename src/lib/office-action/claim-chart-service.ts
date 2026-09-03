@@ -1,6 +1,6 @@
 import { prisma } from '../prisma'
 import type { OfficeActionProfile } from './oa-profile-schema'
-import { runOaStage, type OaGateway } from './oa-llm-service'
+import { runOaStage, fenceUntrusted, type OaGateway } from './oa-llm-service'
 import { parseClaimElements, type ClaimElement } from './document-intake'
 import { verifyQuote } from './objection-classifier'
 import { normalizeLegacyClaimChart, coerceCellVerdict, type CellVerdictV2 } from './oa-json-schema'
@@ -119,7 +119,9 @@ export async function buildClaimChart(
     JSON.stringify(elements.map((e, i) => ({ row: i, claim: e.claimNumber, feature: e.text }))),
     '',
     'Cited documents (columns) — quote ONLY from these texts:',
-    input.citations.map(c => `### ${c.label}\n${truncate(citationCorpus(c), 6000)}`).join('\n\n'),
+    // Fenced: these are fetched from a public page or uploaded by the attorney,
+    // and this is the stage whose verdicts the whole novelty argument rests on.
+    input.citations.map(c => fenceUntrusted(`cited document ${c.label}`, truncate(citationCorpus(c), 6000))).join('\n\n'),
     '',
     'For every row × document, decide DISCLOSED / NOT_FOUND / AMBIGUOUS. For DISCLOSED you MUST include `passage` copied verbatim from that document plus a short `location`. If you cannot find a verbatim passage, use NOT_FOUND or AMBIGUOUS — never invent one. NOT_FOUND means you did not find it in the text supplied, not that the document does not contain it.',
     'Return JSON: { cells: [{ row, citationLabel, verdict, passage?, location? }] }.'

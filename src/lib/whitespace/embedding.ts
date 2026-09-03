@@ -74,6 +74,26 @@ export interface SemanticNeighbor {
   distance: number
 }
 
+/**
+ * Nearest-per-family view of a neighbour list. Neighbours arrive one row per
+ * PUBLICATION, distance-ascending, so a well-populated family would otherwise
+ * fill several of a short display list with the same invention; keeping the
+ * first (nearest) row per familyKey preserves the ranking while making each
+ * row a distinct family. Pure — shared by the search endpoint and the
+ * hypothesis nearest-art capture.
+ */
+export function dedupeNeighborsByFamily(neighbors: SemanticNeighbor[], max: number): SemanticNeighbor[] {
+  const seen = new Set<string>()
+  const kept: SemanticNeighbor[] = []
+  for (const neighbor of neighbors) {
+    if (seen.has(neighbor.familyKey)) continue
+    seen.add(neighbor.familyKey)
+    kept.push(neighbor)
+    if (kept.length >= max) break
+  }
+  return kept
+}
+
 export type SemanticLaneResult =
   | {
       available: true

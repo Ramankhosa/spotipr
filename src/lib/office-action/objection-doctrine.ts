@@ -1,4 +1,5 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
+import { collectProvisions } from './prose-evidence'
 
 /**
  * Office Action Studio — jurisdiction law block
@@ -84,6 +85,30 @@ export function allProfileAuthorities(profile: OfficeActionProfile): Authority[]
   }
   const seen = new Set<string>()
   return out.filter(c => c?.name && (seen.has(c.name) ? false : (seen.add(c.name), true)))
+}
+
+/**
+ * Every statute, rule and form this jurisdiction declares, as canonical keys.
+ *
+ * Harvested from the WHOLE profile rather than from a list of structured
+ * fields: the provisions a reply legitimately cites are spread across
+ * `legalBasis`, sub-clause `basis`, deadline `basis`, consequence `basis`,
+ * extension `form`, `scopeRule`, `replySentence`, and the attorney-written
+ * `guidance` / `actions` / `argumentSkeleton` prose. Reading all of it means the
+ * allowlist grows with the profile instead of drifting behind a hand-maintained
+ * field list — which for a check that only warns is the right trade.
+ */
+const provisionCache = new WeakMap<object, Set<string>>()
+
+export function profileProvisionKeys(profile: OfficeActionProfile): Set<string> {
+  const cached = provisionCache.get(profile as unknown as object)
+  if (cached) return cached
+  const keys = new Set<string>()
+  try {
+    for (const p of collectProvisions(JSON.stringify(profile))) keys.add(p.key)
+  } catch { /* an unserialisable profile just yields an empty allowlist, which skips the check */ }
+  provisionCache.set(profile as unknown as object, keys)
+  return keys
 }
 
 export function renderObjectionDoctrine(profile: OfficeActionProfile, objection: DoctrineTarget): string {

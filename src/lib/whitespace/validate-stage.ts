@@ -22,8 +22,9 @@ import { Prisma, TaskCode, type WhitespaceHypothesis } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { textMatchPredicate } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
+import { STRATEGY_LABEL } from './labels'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
-import { heartbeatRun, WhitespacePermanentError } from './run-lease'
+import { WhitespacePermanentError } from './run-lease'
 import {
   buildDisproofQueriesPrompt,
   buildElementMappingPrompt,
@@ -39,6 +40,7 @@ import type {
   WhitespaceScope,
   WhitespaceType,
 } from './types'
+import type { RunReporter } from './run-reporter'
 
 const ATTACK_HIT_LIMIT = 25
 /**
@@ -49,6 +51,21 @@ const ATTACK_HIT_LIMIT = 25
  */
 const MAPPING_CANDIDATES = 12
 const SEARCH_TIMEOUT_MS = 20_000
+
+/** The steps this stage really takes, declared up front so the rail never guesses. */
+const VALIDATE_STEPS = [
+  { key: 'plan', label: 'Planning the attacks' },
+  { key: 'attack', label: 'Running the attacks' },
+  { key: 'map', label: 'Reading the closest hits against the hypothesis' },
+  { key: 'redteam', label: 'Naming and running the strongest remaining attack' },
+  { key: 'record', label: 'Recording the evidence' },
+  { key: 'verdict', label: 'Applying the gates' },
+]
+const VALIDATE_COUNTERS = [
+  { key: 'attacks', label: 'Attacks' },
+  { key: 'hits', label: 'Families retrieved' },
+  { key: 'mapped', label: 'Documents read' },
+]
 
 /** Exported for tests (candidate selection and mapping-outcome relabelling). */
 export interface AttackHit {
@@ -69,6 +86,18 @@ export interface AttackHit {
  */
 type AttackOutcome = { hits: AttackHit[] } | { hits: null; reason: string }
 
+/**
+ * Where an attack sits in the live narration: the reporter to tell and the
+ * attack's place in the plan. The ordinal is carried rather than read off
+ * `attacks.length`, which also holds the lane-unavailable and literature
+ * records — and the red team's attack arrives after those.
+ */
+interface AttackNarration {
+  reporter: RunReporter
+  n: number
+  total: number
+}
+
 /** Exported for tests. */
 export interface MappedCandidate {
   publicationNumber: string
@@ -80,6 +109,7 @@ export interface MappedCandidate {
 interface ValidateStageInput {
   runId: string
   workerId: string
+  reporter: RunReporter
   studyId: string
   hypothesisId: string
   scope: WhitespaceScope
@@ -130,13 +160,19 @@ async function executeValidation(
     throw new WhitespacePermanentError('This hypothesis carries no element combination to test.')
   }
 
+  const reporter = input.reporter
+  await reporter.plan(VALIDATE_STEPS, VALIDATE_COUNTERS)
+
   const attacks: AttackRecord[] = []
   const allHits = new Map<string, AttackHit>()
   const hitFamiliesByAttack = new Map<string, Set<string>>()
 
   // --- 1. compile the attack plan -------------------------------------------
+  await reporter.step('plan', `Planning attacks against ${elements.length} elements`)
   const cpcInScope = input.scope.classifications.filter(c => c.accepted).map(c => c.code)
   let plan: { synonymShifted: string[]; semanticParaphrases: string[]; cpcAdjacent: string[]; assigneeCandidates: string[] }
+  // Narrated outside the try: a lost lease must surface, not read as a failed plan.
+  reporter.event('model', `Writing disproof queries against ${elements.length} elements`)
   try {
     const response = await runWhitespaceLLM({
       taskCode: TaskCode.WS_VALIDATE,
@@ -165,20 +201,47 @@ async function executeValidation(
       cpcAdjacent: [],
       assigneeCandidates: [],
     }
+    reporter.event('note', 'Using the hypothesis’s own search terms')
     console.error('[Whitespace] Disproof query generation failed; using fallback queries:', error)
   }
 
-  await heartbeatRun(input.runId, input.workerId)
+  // The semantic lane is a deployment fact, not a per-query one: when it is off,
+  // every paraphrase collapses into one record that could not run, and the plan
+  // is counted the way the evidence trail will record it.
+  const semanticConfigured = semanticLaneConfigured()
+  const meaningAttacks = semanticConfigured ? plan.semanticParaphrases.length : 1
+  const attackTotal = plan.synonymShifted.length + meaningAttacks + plan.cpcAdjacent.length + plan.assigneeCandidates.length
+  reporter.count('attacks', 0, attackTotal)
+  reporter.event(
+    'count',
+    `${attackTotal} attacks planned: ${plan.synonymShifted.length} vocabulary, ${meaningAttacks} meaning, ${plan.cpcAdjacent.length} adjacent-class, ${plan.assigneeCandidates.length} portfolio`
+  )
+
+  await reporter.heartbeat()
 
   // --- 2. run the four attack strategies ------------------------------------
-  for (const query of plan.synonymShifted) {
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'SYNONYM_SHIFTED', query, await lexicalAttack(query))
+  // Each attack is announced before its search runs — the panel names the
+  // attack in flight, not the one just finished — and recorded after it.
+  let attackOrdinal = 0
+  const runAttack = async (
+    strategy: AttackRecord['strategy'],
+    query: string,
+    search: () => Promise<AttackOutcome>
+  ): Promise<void> => {
+    const n = ++attackOrdinal
+    await reporter.step('attack', `${strategyLabel(strategy)}, attack ${n} of ${attackTotal}`, { n, total: attackTotal })
+    recordAttack(attacks, allHits, hitFamiliesByAttack, strategy, query, await search(), { reporter, n, total: attackTotal })
   }
 
-  if (semanticLaneConfigured()) {
+  for (const query of plan.synonymShifted) {
+    await runAttack('SYNONYM_SHIFTED', query, () => lexicalAttack(query))
+  }
+
+  if (semanticConfigured) {
     for (const paraphrase of plan.semanticParaphrases) {
-      const result = await semanticNeighbors({ queryText: paraphrase, limit: ATTACK_HIT_LIMIT })
-      if (result.available) {
+      await runAttack('SEMANTIC_PARAPHRASE', paraphrase, async () => {
+        const result = await semanticNeighbors({ queryText: paraphrase, limit: ATTACK_HIT_LIMIT })
+        if (!result.available) return { hits: null, reason: result.reason }
         const hits: AttackHit[] = result.neighbors.map(neighbor => ({
           familyKey: neighbor.familyKey,
           publicationNumber: neighbor.publicationNumber,
@@ -187,34 +250,22 @@ async function executeValidation(
           claimsText: null,
           strategy: 'SEMANTIC_PARAPHRASE',
         }))
-        recordAttack(attacks, allHits, hitFamiliesByAttack, 'SEMANTIC_PARAPHRASE', paraphrase, { hits })
-      } else {
-        attacks.push({ strategy: 'SEMANTIC_PARAPHRASE', query: paraphrase, hits: 0, outcome: 'NOT_RUN', reason: result.reason })
-      }
+        return { hits }
+      })
     }
   } else {
-    attacks.push({
-      strategy: 'SEMANTIC_PARAPHRASE',
-      query: plan.semanticParaphrases.join(' | ') || hypothesis.statement,
-      hits: 0,
-      outcome: 'NOT_RUN',
+    await runAttack('SEMANTIC_PARAPHRASE', plan.semanticParaphrases.join(' | ') || hypothesis.statement, async () => ({
+      hits: null,
       reason: 'Semantic lane not configured — paraphrase attacks were not run.',
-    })
+    }))
   }
 
   for (const code of plan.cpcAdjacent) {
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'CPC_ADJACENT', code, await cpcAttack(code, elements))
+    await runAttack('CPC_ADJACENT', code, () => cpcAttack(code, elements))
   }
 
   for (const assignee of plan.assigneeCandidates) {
-    recordAttack(
-      attacks,
-      allHits,
-      hitFamiliesByAttack,
-      'ASSIGNEE_PIVOT',
-      assignee,
-      await assigneeAttack(assignee, elements)
-    )
+    await runAttack('ASSIGNEE_PIVOT', assignee, () => assigneeAttack(assignee, elements))
   }
 
   // Literature disproof: no NPL provider is wired into this stage yet. Recorded
@@ -226,8 +277,9 @@ async function executeValidation(
     outcome: 'NOT_RUN',
     reason: 'No non-patent-literature provider is configured for this deployment.',
   })
+  reporter.event('note', 'Literature search not available in this corpus')
 
-  await heartbeatRun(input.runId, input.workerId)
+  await reporter.heartbeat()
 
   // --- 3. element-map the closest hits --------------------------------------
   // Publication numbers the model invented or garbled, dropped rather than
@@ -238,9 +290,12 @@ async function executeValidation(
   // direction and exactly the fail-open this stage exists to prevent.
   let malformedMappings = 0
 
-  const mapCandidates = async (candidates: AttackHit[]): Promise<MappedCandidate[]> => {
+  /** Null when the mapping call itself failed — distinct from "read, nothing usable". */
+  const mapCandidates = async (candidates: AttackHit[]): Promise<MappedCandidate[] | null> => {
     if (!candidates.length) return []
     const enriched = await enrichWithClaims(candidates)
+    reporter.event('model', `Comparing ${enriched.length} documents against the hypothesis`)
+    const accepted: MappedCandidate[] = []
     try {
       const response = await runWhitespaceLLM({
         taskCode: TaskCode.WS_VALIDATE,
@@ -262,7 +317,6 @@ async function executeValidation(
       // downgraded to survival. Normalised comparison against the candidate set
       // closes that; anything still unmatched is counted, not guessed at.
       const byNormalised = new Map(enriched.map(entry => [normalisePublicationNumber(entry.publicationNumber), entry.publicationNumber]))
-      const accepted: MappedCandidate[] = []
       for (const candidate of parsed.candidates ?? []) {
         if (!candidate || typeof candidate.publicationNumber !== 'string') continue
         const resolved = byNormalised.get(normalisePublicationNumber(candidate.publicationNumber))
@@ -295,20 +349,31 @@ async function executeValidation(
             : [],
         })
       }
-      return accepted
     } catch (error) {
       console.error('[Whitespace] Element mapping failed:', error)
-      return []
+      return null
     }
+    // Narrated outside the try: a lost lease must surface, not read as a failed mapping.
+    for (const candidate of accepted) reporter.event('read', `Read ${candidate.publicationNumber} in full`)
+    return accepted
   }
 
-  let mapped: MappedCandidate[] = await mapCandidates(
-    selectMappingCandidates(hitFamiliesByAttack, allHits, MAPPING_CANDIDATES)
-  )
+  const primaryCandidates = selectMappingCandidates(hitFamiliesByAttack, allHits, MAPPING_CANDIDATES)
+  let mapped: MappedCandidate[] = []
+  if (primaryCandidates.length) {
+    await reporter.step('map', `Reading ${primaryCandidates.length} closest documents in full`)
+    const primaryMapped = await mapCandidates(primaryCandidates)
+    if (primaryMapped === null) await reporter.fail('map', 'the closest hits could not be read')
+    else mapped = primaryMapped
+  } else {
+    await reporter.skip('map', 'nothing retrieved to read')
+  }
+  reporter.count('mapped', mapped.length)
 
   applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
 
   // --- 4. red team names and executes the strongest remaining attack --------
+  await reporter.step('redteam', 'Naming the strongest remaining attack')
   let redTeam: {
     strongestRemainingAttack?: { description?: string; query?: string | null } | null
     feasibilityConcern?: string | null
@@ -317,6 +382,8 @@ async function executeValidation(
     verdict?: string
     verdictReason?: string
   } = {}
+  let redTeamFailed = false
+  reporter.event('model', `Reviewing ${attacks.length} attacks for the strongest one still untried`)
   try {
     const response = await runWhitespaceLLM({
       taskCode: TaskCode.WS_REDTEAM,
@@ -341,26 +408,42 @@ async function executeValidation(
     })
     redTeam = parseModelJson(response.output, 'Red team')
   } catch (error) {
+    redTeamFailed = true
     console.error('[Whitespace] Red team pass failed:', error)
   }
 
-  if (redTeam.strongestRemainingAttack?.query) {
+  if (redTeamFailed) {
+    await reporter.skip('redteam', 'the red team pass failed')
+  } else if (!redTeam.strongestRemainingAttack?.query) {
+    await reporter.skip('redteam', 'the red team named no further attack')
+  } else {
     const query = String(redTeam.strongestRemainingAttack.query)
     const previouslySeen = new Set(Array.from(allHits.keys()))
+    reporter.detail('Running the red team’s attack')
     const attempt = await lexicalAttack(query)
-    recordAttack(attacks, allHits, hitFamiliesByAttack, 'RED_TEAM', query, attempt)
+    // One more attack than the plan counted — the counter grows with it.
+    recordAttack(attacks, allHits, hitFamiliesByAttack, 'RED_TEAM', query, attempt, {
+      reporter,
+      n: attackTotal + 1,
+      total: attackTotal + 1,
+    })
 
     // The red team's hits get the same element mapping as everyone else's.
     // Without this, the strongest remaining attack could retrieve 25 documents
     // and still be recorded CLEAN because nothing ever read them.
     const fresh = (attempt.hits ?? []).filter(hit => !previouslySeen.has(hit.familyKey)).slice(0, MAPPING_CANDIDATES)
     if (fresh.length) {
+      reporter.detail(`Reading ${fresh.length} new documents the red team retrieved`)
       const alreadyMapped = new Set(mapped.map(candidate => candidate.publicationNumber))
-      const redTeamMapped = (await mapCandidates(fresh)).filter(
-        candidate => !alreadyMapped.has(candidate.publicationNumber)
-      )
-      if (redTeamMapped.length) {
-        mapped = [...mapped, ...redTeamMapped]
+      const redTeamMapped = await mapCandidates(fresh)
+      if (redTeamMapped === null) {
+        reporter.event('note', 'The red team’s hits could not be read')
+      } else {
+        const additions = redTeamMapped.filter(candidate => !alreadyMapped.has(candidate.publicationNumber))
+        if (additions.length) {
+          mapped = [...mapped, ...additions]
+          reporter.count('mapped', mapped.length)
+        }
       }
     }
     // Re-labelled unconditionally, not only when fresh hits mapped: the red-team
@@ -370,9 +453,10 @@ async function executeValidation(
     applyMappingOutcomes(attacks, hitFamiliesByAttack, allHits, mapped)
   }
 
-  await heartbeatRun(input.runId, input.workerId)
+  await reporter.heartbeat()
 
   // --- 5. persist the evidence trail ----------------------------------------
+  await reporter.step('record', `Recording ${attacks.length} search traces`)
   for (const attack of attacks) {
     await prisma.whitespaceEvidence.create({
       data: {
@@ -402,6 +486,7 @@ async function executeValidation(
   }
 
   // --- 6. gates, scores, verdict --------------------------------------------
+  await reporter.step('verdict', 'Applying the gates')
   const fullRefutation =
     mapped.some(candidate => candidate.fullCombination === 'PRESENT') || redTeam.verdict === 'REFUTED'
   const partialCount = mapped.filter(candidate => candidate.fullCombination === 'PARTIAL').length
@@ -470,6 +555,7 @@ async function executeValidation(
     },
   })
 
+  reporter.done()
   return { status, type, confidence: scores.confidence, attacksRun: validation.attacksRun }
 }
 
@@ -634,30 +720,46 @@ async function assigneeAttack(assignee: string, elements: string[]): Promise<Att
   }
 }
 
+/** The reader-facing strategy name; never the model-written query. */
+function strategyLabel(strategy: AttackRecord['strategy']): string {
+  return STRATEGY_LABEL[strategy] ?? strategy
+}
+
 function recordAttack(
   attacks: AttackRecord[],
   allHits: Map<string, AttackHit>,
   hitFamiliesByAttack: Map<string, Set<string>>,
   strategy: AttackRecord['strategy'],
   query: string,
-  outcome: AttackOutcome
+  outcome: AttackOutcome,
+  narration?: AttackNarration
 ) {
-  // A search that could not run is recorded as NOT_RUN — it lowers disproof
-  // completeness instead of masquerading as a clean attack.
   if (outcome.hits === null) {
+    // A search that could not run is recorded as NOT_RUN — it lowers disproof
+    // completeness instead of masquerading as a clean attack.
     attacks.push({ strategy, query, hits: 0, outcome: 'NOT_RUN', reason: outcome.reason })
-    return
+  } else {
+    const hits = outcome.hits
+    // Outcome is provisional CLEAN until mapping says otherwise.
+    attacks.push({ strategy, query, hits: hits.length, outcome: 'CLEAN' })
+    const attackKey = keyForAttack(strategy, query)
+    const families = hitFamiliesByAttack.get(attackKey) ?? new Set<string>()
+    for (const hit of hits) {
+      families.add(hit.familyKey)
+      if (!allHits.has(hit.familyKey)) allHits.set(hit.familyKey, { ...hit, strategy })
+    }
+    hitFamiliesByAttack.set(attackKey, families)
   }
-  const hits = outcome.hits
-  // Outcome is provisional CLEAN until mapping says otherwise.
-  attacks.push({ strategy, query, hits: hits.length, outcome: 'CLEAN' })
-  const attackKey = keyForAttack(strategy, query)
-  const families = hitFamiliesByAttack.get(attackKey) ?? new Set<string>()
-  for (const hit of hits) {
-    families.add(hit.familyKey)
-    if (!allHits.has(hit.familyKey)) allHits.set(hit.familyKey, { ...hit, strategy })
-  }
-  hitFamiliesByAttack.set(attackKey, families)
+
+  if (!narration) return
+  // One line per attack: strategy, place in the plan, hit count. Never the
+  // query — it is model-written text — and never a verdict.
+  const { reporter, n, total } = narration
+  const result =
+    outcome.hits === null ? 'could not run' : `${outcome.hits.length} hit${outcome.hits.length === 1 ? '' : 's'}`
+  reporter.event('attack', `${strategyLabel(strategy)}, attack ${n} of ${total} — ${result}`)
+  reporter.count('attacks', n, total)
+  reporter.count('hits', allHits.size)
 }
 
 async function enrichWithClaims(candidates: AttackHit[]) {

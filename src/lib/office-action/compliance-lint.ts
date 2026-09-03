@@ -8,8 +8,11 @@ import type { BasisSourceIdentity, CitationOverride } from './oa-json-schema'
 import { isComplianceConfirmed } from './oa-json-schema'
 import { complianceRuleFor } from './procedural-reply'
 import { findContradictions, type ChartFact } from './contradiction-lint'
-import { checkQuotations, checkAuthorities, checkQuantitativeClaims, type EvidenceSource, type ProseFinding } from './prose-evidence'
-import { allProfileAuthorities } from './objection-doctrine'
+import {
+  checkQuotations, checkAuthorities, checkQuantitativeClaims, checkStatutoryCitations,
+  type EvidenceSource, type ProseFinding
+} from './prose-evidence'
+import { allProfileAuthorities, profileProvisionKeys } from './objection-doctrine'
 import type { OfficeActionProfile } from './oa-profile-schema'
 
 /**
@@ -248,6 +251,19 @@ export function lintReply(input: LintInput): LintResult {
       label: 'Proposed amendments have verified basis',
       status: needsReview.some(c => c.basisVerdict === 'fail') ? 'fail' : 'warn',
       detail: `${needsReview.length} amendment(s) need your judgement before filing. ${detail}`
+    })
+  }
+
+  // 3c. More than one amendment was proposed for the same claim. Only one can be
+  // filed, so the pipeline files the best-supported and keeps the rest — this is
+  // what tells the attorney there was a choice, and that it was made for them.
+  const contested = amendedClaims.filter(c => (c.alternatives || []).length)
+  if (contested.length) {
+    checks.push({
+      id: 'amendmentAlternatives',
+      label: 'Only one amendment per claim goes into the filing',
+      status: 'warn',
+      detail: `${contested.length} claim(s) had more than one amendment proposed (${contested.map(c => `claim ${c.claimNumber}`).slice(0, 4).join(', ')}). The best-supported version is in this reply; review the alternatives before filing.`
     })
   }
 
@@ -510,12 +526,16 @@ function proseEvidenceChecks(input: LintInput): LintCheck[] {
     ))
   }
 
-  // Authorities are checked against the jurisdiction profile, which is always
-  // present on the export path.
+  // Authorities and provisions are both checked against the jurisdiction
+  // profile, which is always present on the export path.
   if (input.profile) {
     checks.push(rollUp(
       'authorities', 'Authorities cited are those this jurisdiction allows',
       checkAuthorities(sections, allProfileAuthorities(input.profile))
+    ))
+    checks.push(rollUp(
+      'provisions', 'Statutes, rules and forms cited belong to this jurisdiction',
+      checkStatutoryCitations(sections, profileProvisionKeys(input.profile))
     ))
   }
 
@@ -608,15 +628,46 @@ function identityChecks(input: LintInput): LintCheck[] {
     })
   }
 
-  // The office's own stated deadline versus the one the rules compute. A warn:
-  // these can legitimately diverge, and that is the attorney's call, not a
-  // reason to block a filing.
+  /**
+   * The office's own stated deadline against the one the rules compute.
+   *
+   * Blocking, not advisory. Every deadline on the case is computed from
+   * `dateOfReport`, which arrives as unvalidated JSON from the parse stage —
+   * it is the only high-consequence value in this module with no deterministic
+   * check behind it. The report's own "last date for filing response" is the
+   * one independent signal available, and when the two disagree one of them is
+   * wrong about a period that ends in deemed abandonment.
+   *
+   * Blocking here does not prevent the export: it forces the attorney to read
+   * the divergence and acknowledge it, which is the only thing that could
+   * actually catch a misread date. It was a warn, alongside the advice to "work
+   * to the earlier date unless you have confirmed otherwise" — advice nobody
+   * has to see.
+   */
   const stated = parsed.statedDueDate
-  const computed = (input.computedDeadlines || []).find(d => d.dueDate)?.dueDate
+  const computedDeadlines = (input.computedDeadlines || []).filter(d => d.dueDate)
+  const computed = computedDeadlines[0]?.dueDate
   if (stated && computed && stated.slice(0, 10) !== computed.slice(0, 10)) {
     checks.push({
-      id: 'statedDueDate', label: 'Stated and computed response deadlines agree', status: 'warn',
-      detail: `The report states ${stated.slice(0, 10)}; the rules compute ${computed.slice(0, 10)}. Work to the earlier date unless you have confirmed otherwise.`
+      id: 'statedDueDate', label: 'Stated and computed response deadlines agree', status: 'fail',
+      detail: `The report states ${stated.slice(0, 10)} as the last date for filing; the rules compute ${computed.slice(0, 10)} from the report date on file. One of the two dates is wrong. Confirm the date the report was issued, and work to the earlier deadline.`
+    })
+  } else if (stated || computed) {
+    checks.push({ id: 'statedDueDate', label: 'Stated and computed response deadlines agree', status: 'pass' })
+  }
+
+  /**
+   * A reply being exported against a communication with no deadline at all.
+   *
+   * The ingest warns about this, but that warning is a toast at upload time on a
+   * matter the attorney may not come back to for months. This is the last
+   * moment before filing, and the absence of a tracked statutory period is worth
+   * one line here.
+   */
+  if (!computedDeadlines.length) {
+    checks.push({
+      id: 'deadlineTracked', label: 'A statutory deadline is tracked for this communication', status: 'warn',
+      detail: 'No response deadline was computed for the communication this reply answers, so nothing in this system is tracking the statutory period. Confirm the date it was issued and diarise the deadline yourself.'
     })
   }
 

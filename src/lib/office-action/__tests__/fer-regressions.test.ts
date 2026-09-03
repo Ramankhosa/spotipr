@@ -10,7 +10,8 @@ import { findContradictions } from '../contradiction-lint'
 import { checkAmendmentBasis } from '../strategy-service'
 import { toClaimNumbers } from '../claim-chart-service'
 import { refreshDeadline } from '../deadline-engine'
-import { normalizeClassified, fallbackCards } from '../objection-classifier'
+import { normalizeClassified, fallbackCards, verifyQuote, alignedCoverage } from '../objection-classifier'
+import { dedupeAmendments } from '../reply-pipeline'
 
 /**
  * Regressions for defects found in the FER (office action) module review.
@@ -285,5 +286,127 @@ describe('malformed LLM parse output cannot fail the whole ingest', () => {
   it('a model-dropped raw with no text is not appended either', () => {
     const cards = normalizeClassified([], [{ number: '1' } as any], 'source text')
     expect(cards.every(c => c.examinerText.trim().length > 0)).toBe(true)
+  })
+})
+
+// ===========================================================================
+// Second review pass — the paths by which an unsupported statement could still
+// reach a filed document.
+// ===========================================================================
+
+describe('a "verbatim" quote must actually have been written as one', () => {
+  // Two passages, far enough apart that no single window covers both.
+  const FILLER = 'Filler text regarding unrelated matters. '.repeat(60)
+  const D1 = `The apparatus includes a rotary drum mounted on a horizontal shaft and driven by an `
+    + `electric motor at a constant angular velocity. ${FILLER} `
+    + `A control unit receives a temperature signal from a thermocouple positioned within the drying chamber.`
+
+  it('a passage spliced from two distant parts of the document is rejected', () => {
+    // Every bigram but the junction one is present in the source, so the old
+    // set-membership test scored this ~0.93 and called it verbatim.
+    const spliced = 'a rotary drum mounted on a horizontal shaft receives a temperature signal from a thermocouple positioned'
+    expect(verifyQuote(spliced, D1)).toBe(false)
+  })
+
+  it('a genuine long quote survives extraction noise inside it', () => {
+    const withGlitch = 'The apparatus includes a rotary drum mounted on a horizontal shaft 3 and driven by an electric motor'
+    expect(verifyQuote(withGlitch, D1)).toBe(true)
+  })
+
+  it('a quote whose clauses have been reordered is rejected', () => {
+    const reordered = 'driven by an electric motor at a constant angular velocity and mounted on a horizontal shaft'
+    expect(verifyQuote(reordered, D1)).toBe(false)
+  })
+
+  it('an exact quote still passes on the fast path', () => {
+    expect(verifyQuote('a rotary drum mounted on a horizontal shaft', D1)).toBe(true)
+  })
+
+  it('alignment is measured in order, not as set membership', () => {
+    expect(alignedCoverage(['a', 'b', 'c'], ['a', 'b', 'c'])).toBe(1)
+    expect(alignedCoverage(['c', 'b', 'a'], ['a', 'b', 'c'])).toBeLessThan(1)
+  })
+})
+
+describe('the basis sentence covers only the claims whose basis was established', () => {
+  const amendment = (over: any) => ({
+    claimNumber: 1, markedText: '<ins>a phase-change material</ins>', cleanText: 'x',
+    basisRefs: ['¶0007'], basisVerdict: 'pass' as const, ...over
+  })
+
+  it('an amendment whose basis failed is not asserted to fall within Section 59', () => {
+    // Was: one sentence over "the foregoing amendments", built from the union of
+    // every claim's refs — so a claim contributing no refs was covered anyway.
+    const sentence = buildBasisSentence([
+      amendment({}),
+      amendment({ claimNumber: 5, basisRefs: [], basisVerdict: 'fail' })
+    ], 'AUTHORED')
+    expect(sentence).toContain('claim 1')
+    expect(sentence).toContain('[0007]')
+    expect(sentence).not.toContain('claim 5')
+    expect(sentence).not.toContain('foregoing')
+  })
+
+  it('several supported claims are named together', () => {
+    const sentence = buildBasisSentence([
+      amendment({}),
+      amendment({ claimNumber: 3, basisRefs: ['¶0021'] })
+    ], 'AUTHORED')
+    expect(sentence).toContain('claims 1 and 3')
+    expect(sentence).toContain('find support')
+  })
+
+  it('a deletion is stated as a deletion, not as supported by a paragraph', () => {
+    const sentence = buildBasisSentence([
+      amendment({ claimNumber: 4, markedText: '<del>and optionally a heater</del>', basisRefs: [] })
+    ], 'AUTHORED')
+    expect(sentence).toContain('claim 4')
+    expect(sentence).toContain('deletion only')
+    expect(sentence).not.toContain('find support')
+  })
+
+  it('nothing is claimed when no amendment has established basis', () => {
+    expect(buildBasisSentence([
+      amendment({ basisRefs: [], basisVerdict: 'fail' })
+    ], 'AUTHORED')).toBe('')
+  })
+
+  it('a draft written before basisVerdict existed still gets its sentence', () => {
+    const sentence = buildBasisSentence([
+      { claimNumber: 2, markedText: '<ins>x</ins>', cleanText: 'x', basisRefs: ['¶0011'] }
+    ], 'AUTHORED')
+    expect(sentence).toContain('claim 2')
+  })
+})
+
+describe('competing amendments to one claim are kept, not overwritten', () => {
+  const a = (claimNumber: number, marked: string, verdict?: 'pass' | 'risk' | 'fail') =>
+    ({ claimNumber, markedText: marked, cleanText: marked, basisRefs: [], basisVerdict: verdict })
+
+  it('the better-supported proposal is filed and the other is carried', () => {
+    const [claim] = dedupeAmendments([a(1, '<ins>weak</ins>', 'fail'), a(1, '<ins>strong</ins>', 'pass')])
+    expect(claim.markedText).toContain('strong')
+    expect(claim.alternatives).toHaveLength(1)
+    expect(claim.alternatives?.[0].markedText).toContain('weak')
+  })
+
+  it('the losing proposal is not silently discarded even when it came second', () => {
+    const [claim] = dedupeAmendments([a(1, '<ins>strong</ins>', 'pass'), a(1, '<ins>weak</ins>', 'fail')])
+    expect(claim.markedText).toContain('strong')
+    expect(claim.alternatives?.[0].markedText).toContain('weak')
+  })
+
+  it('alternatives carried in from an earlier pass are not dropped on resume', () => {
+    const carried: any = { ...a(1, '<ins>chosen</ins>', 'pass'), alternatives: [a(1, '<ins>earlier</ins>', 'risk')] }
+    const [claim] = dedupeAmendments([carried, a(1, '<ins>newest</ins>', 'fail')])
+    const texts = (claim.alternatives || []).map(x => x.markedText)
+    expect(texts).toContain('<ins>earlier</ins>')
+    expect(texts).toContain('<ins>newest</ins>')
+  })
+
+  it('one amendment per claim still yields one entry with no alternatives', () => {
+    const out = dedupeAmendments([a(1, '<ins>only</ins>', 'pass'), a(2, '<ins>other</ins>', 'pass')])
+    expect(out).toHaveLength(2)
+    expect(out.every(c => !c.alternatives)).toBe(true)
   })
 })

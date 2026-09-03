@@ -27,6 +27,7 @@ export async function GET(request: NextRequest, { params }: { params: { studyId:
       id: true,
       stage: true,
       status: true,
+      params: true,
       scopeVersion: true,
       durationMs: true,
       lastError: true,

@@ -1,10 +1,13 @@
 'use client'
 
 import { useState } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import { AlertTriangle, ArrowRight, Loader2, Swords } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/hint'
+import { LiveActivityPanel } from '../LiveActivityPanel'
+import type { RunActivityState } from '../useRunActivity'
 import type { DimensionGap, DimensionMapResult } from './types'
 
 /**
@@ -28,6 +31,8 @@ export function GapDirections({
   onAttack,
   attacking,
   attackingLabel,
+  attackActivity,
+  onDismissAttack,
 }: {
   result: DimensionMapResult
   selected: Set<string>
@@ -35,6 +40,10 @@ export function GapDirections({
   onAttack: () => void
   attacking: boolean
   attackingLabel: string | null
+  /** gapId → live state of the attack on it; absent or null when nothing is shown. */
+  attackActivity?: Record<string, RunActivityState | null>
+  /** A failed attack's panel hands its display back through this. */
+  onDismissAttack?: (gapId: string) => void
 }) {
   if (!result.gaps.length) {
     return (
@@ -79,6 +88,8 @@ export function GapDirections({
               selected={selected.has(gap.id)}
               onToggle={() => onToggle(gap.id)}
               disabled={attacking || (atCap && !selected.has(gap.id))}
+              activity={attackActivity?.[gap.id] ?? null}
+              onDismissActivity={onDismissAttack ? () => onDismissAttack(gap.id) : undefined}
             />
           </li>
         ))}
@@ -116,12 +127,17 @@ function GapCard({
   selected,
   onToggle,
   disabled,
+  activity,
+  onDismissActivity,
 }: {
   gap: DimensionGap
   familyCount: number
   selected: boolean
   onToggle: () => void
   disabled: boolean
+  /** The attack on this direction, while one is being watched. */
+  activity: RunActivityState | null
+  onDismissActivity?: () => void
 }) {
   const [showWorking, setShowWorking] = useState(false)
   const claimsPct =
@@ -212,6 +228,19 @@ function GapCard({
 
         <GapAnatomy gap={gap} />
       </div>
+
+      {/* The attack's own narration — what has been run, never a verdict. */}
+      <AnimatePresence>
+        {activity && (
+          <LiveActivityPanel
+            key={activity.runId}
+            variant="compact"
+            state={activity}
+            className="mt-3"
+            onDismiss={onDismissActivity}
+          />
+        )}
+      </AnimatePresence>
     </article>
   )
 }

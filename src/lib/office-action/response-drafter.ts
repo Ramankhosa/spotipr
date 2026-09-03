@@ -1,5 +1,5 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
-import { runOaStage, type OaGateway } from './oa-llm-service'
+import { runOaStage, fenceUntrusted, type OaGateway } from './oa-llm-service'
 import { renderDigest, type InventionDigest } from './invention-digest'
 import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, renderSupplementaryBlock } from './context-budget'
 import type { ClassifiedObjection } from './objection-classifier'
@@ -93,7 +93,8 @@ export async function draftObjectionReply(
     // the way a filing does — "paragraph [0007]" — never with the ¶ marker.
     basis.length ? `\nRelevant specification basis (cite these paragraphs as [0007], dropping the ¶):\n${renderContextBlock(basis)}` : '',
     (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',
-    `\nObjection (${objection.canonicalCode}, ${objection.localBasis || ''}):\n"${objection.examinerText}"`,
+    // Fenced: verbatim text lifted out of an uploaded document.
+    `\nObjection (${objection.canonicalCode}, ${objection.localBasis || ''}):\n${fenceUntrusted("the examiner's objection, verbatim", objection.examinerText)}`,
     // A redraft is a revision, not a fresh attempt: the attorney is reacting to
     // specific words, so the model must see them and be told the direction is
     // binding. Their instruction comes last, closest to the task.

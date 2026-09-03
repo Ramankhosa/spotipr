@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { checkQuotations, checkAuthorities, checkQuantitativeClaims, type EvidenceSource } from '../prose-evidence'
+import {
+  checkQuotations, checkAuthorities, checkQuantitativeClaims, checkStatutoryCitations,
+  type EvidenceSource
+} from '../prose-evidence'
 import { findContradictions } from '../contradiction-lint'
-import { allProfileAuthorities, authoritiesFor } from '../objection-doctrine'
+import { allProfileAuthorities, authoritiesFor, profileProvisionKeys } from '../objection-doctrine'
 
 /**
  * Evidence checks over the filed prose.
@@ -204,6 +207,103 @@ describe('the authority list feeding the prompt is the list feeding the check', 
     expect(checkAuthorities(
       section('Following Ferid Allani v. Union of India, the subject matter is patentable.'),
       allProfileAuthorities(profile)
+    )).toHaveLength(0)
+  })
+})
+
+// ===========================================================================
+// Second review pass.
+// ===========================================================================
+
+describe('a quotation attributed to a cited document is checked against THAT document', () => {
+  it('words lifted from the specification cannot pass as a quotation of D1', () => {
+    // Was: the passage was looked for anywhere on file FIRST, and the
+    // attribution consulted only when it was found nowhere. "Anywhere" includes
+    // the applicant's own specification — so the reply could attribute the
+    // applicant's own words to the cited art and be told every quotation was
+    // located.
+    const findings = checkQuotations(
+      section('D1 discloses that "the phaseolin promoter is operably linked to the gene, restricting expression to developing seed".'),
+      SOURCES
+    )
+    expect(findings).toHaveLength(1)
+    expect(findings[0].status).toBe('fail')
+    expect(findings[0].detail).toContain('D1')
+  })
+
+  it('a genuine quotation of the attributed document still passes', () => {
+    expect(checkQuotations(
+      section('D1 states that "the CaMV 35S promoter drives constitutive expression throughout the plant body".'),
+      SOURCES
+    )).toHaveLength(0)
+  })
+
+  it('a quotation attributed to a document we do not hold falls back to the warning', () => {
+    expect(checkQuotations(
+      section('D7 states that "some passage nobody on this case has ever seen before".'),
+      SOURCES
+    )[0].status).toBe('warn')
+  })
+})
+
+describe('statutes, rules and forms cited must belong to this jurisdiction', () => {
+  const declared = profileProvisionKeys({
+    objections: [
+      { canonical: 'NOVELTY', legalBasis: ['Section 2(1)(j)', 'Section 13'] },
+      { canonical: 'ELIGIBILITY', legalBasis: ['Section 3'], subTypes: [{ id: '3d', basis: 'Section 3(d)' }] },
+      { canonical: 'PROCEDURAL_DISCLOSURE', legalBasis: ['Section 8'] }
+    ],
+    amendments: { legalBasis: ['Section 57', 'Section 59'] },
+    timeline: { deadlines: [{ id: 'fer_reply', basis: 'Rule 24B(5)', extension: { form: 'Form 4' } }] }
+  } as any)
+
+  it('a foreign code in an Indian reply blocks', () => {
+    // The same reach that puts KSR in an Indian reply, one layer down: the
+    // authorities check reads case names and never looked at provisions.
+    const findings = checkStatutoryCitations(
+      section('Under 35 U.S.C. § 103 the combination would have been obvious.'),
+      declared
+    )
+    expect(findings.some(f => f.status === 'fail')).toBe(true)
+    expect(findings.find(f => f.status === 'fail')!.detail).toContain('U.S.C')
+  })
+
+  it('the provisions this jurisdiction declares pass', () => {
+    expect(checkStatutoryCitations(
+      section('The objection under Section 2(1)(j) is traversed. The amendments are made under Section 59, and Rule 24B(5) is complied with. An updated Form 4 accompanies this reply.'),
+      declared
+    )).toHaveLength(0)
+  })
+
+  it('a sub-clause of a declared section passes', () => {
+    // The profile declares "Section 3"; arguing the specific sub-clause is
+    // correct drafting, not a defect.
+    expect(checkStatutoryCitations(section('The objection under Section 3(k) is addressed below.'), declared)).toHaveLength(0)
+  })
+
+  it('a provision the jurisdiction does not declare is surfaced for checking', () => {
+    const findings = checkStatutoryCitations(section('The Applicant relies on Rule 137(4) in this regard.'), declared)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].status).toBe('warn')
+    expect(findings[0].detail).toContain('Rule 137(4)')
+  })
+
+  it('a longer section number is not read as an elaboration of a shorter one', () => {
+    // "Section 64" must not be waved through because the profile mentions
+    // Section 6 — containment is tested on provision levels, not on characters.
+    const findings = checkStatutoryCitations(section('Revocation under Section 132 does not arise here.'), declared)
+    expect(findings[0]?.status).toBe('warn')
+  })
+
+  it('the check is skipped, not passed, when the profile declares nothing', () => {
+    expect(checkStatutoryCitations(section('Section 999 applies.'), new Set())).toHaveLength(0)
+  })
+
+  it('the real Indian profile recognises the provisions a reply actually cites', () => {
+    const real = profileProvisionKeys(require('../../../../Countries/IN.json').officeActionProfile)
+    expect(checkStatutoryCitations(
+      section('The objection under Section 2(1)(ja) is traversed. Amendments are made under Section 59. A hearing under Section 14 is requested. Rule 24B(5) is noted, and Form 3 stands filed under Section 8.'),
+      real
     )).toHaveLength(0)
   })
 })

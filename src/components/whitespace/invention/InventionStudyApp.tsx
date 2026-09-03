@@ -2,12 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { AnimatePresence } from 'framer-motion'
 import { AlertCircle, ArrowLeft, Compass, FileDown, Lightbulb, Loader2, Play, ScrollText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/hint'
 import { useToast } from '@/components/ui/toast'
 import { HypothesesPanel } from '../HypothesesPanel'
-import { authHeaders, conflictRunId, isPollAborted, PollAbortedError, pollRun, wsApi, type RunProgress } from '../api'
+import { LiveActivityPanel } from '../LiveActivityPanel'
+import { SemanticSearchPanel } from '../SemanticSearchPanel'
+import { useRunActivity, type RunActivityState } from '../useRunActivity'
+import { authHeaders, conflictRunId, isPollAborted, PollAbortedError, WATCH_TIMEOUT_STATUS, wsApi } from '../api'
 import { CoOccupancyGrid } from './CoOccupancyGrid'
 import { GapDirections, MAX_ATTACKS_PER_ROUND } from './GapDirections'
 import { JourneyRail, type JourneyStep, type StepState } from './JourneyRail'
@@ -86,8 +90,16 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
 
   const [compiling, setCompiling] = useState(false)
   const [running, setRunning] = useState(false)
-  const [progress, setProgress] = useState<RunProgress | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
+
+  // Live narration for every run this page watches. The panel reads the
+  // entry for `watchedRunId` (the map) and for each attack's run.
+  const activity = useRunActivity(studyId)
+  const { watch: watchRun, dismiss: dismissRun } = activity
+  /** The DIMENSION_MAP run whose activity the full panel shows. */
+  const [watchedRunId, setWatchedRunId] = useState<string | null>(null)
+  /** gapId → VALIDATE runId for the attack round in progress (or just finished). */
+  const [attackRuns, setAttackRuns] = useState<Record<string, string>>({})
 
   const [edit, setEdit] = useState<RegistryEdit>({ removedDimensions: new Set(), removedValues: new Set() })
   const [selectedGaps, setSelectedGaps] = useState<Set<string>>(new Set())
@@ -197,10 +209,11 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
   const attachToDimensionRun = useCallback(
     async (runId: string, controller: AbortController) => {
       watchedDimensionRun.current = runId
+      setWatchedRunId(runId)
       setRunning(true)
       setRunError(null)
       try {
-        const final = await pollRun(studyId, runId, (_status, tick) => setProgress(tick), controller.signal)
+        const final = await watchRun(runId, controller.signal)
         if (controller.signal.aborted) return
         if (final.status === 'COMPLETED') {
           setResult(final.results as DimensionMapResult)
@@ -216,13 +229,10 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
       } finally {
         if (watchedDimensionRun.current === runId) watchedDimensionRun.current = null
         pollAborts.current.delete(controller)
-        if (!controller.signal.aborted) {
-          setRunning(false)
-          setProgress(null)
-        }
+        if (!controller.signal.aborted) setRunning(false)
       }
     },
-    [load, studyId]
+    [load, watchRun]
   )
 
   // Re-attach after a reload found a map QUEUED/PROCESSING (see load).
@@ -239,7 +249,9 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
     async (registry?: DimensionMapResult['registry']) => {
       setRunning(true)
       setRunError(null)
-      setProgress(null)
+      // A failed panel left from the previous map hands its display back now;
+      // the new run's panel takes the same slot.
+      if (watchedRunId) dismissRun(watchedRunId)
       const controller = new AbortController()
       pollAborts.current.add(controller)
       try {
@@ -276,10 +288,9 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
         if (isPollAborted(error)) return
         setRunError(error instanceof Error ? error.message : 'Could not run the map.')
         setRunning(false)
-        setProgress(null)
       }
     },
-    [attachToDimensionRun, studyId]
+    [attachToDimensionRun, dismissRun, studyId, watchedRunId]
   )
 
   /**
@@ -409,6 +420,7 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
     const latest = runs.find(run => run.stage === 'DIMENSION_MAP' && run.status === 'COMPLETED')
     if (!latest) return
     setAttacking(true)
+    setAttackRuns({})
     const controller = new AbortController()
     pollAborts.current.add(controller)
     try {
@@ -432,7 +444,9 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
         index += 1
         setAttackLabel(`Attacking direction ${index} of ${promoted.promoted.length}…`)
         const runId = await startValidateRun(entry.hypothesisId, controller.signal)
-        const final = await pollRun(studyId, runId, undefined, controller.signal)
+        // The direction card shows this run's activity while it is attacked.
+        setAttackRuns(current => ({ ...current, [entry.gapId]: runId }))
+        const final = await watchRun(runId, controller.signal)
         if (final.status !== 'COMPLETED') failedCount += 1
       }
       if (controller.signal.aborted) return
@@ -474,7 +488,23 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
         setAttackLabel(null)
       }
     }
-  }, [load, result, runs, selectedGaps, startValidateRun, studyId, toast])
+  }, [load, result, runs, selectedGaps, startValidateRun, studyId, toast, watchRun])
+
+  /** Per direction, the live state of its attack — null once the entry is gone. */
+  const liveRuns = activity.runs
+  const attackActivity = useMemo<Record<string, RunActivityState | null>>(() => {
+    const entries: Record<string, RunActivityState | null> = {}
+    for (const [gapId, runId] of Object.entries(attackRuns)) entries[gapId] = liveRuns[runId] ?? null
+    return entries
+  }, [attackRuns, liveRuns])
+
+  const dismissAttack = useCallback(
+    (gapId: string) => {
+      const runId = attackRuns[gapId]
+      if (runId) dismissRun(runId)
+    },
+    [attackRuns, dismissRun]
+  )
 
   // wsApi parses every response as JSON, so the report has to be fetched raw.
   const downloadReport = useCallback(async () => {
@@ -576,6 +606,10 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
   }
 
   const invention = study.inventionJson
+  const mapActivity = activity.get(watchedRunId)
+  // While the panel holds a failure it shows the server's message itself;
+  // Dismiss hands the display back to the plain error box below.
+  const panelHoldsFailure = mapActivity?.status === 'FAILED' || mapActivity?.status === WATCH_TIMEOUT_STATUS
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:py-10">
@@ -739,20 +773,20 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
               </div>
             )}
 
-            {running && (
-              <div className="mt-3 rounded-xl border border-border bg-muted/40 p-4">
-                <div className="flex items-center gap-2 text-sm text-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  {progress?.detail || 'Starting…'}
-                </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Discovery reads a sample and proposes viewpoints; every proposal is then counted against the
-                  whole field before it is kept. This usually takes a couple of minutes.
-                </p>
-              </div>
-            )}
+            <AnimatePresence>
+              {mapActivity && (
+                <LiveActivityPanel
+                  key={mapActivity.runId}
+                  variant="full"
+                  state={mapActivity}
+                  className="mt-3"
+                  footnote="Discovery reads a sample and proposes viewpoints; every proposal is then counted against the whole field before it is kept. You can leave this page — the work continues."
+                  onDismiss={() => dismissRun(mapActivity.runId)}
+                />
+              )}
+            </AnimatePresence>
 
-            {runError && !running && (
+            {runError && !running && !panelHoldsFailure && (
               <div className="mt-3 flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                 <p className="text-sm leading-relaxed text-foreground">{runError}</p>
@@ -798,7 +832,15 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                 <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   The grid
                 </h2>
-                <CoOccupancyGrid result={result} />
+                <CoOccupancyGrid result={result} studyId={studyId} />
+              </section>
+
+              {/* A tool, not a journey stage — deliberately absent from the rail. */}
+              <section className="scroll-mt-6">
+                <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Search the field
+                </h2>
+                <SemanticSearchPanel studyId={studyId} />
               </section>
 
               {/* 5 — directions */}
@@ -811,6 +853,8 @@ export function InventionStudyApp({ studyId }: { studyId: string }) {
                   selected={selectedGaps}
                   attacking={attacking}
                   attackingLabel={attackLabel}
+                  attackActivity={attackActivity}
+                  onDismissAttack={dismissAttack}
                   onAttack={() => void attackSelected()}
                   onToggle={id =>
                     setSelectedGaps(prev => {

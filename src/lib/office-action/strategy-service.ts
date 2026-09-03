@@ -1,5 +1,5 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
-import { runOaStage, type OaGateway } from './oa-llm-service'
+import { runOaStage, fenceUntrusted, type OaGateway } from './oa-llm-service'
 import { renderDigest, type InventionDigest } from './invention-digest'
 import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, renderSupplementaryBlock } from './context-budget'
 import type { ClassifiedObjection } from './objection-classifier'
@@ -199,7 +199,8 @@ export async function buildObjectionStrategy(
     distinctions.length ? `\nFeatures absent from ALL cited documents (your distinctions):\n- ${distinctions.join('\n- ')}` : '',
     basis.length ? `\nSpecification basis available (cite these ¶ tags for any amendment):\n${renderContextBlock(basis)}` : '',
     (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',
-    `\nObjection (${objection.canonicalCode}${objection.localBasis ? `, ${objection.localBasis}` : ''}):\n"${objection.examinerText}"`,
+    // Fenced: verbatim text lifted out of an uploaded document.
+    `\nObjection (${objection.canonicalCode}${objection.localBasis ? `, ${objection.localBasis}` : ''}):\n${fenceUntrusted("the examiner's objection, verbatim", objection.examinerText)}`,
     '',
     'Assess the examiner position and propose 2–3 response options with tradeoffs. If you propose a claim amendment, mark insertions with <ins></ins> and deletions with <del></del>, and cite the ¶ ids that support EVERY inserted feature — only from the specification basis supplied above (attorney-provided supporting material is post-filing evidence and is NOT amendment basis). If the record lacks the evidence the objection requires (e.g. comparative efficacy data) and none was provided above, do NOT invent it: set judgmentFlag describing the gap.',
     'Return JSON: { assessment, options:[{id,kind,title,rationale,pros:[],cons:[],recommended}], amendments:[{claimNumber,markedText,cleanText,basisRefs:[]}], judgmentFlag? }.'
@@ -245,8 +246,13 @@ export async function buildObjectionStrategy(
   }
 }
 
-/** Amendments that passed the s.59 guard — the only ones allowed into the reply. */
-export function usableAmendments(strategy: ObjectionStrategy): ProposedAmendment[] {
-  const ok = new Set(strategy.basisVerdicts.filter(v => v.verdict === 'pass').map(v => v.claimNumber))
-  return strategy.amendments.filter(a => ok.has(a.claimNumber))
-}
+/**
+ * `usableAmendments` was removed rather than fixed.
+ *
+ * It filtered amendments by a Set of claim numbers whose verdict passed — the
+ * exact claim-number-keying defect the pipeline had already fixed by pairing
+ * verdicts POSITIONALLY, because the prompt asks for 2–3 options and a second,
+ * unsupported amendment to the same claim inherited the first one's pass. It had
+ * no callers, and its name invited one. Pair `strategy.amendments[i]` with
+ * `strategy.basisVerdicts[i]`; see the amendment loop in reply-pipeline.
+ */

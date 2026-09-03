@@ -54,7 +54,7 @@ import {
 } from './embedding'
 import { rarePairFromCounts } from './rarity'
 import { parseModelJson, runWhitespaceLLM, type WhitespaceLLMContext } from './llm'
-import { heartbeatRun, WhitespacePermanentError } from './run-lease'
+import { WhitespacePermanentError } from './run-lease'
 import { CORPUS_FIRST_YEAR } from './types'
 import {
   buildDimensionGrowPrompt,
@@ -75,6 +75,7 @@ import type {
   FieldRule,
   WhitespaceScope,
 } from './types'
+import type { RunReporter } from './run-reporter'
 
 // ---------------------------------------------------------------------------
 // Budgets and thresholds
@@ -201,18 +202,50 @@ async function withTimeout<T>(query: Prisma.Sql, ms: number): Promise<T[]> {
 }
 
 /**
- * Heartbeat + live narration in one write. Runs on its own pooled connection,
- * so it is safe to call while the census transaction is open elsewhere.
+ * A step transition + heartbeat in one write. The reporter runs on its own
+ * pooled connection, so it is safe to call while the census transaction is
+ * open elsewhere.
  *
- * Delegates to the shared heartbeat so the run's LEASE is extended as well as
- * its timestamp. This stage is by far the longest in the studio — the census
- * alone can hold a transaction for ten minutes — so a heartbeat that only
- * touched `heartbeatAt` would let the lease lapse mid-run and invite a second
- * worker to start the same dimension map over.
+ * Narration and the run's LEASE are one write. This stage is by far the
+ * longest in the studio — the census alone can hold a transaction for ten
+ * minutes — so a heartbeat that only touched `heartbeatAt` would let the lease
+ * lapse mid-run and invite a second worker to start the same dimension map
+ * over. A discovery round is one of MAX_ROUNDS, which is what the step's
+ * n/total bar shows.
  */
-async function progress(runId: string, workerId: string, phase: string, detail: string, round?: number): Promise<void> {
-  await heartbeatRun(runId, workerId, { phase, detail, ...(round !== undefined ? { round } : {}) })
+async function progress(reporter: RunReporter, phase: string, detail: string, round?: number): Promise<void> {
+  await reporter.step(phase, detail, round !== undefined ? { round, n: round, total: MAX_ROUNDS } : undefined)
 }
+
+/**
+ * Passed as a counter's value to declare its denominator before anything has
+ * been measured against it: the reporter reads a non-finite value as "not
+ * measured", so the panel shows "— / total" rather than a fabricated zero.
+ */
+const NOT_MEASURED = Number.NaN
+
+/** Sampled documents named per discovery round before the rest are summarised. */
+const DOC_LINES_PER_ROUND = 8
+
+/** The steps this stage really takes; a re-census compiles instead of discovering. */
+function dimensionMapSteps(recensus: boolean): Array<{ key: string; label: string }> {
+  return [
+    { key: 'precheck', label: 'Sizing the field' },
+    { key: 'sample', label: 'Drawing a sample of the field' },
+    { key: 'discover', label: recensus ? 'Compiling your edited viewpoints' : 'Discovering the viewpoints' },
+    { key: 'census', label: 'Counting every value across the field' },
+    { key: 'assemble', label: 'Assembling the grid' },
+  ]
+}
+
+const DIMENSION_MAP_COUNTERS = [
+  { key: 'families', label: 'Families in the field' },
+  { key: 'sampled', label: 'Sampled families' },
+  { key: 'viewpoints', label: 'Viewpoints' },
+  { key: 'values', label: 'Values' },
+  { key: 'placed', label: 'Sampled families placed' },
+  { key: 'matched', label: 'Values counted' },
+]
 
 function normaliseLabel(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
@@ -548,12 +581,17 @@ function tooNarrowMessage(
 export async function runDimensionMapStage(input: {
   runId: string
   workerId: string
+  reporter: RunReporter
   studyId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
   suppliedRegistry?: SuppliedDimensionRegistry | null
 }): Promise<DimensionMapResult> {
-  const { runId, workerId, studyId, scope } = input
+  const { studyId, scope, reporter } = input
+  // The plan first, so the rail shows every step this run will take before any
+  // of them starts. Counter denominators are declared as they become known.
+  await reporter.plan(dimensionMapSteps(Boolean(input.suppliedRegistry)), DIMENSION_MAP_COUNTERS)
+
   // Outside any transaction: a scope whose concepts stem away must fail with
   // the concept named, not census a silently different field. Checked on the
   // loosest plan — every rung searches the same groups.
@@ -564,7 +602,7 @@ export async function runDimensionMapStage(input: {
   // PRODUCER and fits the rule fresh; a re-census over a user-edited registry
   // reuses the rule the discovery run persisted, so the user's edit recounts
   // the same field rather than a re-fitted one.
-  await progress(runId, workerId, 'precheck', 'Sizing the field')
+  await progress(reporter, 'precheck', 'Sizing the field')
   const field = await resolveFieldDefinition(scope, { studyId, reuse: Boolean(input.suppliedRegistry) })
   const { candidates, rule } = field
   const where = field.where
@@ -618,13 +656,17 @@ export async function runDimensionMapStage(input: {
   if (familyCount < MIN_FIELD_FAMILIES) {
     throw new WhitespacePermanentError(tooNarrowMessage(familyCount, scope, candidates.reason, rule))
   }
+  reporter.count('families', familyCount)
+  reporter.event(
+    'count',
+    `${familyCount.toLocaleString()} families across ${publicationCount.toLocaleString()} publications`
+  )
 
   // --- Deterministic sample --------------------------------------------------
   // Hash the FAMILY key (stable business key, unlike the autoincrement id) with
   // a full DISTINCT ON tiebreak, so the same scope always draws the same sample.
   await progress(
-    runId,
-    workerId,
+    reporter,
     'sample',
     `Drawing a ${SAMPLE_FAMILIES.toLocaleString()}-family sample of ${familyCount.toLocaleString()} families`
   )
@@ -651,6 +693,9 @@ export async function runDimensionMapStage(input: {
   const sampleN = sampleRows.length
   const sampleIds = sampleRows.map(row => Number(row.id))
   const idToFamily = new Map<number, string>(sampleRows.map(row => [Number(row.id), row.familyKey]))
+  reporter.count('sampled', sampleN)
+  reporter.count('placed', NOT_MEASURED, sampleN)
+  reporter.event('read', `${sampleN.toLocaleString()} families sampled by family-key hash`)
 
   // --- Registry: supplied (re-census) or discovered (the round loop) ---------
   const rounds: DimensionRound[] = []
@@ -658,13 +703,20 @@ export async function runDimensionMapStage(input: {
   let settledReason: DimensionSettledReason
 
   if (input.suppliedRegistry) {
+    const suppliedCount = Array.isArray(input.suppliedRegistry.dimensions) ? input.suppliedRegistry.dimensions.length : 0
+    await progress(reporter, 'discover', `Compiling ${suppliedCount} edited viewpoints and counting their values against the sample`)
     registry = await compileSuppliedRegistry(input.suppliedRegistry, sampleIds, idToFamily, valueLane, coverageNotes)
     settledReason = 'REGISTRY_SUPPLIED'
     coverageNotes.push('Viewpoints were supplied by the user (registry edit); discovery did not re-run.')
+    // What compiled, as counts. Which edits were dropped and why is the
+    // coverage notes' business, published with the result.
+    reporter.count('viewpoints', registry.length)
+    reporter.count('values', totalValues(registry))
+    reporter.count('placed', assignedUnion(registry).size, sampleN)
+    reporter.event('count', `Compiled ${registry.length} viewpoints, ${totalValues(registry)} values`)
   } else {
     const discovered = await discoverRegistry({
-      runId,
-      workerId,
+      reporter,
       studyId,
       scope,
       llmContext: input.llmContext,
@@ -702,7 +754,8 @@ export async function runDimensionMapStage(input: {
   })
 
   // --- The exact census + gap detection (one transaction) ---------------------
-  await progress(runId, workerId, 'census', `Counting ${flatValues.length} values across ${familyCount.toLocaleString()} families`)
+  await progress(reporter, 'census', `Counting ${flatValues.length} values across ${familyCount.toLocaleString()} families`)
+  reporter.count('matched', NOT_MEASURED, flatValues.length)
   // Outside the transaction, deliberately: the discovery rounds already cached
   // these literals, so this is normally a pure cache read — but a cold miss is
   // an embedding API call, and an API call must never hold the census
@@ -780,7 +833,10 @@ export async function runDimensionMapStage(input: {
       await setStatementTimeout(tx, CENSUS_TIMEOUT_MS)
       await tx.$executeRaw(Prisma.sql`CREATE INDEX ws_dim_census_doc_idx ON ws_dim_census USING gin(doc)`)
       await tx.$executeRawUnsafe(`ANALYZE ws_dim_census`)
-      await progress(runId, workerId, 'census', `Matching ${flatValues.length} value vocabularies`)
+      await progress(reporter, 'census', `Matching ${flatValues.length} value vocabularies`)
+      // Same key, so the step above only queued a throttled write; the write
+      // block below can run for minutes, and the lease must go in fresh.
+      await reporter.heartbeat()
 
       // Hit extraction: one bounded probe per value. Bare — a value that cannot
       // be counted fails the census; counting it as zero would fabricate a gap.
@@ -795,6 +851,7 @@ export async function runDimensionMapStage(input: {
       await setStatementTimeout(tx, FACET_TIMEOUT_MS)
       try {
         for (let m = 0; m < flatValues.length; m++) {
+          reporter.event('read', `Matching “${flatValues[m].label}”`)
           const vector = valueLane.enabled ? censusLiterals[m] : null
           if (vector) {
             await tx.$executeRaw(Prisma.sql`
@@ -818,7 +875,10 @@ export async function runDimensionMapStage(input: {
               FROM ws_dim_census
               WHERE doc @@ websearch_to_tsquery('english'::regconfig, ${flatValues[m].query})`)
           }
-          if (m % 8 === 7) await progress(runId, workerId, 'census', `Matched ${m + 1} of ${flatValues.length} values`)
+          reporter.count('matched', m + 1, flatValues.length)
+          // An awaited write every eight values keeps the lease fresh through a
+          // loop that can run for minutes; the per-value lines ride along.
+          if (m % 8 === 7) await reporter.heartbeat()
         }
       } catch (error) {
         if (isStatementTimeout(error)) {
@@ -837,11 +897,20 @@ export async function runDimensionMapStage(input: {
         SELECT value_idx, COUNT(*)::bigint AS families FROM ws_dim_hits GROUP BY 1`)
       const valueFamilies = new Array<number>(flatValues.length).fill(0)
       for (const row of valueRows) valueFamilies[Number(row.value_idx)] = Number(row.families)
+      // Census facts, not findings: how many families the biggest values placed.
+      const largestValues = flatValues
+        .map((value, index) => ({ label: value.label, families: valueFamilies[index] }))
+        .sort((a, b) => b.families - a.families)
+        .slice(0, 8)
+      for (const entry of largestValues) {
+        reporter.event('count', `${entry.label}: ${entry.families.toLocaleString()} families`)
+      }
 
       // Every cell of every matrix, one self-join. Volume is sum(k^2) over
       // families, which MAX_TOTAL_VALUES bounds — this is the second long pole.
       await setStatementTimeout(tx, CENSUS_TIMEOUT_MS)
-      await progress(runId, workerId, 'census', 'Computing pairwise co-occupancy')
+      await progress(reporter, 'census', 'Computing pairwise co-occupancy')
+      await reporter.heartbeat()
       const pairRows = await tx.$queryRaw<Array<{ a_idx: number; b_idx: number; families: bigint }>>(Prisma.sql`
         SELECT a.value_idx AS a_idx, b.value_idx AS b_idx, COUNT(*)::bigint AS families
         FROM ws_dim_hits a
@@ -850,6 +919,7 @@ export async function runDimensionMapStage(input: {
         GROUP BY 1, 2`)
       const pairCounts = new Map<string, number>()
       for (const row of pairRows) pairCounts.set(`${Number(row.a_idx)}:${Number(row.b_idx)}`, Number(row.families))
+      reporter.event('count', `${pairRows.length.toLocaleString()} value pairs crossed`)
 
       // Families each dimension places, and families any dimension places.
       await setStatementTimeout(tx, FACET_TIMEOUT_MS)
@@ -915,6 +985,8 @@ export async function runDimensionMapStage(input: {
             gap.armFamilies = Number(row.families)
             gap.armClaimsReadable = Number(row.with_claims)
           }
+        } else {
+          reporter.event('note', 'Claims readability of the surrounding families could not be counted')
         }
       }
       finaliseGaps(gaps, marginFloor)
@@ -936,7 +1008,7 @@ export async function runDimensionMapStage(input: {
   )
 
   // --- Assemble the result (pure arithmetic from here) ------------------------
-  await progress(runId, workerId, 'assemble', 'Assembling the registry and gap list')
+  await progress(reporter, 'assemble', 'Assembling the grid')
 
   let flatCursor = 0
   const resultRegistry: Dimension[] = registry.map((dimension, dimIdx) => {
@@ -1042,7 +1114,9 @@ export async function runDimensionMapStage(input: {
   ]
 
   const unclassifiedFamilies = census.familyCount - census.assignedAnyFamilies
-  await progress(runId, workerId, 'done', `${resultRegistry.length} viewpoints, ${census.gaps.length} candidate gaps`)
+  // No terminal write: the viewpoint and gap counts are findings, and the
+  // completion write nulls progress anyway. done() only settles the rail.
+  reporter.done()
 
   return {
     familyCount: census.familyCount,
@@ -1078,8 +1152,7 @@ export async function runDimensionMapStage(input: {
 // ---------------------------------------------------------------------------
 
 async function discoverRegistry(input: {
-  runId: string
-  workerId: string
+  reporter: RunReporter
   studyId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
@@ -1089,7 +1162,7 @@ async function discoverRegistry(input: {
   rounds: DimensionRound[]
   valueLane: ValueSemanticLane
 }): Promise<{ registry: WorkingDimension[]; settledReason: DimensionSettledReason }> {
-  const { runId, workerId, sampleRows, sampleIds, idToFamily, rounds, valueLane } = input
+  const { reporter, sampleRows, sampleIds, idToFamily, rounds, valueLane } = input
   const sampleN = sampleRows.length
   /**
    * A position on an axis has to cover a meaningful slice of the field. At 1%
@@ -1136,13 +1209,26 @@ async function discoverRegistry(input: {
     }))
 
     await progress(
-      runId,
-      workerId,
+      reporter,
       'discover',
       round === 1
         ? `Round 1: proposing viewpoints from ${slice.length} sampled families`
         : `Round ${round}: reading ${slice.length} of ${residualRows.length} unplaced families`,
       round
+    )
+    // What the model is about to read — the identities of its inputs, never
+    // its answer. A handful named, the rest counted.
+    for (const doc of sliceDocs.slice(0, DOC_LINES_PER_ROUND)) {
+      reporter.event('read', `${doc.publicationNumber} — ${doc.title}`)
+    }
+    if (sliceDocs.length > DOC_LINES_PER_ROUND) {
+      reporter.event('note', `…and ${sliceDocs.length - DOC_LINES_PER_ROUND} more in round ${round}`)
+    }
+    reporter.event(
+      'model',
+      round === 1
+        ? `Reading ${slice.length} families to propose viewpoints`
+        : `Reading ${slice.length} unplaced families to propose further viewpoints`
     )
 
     const record: DimensionRound = {
@@ -1236,6 +1322,8 @@ async function discoverRegistry(input: {
 
     // --- measure everything at once -----------------------------------------
     const allCandidateValues = candidates.flatMap(candidate => candidate.values)
+    reporter.event('model', `Proposed ${candidates.length} viewpoints, ${allCandidateValues.length} values`)
+    reporter.detail(`Round ${round}: counting ${allCandidateValues.length} proposed values against the sample`)
     const nodeCounts = await queryNodeCounts(allCandidateValues.map(value => value.query))
     const sampleSets = await assignSample(sampleIds, idToFamily, allCandidateValues.map(value => value.query), {
       lane: valueLane,
@@ -1249,6 +1337,9 @@ async function discoverRegistry(input: {
     const existingValues = registry.flatMap(dimension => dimension.values.map(value => ({ dimension, value })))
     const residualSet = new Set(residualRows.map(row => row.familyKey))
     let acceptedThisRound = 0
+    // Values kept per candidate axis, narrated as one line each after the
+    // ladder — never one line per value, and never the reason.
+    const keptValues = new Map<CandidateDimension, number>()
 
     let flatIdx = 0
     for (const candidate of candidates) {
@@ -1344,6 +1435,7 @@ async function discoverRegistry(input: {
           existingValues.push({ dimension: candidate.existing, value: grown })
           record.acceptedValues.push({ dimension: candidate.existing.label, value: value.label })
           acceptedThisRound++
+          keptValues.set(candidate, (keptValues.get(candidate) ?? 0) + 1)
         }
         continue
       }
@@ -1432,6 +1524,16 @@ async function discoverRegistry(input: {
       record.acceptedDimensions.push(working.label)
       for (const value of working.values) record.acceptedValues.push({ dimension: working.label, value: value.label })
       acceptedThisRound += working.values.length
+      keptValues.set(candidate, working.values.length)
+    }
+
+    // One line per candidate axis, counts only. Which values fell and why is
+    // the round record's business — and the census may yet revise the picture.
+    for (const candidate of candidates) {
+      reporter.event(
+        'note',
+        `Axis “${candidate.label}”: ${keptValues.get(candidate) ?? 0} of ${candidate.values.length} values kept`
+      )
     }
 
     // Merged-into incumbents changed vocabulary; refresh every sample set so
@@ -1450,6 +1552,11 @@ async function discoverRegistry(input: {
     const unionAfter = assignedUnion(registry)
     record.residualShareAfter = sampleN ? (sampleN - unionAfter.size) / sampleN : 1
     rounds.push(record)
+    reporter.count('viewpoints', registry.length)
+    reporter.count('values', totalValues(registry))
+    reporter.count('placed', unionAfter.size, sampleN)
+    // Why the loop stops is a finding; that the round ended is not.
+    reporter.event('note', `Round ${round} finished`)
 
     if (!acceptedThisRound) {
       settledReason = 'NO_ACCEPTED_ADDITIONS'

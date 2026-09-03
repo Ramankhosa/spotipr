@@ -14,14 +14,71 @@ export type WhitespaceRunStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILE
 /** FIELD = landscape census pipeline; INVENTION = dimension-map pipeline. */
 export type WhitespaceStudyKind = 'FIELD' | 'INVENTION'
 
-/** Live narration for a run in flight, written at heartbeat points. */
+export type LiveStepState = 'pending' | 'active' | 'done' | 'skipped' | 'failed'
+
+/** One declared unit of a stage's work. `done` is reachable only from `active`. */
+export interface LiveStep {
+  key: string
+  /** Plain attorney English, present tense. */
+  label: string
+  state: LiveStepState
+  /** One human status line; the reason when skipped or failed. */
+  detail?: string
+  /** Count-don't-guess progress inside the step; never an estimate. */
+  n?: number
+  total?: number
+}
+
+export interface LiveCounter {
+  key: string
+  label: string
+  /** Null until first measured — never a fabricated zero. */
+  value: number | null
+  total?: number
+}
+
+export type LiveEventKind = 'read' | 'count' | 'attack' | 'model' | 'note'
+
+export interface LiveEvent {
+  /** Monotonic within one attempt, starting at 1. */
+  seq: number
+  /** Epoch ms, worker clock. */
+  t: number
+  kind: LiveEventKind
+  /** ≤ 160 chars; narrates what was DONE, never what was found. */
+  text: string
+}
+
+/**
+ * Live narration for a run in flight, written at heartbeat points.
+ *
+ * `phase` / `detail` / `round` are the v1 contract every reader understands
+ * (phase = the active step's key, detail = its detail or label). The v2 fields
+ * carry the structured live state the activity panel renders; a row written by
+ * a pre-upgrade worker simply lacks them. Everything here must be plain JSON.
+ */
 export interface WhitespaceRunProgress {
   phase: string
   detail: string
   round?: number
+  v?: 2
+  stage?: WhitespaceRunStage
+  /** The run's attemptCount for this narration; a retry starts a new sequence. */
+  attempt?: number
+  steps?: LiveStep[]
+  counters?: LiveCounter[]
+  /** Rolling window (≤ 20) of the newest events, ascending seq. */
+  recent?: LiveEvent[]
+  /** Last seq assigned, so a reader can detect events that left the window. */
+  seq?: number
+  /** Attempt start, epoch ms (worker clock). */
+  startedAt?: number
+  updatedAt?: number
+  /** Narration writes that blipped (swallowed DB errors), for the internals line. */
+  writeFailures?: number
 }
 
-export type TrailKind = 'SCOPE' | 'RUN' | 'EDIT' | 'HYPOTHESIS' | 'CHALLENGE' | 'NOTE' | 'SYSTEM'
+export type TrailKind = 'SCOPE' | 'RUN' | 'EDIT' | 'HYPOTHESIS' | 'CHALLENGE' | 'NOTE' | 'SYSTEM' | 'SEARCH'
 
 /** Where a scope element came from. User-authored entries are never overwritten by a recompile. */
 export type ScopeOrigin = 'user' | 'copilot'

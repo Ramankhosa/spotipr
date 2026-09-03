@@ -115,24 +115,39 @@ export function checkQuotations(sections: ProseSection[], sources: EvidenceSourc
       const at = section.text.indexOf(quote)
       const sentence = at >= 0 ? sentenceAround(section.text, at) : section.text
       const attributed = labelsIn(sentence).filter(l => byLabel.has(l.toLowerCase()))
-
-      // Found anywhere on file → the quotation is real.
-      if (sources.some(s => verifyQuote(quote, s.text))) continue
-
       const shown = quote.length > 90 ? `${quote.slice(0, 90)}…` : quote
+
+      /**
+       * A quotation attributed to a document we HOLD is checked against THAT
+       * document, and nothing else.
+       *
+       * This used to look for the passage anywhere on file first, and consult
+       * the attribution only when it was found nowhere. "Anywhere" includes the
+       * applicant's own specification, the claims, the examination report and
+       * every supplementary upload — so "D1 discloses X", where X is lifted
+       * verbatim from the specification, was reported as located. The single
+       * failure this function exists to catch is a misquotation of cited art
+       * attributed to a specific reference, and that was the shape it passed.
+       */
       if (attributed.length) {
+        if (attributed.some(l => verifyQuote(quote, byLabel.get(l.toLowerCase()) || ''))) continue
         findings.push({
           where: section.where,
           status: 'fail',
           detail: `The reply quotes ${attributed.join(' / ')} as saying “${shown}”, but that passage does not appear in the copy of ${attributed.length === 1 ? 'that document' : 'those documents'} on file. Remove the quotation or correct it — a misquotation of cited art goes to the Controller over your signature.`
         })
-      } else {
-        findings.push({
-          where: section.where,
-          status: 'warn',
-          detail: `The quotation “${shown}” could not be found in any document on this case. Check it against your source before filing.`
-        })
+        continue
       }
+
+      // Unattributed: anywhere on file is enough. It may be quoting the
+      // specification, the report, or the attorney's own evidence, and the
+      // sentence does not say which.
+      if (sources.some(s => verifyQuote(quote, s.text))) continue
+      findings.push({
+        where: section.where,
+        status: 'warn',
+        detail: `The quotation “${shown}” could not be found in any document on this case. Check it against your source before filing.`
+      })
     }
   }
   return findings
@@ -211,7 +226,136 @@ export function checkAuthorities(sections: ProseSection[], allowed: Authority[])
 }
 
 // ---------------------------------------------------------------------------
-// 3. Quantitative claims
+// 3. Statutory citations
+// ---------------------------------------------------------------------------
+
+/**
+ * Provisions as a reply cites them: "Section 3(d)", "Sections 2(1)(ja)",
+ * "s.59", "Rule 24B(5)", "Form 3".
+ *
+ * Only the local shapes — a foreign code is matched separately below, because
+ * the two mean very different things when they cannot be resolved.
+ */
+const LOCAL_PROVISION_RE =
+  /\b(?:sections?|rules?|forms?|sec\.|s\.|r\.)\s*(\d{1,3}[A-Za-z]?(?:\s*\([^()\s]{1,8}\))*)/gi
+
+/**
+ * A citation to another jurisdiction's code. Unambiguous, and exactly the reach
+ * a model makes when it argues an Indian objection from what it was trained on:
+ * "35 U.S.C. § 103", "Article 56 EPC", "MPEP § 2143".
+ */
+const FOREIGN_CODE_RE =
+  /\b\d{1,2}\s*U\.?\s?S\.?\s?C\.?|\bC\.?F\.?R\.?\b|\bM\.?P\.?E\.?P\.?\b|\bEPC\b|\bArticle\s+\d{1,3}\s*(?:EPC|PCT)\b|§/gi
+
+/** Which keyword opened the citation — the key is namespaced by it. */
+function provisionKind(raw: string): 'SECTION' | 'RULE' | 'FORM' {
+  const head = raw.trim().toLowerCase()
+  if (head.startsWith('r')) return 'RULE'
+  if (head.startsWith('f')) return 'FORM'
+  return 'SECTION'
+}
+
+/**
+ * A provision split into its levels: "2(1)(ja)" → ["2", "1", "JA"].
+ *
+ * Segmented rather than kept as one string so that containment can be tested on
+ * level boundaries. Compared as raw text, "Section 64" reads as an elaboration
+ * of "Section 6" and a citation to a revocation provision would be waved
+ * through by a profile that happens to mention Section 6.
+ */
+function provisionSegments(body: string): string[] {
+  const cleaned = body.replace(/\s+/g, '').toUpperCase()
+  const head = /^[^(]*/.exec(cleaned)?.[0] || ''
+  const nested = Array.from(cleaned.matchAll(/\(([^)]*)\)/g)).map(m => m[1])
+  return [head, ...nested].filter(Boolean)
+}
+
+/**
+ * Canonical key for a provision, so "Section 2(1)(ja)", "section 2 (1) (ja)"
+ * and "s.2(1)(JA)" are one thing.
+ */
+export function provisionKey(kindWord: string, body: string): string {
+  return `${provisionKind(kindWord)}:${provisionSegments(body).join('|')}`
+}
+
+/** Every provision the text cites, with the words that produced each key. */
+export function collectProvisions(text: string): Array<{ raw: string; key: string }> {
+  const out: Array<{ raw: string; key: string }> = []
+  const seen = new Set<string>()
+  LOCAL_PROVISION_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = LOCAL_PROVISION_RE.exec(text)) !== null) {
+    const key = provisionKey(m[0], m[1])
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ raw: m[0].replace(/\s+/g, ' ').trim(), key })
+  }
+  return out
+}
+
+/**
+ * A cited provision is recognised when the jurisdiction declares it, or declares
+ * something it contains or is contained by.
+ *
+ * Both directions are legitimate drafting. The reply may answer a "Section 3"
+ * objection by arguing the specific sub-clause "Section 3(d)", or answer a
+ * "Section 2(1)(ja)" objection by referring to "Section 2(1)". Demanding an
+ * exact match would fire on correct replies, which is how a check gets ignored.
+ */
+function recognised(key: string, declared: Set<string>): boolean {
+  if (declared.has(key)) return true
+  // Containment on LEVEL boundaries only — see provisionSegments.
+  return Array.from(declared).some(d => d.startsWith(`${key}|`) || key.startsWith(`${d}|`))
+}
+
+/**
+ * Every statute, rule and form the reply cites must be one this jurisdiction
+ * actually has.
+ *
+ * `checkAuthorities` reads case names; nothing read the provisions, which in an
+ * Indian reply are the denser and more citable material — and the more likely
+ * error. Section 2(1)(j) and 2(1)(ja) are different objections; Rule 24B(5) and
+ * Rule 24B(6) are different deadlines; Form 3 and Form 27 are different
+ * obligations. All of them are reconstructed by a model rather than recalled.
+ *
+ * Graded by what the miss actually means:
+ *   fail — a citation to another jurisdiction's code. There is no reading on
+ *          which "35 U.S.C. § 103" belongs in a submission to the Controller,
+ *          and it is the same reach that puts KSR in an Indian reply.
+ *   warn — a local-form provision this jurisdiction's profile does not declare.
+ *          The profile is not an exhaustive statute book, so this is "check
+ *          it", not "it is wrong".
+ */
+export function checkStatutoryCitations(sections: ProseSection[], declared: Set<string>): ProseFinding[] {
+  const findings: ProseFinding[] = []
+
+  for (const section of sections) {
+    FOREIGN_CODE_RE.lastIndex = 0
+    const foreign = Array.from(new Set((section.text.match(FOREIGN_CODE_RE) || []).map(s => s.trim())))
+    if (foreign.length) {
+      findings.push({
+        where: section.where,
+        status: 'fail',
+        detail: `The reply cites ${foreign.slice(0, 3).map(f => `“${f}”`).join(', ')} — another jurisdiction's code. Argue the objection under the provisions of the Act and Rules this office applies, and remove the foreign citation.`
+      })
+    }
+
+    if (!declared.size) continue
+    const unknown = collectProvisions(section.text).filter(p => !recognised(p.key, declared))
+    if (unknown.length) {
+      findings.push({
+        where: section.where,
+        status: 'warn',
+        detail: `The reply cites ${unknown.slice(0, 4).map(p => `“${p.raw}”`).join(', ')}, which this jurisdiction's profile does not declare. Verify the provision number against the Act and Rules before filing.`
+      })
+    }
+  }
+
+  return findings
+}
+
+// ---------------------------------------------------------------------------
+// 4. Quantitative claims
 // ---------------------------------------------------------------------------
 
 const MAGNITUDE_WORDS: Record<string, string> = {

@@ -1,5 +1,5 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
-import { runOaStage, type OaGateway } from './oa-llm-service'
+import { runOaStage, fenceUntrusted, type OaGateway } from './oa-llm-service'
 
 /**
  * Office Action Studio — intake parser
@@ -147,9 +147,8 @@ export async function parseOfficeActionDocument(
     'Return JSON of shape { applicationNumber?, dateOfDispatch? (ISO yyyy-mm-dd), dateOfReport? (ISO — same as dateOfDispatch), dateOfFiling? (ISO), dateOfPublication? (ISO), applicantName? (from the PART-metadata block, NOT the "To" agent address), examinerName?, controllerName?, controllerEmail?, hearingDate? (ISO), statedDueDate? (ISO, from "Last date for filing response"), citedDocuments: [{label, docNumber, kind (PATENT|NPL), publicationDate? (ISO), relevantDescription? (the examiner\'s pinpoint), relevantClaimsOfCited?, claimsOfAllegedInvention?: number[]}], objections: [{number?, examinerText (VERBATIM from PART-II section B / PART-III), legalBasisMentioned?: string[], claimsAffected?: number[], citationLabels?: string[]}] }. Take objections from the PART-II section B "Detailed observations" and PART-III "Formal requirements" ONLY — do NOT infer objections from the PART-I summary Yes/No grid (its Yes/No meaning differs per row and is unreliable).',
     '',
     'Document text:',
-    '"""',
-    text,
-    '"""'
+    // Fenced: this is an uploaded file whose contents nobody here authored.
+    fenceUntrusted('the examination report as uploaded', text)
   ].filter(Boolean).join('\n')
 
   const result = await runOaStage<ParsedFer>(

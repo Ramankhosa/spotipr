@@ -119,6 +119,14 @@ function seedCentroids(data: Uint32Array, n: number, k: number, random: () => nu
   return centroids
 }
 
+export interface KMeansIterationInfo {
+  /** 1-based Lloyd pass that just finished. */
+  iteration: number
+  /** Points whose assignment changed in this pass; 0 means the loop stops here. */
+  changed: number
+  maxIterations: number
+}
+
 /**
  * Lloyd iterations with per-bit majority-vote centroid update. Empty clusters
  * are re-seeded mid-run from the points farthest from their centroids (each
@@ -130,7 +138,16 @@ export function binaryKMeans(
   data: Uint32Array,
   n: number,
   k: number,
-  options: { maxIterations?: number; seed?: number } = {}
+  options: {
+    maxIterations?: number
+    seed?: number
+    /**
+     * Called synchronously at the end of every Lloyd pass, before the
+     * convergence check. A progress hook only: it never sees the assignment,
+     * so a caller that narrates cannot change the result.
+     */
+    onIteration?: (info: KMeansIterationInfo) => void
+  } = {}
 ): KMeansResult {
   if (n === 0 || k === 0) {
     return {
@@ -223,6 +240,7 @@ export function binaryKMeans(
     }
     centroids = next
 
+    options.onIteration?.({ iteration: iterations, changed, maxIterations })
     if (changed === 0) break
   }
 

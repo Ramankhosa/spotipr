@@ -36,13 +36,36 @@ import { resolveFieldDefinition } from './field-definition'
 import { ladderSummary, wideningAdviceFor } from './field-rule'
 import { comparableVectorSql } from './embedding'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
-import { heartbeatRun, WhitespacePermanentError } from './run-lease'
+import { WhitespacePermanentError } from './run-lease'
 import { buildClusterLabelPrompt, WS_CLUSTER_LABEL_STAGE_CODE } from './prompts'
 import { stableJson, type ClusterStageResult, type WhitespaceScope } from './types'
+import type { RunReporter } from './run-reporter'
 
 /** Sample ceiling. 20k × 64B vectors ≈ 1.3MB packed; k-means cost is trivial. */
 const SAMPLE_CAP = Math.max(1000, Number(process.env.WHITESPACE_CLUSTER_SAMPLE_CAP) || 20_000)
 const STAGE_TIMEOUT_MS = 60_000
+/** Lloyd pass ceiling — also the total the "passes" counter is narrated against. */
+const KMEANS_MAX_ITERATIONS = 20
+
+const CLUSTER_STEPS = [
+  { key: 'field', label: 'Loading the field definition' },
+  { key: 'sample', label: 'Drawing a uniform sample' },
+  { key: 'cluster', label: 'Grouping similar families' },
+  { key: 'geometry', label: 'Measuring how tight each group is' },
+  { key: 'name', label: 'Naming the areas' },
+  { key: 'persist', label: 'Saving the areas' },
+]
+const CLUSTER_COUNTERS = [
+  { key: 'sampled', label: 'Sampled families' },
+  { key: 'areas', label: 'Areas' },
+  { key: 'passes', label: 'Clustering passes', total: KMEANS_MAX_ITERATIONS },
+  { key: 'saved', label: 'Areas saved' },
+]
+/**
+ * Area names narrated one per line, the rest aggregated: k reaches 24 and the
+ * reporter's feed window holds 20 events between two awaited writes.
+ */
+const NAME_EVENT_BUDGET = 18
 
 interface SampleRow {
   id: string
@@ -64,10 +87,14 @@ function chooseK(n: number): number {
 export async function runClusterStage(input: {
   runId: string
   workerId: string
+  reporter: RunReporter
   studyId: string
   scope: WhitespaceScope
   llmContext: WhitespaceLLMContext
 }): Promise<ClusterStageResult> {
+  const { reporter } = input
+  await reporter.plan(CLUSTER_STEPS, CLUSTER_COUNTERS)
+
   // binary-kmeans is a Hamming clusterer over fixed-width bit vectors; it
   // cannot read a float corpus. Refuse up front with the real reason — the
   // old path fell through to "the embedding pipeline has not covered this
@@ -92,6 +119,7 @@ export async function runClusterStage(input: {
   // same match rule the census fitted (reuse: true reads it off the census run).
   // Each stage is its own run, and an area map drawn over a narrower field than
   // the census reported would make every area's share of the field wrong.
+  await reporter.step('field', 'Reading the match rule the census fitted')
   const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
   const where = field.where
   const coverageNotes: string[] = [...field.coverageNotes]
@@ -100,6 +128,7 @@ export async function runClusterStage(input: {
   // Field size comes from the completed census when one exists — re-counting the
   // corpus here would repeat the most expensive query in the studio for a number
   // the study already holds. The direct count is only the fallback.
+  await reporter.step('sample', `Drawing up to ${SAMPLE_CAP.toLocaleString()} families in family-key hash order`)
   const censusFamilies = await familyCountFromCensus(input.studyId, input.scope)
 
   // Hash order over the FAMILY KEY (stable business key), not the autoincrement
@@ -160,6 +189,8 @@ export async function runClusterStage(input: {
     }
   }
   const n = sampleRows.length
+  reporter.count('sampled', n)
+  reporter.event('count', `${n.toLocaleString()} families sampled from a field of ${fieldFamilies.toLocaleString()}`)
 
   if (n < 20) {
     // Two different failures wear the same number, and conflating them sends
@@ -182,17 +213,46 @@ export async function runClusterStage(input: {
   }
 
   // --- pack + cluster -------------------------------------------------------
+  const k = chooseK(n)
+  await reporter.step('cluster', `Grouping ${n.toLocaleString()} families into ${k} areas`)
+  reporter.count('areas', k)
+  reporter.event('note', `${k} areas planned`)
+
   const data = new Uint32Array(n * WORDS)
   for (let i = 0; i < n; i++) {
     data.set(packBitString(sampleRows[i].bits), i * WORDS)
   }
 
-  const k = chooseK(n)
-  const result = binaryKMeans(data, n, k, { seed: 7 })
+  // k-means is synchronous, so the passes are a counter that lands in the next
+  // flush plus ONE line after the loop — never an event per pass.
+  let lastPassChanged = -1
+  const result = binaryKMeans(data, n, k, {
+    seed: 7,
+    maxIterations: KMEANS_MAX_ITERATIONS,
+    onIteration: info => {
+      lastPassChanged = info.changed
+      reporter.count('passes', info.iteration, info.maxIterations)
+    },
+  })
+  reporter.event(
+    'note',
+    lastPassChanged === 0
+      ? `Converged after ${result.iterations} pass${result.iterations === 1 ? '' : 'es'}`
+      : `Stopped at the ${KMEANS_MAX_ITERATIONS}-pass limit`
+  )
+  if (result.k !== k) {
+    reporter.count('areas', result.k)
+    reporter.event(
+      'note',
+      `${k - result.k} planned area${k - result.k === 1 ? '' : 's'} had no members and ${k - result.k === 1 ? 'was' : 'were'} dropped`
+    )
+  }
+
+  await reporter.step('geometry', `Measuring cohesion, separation and medoids of ${result.k} areas`)
   const geometry = clusterGeometry(data, n, result)
   const layout = layoutCentroids(result.centroidMeans, result.k)
 
-  await heartbeatRun(input.runId, input.workerId)
+  await reporter.heartbeat()
 
   // --- per-cluster aggregates from the sample -------------------------------
   const memberIndex: number[][] = Array.from({ length: result.k }, () => [])
@@ -229,6 +289,12 @@ export async function runClusterStage(input: {
     description: '',
     keywords: [],
   }))
+  await reporter.step('name', `Naming ${result.k} areas`)
+  reporter.event('model', `Naming ${result.k} areas from their most representative titles`)
+  // Reporter calls stay outside the try: a lost lease must not be logged as a
+  // labelling failure, and the fail() below rethrows it first anyway.
+  const namedByModel = new Set<number>()
+  let namingFailed = false
   try {
     const prompt = buildClusterLabelPrompt(
       memberIndex.map((members, index) => ({
@@ -262,19 +328,35 @@ export async function runClusterStage(input: {
             ? entry.keywords.filter((keyword): keyword is string => typeof keyword === 'string').slice(0, 6)
             : [],
         }
+        namedByModel.add(entry.index)
       }
     }
   } catch (error) {
     coverageNotes.push('Areas are numbered rather than named — the naming call failed; numbers do not affect any metric.')
     console.error('[Whitespace] Cluster labelling failed:', error instanceof Error ? error.message : error)
+    namingFailed = true
+  }
+  if (namingFailed) {
+    await reporter.fail('name', 'names unavailable — areas keep their numbers')
+  } else {
+    // Area names are inputs to persistence, not a finding, so they may be
+    // narrated — within the feed window.
+    const named = Array.from(namedByModel).sort((a, b) => a - b)
+    for (const index of named.slice(0, NAME_EVENT_BUDGET)) {
+      reporter.event('note', `Area ${index + 1}: “${labels[index].label}”`)
+    }
+    if (named.length > NAME_EVENT_BUDGET) {
+      reporter.event('note', `…and ${named.length - NAME_EVENT_BUDGET} more areas named`)
+    }
   }
 
-  await heartbeatRun(input.runId, input.workerId)
+  await reporter.heartbeat()
 
   // --- persist: replace the study's cluster set atomically ------------------
   // Scoped to depth 0: promoted dimension gaps live at depth 1 with their own
   // area analyses, and WhitespaceHypothesis.clusterId has NO relation — a wider
   // wipe would leave those hypotheses dangling and silently fail gate G1.
+  await reporter.step('persist', `Saving ${result.k} areas and ${n.toLocaleString()} sampled members`)
   await prisma.$transaction(async tx => {
     // Scoped to depth 0 on BOTH sides. The cluster wipe always was; the member
     // wipe was not, so re-mapping the field deleted the members of every
@@ -341,6 +423,11 @@ export async function runClusterStage(input: {
       for (let offset = 0; offset < rows.length; offset += 2000) {
         await tx.whitespaceClusterMember.createMany({ data: rows.slice(offset, offset + 2000) })
       }
+      reporter.count('saved', c + 1, result.k)
+      // The reporter writes on its own pooled connection, outside this
+      // transaction: a lease lost mid-save surfaces here and rolls it back
+      // rather than letting a zombie worker finish the wipe-and-replace.
+      if ((c + 1) % 8 === 0 && c + 1 < result.k) await reporter.heartbeat()
     }
   }, { timeout: 120_000, maxWait: 20_000 })
 
@@ -358,6 +445,7 @@ export async function runClusterStage(input: {
   // filter answers it.
   let embeddedFamilies: number | null = n
   if (n >= SAMPLE_CAP) {
+    reporter.detail('Measuring embedding coverage of the field')
     try {
       const embeddedRows = await withTimeout<{ families: bigint }>(
         Prisma.sql`
@@ -380,6 +468,7 @@ export async function runClusterStage(input: {
     coverageNotes.push('A substantial share of this field carries no embedding vector yet and is invisible to the area map.')
   }
 
+  reporter.done()
   return {
     clusterCount: result.k,
     sampledFamilies: n,

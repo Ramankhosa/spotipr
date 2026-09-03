@@ -165,3 +165,141 @@ describe('startWhitespaceRun dedupe', () => {
     expect(prismaMock.whitespaceRun.create).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('recordRunFailure', () => {
+  function claimedRun(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'run-1',
+      studyId: 'study-1',
+      stage: 'DIMENSION_MAP',
+      scopeSnapshot: {},
+      params: null,
+      attemptCount: 1,
+      maxAttempts: 3,
+      ...overrides,
+    }
+  }
+
+  it('is fenced on the lease: when another worker holds the run, nothing is recorded', async () => {
+    prismaMock.whitespaceRun.updateMany.mockResolvedValue({ count: 0 })
+    const { recordRunFailure } = await import('../service')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await recordRunFailure(claimedRun({ attemptCount: 3 }), new Error('LLM gateway 502'), 'worker-a')
+
+    const call = prismaMock.whitespaceRun.updateMany.mock.calls[0][0]
+    expect(call.where).toEqual({ id: 'run-1', lockedBy: 'worker-a', status: 'PROCESSING' })
+    expect(prismaMock.whitespaceRun.update).not.toHaveBeenCalled()
+    expect(prismaMock.whitespaceTrailEntry.create).not.toHaveBeenCalled()
+    expect(prismaMock.whitespaceHypothesis.updateMany).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
+  })
+
+  it('requeues a transient failure with backoff while attempts remain', async () => {
+    prismaMock.whitespaceRun.updateMany.mockResolvedValue({ count: 1 })
+    const { recordRunFailure } = await import('../service')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await recordRunFailure(claimedRun({ attemptCount: 1 }), new Error('Connection terminated'), 'worker-a')
+
+    const data = prismaMock.whitespaceRun.updateMany.mock.calls[0][0].data
+    expect(data.status).toBe('QUEUED')
+    expect(data.lastError).toBe('Connection terminated')
+    expect(data.nextAttemptAt.getTime()).toBeGreaterThan(Date.now())
+    expect(prismaMock.whitespaceTrailEntry.create).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('finalizes a spent failure: FAILED, trail entry, hypothesis released', async () => {
+    prismaMock.whitespaceRun.updateMany.mockResolvedValue({ count: 1 })
+    const { recordRunFailure } = await import('../service')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await recordRunFailure(
+      claimedRun({ stage: 'VALIDATE', attemptCount: 3, params: { hypothesisId: 'hyp-1' } }),
+      new Error('Connection terminated'),
+      'worker-a'
+    )
+
+    expect(prismaMock.whitespaceRun.updateMany.mock.calls[0][0].data.status).toBe('FAILED')
+    expect(prismaMock.whitespaceHypothesis.updateMany).toHaveBeenCalledWith({
+      where: { id: 'hyp-1', studyId: 'study-1', status: 'VALIDATING' },
+      data: { status: 'INCONCLUSIVE' },
+    })
+    expect(prismaMock.whitespaceTrailEntry.create).toHaveBeenCalledTimes(1)
+    consoleError.mockRestore()
+  })
+})
+
+describe('runPayload', () => {
+  it('exposes attempt, retry timing, heartbeat and a server clock, and measures elapsed from the attempt start', async () => {
+    const { runPayload } = await import('../service')
+    const startedAt = Date.now() - 62_000
+    const payload = runPayload({
+      id: 'run-1',
+      stage: 'DIMENSION_MAP',
+      status: 'PROCESSING',
+      results: { hidden: true },
+      gateCounts: null,
+      progress: { phase: 'discover', detail: 'Round 1', v: 2, startedAt },
+      lastError: null,
+      durationMs: null,
+      createdAt: new Date(Date.now() - 10 * 60_000),
+      completedAt: null,
+      attemptCount: 2,
+      maxAttempts: 3,
+      nextAttemptAt: new Date(Date.now() - 60_000),
+      heartbeatAt: new Date(Date.now() - 1_500),
+    })
+    expect(payload.results).toBeNull()
+    expect(payload.progress).toMatchObject({ phase: 'discover', v: 2 })
+    expect(payload.attempt).toBe(2)
+    expect(payload.maxAttempts).toBe(3)
+    expect(typeof payload.serverNow).toBe('string')
+    expect(typeof payload.heartbeatAt).toBe('string')
+    // From the attempt's own start, not the row's creation ten minutes ago.
+    expect(payload.elapsedMs).toBeGreaterThanOrEqual(62_000)
+    expect(payload.elapsedMs).toBeLessThan(70_000)
+  })
+
+  it('hides narration and elapsed for a run that is not processing, but keeps the retry info', async () => {
+    const { runPayload } = await import('../service')
+    const next = new Date(Date.now() + 30_000)
+    const payload = runPayload({
+      id: 'run-1',
+      stage: 'FIELD_MAP',
+      status: 'QUEUED',
+      results: null,
+      gateCounts: null,
+      progress: { phase: 'stale', detail: 'from the last attempt' },
+      lastError: 'The worker stopped',
+      durationMs: null,
+      createdAt: new Date(),
+      completedAt: null,
+      attemptCount: 1,
+      maxAttempts: 3,
+      nextAttemptAt: next,
+      heartbeatAt: new Date(),
+    })
+    expect(payload.progress).toBeNull()
+    expect(payload.elapsedMs).toBeNull()
+    expect(payload.nextAttemptAt).toBe(next.toISOString())
+    expect(payload.error).toBe('The worker stopped')
+  })
+})
+
+describe('resolveStaleRun requeue', () => {
+  it('kicks the inline drain so a retry does not sit in the queue with nobody coming back for it', async () => {
+    const row = staleProcessingRow({ attemptCount: 1, maxAttempts: 3 })
+    prismaMock.whitespaceRun.updateMany.mockResolvedValue({ count: 1 })
+    prismaMock.whitespaceRun.findUnique.mockResolvedValue({ ...row, status: 'QUEUED', lockedUntil: null })
+
+    const { resolveStaleRun } = await import('../service')
+    await resolveStaleRun(row)
+    // The drain runs on a zero-delay timer: sweep (findMany), then a claim ($queryRaw).
+    await new Promise(resolve => setTimeout(resolve, 25))
+    expect(prismaMock.$queryRaw).toHaveBeenCalled()
+  })
+})

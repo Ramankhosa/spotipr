@@ -156,6 +156,43 @@ describe('binaryKMeans', () => {
       expect(Array.from(again.centroids)).toEqual(Array.from(result.centroids))
     }
   })
+
+  it('reports every Lloyd pass through onIteration without changing the result', () => {
+    const random = mulberry32(41)
+    const n = 150
+    const data = new Uint32Array(n * WORDS)
+    for (let i = 0; i < n; i++) data.set(packBitString(randomBitString(random)), i * WORDS)
+
+    const silent = binaryKMeans(data, n, 6, { seed: 5, maxIterations: 20 })
+    const seen: Array<{ iteration: number; changed: number; maxIterations: number }> = []
+    const narrated = binaryKMeans(data, n, 6, {
+      seed: 5,
+      maxIterations: 20,
+      onIteration: info => seen.push({ ...info }),
+    })
+
+    // Once per pass, numbered 1..iterations, each carrying the cap.
+    expect(narrated.iterations).toBeGreaterThan(0)
+    expect(seen).toHaveLength(narrated.iterations)
+    for (let i = 0; i < seen.length; i++) {
+      expect(seen[i].iteration).toBe(i + 1)
+      expect(seen[i].maxIterations).toBe(20)
+    }
+    // Every pass before the last moved something; a converged last pass moved nothing.
+    for (let i = 0; i < seen.length - 1; i++) expect(seen[i].changed).toBeGreaterThan(0)
+    if (narrated.iterations < 20) expect(seen[seen.length - 1].changed).toBe(0)
+
+    // The hook is observation only: same seed, same clusters.
+    expect(narrated.k).toBe(silent.k)
+    expect(narrated.iterations).toBe(silent.iterations)
+    expect(Array.from(narrated.assignments)).toEqual(Array.from(silent.assignments))
+    expect(Array.from(narrated.centroids)).toEqual(Array.from(silent.centroids))
+
+    // Nothing to iterate over, nothing reported.
+    let calls = 0
+    binaryKMeans(new Uint32Array(0), 0, 4, { onIteration: () => { calls++ } })
+    expect(calls).toBe(0)
+  })
 })
 
 describe('clusterGeometry', () => {

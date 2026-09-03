@@ -32,6 +32,7 @@ import type { FieldMapResult, FieldRule, LabelledCount, TextCoverage, Whitespace
 import { CORPUS_FIRST_YEAR, scopeMatching } from './types'
 import { WhitespacePermanentError } from './run-lease'
 import { fieldRuleNote, ladderSummary, minimumRungFor, narrowingAdviceFor, rungPhrase } from './field-rule'
+import type { RunReporter } from './run-reporter'
 
 /**
  * Ceiling for the staging pass — the only statement that touches the corpus.
@@ -674,6 +675,8 @@ export function extractApplicantNames(value: unknown, depth = 0): string[] {
 }
 
 export interface FieldMapOptions {
+  /** Live narration for the run this census belongs to; absent for direct callers. */
+  reporter?: RunReporter
   /** Bounds the assignee facet. Beyond this the result is a sample, and says so. */
   assigneeSampleCap?: number
   /** Ceiling for the staging pass. Defaults to WHITESPACE_CENSUS_TIMEOUT_MS or 90s. */
@@ -892,11 +895,27 @@ export async function runFieldMap(
   if (options.candidateNote) coverageNotes.push(options.candidateNote)
   const gaps: string[] = []
 
+  // Live narration, when this census belongs to a run. The reporter writes on
+  // the global client, not the census transaction, so its writes never wait
+  // behind a facet — and a lost lease surfaces here as a throw, which rolls
+  // the transaction back rather than letting it finish blind.
+  const reporter = options.reporter
+  /** One facet's outcome: the count it produced, or the step marked failed. */
+  const counted = async <T>(key: string, rows: T[] | null, summary: (rows: T[]) => string): Promise<T[]> => {
+    if (!rows) {
+      await reporter?.fail(key, 'could not be counted')
+      return []
+    }
+    reporter?.event('count', summary(rows))
+    return rows
+  }
+
   // One interactive transaction, because the temp table lives on a single
   // connection and Prisma's pool would otherwise hand each facet a different one.
   return prisma.$transaction(
     async tx => {
   // --- The single pass over the corpus -------------------------------------
+  await reporter?.step('stage')
   await setStatementTimeout(tx, censusTimeoutMs)
   try {
     await tx.$executeRaw(stageCensus(where, rowCap))
@@ -909,6 +928,7 @@ export async function runFieldMap(
   // --- Facet 1: size -------------------------------------------------------
   // Not savepoint-tolerant: every other number is a proportion of this one, so a
   // map without it would be a map of nothing.
+  await reporter?.step('size')
   let totals: Array<{ families: bigint; publications: bigint }>
   try {
     totals = await tx.$queryRaw<Array<{ families: bigint; publications: bigint }>>(
@@ -927,6 +947,12 @@ export async function runFieldMap(
   }
   const familyCount = Number(totals[0]?.families ?? 0)
   const publicationCount = Number(totals[0]?.publications ?? 0)
+  reporter?.count('families', familyCount)
+  reporter?.count('publications', publicationCount)
+  reporter?.event(
+    'count',
+    `${familyCount.toLocaleString()} families across ${publicationCount.toLocaleString()} publications`
+  )
 
   // Over the exact-census ceiling: the staged rows are an arbitrary subset, and
   // facets over an arbitrary subset would be quietly biased. Refuse with the
@@ -943,8 +969,10 @@ export async function runFieldMap(
   }
 
   // --- Facet 2: filing trend ----------------------------------------------
-  const yearRows =
-    (await facet<{ year: number; families: bigint }>(
+  await reporter?.step('trend')
+  const yearRows = await counted(
+    'trend',
+    await facet<{ year: number; families: bigint }>(
       tx,
       'filingsByYear',
       Prisma.sql`
@@ -954,49 +982,63 @@ export async function runFieldMap(
         GROUP BY 1
         ORDER BY 1`,
       gaps
-    )) ?? []
+    ),
+    rows => `Filings counted across ${rows.length} filing years`
+  )
   const filingsByYear: YearCount[] = yearRows.map(r => ({ year: Number(r.year), families: Number(r.families) }))
 
   // --- Facet 3: jurisdictions ---------------------------------------------
+  await reporter?.step('where')
   const jurisdictions = toLabelled(
-    (await facet<{ label: string | null; families: bigint }>(
-      tx,
-      'jurisdictions',
-      Prisma.sql`
+    await counted(
+      'where',
+      await facet<{ label: string | null; families: bigint }>(
+        tx,
+        'jurisdictions',
+        Prisma.sql`
         SELECT country AS label, COUNT(DISTINCT family_key)::bigint AS families
         FROM ws_census
         GROUP BY 1
         ORDER BY 2 DESC
         LIMIT 40`,
-      gaps
-    )) ?? []
+        gaps
+      ),
+      rows => `${rows.length} jurisdictions counted`
+    )
   )
 
   // --- Facet 4: classifications -------------------------------------------
   // Truncated to subgroup level: full CPC codes are too granular to read, and
   // comparing counts across hierarchy depths is meaningless (parent codes are
   // structurally sparse because examiners push documents down the tree).
+  await reporter?.step('classes')
   const classifications = toLabelled(
-    (await facet<{ label: string | null; families: bigint }>(
-      tx,
-      'classifications',
-      Prisma.sql`
+    await counted(
+      'classes',
+      await facet<{ label: string | null; families: bigint }>(
+        tx,
+        'classifications',
+        Prisma.sql`
         SELECT split_part(regexp_replace(upper(c), '[[:space:]]+', '', 'g'), '/', 1) AS label,
                COUNT(DISTINCT ws.family_key)::bigint AS families
         FROM ws_census ws, unnest(ws.classifications) c
         GROUP BY 1
         ORDER BY 2 DESC
         LIMIT 30`,
-      gaps
-    )) ?? []
+        gaps
+      ),
+      rows => `${rows.length} classification groups counted`
+    )
   )
 
   // --- Facet 5: status proxy ----------------------------------------------
   // Kind codes only. This is a proxy and the UI must never call it legal status:
   // B/C are grants in most offices, A is an application, and the corpus has no
   // legal-event data of any kind.
-  const statusRows =
-    (await facet<{ bucket: string; families: bigint }>(
+  await reporter?.step('status')
+  const statusRows = await counted(
+    'status',
+    await facet<{ bucket: string; families: bigint }>(
       tx,
       'statusProxy',
       Prisma.sql`
@@ -1009,7 +1051,9 @@ export async function runFieldMap(
         FROM ws_census
         GROUP BY 1`,
       gaps
-    )) ?? []
+    ),
+    () => `Grants sorted from applications by kind code across ${familyCount.toLocaleString()} families`
+  )
   const statusProxy = { granted: 0, pending: 0, unknown: 0 }
   for (const row of statusRows) {
     const key = row.bucket as keyof typeof statusProxy
@@ -1032,17 +1076,17 @@ export async function runFieldMap(
   // grouping set counts DISTINCT families over the whole staged set, once. The
   // 40-country LIMIT compounded it in the other direction, truncating the sum
   // for wide fields; ordering the total row first keeps it out of the cap.
-  const coverageRows =
-    (await facet<{
-      country: string | null
-      is_total: number
-      families: bigint
-      with_claims: bigint
-      with_description: bigint
-    }>(
-      tx,
-      'textCoverage',
-      Prisma.sql`
+  await reporter?.step('text')
+  const coverageFacet = await facet<{
+    country: string | null
+    is_total: number
+    families: bigint
+    with_claims: bigint
+    with_description: bigint
+  }>(
+    tx,
+    'textCoverage',
+    Prisma.sql`
         SELECT ws.country                    AS country,
                GROUPING(ws.country)::int     AS is_total,
                COUNT(DISTINCT ws.family_key)::bigint AS families,
@@ -1057,8 +1101,12 @@ export async function runFieldMap(
         GROUP BY GROUPING SETS ((ws.country), ())
         ORDER BY is_total DESC, families DESC
         LIMIT 41`,
-      gaps
-    )) ?? []
+    gaps
+  )
+  const coverageRows = await counted('text', coverageFacet, rows => {
+    const total = rows.find(r => Number(r.is_total) === 1)
+    return `Claim text readable for ${Number(total?.with_claims ?? 0).toLocaleString()} of ${familyCount.toLocaleString()} families`
+  })
 
   const coverageTotal = coverageRows.find(r => Number(r.is_total) === 1) ?? null
   const textCoverage: TextCoverage = {
@@ -1073,6 +1121,8 @@ export async function runFieldMap(
         withClaims: Number(r.with_claims),
       })),
   }
+  // Only when the facet read: a zero from a rolled-back facet is a gap, not a count.
+  if (coverageFacet) reporter?.count('claims', textCoverage.withClaims, familyCount)
 
   // --- Facet 7: assignees --------------------------------------------------
   // applicants is an unnormalised JSON blob, so names are extracted and
@@ -1089,8 +1139,10 @@ export async function runFieldMap(
   // draws the same unbiased sample.
   let assignees: LabelledCount[] = []
   let assigneesSampled = false
-  const applicantRows =
-    (await facet<{ familyKey: string; applicants: unknown }>(
+  await reporter?.step('who')
+  const applicantRows = await counted(
+    'who',
+    await facet<{ familyKey: string; applicants: unknown }>(
       tx,
       'assignees',
       Prisma.sql`
@@ -1110,7 +1162,9 @@ export async function runFieldMap(
         FROM picked p
         JOIN "local_patents" lp ON lp."id" = p.id`,
       gaps
-    )) ?? []
+    ),
+    rows => `Applicants read for ${rows.length.toLocaleString()} families`
+  )
 
   if (applicantRows.length) {
     assigneesSampled = applicantRows.length >= sampleCap

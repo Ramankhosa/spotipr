@@ -16,6 +16,8 @@
  */
 
 import { prisma } from '@/lib/prisma'
+import type { Prisma } from '@prisma/client'
+import type { WhitespaceRunProgress } from './types'
 
 /**
  * How long a claim is good for before another worker may take the run.
@@ -99,12 +101,16 @@ export function isLeaseLost(error: unknown): boolean {
  * stage aborts. A write that merely errors (a connection blip) is still
  * swallowed — a missed heartbeat costs a re-claim at worst; failing a
  * forty-minute census because a bookkeeping write blipped would be far worse.
+ *
+ * Resolves `true` when the row was written and `false` when the write blipped,
+ * so a caller writing narration at a cadence can back off instead of stalling a
+ * transaction behind a pool timeout every 1.5 s without ever knowing.
  */
 export async function heartbeatRun(
   runId: string,
   workerId: string,
-  progress?: { phase: string; detail: string; round?: number }
-): Promise<void> {
+  progress?: WhitespaceRunProgress
+): Promise<boolean> {
   let count: number
   try {
     const updated = await prisma.whitespaceRun.updateMany({
@@ -112,13 +118,15 @@ export async function heartbeatRun(
       data: {
         heartbeatAt: new Date(),
         lockedUntil: new Date(Date.now() + RUN_LEASE_MS),
-        ...(progress ? { progress: { ...progress } } : {}),
+        // The reporter guarantees plain JSON; the cast is for Prisma's input type.
+        ...(progress ? { progress: { ...progress } as unknown as Prisma.InputJsonObject } : {}),
       },
     })
     count = updated.count
   } catch {
     // Staleness detection and narration only.
-    return
+    return false
   }
   if (count === 0) throw new WhitespaceLeaseLostError(runId)
+  return true
 }

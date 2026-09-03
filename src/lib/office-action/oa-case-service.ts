@@ -320,14 +320,24 @@ export async function ingestDocument(
         classification.success
           ? ''
           : `Objections were extracted but could not be auto-classified (${classification.error || 'classification failed'}) — review each card's category.`,
-        // A deadline that could not be computed is the one omission the attorney
-        // must not discover by its absence. The trigger date is dropped whenever
-        // it does not extract as ISO ("15.03.2026" from an OCR'd PDF), and the
-        // ingest then returned 201 with an empty deadline list and nothing said —
-        // no strip in the workspace, no statutory clock, on a deemed-abandonment
-        // deadline.
-        deadlines.length === 0 && parseResult.instrument.instrumentId
-          ? `No response deadline could be computed — the date of the report was not readable, so the ${profile.meta.office} time limit is NOT being tracked for this document. Check the report date and diarise the deadline yourself.`
+        /**
+         * A deadline that could not be computed is the one omission the attorney
+         * must not discover by its absence. The trigger date is dropped whenever
+         * it does not extract as ISO ("15.03.2026" from an OCR'd PDF), and the
+         * ingest then returned 201 with an empty deadline list and nothing said —
+         * no strip in the workspace, no statutory clock, on a deemed-abandonment
+         * deadline.
+         *
+         * This used to be guarded on the instrument having been detected — but
+         * detection is a literal substring match against the profile's hints, so
+         * the case where it fails is exactly the case where no deadline rule can
+         * run, and that case said nothing at all. Warn whenever the list is
+         * empty, and name which of the two reasons it was.
+         */
+        deadlines.length === 0
+          ? (parseResult.instrument.instrumentId
+              ? `No response deadline could be computed — the date of the report was not readable, so the ${profile.meta.office} time limit is NOT being tracked for this document. Check the report date and diarise the deadline yourself.`
+              : `This document could not be identified as a communication ${profile.meta.office} issues deadlines for, so NO time limit is being tracked for it. Confirm what it is and diarise the deadline yourself.`)
           : ''
       ].filter(Boolean).join(' ') || undefined
     }

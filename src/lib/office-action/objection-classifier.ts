@@ -48,13 +48,102 @@ function foldForMatch(s: string): string {
 
 const WORD_RE = /[a-z0-9]+/g
 
+/** First entry of the ascending list that is >= `from`, or -1. */
+function firstAtOrAfter(sorted: number[], from: number): number {
+  let lo = 0, hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (sorted[mid] < from) lo = mid + 1
+    else hi = mid
+  }
+  return lo < sorted.length ? sorted[lo] : -1
+}
+
+/**
+ * A quotation may only absorb so much noise before it stops being a quotation:
+ * the window it is allowed to occupy in the source is its own length plus this
+ * much room for dropped superscripts, hyphenation and page furniture.
+ */
+const WINDOW_SLACK_RATIO = 0.25
+const WINDOW_SLACK_FLOOR = 8
+/** Alignments tried before giving up — bounds the cost when every needle word is common. */
+const MAX_ANCHOR_CANDIDATES = 64
+
+/**
+ * How much of the needle aligns, IN ORDER, against one contiguous window of the
+ * source.
+ *
+ * Exported for the regression tests: this is the function that decides whether a
+ * "verbatim" passage really is one.
+ */
+export function alignedCoverage(needleWords: string[], hayWords: string[]): number {
+  if (!needleWords.length || !hayWords.length) return 0
+
+  // Positions of every hay word the needle actually uses — the alignment never
+  // needs the rest of the document.
+  const wanted = new Set(needleWords)
+  const positions = new Map<string, number[]>()
+  for (let i = 0; i < hayWords.length; i++) {
+    const w = hayWords[i]
+    if (!wanted.has(w)) continue
+    const list = positions.get(w)
+    if (list) list.push(i)
+    else positions.set(w, [i])
+  }
+
+  // Anchor on the needle word that occurs LEAST often in the source: it yields
+  // the fewest candidate alignments and is the most diagnostic of them.
+  let anchorIndex = -1
+  let anchorHits: number[] | undefined
+  for (let i = 0; i < needleWords.length; i++) {
+    const hits = positions.get(needleWords[i])
+    if (!hits?.length) continue
+    if (!anchorHits || hits.length < anchorHits.length) { anchorHits = hits; anchorIndex = i }
+    if (anchorHits.length === 1) break
+  }
+  if (!anchorHits || anchorIndex < 0) return 0
+
+  const slack = Math.ceil(needleWords.length * WINDOW_SLACK_RATIO) + WINDOW_SLACK_FLOOR
+  let best = 0
+
+  for (const at of anchorHits.slice(0, MAX_ANCHOR_CANDIDATES)) {
+    const start = Math.max(0, at - anchorIndex - slack)
+    const end = Math.min(hayWords.length, start + needleWords.length + 2 * slack)
+
+    // Greedy in-order walk: each needle word must appear AFTER the previous
+    // match and inside the window. Reordered clauses cannot both match.
+    let cursor = start
+    let matched = 0
+    for (const w of needleWords) {
+      const hits = positions.get(w)
+      if (!hits) continue
+      const found = firstAtOrAfter(hits, cursor)
+      if (found >= 0 && found < end) { matched++; cursor = found + 1 }
+    }
+
+    const coverage = matched / needleWords.length
+    if (coverage > best) best = coverage
+    if (best === 1) break
+  }
+
+  return best
+}
+
 /**
  * Verify the examiner quote is grounded in the source document.
  *  - Short quotes (< 12 words): require an exact folded substring — strict.
- *  - Long quotes: require a high fraction of consecutive word-BIGRAMS to appear
- *    in the source. This tolerates a stray dash/superscript/OCR glitch inside a
- *    2000-char verbatim span while still rejecting fabricated sentences (whose
- *    bigrams are absent from the source).
+ *  - Long quotes: require the words to ALIGN, IN ORDER, against one contiguous
+ *    window of the source. This tolerates a stray dash/superscript/OCR glitch
+ *    inside a 2000-char verbatim span while rejecting a passage that was never
+ *    written as one.
+ *
+ * Word bigrams used to be collected into a Set and tested for membership one by
+ * one, so neither order nor proximity was checked at all: a passage spliced from
+ * two distant paragraphs of the same document — or one whose clauses had been
+ * rearranged — scored close to 1.0 and was reported as verbatim. That verdict is
+ * the trust root for `quoteVerified` on every objection card, for every
+ * DISCLOSED chart cell, and for the quotation check over the filed prose, so all
+ * three inherited the weakness.
  */
 export function verifyQuote(examinerText: string, sourceText: string, threshold = 0.85): boolean {
   const needleFolded = foldForMatch(examinerText)
@@ -68,17 +157,8 @@ export function verifyQuote(examinerText: string, sourceText: string, threshold 
   // Short quotes must match exactly (already failed above) — no fuzzy pass.
   if (needleWords.length < 12) return false
 
-  // Bigram coverage: fraction of the needle's consecutive word-pairs present in the source.
   const hayWords = hayFolded.match(WORD_RE) || []
-  const hayBigrams = new Set<string>()
-  for (let i = 0; i < hayWords.length - 1; i++) hayBigrams.add(hayWords[i] + ' ' + hayWords[i + 1])
-
-  let present = 0
-  const total = needleWords.length - 1
-  for (let i = 0; i < total; i++) {
-    if (hayBigrams.has(needleWords[i] + ' ' + needleWords[i + 1])) present++
-  }
-  return total > 0 && present / total >= threshold
+  return alignedCoverage(needleWords, hayWords) >= threshold
 }
 
 /**

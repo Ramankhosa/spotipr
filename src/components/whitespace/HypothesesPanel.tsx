@@ -17,13 +17,17 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import { ArrowUpRight, FlaskConical, Gavel, Loader2, Sparkles, Swords, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { GATE_LABEL, REVIEW_LABEL, STATUS_LABEL, STRATEGY_LABEL, TYPE_LABEL } from '@/lib/whitespace/labels'
 import { HUMAN_REVIEW_VERDICTS, MIN_REVIEW_NOTE, type HumanReviewVerdict } from '@/lib/whitespace/types'
-import { conflictRunId, isPollAborted, pollRun, wsApi } from './api'
+import { conflictRunId, isPollAborted, wsApi } from './api'
+import { LiveActivityPanel } from './LiveActivityPanel'
+import { DISTANCE_TOOLTIP } from './SemanticSearchPanel'
+import { useRunActivity } from './useRunActivity'
 
 interface HypothesisRow {
   id: string
@@ -51,7 +55,15 @@ interface HypothesisRow {
   } | null
   coverageLimitations: string[] | null
   humanReview: { verdict: HumanReviewVerdict; note: string | null; reviewedAt: string } | null
-  evidence: Array<{ id: string; kind: string; stance: string; refId: string | null; passage: string | null }>
+  evidence: Array<{
+    id: string
+    kind: string
+    stance: string
+    refId: string | null
+    passage: string | null
+    score: number | null
+    data?: { role?: string; title?: string | null; rank?: number } | null
+  }>
 }
 
 interface ConceptRow {
@@ -61,6 +73,19 @@ interface ConceptRow {
   summary: string
   status: string
   features: { requiredElements?: string[]; openQuestions?: string[] } | null
+}
+
+/** The slice of the study GET's `runs[]` used to re-attach to live validations. */
+interface StudyRunRow {
+  id: string
+  stage: string
+  status: string
+  params?: Record<string, unknown> | null
+}
+
+function paramString(params: StudyRunRow['params'], key: string): string | undefined {
+  const value = params?.[key]
+  return typeof value === 'string' ? value : undefined
 }
 
 /** Verdict chip colours. Endorsement is the only one that earns the accent. */
@@ -110,6 +135,11 @@ export function HypothesesPanel({
   const [draftVerdict, setDraftVerdict] = useState<HumanReviewVerdict | null>(null)
   const [draftNote, setDraftNote] = useState('')
   const [hasValidating, setHasValidating] = useState(false)
+
+  // Live narration for validations in flight, keyed by the card they belong to.
+  const activity = useRunActivity(studyId)
+  const { watch: watchRun, dismiss: dismissRun } = activity
+  const [liveByHypothesis, setLiveByHypothesis] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     try {
@@ -184,7 +214,8 @@ export function HypothesesPanel({
           if (!liveRunId) throw error
           runId = liveRunId
         }
-        const final = await pollRun(studyId, runId, undefined, controller.signal)
+        setLiveByHypothesis(current => ({ ...current, [hypothesisId]: runId }))
+        const final = await watchRun(runId, controller.signal)
         if (final.status === 'FAILED') {
           toast({ variant: 'error', title: 'Validation did not finish', description: final.error || 'Run it again.' })
         }
@@ -204,24 +235,25 @@ export function HypothesesPanel({
         setValidatingId(current => (current === hypothesisId ? null : current))
       }
     },
-    [studyId, toast, load, onChanged]
+    [studyId, toast, load, onChanged, watchRun]
   )
 
   /**
    * Re-attaches after a reload: a hypothesis left VALIDATING has a QUEUED or
    * PROCESSING VALIDATE run behind it, and without a poll it read "Validating"
-   * forever. Polls every live VALIDATE run and refreshes when they settle; a
-   * failure is not toasted because the user did not just start this work.
+   * forever. Watches every live VALIDATE run — each mapped to its card by
+   * params.hypothesisId, when the payload carries it — and refreshes when they
+   * settle; a failure is not toasted because the user did not just start this
+   * work. The card's panel shows it.
    */
   const reattachValidation = useCallback(async () => {
     if (pollAbort.current) return
     const controller = new AbortController()
     pollAbort.current = controller
     try {
-      const data = await wsApi<{ runs: Array<{ id: string; stage: string; status: string }> }>(
-        `/api/whitespace/studies/${studyId}`,
-        { signal: controller.signal }
-      )
+      const data = await wsApi<{ runs: StudyRunRow[] }>(`/api/whitespace/studies/${studyId}`, {
+        signal: controller.signal,
+      })
       const live = data.runs.filter(
         run => run.stage === 'VALIDATE' && (run.status === 'QUEUED' || run.status === 'PROCESSING')
       )
@@ -230,7 +262,14 @@ export function HypothesesPanel({
         setHasValidating(false)
         return
       }
-      await Promise.all(live.map(run => pollRun(studyId, run.id, undefined, controller.signal)))
+      const byHypothesis: Record<string, string> = {}
+      for (const run of live) {
+        const hypothesisId = paramString(run.params, 'hypothesisId')
+        // Newest first: the first run seen for a hypothesis is the one to show.
+        if (hypothesisId && !byHypothesis[hypothesisId]) byHypothesis[hypothesisId] = run.id
+      }
+      if (Object.keys(byHypothesis).length) setLiveByHypothesis(current => ({ ...current, ...byHypothesis }))
+      await Promise.all(live.map(run => watchRun(run.id, controller.signal)))
       await load()
       onChanged?.()
     } catch (error) {
@@ -239,7 +278,7 @@ export function HypothesesPanel({
     } finally {
       if (pollAbort.current === controller) pollAbort.current = null
     }
-  }, [studyId, load, onChanged])
+  }, [studyId, load, onChanged, watchRun])
 
   useEffect(() => {
     if (hasValidating) void reattachValidation()
@@ -372,6 +411,7 @@ export function HypothesesPanel({
             const validation = hypothesis.validation
             const refuted = hypothesis.status === 'REFUTED'
             const promoted = concepts.some(concept => concept.hypothesisId === hypothesis.id)
+            const liveState = activity.get(liveByHypothesis[hypothesis.id])
             return (
               <li key={hypothesis.id} className={`rounded-md border p-4 ${refuted ? 'border-border bg-muted/30' : 'border-border'}`}>
                 <div className="flex flex-wrap items-center gap-2">
@@ -413,6 +453,8 @@ export function HypothesesPanel({
                     <Score label="Crowding" value={scores.crowdedness} />
                   </div>
                 )}
+
+                <NearestArt evidence={hypothesis.evidence} />
 
                 {validation && (
                   <details className="mt-3 rounded-md bg-muted/40 px-3 py-2" open={refuted}>
@@ -602,6 +644,19 @@ export function HypothesesPanel({
                   )}
                   {promoted && <span className="text-xs text-muted-foreground">Promoted to a concept below.</span>}
                 </div>
+
+                {/* The attack's own narration — what has been run, never a verdict. */}
+                <AnimatePresence>
+                  {liveState && (
+                    <LiveActivityPanel
+                      key={liveState.runId}
+                      variant="compact"
+                      state={liveState}
+                      className="mt-3"
+                      onDismiss={() => dismissRun(liveState.runId)}
+                    />
+                  )}
+                </AnimatePresence>
               </li>
             )
           })}
@@ -641,6 +696,51 @@ export function HypothesesPanel({
         )}
       </div>
     </section>
+  )
+}
+
+/**
+ * The nearest documents to the hypothesis statement, captured at generation
+ * time (data.role NEAREST_ART discriminates them from validation's own
+ * PATENT_PASSAGE rows). Hypotheses generated before the capture existed have
+ * no such rows, and the section simply doesn't render — an honest omission,
+ * not a warning.
+ */
+function NearestArt({ evidence }: { evidence: HypothesisRow['evidence'] }) {
+  const rows = evidence
+    .filter(item => item.kind === 'PATENT_PASSAGE' && item.data?.role === 'NEAREST_ART')
+    .sort((a, b) => (a.data?.rank ?? a.score ?? 0) - (b.data?.rank ?? b.score ?? 0))
+  if (!rows.length) return null
+  return (
+    <details className="mt-3 rounded-md bg-muted/40 px-3 py-2">
+      <summary className="cursor-pointer text-sm font-medium text-foreground">
+        Closest existing art — {rows.length} famil{rows.length === 1 ? 'y' : 'ies'}
+      </summary>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        The nearest documents in this field to the statement above, by meaning. Read them before
+        trusting the gap — the closest art is the art most likely to anticipate it.
+      </p>
+      <ol className="mt-2 space-y-2">
+        {rows.map(item => (
+          <li key={item.id} className="text-xs">
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span className="font-mono text-[11px] text-muted-foreground">{item.refId}</span>
+              <span className="min-w-0 flex-1 font-medium text-foreground">
+                {item.data?.title ?? 'Untitled'}
+              </span>
+              {typeof item.score === 'number' && (
+                <span className="font-mono text-[11px] text-muted-foreground" title={DISTANCE_TOOLTIP}>
+                  dist {item.score.toFixed(2)}
+                </span>
+              )}
+            </div>
+            {item.passage && (
+              <p className="mt-0.5 line-clamp-2 text-muted-foreground">{item.passage}</p>
+            )}
+          </li>
+        ))}
+      </ol>
+    </details>
   )
 }
 

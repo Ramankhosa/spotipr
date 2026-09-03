@@ -19,9 +19,12 @@ import { prisma } from '@/lib/prisma'
 import { buildScopeFilter, corpusMembershipPredicate, textMatchPredicate } from './field-map'
 import { PUBLICATION_LAG_MONTHS } from './field-map'
 import { semanticLaneConfigured, semanticNeighbors } from './embedding'
-import { heartbeatRun, WhitespacePermanentError } from './run-lease'
+import { WhitespacePermanentError } from './run-lease'
 import type { SignalsStageResult, TermDivergence, WhitespaceScope } from './types'
+import type { RunReporter } from './run-reporter'
 
+/** Scope concepts probed, in scope order. */
+const PROBE_CONCEPT_CAP = 6
 const PROBE_TOP_N = 300
 const PROBE_TIMEOUT_MS = 20_000
 /** Ceiling on the lexical reach count; past it the figure is a floor, not a total. */
@@ -35,6 +38,16 @@ const VELOCITY_WINDOW_YEARS = 3
 const VELOCITY_SPAN_YEARS = 5
 /** Below this many filings in the earlier window the ratio is noise, not a trend. */
 const VELOCITY_MIN_BASE = 5
+
+const SIGNALS_STEPS = [
+  { key: 'load', label: 'Loading the areas' },
+  { key: 'metrics', label: 'Measuring each area' },
+  { key: 'probe', label: "Checking the field's vocabulary against yours" },
+]
+const SIGNALS_COUNTERS = [
+  { key: 'scored', label: 'Areas measured' },
+  { key: 'probed', label: 'Concepts probed' },
+]
 
 /**
  * Compound annual growth in filings, between two THREE-YEAR MEANS five years
@@ -71,11 +84,15 @@ export function filingCagrPct(byYear: Map<number, number>, lastCompleteYear: num
 export async function runSignalsStage(input: {
   runId: string
   workerId: string
+  reporter: RunReporter
   studyId: string
   scope: WhitespaceScope
 }): Promise<SignalsStageResult> {
+  const { reporter } = input
+  await reporter.plan(SIGNALS_STEPS, SIGNALS_COUNTERS)
   const coverageNotes: string[] = []
 
+  await reporter.step('load', 'Loading the areas and their sampled members')
   const clusters = await prisma.whitespaceCluster.findMany({
     where: { studyId: input.studyId, depth: 0 },
     orderBy: { fieldEstimate: 'desc' },
@@ -96,6 +113,7 @@ export async function runSignalsStage(input: {
     list.push(member)
     byCluster.set(member.clusterId, list)
   }
+  reporter.event('count', `${clusters.length} areas across ${members.length.toLocaleString()} sampled families loaded`)
 
   // --- density normaliser: P95 of field estimates across clusters -----------
   const estimates = clusters.map(cluster => cluster.fieldEstimate).sort((a, b) => a - b)
@@ -103,6 +121,9 @@ export async function runSignalsStage(input: {
 
   const lastCompleteYear = new Date().getFullYear() - Math.ceil(PUBLICATION_LAG_MONTHS / 12)
 
+  // Awaited before the per-cluster writes below: the lease is confirmed live
+  // before this stage starts changing rows.
+  await reporter.step('metrics', `Measuring ${clusters.length} areas`)
   const raw = clusters.map(cluster => {
     const clusterMembers = byCluster.get(cluster.id) ?? []
 
@@ -163,7 +184,8 @@ export async function runSignalsStage(input: {
     return below / velocities.length
   }
 
-  for (const entry of raw) {
+  for (let i = 0; i < raw.length; i++) {
+    const entry = raw[i]
     const density = Math.min(1, entry.density)
     const crowdedness =
       0.5 * density + 0.3 * velocityPercentile(entry.velocityPct) + 0.2 * (1 - (entry.hhi ?? 0.5))
@@ -183,12 +205,23 @@ export async function runSignalsStage(input: {
         } as unknown as Prisma.InputJsonValue,
       },
     })
+    // What was done, never what was measured: the numbers stay hidden until
+    // the run completes.
+    reporter.count('scored', i + 1, raw.length)
+    reporter.event('count', `Measured “${entry.cluster.label}”`)
+    if ((i + 1) % 8 === 0 && i + 1 < raw.length) await reporter.heartbeat()
   }
 
-  await heartbeatRun(input.runId, input.workerId)
+  await reporter.heartbeat()
 
   // --- terminology-divergence probe ----------------------------------------
-  const divergence = await terminologyProbe(input.scope, coverageNotes)
+  const conceptCount = Math.min(PROBE_CONCEPT_CAP, input.scope.concepts.length)
+  if (conceptCount > 0) {
+    await reporter.step('probe', `Probing ${conceptCount} concept${conceptCount === 1 ? '' : 's'} against the field's vocabulary`)
+  } else {
+    await reporter.skip('probe', 'the scope names no concepts to probe')
+  }
+  const divergence = await terminologyProbe(input.scope, coverageNotes, reporter)
 
   const withoutTrend = raw.filter(entry => entry.velocityPct === null).length
   if (withoutTrend > 0) {
@@ -201,6 +234,7 @@ export async function runSignalsStage(input: {
   )
   coverageNotes.push('Every number in this stage is computed from the corpus; no model produced any of them.')
 
+  reporter.done()
   return {
     clustersScored: raw.length,
     divergence,
@@ -225,11 +259,16 @@ export async function runSignalsStage(input: {
  * lexical predicate has no such freedom: every neighbour is checked, the answer
  * is exact, and it is the question the banner actually claims to answer.
  */
-async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[]): Promise<TermDivergence[]> {
+async function terminologyProbe(
+  scope: WhitespaceScope,
+  coverageNotes: string[],
+  reporter: RunReporter
+): Promise<TermDivergence[]> {
   const results: TermDivergence[] = []
   const semanticAvailable = semanticLaneConfigured()
   if (!semanticAvailable) {
     coverageNotes.push('Terminology divergence could not be measured — the semantic lane is not configured.')
+    reporter.event('note', 'The semantic lane is not configured — vocabulary agreement is not measured')
   }
 
   // Base predicate: the scope minus its concept text, so both lanes search the
@@ -244,7 +283,13 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
   // two lanes reading different corpora.
   const semanticFilter = Prisma.sql`${baseFilter} AND ${corpusMembershipPredicate()}`
 
-  for (const concept of scope.concepts.slice(0, 6)) {
+  const concepts = scope.concepts.slice(0, PROBE_CONCEPT_CAP)
+  for (let i = 0; i < concepts.length; i++) {
+    const concept = concepts[i]
+    // "Probed so far": the counter moves when a concept is finished, whichever
+    // of the exits below its probe takes — never when it is merely started.
+    reporter.count('probed', i, concepts.length)
+    reporter.detail(`Probing “${concept.label}”`)
     const terms = [concept.label, ...concept.synonyms].map(term => term.trim()).filter(Boolean)
     if (!terms.length) continue
     // One OR group over the concept's terms, matched with the same per-corpus
@@ -389,6 +434,7 @@ async function terminologyProbe(scope: WhitespaceScope, coverageNotes: string[])
       divergent: measurable && overlapPct !== null && overlapPct < 30 && semanticOnly >= 30,
     })
   }
+  reporter.count('probed', concepts.length, concepts.length)
 
   return results
 }

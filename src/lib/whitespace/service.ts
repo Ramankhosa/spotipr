@@ -17,6 +17,9 @@ import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { runFieldMap } from './field-map'
 import { type WhitespaceLLMContext } from './llm'
+import { RunReporter } from './run-reporter'
+import { hostname } from 'os'
+import type { WhitespaceRunProgress } from './types'
 import { buildFieldNarrationPrompt, buildScopeCompilePrompt, WS_SCOPE_STAGE_CODE } from './prompts'
 import {
   isLeaseLost,
@@ -456,6 +459,9 @@ export async function resolveStaleRun<
   if (count > 0 && !attemptsLeft) {
     await finalizeRunFailure(fresh, finalMessage)
   }
+  // A requeued run needs a drain to come back for it: with no standalone
+  // worker, nothing else will, and the user would watch "retrying" forever.
+  if (count > 0 && attemptsLeft) kickInlineDrain()
   return fresh as unknown as T
 }
 
@@ -666,6 +672,7 @@ export async function drainWhitespaceRuns(
         llmContext,
         startedAt,
         workerId,
+        attemptCount: run.attemptCount,
       })
     } catch (error) {
       // A lost lease means another worker legitimately holds the run now;
@@ -674,7 +681,7 @@ export async function drainWhitespaceRuns(
         console.warn(`[Whitespace] Run ${run.id} lost its lease mid-stage; the current holder's attempt stands.`)
         continue
       }
-      await recordRunFailure(run, error)
+      await recordRunFailure(run, error, workerId)
     }
   }
   return handled
@@ -744,8 +751,18 @@ async function finalizeRunFailure(
   }
 }
 
-/** Applies the retry budget, or gives up and says so. */
-async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> {
+/**
+ * Applies the retry budget, or gives up and says so.
+ *
+ * Fenced on the lease like every other run write: a worker that lost its lease
+ * (a hung model call past RUN_LEASE_MS) and then failed for some OTHER reason
+ * used to flip the NEW holder's PROCESSING row to QUEUED or FAILED — discarding
+ * a live attempt and starting a third. When the fence misses, the current
+ * holder's attempt stands and nothing here is recorded.
+ *
+ * Exported for tests only.
+ */
+export async function recordRunFailure(run: ClaimedRun, error: unknown, workerId: string): Promise<void> {
   const message = error instanceof Error ? error.message : 'Stage failed.'
   const permanent = isPermanentFailure(error)
   const willRetry = !permanent && run.attemptCount < run.maxAttempts
@@ -760,8 +777,8 @@ async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> 
 
   try {
     const delayMs = retryDelayMs(run.attemptCount)
-    await prisma.whitespaceRun.update({
-      where: { id: run.id },
+    const { count } = await prisma.whitespaceRun.updateMany({
+      where: { id: run.id, lockedBy: workerId, status: 'PROCESSING' },
       data: willRetry
         ? {
             status: 'QUEUED',
@@ -778,6 +795,12 @@ async function recordRunFailure(run: ClaimedRun, error: unknown): Promise<void> 
             completedAt: new Date(),
           },
     })
+    if (count === 0) {
+      console.warn(
+        `[Whitespace] Run ${run.id} lost its lease before its failure could be recorded; the current holder's attempt stands.`
+      )
+      return
+    }
 
     if (willRetry) {
       // With no standalone worker, nothing drains later: the inline drain exits
@@ -810,7 +833,9 @@ let inlineDrainRunning = false
 function kickInlineDrain(fallback?: { studyId: string; headers: Record<string, string> }): void {
   if (inlineDrainRunning) return
   inlineDrainRunning = true
-  const workerId = `inline-${process.pid}`
+  // Host-qualified and salted: two web hosts with the same pid used to share a
+  // lockedBy and both pass the lease fence.
+  const workerId = `inline-${hostname()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
   setTimeout(() => {
     void (async () => {
       try {
@@ -831,6 +856,25 @@ function kickInlineDrain(fallback?: { studyId: string; headers: Record<string, s
 
 type LlmContext = WhitespaceLLMContext
 
+/** The census's real steps, in the order field-map.ts runs its facets. */
+const FIELD_MAP_STEPS = [
+  { key: 'rule', label: 'Fitting the match rule' },
+  { key: 'stage', label: 'Reading every publication the scope matches' },
+  { key: 'size', label: 'Counting families' },
+  { key: 'trend', label: 'Counting filings by year' },
+  { key: 'where', label: 'Counting jurisdictions' },
+  { key: 'classes', label: 'Counting classification codes' },
+  { key: 'status', label: 'Sorting grants from applications' },
+  { key: 'text', label: 'Checking how much text is readable' },
+  { key: 'who', label: 'Ranking who is filing' },
+  { key: 'narrate', label: 'Writing the plain-English summary' },
+]
+const FIELD_MAP_COUNTERS = [
+  { key: 'families', label: 'Families' },
+  { key: 'publications', label: 'Publications' },
+  { key: 'claims', label: 'Families with readable claims' },
+]
+
 async function executeRun(input: {
   runId: string
   studyId: string
@@ -840,15 +884,29 @@ async function executeRun(input: {
   params?: Prisma.InputJsonValue
   startedAt: number
   workerId: string
+  attemptCount: number
 }): Promise<void> {
   const params = (input.params ?? {}) as Record<string, unknown>
 
-  let results: Prisma.InputJsonValue
-  let gateCounts: Prisma.InputJsonValue | undefined
-  let trailSummary: string
+  // One reporter per attempt. Closed — awaited — BEFORE the completion write,
+  // so no late narration flush can trip the status fence after the run is
+  // no longer PROCESSING.
+  const reporter = new RunReporter({
+    runId: input.runId,
+    workerId: input.workerId,
+    stage: input.stage,
+    attempt: input.attemptCount,
+  })
 
+  let results!: Prisma.InputJsonValue
+  let gateCounts: Prisma.InputJsonValue | undefined
+  let trailSummary!: string
+
+  try {
   switch (input.stage) {
     case 'FIELD_MAP': {
+      await reporter.plan(FIELD_MAP_STEPS, FIELD_MAP_COUNTERS)
+      await reporter.step('rule', 'Fitting the match rule against the corpus')
       // A producer: fits the match rule fresh and persists it on the result,
       // where every later stage of this scope reads it back.
       const { resolveFieldDefinition } = await import('./field-definition')
@@ -858,12 +916,16 @@ async function executeRun(input: {
         candidateIds: field.candidates.ids,
         candidateNote: candidateCoverageNote(field.candidates),
         fieldRule: field.rule,
+        reporter,
       })
+      await reporter.step('narrate', 'Summarising the census in plain English')
       const narrative = await narrateField({
         scope: input.scope,
         result,
         llmContext: input.llmContext,
       })
+      if (!narrative) await reporter.fail('narrate', 'summary unavailable — the census stands on its numbers')
+      reporter.done()
       results = { ...result, narrative } as unknown as Prisma.InputJsonValue
       gateCounts = result.gateCounts as unknown as Prisma.InputJsonValue
       trailSummary = `Field map complete — ${result.familyCount.toLocaleString()} families, ${Math.round(
@@ -876,6 +938,7 @@ async function executeRun(input: {
       const result = await runClusterStage({
         runId: input.runId,
         workerId: input.workerId,
+        reporter,
         studyId: input.studyId,
         scope: input.scope,
         llmContext: input.llmContext,
@@ -889,6 +952,7 @@ async function executeRun(input: {
       const result = await runSignalsStage({
         runId: input.runId,
         workerId: input.workerId,
+        reporter,
         studyId: input.studyId,
         scope: input.scope,
       })
@@ -905,6 +969,7 @@ async function executeRun(input: {
       const result = await runDeepDiveStage({
         runId: input.runId,
         workerId: input.workerId,
+        reporter,
         studyId: input.studyId,
         clusterId,
         llmContext: input.llmContext,
@@ -920,6 +985,7 @@ async function executeRun(input: {
       const result = await runValidateStage({
         runId: input.runId,
         workerId: input.workerId,
+        reporter,
         studyId: input.studyId,
         hypothesisId,
         scope: input.scope,
@@ -942,6 +1008,7 @@ async function executeRun(input: {
       const result = await runDimensionMapStage({
         runId: input.runId,
         workerId: input.workerId,
+        reporter,
         studyId: input.studyId,
         scope: input.scope,
         llmContext: input.llmContext,
@@ -965,6 +1032,14 @@ async function executeRun(input: {
     }
     default:
       throw new Error(`Stage ${input.stage} is not implemented yet.`)
+  }
+  } catch (error) {
+    // A lease already lost wins over whatever the stage tripped on afterwards:
+    // the failure must not be recorded against the new holder's attempt.
+    if (isLeaseLost(reporter.fatal)) throw reporter.fatal
+    throw error
+  } finally {
+    await reporter.close()
   }
 
   // Fenced on the lease, like the heartbeat: if another worker reclaimed this
@@ -1010,7 +1085,18 @@ export function runPayload(row: {
   durationMs: number | null
   createdAt: Date
   completedAt: Date | null
+  attemptCount?: number
+  maxAttempts?: number
+  nextAttemptAt?: Date | null
+  heartbeatAt?: Date | null
 }) {
+  const now = Date.now()
+  const processing = row.status === 'PROCESSING'
+  const progress = processing ? ((row.progress as WhitespaceRunProgress | null) ?? null) : null
+  // The attempt's own start: the reporter stamps it on its first write, and
+  // until then the claim's heartbeatAt is that moment. Never createdAt — that
+  // includes queue wait, backoff and earlier attempts.
+  const attemptStartedAt = progress?.startedAt ?? (processing ? row.heartbeatAt?.getTime() ?? null : null)
   return {
     runId: row.id,
     stage: row.stage,
@@ -1019,10 +1105,17 @@ export function runPayload(row: {
     gateCounts: row.gateCounts,
     // Live narration is readable while PROCESSING; results stay hidden until
     // COMPLETED — partial results are never exposed, narration is.
-    progress: row.status === 'PROCESSING' ? (row.progress ?? null) : null,
+    progress,
     error: row.lastError,
     durationMs: row.durationMs,
     startedAt: row.createdAt.toISOString(),
     completedAt: row.completedAt?.toISOString() ?? null,
+    attempt: row.attemptCount ?? null,
+    maxAttempts: row.maxAttempts ?? null,
+    nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
+    heartbeatAt: row.heartbeatAt?.toISOString() ?? null,
+    // Server clock, so a client can measure silence without trusting its own.
+    serverNow: new Date(now).toISOString(),
+    elapsedMs: processing && attemptStartedAt !== null ? Math.max(0, now - attemptStartedAt) : null,
   }
 }

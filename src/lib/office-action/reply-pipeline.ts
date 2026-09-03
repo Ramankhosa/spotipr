@@ -500,9 +500,65 @@ function objectionName(code: string, subTypeId?: string | null): string {
   return `${label[code] || code}${subTypeId ? ` (${subTypeId})` : ''}`
 }
 
-/** Last amendment per claim number wins (later objections may refine the same claim). */
-function dedupeAmendments(list: AmendedClaim[]): AmendedClaim[] {
-  const byClaim = new Map<number, AmendedClaim>()
-  for (const a of list) byClaim.set(a.claimNumber, a)
-  return Array.from(byClaim.values()).sort((a, b) => a.claimNumber - b.claimNumber)
+/** How well the deterministic Section 59 guard stood behind a proposal. */
+const BASIS_RANK: Record<string, number> = { pass: 3, risk: 2, fail: 1 }
+const basisRank = (a: AmendedClaim): number => BASIS_RANK[a.basisVerdict || ''] ?? 0
+
+/** Same amendment proposed twice (a resumed run re-reads what it wrote). */
+function dedupeByText(list: AmendedClaim[]): AmendedClaim[] {
+  const seen = new Set<string>()
+  return list.filter(a => {
+    const key = `${a.claimNumber}::${(a.markedText || a.cleanText || '').replace(/\s+/g, ' ').trim()}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/**
+ * One amendment per claim reaches the filing — but nothing is thrown away.
+ *
+ * Only one version of claim 1 can go into the letter, so a choice has to be
+ * made. It used to be made by `Map.set`: last write wins, silently. Novelty and
+ * clarity both biting the independent claim is routine, and when they did the
+ * attorney was shown one proposal and never told the other existed — the same
+ * failure the pipeline refuses to commit two screens earlier, where it carries
+ * failing amendments through precisely because "an amendment the attorney never
+ * saw is worse than one they saw and rejected".
+ *
+ * The proposal with the best-established basis is the one filed; the rest ride
+ * along on `alternatives` so the workspace and the lint can surface them.
+ * Alternatives carried in from an earlier pass rejoin the pool, so a resumed run
+ * cannot quietly drop what a previous one preserved.
+ */
+export function dedupeAmendments(list: AmendedClaim[]): AmendedClaim[] {
+  const byClaim = new Map<number, AmendedClaim[]>()
+  for (const a of list) {
+    const bucket = byClaim.get(a.claimNumber)
+    if (bucket) bucket.push(a)
+    else byClaim.set(a.claimNumber, [a])
+  }
+
+  const out: AmendedClaim[] = []
+  for (const proposals of Array.from(byClaim.values())) {
+    // Best basis wins; on a tie the later proposal does, since a later objection
+    // may genuinely be refining the same claim.
+    let chosen = 0
+    for (let i = 1; i < proposals.length; i++) {
+      if (basisRank(proposals[i]) >= basisRank(proposals[chosen])) chosen = i
+    }
+
+    const carried: AmendedClaim[] = []
+    proposals.forEach((p: AmendedClaim, i: number) => {
+      const { alternatives, ...rest } = p as AmendedClaim & { alternatives?: AmendedClaim[] }
+      if (i !== chosen) carried.push(rest as AmendedClaim)
+      for (const alt of alternatives || []) carried.push(alt)
+    })
+
+    const { alternatives: _superseded, ...primary } = proposals[chosen] as AmendedClaim & { alternatives?: AmendedClaim[] }
+    const kept = dedupeByText(carried)
+    out.push(kept.length ? { ...(primary as AmendedClaim), alternatives: kept } : (primary as AmendedClaim))
+  }
+
+  return out.sort((a, b) => a.claimNumber - b.claimNumber)
 }

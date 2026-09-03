@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { AnimatePresence } from 'framer-motion'
 import { AlertCircle, ArrowLeft, FileDown, Loader2, Play, Plus, RefreshCw, Save, Trash2, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,10 +13,13 @@ import { useToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth-context'
 import { CORPUS_FIRST_YEAR, emptyWhitespaceScope } from '@/lib/whitespace/types'
 import type { FieldMapResult, WhitespaceScope } from '@/lib/whitespace/types'
-import { authHeaders, wsApi } from './api'
+import { authHeaders, conflictRunId, isPollAborted, WATCH_TIMEOUT_STATUS, wsApi, type RunPayload } from './api'
 import { ClustersPanel } from './ClustersPanel'
 import { FieldRuleLadder, MatchRuleControl } from './FieldRulePanel'
 import { HypothesesPanel } from './HypothesesPanel'
+import { LiveActivityPanel } from './LiveActivityPanel'
+import { SemanticSearchPanel } from './SemanticSearchPanel'
+import { useRunActivity } from './useRunActivity'
 
 interface StudyRow {
   id: string
@@ -38,17 +42,8 @@ interface RunRow {
   completedAt: string | null
 }
 
-interface RunPayload {
-  runId: string
-  stage: string
-  status: string
-  results: (FieldMapResult & { narrative?: string | null }) | null
-  error: string | null
-  durationMs: number | null
-  scopeStale?: boolean
-  scopeVersion?: number
-  currentScopeVersion?: number
-}
+/** What a COMPLETED field-map run's `results` holds. */
+type FieldMapResults = FieldMapResult & { narrative?: string | null }
 
 const api = wsApi
 
@@ -209,13 +204,26 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
   const [panelEpoch, setPanelEpoch] = useState(0)
   const [downloadingReport, setDownloadingReport] = useState(false)
 
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoCompiled = useRef(false)
-  // Identifies the poll chain allowed to write state. Every entry point into
-  // loadRun (initial load, "Map the field", a 409 re-attach) used to start its
-  // own chain while only the newest timer id was retained, so the older chains
-  // polled forever and raced each other's setState calls.
-  const activePoll = useRef<string | null>(null)
+
+  // Live narration for the field map in flight. The panel reads the entry for
+  // `watchedRunId`; the entry exists only while the run has reported.
+  const activity = useRunActivity(studyId)
+  const { watch: watchRun, dismiss: dismissRun } = activity
+  const [watchedRunId, setWatchedRunId] = useState<string | null>(null)
+
+  // One abort controller for the field-map watch this page owns. A census runs
+  // for minutes; without it, navigating away left the loop polling — and
+  // calling setState — from a component that no longer exists.
+  const pollAbort = useRef<AbortController | null>(null)
+  useEffect(
+    () => () => {
+      pollAbort.current?.abort()
+    },
+    []
+  )
+  /** The run currently being watched, so load() never double-attaches to it. */
+  const watchingRun = useRef<string | null>(null)
 
   const patchScope = useCallback((updater: (draft: WhitespaceScope) => WhitespaceScope) => {
     setScope(current => updater(structuredClone(current)))
@@ -223,48 +231,50 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
   }, [])
 
   /**
-   * Polls one field-map run. `announceFailure` is false when re-attaching to a
-   * run the user did not just start: reading a study whose last map failed a
-   * week ago is not news, and the error toast fired on every single page load.
-   * The failure stays visible in the panel either way.
+   * Watches one field-map run to its terminal status, then shows its payload.
+   * Shared by a fresh start, a 409 attach, and a reload that found the run
+   * already in flight. `announceFailure` is false when re-attaching to a run
+   * the user did not just start: reading a study whose last map failed a week
+   * ago is not news, and the error toast fired on every single page load. The
+   * failure stays visible in the panel either way.
    */
-  const loadRun = useCallback(
+  const attachToFieldMap = useCallback(
     async (runId: string, options: { announceFailure?: boolean } = {}) => {
       const announceFailure = options.announceFailure ?? true
-      if (pollTimer.current) clearTimeout(pollTimer.current)
-      activePoll.current = runId
+      if (watchingRun.current === runId) return
+      pollAbort.current?.abort()
+      const controller = new AbortController()
+      pollAbort.current = controller
+      watchingRun.current = runId
+      setWatchedRunId(runId)
+      setRunning(true)
       try {
-        const payload = await api<RunPayload>(`/api/whitespace/studies/${studyId}/runs/${runId}`)
-        if (activePoll.current !== runId) return
-        setRun(payload)
-        if (payload.status === 'QUEUED' || payload.status === 'PROCESSING') {
-          setRunning(true)
-          pollTimer.current = setTimeout(() => {
-            if (activePoll.current === runId) void loadRun(runId, options)
-          }, 3000)
-        } else {
-          setRunning(false)
-          activePoll.current = null
-          if (payload.status === 'FAILED' && announceFailure) {
-            toast({
-              variant: 'error',
-              title: 'Field map failed',
-              description: payload.error || 'The stage did not complete.',
-            })
-          }
+        const final = await watchRun(runId, controller.signal)
+        if (controller.signal.aborted) return
+        // A stopped watch is not a run status: keep whatever was shown and let
+        // the panel say "stopped watching" until the user reloads.
+        if (final.status !== WATCH_TIMEOUT_STATUS) setRun(final)
+        if (final.status === 'FAILED' && announceFailure) {
+          toast({
+            variant: 'error',
+            title: 'Field map failed',
+            description: final.error || 'The stage did not complete.',
+          })
         }
       } catch (error) {
-        if (activePoll.current !== runId) return
-        setRunning(false)
-        activePoll.current = null
+        if (isPollAborted(error)) return
         toast({
           variant: 'error',
           title: 'Lost track of the run',
           description: error instanceof Error ? error.message : 'Reload to check its status.',
         })
+      } finally {
+        if (watchingRun.current === runId) watchingRun.current = null
+        if (pollAbort.current === controller) pollAbort.current = null
+        if (!controller.signal.aborted) setRunning(false)
       }
     },
-    [studyId, toast]
+    [toast, watchRun]
   )
 
   const load = useCallback(async () => {
@@ -277,13 +287,29 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
       setDirty(false)
       setRuns(data.runs || [])
       const latestFieldMap = (data.runs || []).find(r => r.stage === 'FIELD_MAP')
-      if (latestFieldMap) void loadRun(latestFieldMap.id, { announceFailure: false })
+      if (latestFieldMap) {
+        if (latestFieldMap.status === 'QUEUED' || latestFieldMap.status === 'PROCESSING') {
+          // Still in flight after a reload: watch it rather than showing an
+          // idle "Map the field" button over a working server.
+          void attachToFieldMap(latestFieldMap.id, { announceFailure: false })
+        } else {
+          try {
+            setRun(await api<RunPayload>(`/api/whitespace/studies/${studyId}/runs/${latestFieldMap.id}`))
+          } catch (error) {
+            toast({
+              variant: 'error',
+              title: 'Lost track of the run',
+              description: error instanceof Error ? error.message : 'Reload to check its status.',
+            })
+          }
+        }
+      }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not load this study.')
     } finally {
       setLoading(false)
     }
-  }, [studyId, loadRun])
+  }, [studyId, attachToFieldMap, toast])
 
   useEffect(() => {
     if (authLoading) return
@@ -293,14 +319,6 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
     }
     void load()
   }, [authLoading, user, load])
-
-  useEffect(
-    () => () => {
-      activePoll.current = null
-      if (pollTimer.current) clearTimeout(pollTimer.current)
-    },
-    []
-  )
 
   const compile = useCallback(
     async (force: boolean) => {
@@ -411,18 +429,22 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
 
   const startFieldMap = useCallback(async () => {
     setRunning(true)
+    // A failed panel left from the previous map hands its display back now.
+    if (watchedRunId) dismissRun(watchedRunId)
     try {
       const data = await api<{ runId: string }>(`/api/whitespace/studies/${studyId}/runs`, {
         method: 'POST',
         body: JSON.stringify({ stage: 'FIELD_MAP' }),
       })
-      void loadRun(data.runId)
+      void attachToFieldMap(data.runId)
     } catch (error) {
       // 409 means this stage is already running — attach to it instead of
       // reporting a failure for work that is in fact under way.
       if ((error as { status?: number })?.status === 409) {
         toast({ variant: 'default', title: 'Already mapping', description: 'Showing the run in progress.' })
-        void load()
+        const liveRunId = conflictRunId(error)
+        if (liveRunId) void attachToFieldMap(liveRunId)
+        else void load()
         return
       }
       setRunning(false)
@@ -432,7 +454,7 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
         description: error instanceof Error ? error.message : 'Try again.',
       })
     }
-  }, [studyId, loadRun, load, toast])
+  }, [studyId, attachToFieldMap, dismissRun, load, toast, watchedRunId])
 
   const runnable = useMemo(
     () => scope.concepts.some(c => c.label.trim()) || scope.classifications.some(c => c.accepted && c.code.trim()),
@@ -484,8 +506,12 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
     )
   }
 
-  const results = run?.status === 'COMPLETED' ? run.results : null
+  const results = run?.status === 'COMPLETED' ? (run.results as FieldMapResults | null) : null
   const staleResult = Boolean(results && run?.scopeStale)
+  const mapActivity = activity.get(watchedRunId)
+  // While the panel holds a failure it shows the server's message itself;
+  // Dismiss hands the display back to the plain error box.
+  const panelHoldsFailure = mapActivity?.status === 'FAILED' || mapActivity?.status === WATCH_TIMEOUT_STATUS
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-12">
@@ -848,21 +874,27 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
               {run?.currentScopeVersion}. Run again to bring them in line.
             </p>
           )}
-          {run?.status === 'FAILED' && (
+          {run?.status === 'FAILED' && !panelHoldsFailure && (
             <div className="mb-4 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <p className="text-sm text-foreground">{run.error || 'The stage failed.'}</p>
             </div>
           )}
 
-          {running && !results && (
-            <div className="flex items-center gap-2 py-8 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Counting families across the corpus…</span>
-            </div>
-          )}
+          <AnimatePresence>
+            {mapActivity && (
+              <LiveActivityPanel
+                key={mapActivity.runId}
+                variant="full"
+                state={mapActivity}
+                className="mb-4"
+                footnote="This stage reads the corpus only and costs nothing. You can leave this page — the census continues."
+                onDismiss={() => dismissRun(mapActivity.runId)}
+              />
+            )}
+          </AnimatePresence>
 
-          {!results && !running && run?.status !== 'FAILED' && (
+          {!results && !running && !mapActivity && run?.status !== 'FAILED' && (
             <p className="text-sm text-muted-foreground">
               No map yet. Once the scope reads correctly, run it — this stage only reads the corpus and costs you
               nothing.
@@ -1026,6 +1058,12 @@ export function WhitespaceStudyApp({ studyId }: { studyId: string }) {
         fieldMapReady={Boolean(results)}
         onChanged={() => setPanelEpoch(epoch => epoch + 1)}
       />
+
+      {results && (
+        <div className="mt-10">
+          <SemanticSearchPanel studyId={studyId} />
+        </div>
+      )}
 
       {/* Stages 5-7: hypotheses, validation, concepts. refreshToken (not key):
           a remount on every upstream stage completion destroyed an in-progress

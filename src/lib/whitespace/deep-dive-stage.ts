@@ -14,27 +14,47 @@
 import { Prisma, TaskCode } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
-import { heartbeatRun, WhitespacePermanentError } from './run-lease'
+import { WhitespacePermanentError } from './run-lease'
 import { buildClaimElementsPrompt, WS_CLAIM_ELEMENTS_STAGE_CODE } from './prompts'
 import { computeRarePairs, supportFloor } from './rarity'
 import type { ClaimElementFamily, DeepDiveResult } from './types'
+import type { RunReporter } from './run-reporter'
 
 /** Top-of-area families read at claim level. Plan §9.2 says 30-60; we take 60. */
 const FAMILIES_PER_DIVE = 60
 const EXTRACTION_BATCH = 8
 const CLAIMS_TIMEOUT_MS = 15_000
 
+const DEEP_DIVE_STEPS = [
+  { key: 'members', label: "Choosing the area's most representative families" },
+  { key: 'claims', label: 'Loading their claims' },
+  { key: 'extract', label: 'Reading claims and extracting elements' },
+  { key: 'tally', label: 'Counting element combinations' },
+  { key: 'save', label: 'Saving the analysis' },
+]
+const DEEP_DIVE_COUNTERS = [
+  { key: 'readable', label: 'Families with readable claims' },
+  { key: 'extracted', label: 'Families read' },
+  { key: 'elements', label: 'Distinct elements' },
+]
+/** Publication numbers named in a batch's "model" line before the ellipsis. */
+const BATCH_EVENT_PUBLICATIONS = 3
+
 /** z_ref for rarity normalisation (plan 10.3). */
 
 export async function runDeepDiveStage(input: {
   runId: string
   workerId: string
+  reporter: RunReporter
   studyId: string
   clusterId: string
   llmContext: WhitespaceLLMContext
 }): Promise<DeepDiveResult> {
+  const { reporter } = input
+  await reporter.plan(DEEP_DIVE_STEPS, DEEP_DIVE_COUNTERS)
   const coverageNotes: string[] = []
 
+  await reporter.step('members')
   const cluster = await prisma.whitespaceCluster.findUnique({ where: { id: input.clusterId } })
   if (!cluster || cluster.studyId !== input.studyId) {
     throw new WhitespacePermanentError('That area no longer exists — the field may have been re-clustered since.')
@@ -51,8 +71,10 @@ export async function runDeepDiveStage(input: {
   if (!members.length) {
     throw new WhitespacePermanentError('This area has no sampled members to read.')
   }
+  reporter.event('count', `${members.length} representative families of “${cluster.label}” chosen, medoids first`)
 
   // --- claims assembly, entirely from local storage -------------------------
+  await reporter.step('claims', `Loading the claims of ${members.length} families`)
   const publicationNumbers = members.map(member => member.publicationNumber)
   const claimRows = await withTimeout<{
     publicationNumber: string
@@ -88,12 +110,19 @@ export async function runDeepDiveStage(input: {
     }
   }
 
+  reporter.count('readable', readable.length, members.length)
+  reporter.event('count', `${readable.length} of ${members.length} families have readable claims locally`)
+
   if (withoutClaims > 0) {
     coverageNotes.push(
       `${withoutClaims} of ${members.length} representative families have no readable claims locally and are excluded from element analysis — they are counted here, not hidden.`
     )
   }
   if (!readable.length) {
+    // Nothing to read: the rail says so rather than marking the steps done.
+    await reporter.skip('extract', 'no readable claims')
+    await reporter.skip('tally', 'no readable claims')
+    await reporter.step('save', 'Saving the empty analysis')
     // Persist the empty analysis so G1 has a record to read, then stop honestly.
     await upsertAreaAnalysis(input.studyId, input.clusterId, {
       status: 'COMPLETED',
@@ -105,6 +134,7 @@ export async function runDeepDiveStage(input: {
       } as unknown as Prisma.InputJsonValue,
       results: null,
     })
+    reporter.done()
     return {
       clusterId: input.clusterId,
       clusterLabel: cluster.label,
@@ -130,8 +160,16 @@ export async function runDeepDiveStage(input: {
   // than silently dropped — the module header promises families are never
   // silently omitted, and a garbled echo is a data gap like any other.
   let unmatchedExtractions = 0
+  const batchTotal = Math.ceil(readable.length / EXTRACTION_BATCH)
   for (let offset = 0; offset < readable.length; offset += EXTRACTION_BATCH) {
     const batch = readable.slice(offset, offset + EXTRACTION_BATCH)
+    const batchIndex = Math.floor(offset / EXTRACTION_BATCH)
+    await reporter.step('extract', undefined, { n: batchIndex + 1, total: batchTotal })
+    reporter.event('model', `Reading claims of ${batch.length} families: ${describeBatch(batch)}`)
+    // Narration is buffered and emitted after the try: a lost lease must not
+    // be logged as an extraction failure, and the heartbeat below rethrows it.
+    const readLines: string[] = []
+    let batchFailed = false
     try {
       const response = await runWhitespaceLLM({
         taskCode: TaskCode.WS_CLAIM_ELEMENTS,
@@ -184,12 +222,23 @@ export async function runDeepDiveStage(input: {
           constraint: typeof entry.constraint === 'string' ? entry.constraint.trim().slice(0, 200) || null : null,
           claimsAvailability: source.claimsAvailability,
         })
+        readLines.push(
+          `${source.publicationNumber} — ${source.title.slice(0, 70)}: ${elements.length} element${elements.length === 1 ? '' : 's'}`
+        )
       }
     } catch (error) {
       console.error('[Whitespace] Element extraction batch failed:', error instanceof Error ? error.message : error)
       coverageNotes.push(`One extraction batch of ${batch.length} families failed and is missing from the analysis.`)
+      batchFailed = true
     }
-    await heartbeatRun(input.runId, input.workerId)
+    if (batchFailed) {
+      reporter.event('note', `One batch of ${batch.length} families failed and is excluded`)
+    } else {
+      for (const line of readLines) reporter.event('read', line)
+    }
+    reporter.count('extracted', extracted.length, readable.length)
+    reporter.count('elements', vocabulary.length)
+    await reporter.heartbeat()
   }
 
   if (unmatchedExtractions > 0) {
@@ -207,11 +256,16 @@ export async function runDeepDiveStage(input: {
   }
 
   // --- deterministic co-occurrence + residuals (plan 10.3) ------------------
+  await reporter.step('tally', `Counting element combinations across ${extracted.length} families`)
   const N = extracted.length
   const support = new Map<string, number>()
   for (const family of extracted) {
     for (const element of family.elements) support.set(element, (support.get(element) ?? 0) + 1)
   }
+  // The distinct-element count is work done; which pairs are rare is a finding
+  // and stays hidden until the run completes.
+  reporter.count('elements', support.size)
+  reporter.event('count', `${support.size} distinct elements tallied`)
 
   // The floor and the residual math live in rarity.ts so tests pin them down.
   const floor = supportFloor(N)
@@ -258,6 +312,7 @@ export async function runDeepDiveStage(input: {
     generatedAt: new Date().toISOString(),
   }
 
+  await reporter.step('save', `Saving the analysis of ${N} families`)
   await upsertAreaAnalysis(input.studyId, input.clusterId, {
     status: 'COMPLETED',
     claimElements: { families: extracted } as unknown as Prisma.InputJsonValue,
@@ -270,7 +325,17 @@ export async function runDeepDiveStage(input: {
     results: result as unknown as Prisma.InputJsonValue,
   })
 
+  reporter.done()
   return result
+}
+
+/** "PUB, PUB, PUB…" — the first few publication numbers of a batch. */
+function describeBatch(batch: Array<{ publicationNumber: string }>): string {
+  const named = batch
+    .slice(0, BATCH_EVENT_PUBLICATIONS)
+    .map(item => item.publicationNumber)
+    .join(', ')
+  return batch.length > BATCH_EVENT_PUBLICATIONS ? `${named}…` : named
 }
 
 /**

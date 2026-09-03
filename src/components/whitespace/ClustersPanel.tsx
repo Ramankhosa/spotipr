@@ -12,10 +12,14 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import { BookOpen, Grid2x2, Loader2, SignalHigh } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/toast'
-import { conflictRunId, isPollAborted, pollRun, wsApi } from './api'
+import { conflictRunId, isPollAborted, wsApi } from './api'
+import { ClusterMap } from './ClusterMap'
+import { LiveActivityPanel } from './LiveActivityPanel'
+import { useRunActivity } from './useRunActivity'
 
 interface ClusterRow {
   id: string
@@ -58,6 +62,32 @@ const GRADE_LABEL: Record<string, string> = {
   diffuse: 'Broad mix',
 }
 
+type LiveStage = 'CLUSTER' | 'SIGNALS' | 'DEEP_DIVE'
+
+/** The run whose activity this panel shows; a deep dive names its area. */
+interface LiveRun {
+  stage: LiveStage
+  runId: string
+  clusterId?: string
+}
+
+/** The slice of the study GET's `runs[]` this panel reads to re-attach. */
+interface StudyRunRow {
+  id: string
+  stage: string
+  status: string
+  params?: Record<string, unknown> | null
+}
+
+function isLiveStage(stage: string): stage is LiveStage {
+  return stage === 'CLUSTER' || stage === 'SIGNALS' || stage === 'DEEP_DIVE'
+}
+
+function paramString(params: StudyRunRow['params'], key: string): string | undefined {
+  const value = params?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+
 export function ClustersPanel({
   studyId,
   fieldMapReady,
@@ -75,6 +105,16 @@ export function ClustersPanel({
   const [mapping, setMapping] = useState(false)
   const [scoring, setScoring] = useState(false)
   const [divingClusterId, setDivingClusterId] = useState<string | null>(null)
+  const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null)
+
+  // Live narration for the stage in flight: one full panel for the section
+  // (cluster, signals) or one compact panel inside the area being read.
+  const activity = useRunActivity(studyId)
+  const { watch: watchRun, dismiss: dismissRun } = activity
+  const [live, setLive] = useState<LiveRun | null>(null)
+  // The parent passes an inline arrow; a ref keeps it out of effect deps.
+  const onChangedRef = useRef(onChanged)
+  onChangedRef.current = onChanged
 
   const load = useCallback(async () => {
     try {
@@ -136,7 +176,8 @@ export function ClustersPanel({
           if (!liveRunId) throw error
           runId = liveRunId
         }
-        const final = await pollRun(studyId, runId, undefined, controller.signal)
+        setLive({ stage, runId, clusterId: params?.clusterId })
+        const final = await watchRun(runId, controller.signal)
         if (final.status === 'FAILED') {
           toast({ variant: 'error', title: failTitle, description: final.error || 'The stage did not complete.' })
         }
@@ -155,11 +196,77 @@ export function ClustersPanel({
         setBusy(false)
       }
     },
-    [studyId, toast, load, onChanged]
+    [studyId, toast, load, onChanged, watchRun]
   )
+
+  /**
+   * Re-attaches after a reload: a CLUSTER, SIGNALS or DEEP_DIVE run left
+   * QUEUED or PROCESSING keeps working on the server, and without a watch the
+   * panel showed idle buttons over it. Every live run is watched; the newest
+   * drives the panels (a deep dive is mapped to its area by params.clusterId).
+   * Refreshes when they settle; a failure is not toasted because the user did
+   * not just start this work — the panel shows it.
+   */
+  const reattach = useCallback(async () => {
+    if (pollAbort.current) return
+    const controller = new AbortController()
+    pollAbort.current = controller
+    const resumed: LiveRun[] = []
+    try {
+      const data = await wsApi<{ runs: StudyRunRow[] }>(`/api/whitespace/studies/${studyId}`, {
+        signal: controller.signal,
+      })
+      for (const run of data.runs) {
+        if (!isLiveStage(run.stage) || (run.status !== 'QUEUED' && run.status !== 'PROCESSING')) continue
+        resumed.push({ stage: run.stage, runId: run.id, clusterId: paramString(run.params, 'clusterId') })
+      }
+      if (!resumed.length) return
+      setLive(resumed[0])
+      for (const entry of resumed) {
+        if (entry.stage === 'CLUSTER') setMapping(true)
+        else if (entry.stage === 'SIGNALS') setScoring(true)
+        else if (entry.clusterId) setDivingClusterId(entry.clusterId)
+      }
+      await Promise.all(resumed.map(entry => watchRun(entry.runId, controller.signal)))
+      if (controller.signal.aborted) return
+      await load()
+      onChangedRef.current?.()
+    } catch (error) {
+      if (isPollAborted(error)) return
+      // Background re-attach; the cards keep their state until the next load.
+    } finally {
+      if (pollAbort.current === controller) pollAbort.current = null
+      // Clear only what this re-attach set, and only if still the owner: a
+      // stage the user started meanwhile must keep its own spinner.
+      for (const entry of resumed) {
+        if (entry.stage === 'CLUSTER') setMapping(false)
+        else if (entry.stage === 'SIGNALS') setScoring(false)
+        else if (entry.clusterId) {
+          const clusterId = entry.clusterId
+          setDivingClusterId(current => (current === clusterId ? null : current))
+        }
+      }
+    }
+  }, [studyId, watchRun, load])
+
+  useEffect(() => {
+    void reattach()
+  }, [reattach])
 
   const hasSignals = clusters.some(cluster => typeof cluster.metrics?.density === 'number')
   const divergent = divergence.filter(entry => entry.divergent)
+
+  // Null until the run has reported once; gone again shortly after it completes.
+  const liveState = live ? activity.get(live.runId) : null
+  const sectionActivity = live && live.stage !== 'DEEP_DIVE' ? liveState : null
+  const diveActivity = live && live.stage === 'DEEP_DIVE' ? liveState : null
+
+  // Areas clustered before layout coordinates were persisted have no map;
+  // hide it entirely rather than draw a partial one. A re-map regenerates it.
+  const mapClusters = clusters.filter(
+    (cluster): cluster is ClusterRow & { metrics: { layout: { x: number; y: number } } } =>
+      Number.isFinite(cluster.metrics?.layout?.x) && Number.isFinite(cluster.metrics?.layout?.y)
+  )
 
   return (
     <section className="mt-10 rounded-lg border border-border bg-card">
@@ -231,12 +338,17 @@ export function ClustersPanel({
           </p>
         )}
 
-        {mapping && !clusters.length && (
-          <div className="flex items-center gap-2 py-6 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">Grouping the field into areas…</span>
-          </div>
-        )}
+        <AnimatePresence>
+          {sectionActivity && (
+            <LiveActivityPanel
+              key={sectionActivity.runId}
+              variant="full"
+              state={sectionActivity}
+              className="mb-5"
+              onDismiss={() => dismissRun(sectionActivity.runId)}
+            />
+          )}
+        </AnimatePresence>
 
         {divergent.length > 0 && (
           <div className="mb-5 rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3">
@@ -252,6 +364,24 @@ export function ClustersPanel({
           </div>
         )}
 
+        {mapClusters.length >= 2 && (
+          <ClusterMap
+            clusters={mapClusters.map(cluster => ({
+              id: cluster.id,
+              label: cluster.label,
+              fieldEstimate: cluster.fieldEstimate,
+              layout: cluster.metrics.layout,
+            }))}
+            selectedId={selectedClusterId}
+            onSelect={id => {
+              setSelectedClusterId(id)
+              document
+                .getElementById(`cluster-card-${id}`)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }}
+          />
+        )}
+
         {clusters.length > 0 && (
           <ul className="grid gap-4 sm:grid-cols-2">
             {clusters.map(cluster => {
@@ -261,7 +391,14 @@ export function ClustersPanel({
               const diveDone = dive?.status === 'COMPLETED' && dive.results
               const diving = divingClusterId === cluster.id
               return (
-                <li key={cluster.id} className="flex flex-col rounded-md border border-border p-4">
+                <li
+                  key={cluster.id}
+                  id={`cluster-card-${cluster.id}`}
+                  className={[
+                    'flex flex-col rounded-md border p-4',
+                    selectedClusterId === cluster.id ? 'border-primary/50' : 'border-border',
+                  ].join(' ')}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-foreground">{cluster.label}</p>
@@ -333,6 +470,18 @@ export function ClustersPanel({
                       )}
                     </Button>
                   </div>
+
+                  <AnimatePresence>
+                    {diveActivity && live?.clusterId === cluster.id && (
+                      <LiveActivityPanel
+                        key={diveActivity.runId}
+                        variant="compact"
+                        state={diveActivity}
+                        className="mt-3"
+                        onDismiss={() => dismissRun(diveActivity.runId)}
+                      />
+                    )}
+                  </AnimatePresence>
 
                   <details className="mt-3 border-t border-border/60 pt-2">
                     <summary className="cursor-pointer text-xs text-muted-foreground">How this was computed</summary>

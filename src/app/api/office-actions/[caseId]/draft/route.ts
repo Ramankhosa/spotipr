@@ -23,7 +23,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
   if (auth.error) return NextResponse.json({ error: auth.error.message }, { status: auth.error.status })
 
   const owner = await prisma.officeActionCase.findUnique({
-    where: { id: params.caseId }, select: { userId: true }
+    where: { id: params.caseId }, select: { userId: true, specificationText: true }
   })
   if (!owner) return NextResponse.json({ error: 'Case not found' }, { status: 404 })
   if (owner.userId !== auth.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
@@ -184,6 +184,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
   const amended = { ...((draft.amendedClaimsJson as any) || {}) }
   let claims: any[] = Array.isArray(amended.claims) ? [...amended.claims] : []
   if (Array.isArray(body.amendedClaims)) {
+    const touched = new Set<number>()
     for (const edit of body.amendedClaims) {
       const n = Number(edit?.claimNumber)
       if (!n) continue
@@ -197,8 +198,53 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
       if (typeof edit.cleanText === 'string') target.cleanText = edit.cleanText
       if (Array.isArray(edit.basisRefs)) target.basisRefs = edit.basisRefs.map(String)
       if (!existing) claims.push(target)
+      touched.add(n)
     }
     claims.sort((a, b) => a.claimNumber - b.claimNumber)
+
+    /**
+     * Re-run the Section 59 guard over every amendment this request changed.
+     *
+     * `markedText`, `cleanText` and `basisRefs` are all editable here, and the
+     * verdict was left at whatever the original proposal scored — so a `pass`
+     * survived a complete rewrite of the inserted wording, and the lint's
+     * `amendmentBasisReview` check read that stale field. An amendment the
+     * attorney wrote themselves had never been checked at all: supply plausible
+     * refs and both `basis` and `basisResolves` went green, because neither
+     * looks at whether the cited paragraphs support the inserted words.
+     *
+     * The check is a pure function over the as-filed paragraph table — no LLM
+     * call, no cost, so there is no reason not to run it on every write.
+     */
+    if (touched.size) {
+      const { analyzeParagraphMarkers, splitParagraphs } = await import('@/lib/office-action/document-intake')
+      const { checkAmendmentBasis } = await import('@/lib/office-action/strategy-service')
+      const specText = owner.specificationText || ''
+      const paragraphs = splitParagraphs(specText, analyzeParagraphMarkers(specText))
+
+      for (const c of claims) {
+        if (!touched.has(c.claimNumber)) continue
+
+        // Without a marked-up copy there is no way to tell an insertion from the
+        // claim as it already stood, so there is nothing to check. Say that
+        // rather than carrying a verdict forward or inventing one — 'risk' keeps
+        // it out of the filed basis sentence and in front of the attorney.
+        if (!(c.markedText || '').trim()) {
+          c.basisVerdict = 'risk'
+          c.basisNote = 'No marked-up copy was supplied for this claim, so the specification support for the amendment could not be checked. Provide the marked copy, or verify the basis by hand before filing.'
+          continue
+        }
+
+        const verdict = checkAmendmentBasis({
+          claimNumber: c.claimNumber,
+          markedText: c.markedText || '',
+          cleanText: c.cleanText || '',
+          basisRefs: Array.isArray(c.basisRefs) ? c.basisRefs.map(String) : []
+        }, paragraphs)
+        c.basisVerdict = verdict.verdict
+        c.basisNote = verdict.note
+      }
+    }
   }
 
   const updated = await prisma.oaResponseDraft.update({

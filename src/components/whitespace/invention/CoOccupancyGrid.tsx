@@ -1,8 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { Hint } from '@/components/ui/hint'
-import { hueFor, type DimensionMapResult, type DimensionMatrix } from './types'
+import { isPollAborted, wsApi } from '../api'
+import { DISTANCE_TOOLTIP, type SemanticSearchNeighbor } from '../SemanticSearchPanel'
+import { hueFor, type DimensionMapResult, type DimensionMatrix, type DimensionValue } from './types'
 
 /**
  * The grid: two viewpoints crossed, every cell an exact family count.
@@ -14,14 +17,24 @@ import { hueFor, type DimensionMapResult, type DimensionMatrix } from './types'
  * everywhere else in the product; gap cells are marked by SHAPE (a dashed well)
  * rather than colour, so they read even where the ramp is dark.
  */
-export function CoOccupancyGrid({ result }: { result: DimensionMapResult }) {
+/**
+ * Pair chips beyond this count collapse behind a "Show all" toggle. The rail
+ * used to be one hidden-scrollbar line, which left every off-screen pair
+ * undiscoverable; wrapping shows everything, and the cap keeps a 28-pair
+ * registry from burying the grid it selects for.
+ */
+const PAIR_CHIP_LIMIT = 12
+
+export function CoOccupancyGrid({ result, studyId }: { result: DimensionMapResult; studyId: string }) {
   const harvested = result.matrices.filter(matrix => matrix.harvested)
   const skipped = result.matrices.filter(matrix => !matrix.harvested)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [showAllPairs, setShowAllPairs] = useState(false)
   // A recount replaces the matrices wholesale; a stale index would silently
   // show a different pair (or none) under the previously active chip.
   useEffect(() => {
     setActiveIndex(0)
+    setShowAllPairs(false)
   }, [result])
   const matrix = harvested[activeIndex] ?? harvested[0] ?? null
 
@@ -51,8 +64,11 @@ export function CoOccupancyGrid({ result }: { result: DimensionMapResult }) {
       </div>
 
       {harvested.length > 1 && (
-        <div className="rail-x mb-3 flex gap-1.5 overflow-x-auto pb-1">
+        <div className="mb-3 flex flex-wrap gap-1.5">
           {harvested.map((entry, index) => {
+            // Indices stay original across the collapse so a chip always
+            // selects the pair it names; the active chip never hides.
+            if (!showAllPairs && index >= PAIR_CHIP_LIMIT && index !== activeIndex) return null
             const a = result.registry.find(d => d.id === entry.aDimensionId)
             const b = result.registry.find(d => d.id === entry.bDimensionId)
             return (
@@ -61,7 +77,7 @@ export function CoOccupancyGrid({ result }: { result: DimensionMapResult }) {
                 type="button"
                 onClick={() => setActiveIndex(index)}
                 className={[
-                  'shrink-0 rounded-full border px-3 py-1 text-xs transition-colors',
+                  'rounded-full border px-3 py-1 text-xs transition-colors',
                   index === activeIndex
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-border bg-card text-muted-foreground hover:bg-accent',
@@ -71,11 +87,20 @@ export function CoOccupancyGrid({ result }: { result: DimensionMapResult }) {
               </button>
             )
           })}
+          {harvested.length > PAIR_CHIP_LIMIT && (
+            <button
+              type="button"
+              onClick={() => setShowAllPairs(v => !v)}
+              className="rounded-full border border-dashed border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {showAllPairs ? 'Show fewer' : `Show all ${harvested.length} pairs`}
+            </button>
+          )}
         </div>
       )}
 
       {matrix ? (
-        <Matrix result={result} matrix={matrix} />
+        <Matrix result={result} matrix={matrix} studyId={studyId} />
       ) : (
         <div className="rounded-xl border border-dashed border-border p-8 text-center">
           <p className="text-sm text-foreground">No viewpoint pair could be read for emptiness.</p>
@@ -112,7 +137,15 @@ export function CoOccupancyGrid({ result }: { result: DimensionMapResult }) {
   )
 }
 
-function Matrix({ result, matrix }: { result: DimensionMapResult; matrix: DimensionMatrix }) {
+function Matrix({
+  result,
+  matrix,
+  studyId,
+}: {
+  result: DimensionMapResult
+  matrix: DimensionMatrix
+  studyId: string
+}) {
   const aIndex = result.registry.findIndex(d => d.id === matrix.aDimensionId)
   const bIndex = result.registry.findIndex(d => d.id === matrix.bDimensionId)
   const a = result.registry[aIndex]
@@ -215,11 +248,12 @@ function Matrix({ result, matrix }: { result: DimensionMapResult; matrix: Dimens
                       {isOpen && (
                         <CellPopover
                           onClose={() => setOpen(null)}
-                          rowLabel={rowValue.label}
-                          colLabel={colValue.label}
+                          studyId={studyId}
+                          aDimensionLabel={a.label}
+                          bDimensionLabel={b.label}
+                          rowValue={rowValue}
+                          colValue={colValue}
                           observed={observed}
-                          rowFamilies={rowValue.families}
-                          colFamilies={colValue.families}
                           gap={gap ?? null}
                           marginFloor={result.thresholds.marginFloor}
                         />
@@ -252,27 +286,75 @@ function Matrix({ result, matrix }: { result: DimensionMapResult; matrix: Dimens
 
 function CellPopover({
   onClose,
-  rowLabel,
-  colLabel,
+  studyId,
+  aDimensionLabel,
+  bDimensionLabel,
+  rowValue,
+  colValue,
   observed,
-  rowFamilies,
-  colFamilies,
   gap,
   marginFloor,
 }: {
   onClose: () => void
-  rowLabel: string
-  colLabel: string
+  studyId: string
+  aDimensionLabel: string
+  bDimensionLabel: string
+  rowValue: DimensionValue
+  colValue: DimensionValue
   observed: number
-  rowFamilies: number
-  colFamilies: number
   gap: DimensionMapResult['gaps'][number] | null
   marginFloor: number
 }) {
+  const rowLabel = rowValue.label
+  const colLabel = colValue.label
+  const rowFamilies = rowValue.families
+  const colFamilies = colValue.families
   const thin = rowFamilies < marginFloor || colFamilies < marginFloor
+
+  // The nearest-art probe is on demand: each press is one embed call, so it
+  // never fires on open. State lives here — the popover unmounts on close, so
+  // reopening starts idle (a fresh call, bounded by the endpoint's rate cap).
+  const [artState, setArtState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'loaded'; neighbors: SemanticSearchNeighbor[] }
+    | { kind: 'unavailable'; reason: string }
+    | { kind: 'failed'; message: string }
+  >({ kind: 'idle' })
+
+  const findClosestArt = async () => {
+    setArtState({ kind: 'loading' })
+    // Labels plus a few synonyms per side — embeddings need vocabulary, not
+    // grammar, the same way the census phrases a value's query.
+    const query = [
+      aDimensionLabel,
+      rowLabel,
+      ...rowValue.synonyms.slice(0, 4),
+      bDimensionLabel,
+      colLabel,
+      ...colValue.synonyms.slice(0, 4),
+    ]
+      .join(', ')
+      .slice(0, 600)
+    try {
+      const payload = await wsApi<
+        | { available: true; neighbors: SemanticSearchNeighbor[] }
+        | { available: false; reason: string }
+      >(`/api/whitespace/studies/${studyId}/semantic-search`, {
+        method: 'POST',
+        body: JSON.stringify({ query, limit: 5 }),
+      })
+      if (!payload.available) setArtState({ kind: 'unavailable', reason: payload.reason })
+      else setArtState({ kind: 'loaded', neighbors: payload.neighbors })
+    } catch (error) {
+      if (isPollAborted(error)) return
+      setArtState({ kind: 'failed', message: error instanceof Error ? error.message : 'Try again.' })
+    }
+  }
+
   return (
     <div
-      className="absolute left-1/2 top-full z-30 mt-1 w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-3 text-left shadow-lg"
+      className="absolute left-1/2 top-full z-30 mt-1 w-72 -translate-x-1/2 rounded-lg border border-border bg-popover p-3 text-left shadow-lg"
       role="dialog"
     >
       <button
@@ -314,6 +396,61 @@ function CellPopover({
             : 'Empty, but too few families were expected here for the absence to be surprising.'}
         </p>
       ) : null}
+
+      <div className="mt-2 border-t border-border pt-2">
+        {artState.kind === 'idle' && (
+          <div>
+            <button
+              type="button"
+              onClick={() => void findClosestArt()}
+              className="rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+            >
+              Find the closest art
+            </button>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Runs one meaning-based search for this combination.
+            </p>
+          </div>
+        )}
+        {artState.kind === 'loading' && (
+          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Searching near this combination…
+          </p>
+        )}
+        {artState.kind === 'unavailable' && (
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Semantic search is unavailable — {artState.reason}
+          </p>
+        )}
+        {artState.kind === 'failed' && (
+          <p className="text-[11px] leading-snug text-muted-foreground">{artState.message}</p>
+        )}
+        {artState.kind === 'loaded' &&
+          (artState.neighbors.length === 0 ? (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Nothing in this field reads close to this combination — consistent with a gap, though
+              absence of art is never proof.
+            </p>
+          ) : (
+            <div>
+              <p className="text-[11px] font-medium text-foreground">Closest art to this combination</p>
+              <ul className="mt-1 max-h-48 space-y-1.5 overflow-y-auto">
+                {artState.neighbors.map(neighbor => (
+                  <li key={neighbor.publicationNumber} className="text-[11px] leading-snug">
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {neighbor.publicationNumber}
+                    </span>{' '}
+                    <span className="font-mono text-[10px] text-muted-foreground" title={DISTANCE_TOOLTIP}>
+                      dist {neighbor.distance.toFixed(2)}
+                    </span>
+                    <span className="line-clamp-1 text-foreground">{neighbor.title ?? 'Untitled'}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+      </div>
     </div>
   )
 }

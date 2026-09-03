@@ -84,6 +84,15 @@ export interface AmendedClaim {
    */
   basisVerdict?: 'pass' | 'risk' | 'fail'
   basisNote?: string
+  /**
+   * Other amendments proposed for this same claim that are NOT being filed.
+   *
+   * Only one version of a claim can go into the letter, so the pipeline picks
+   * the best-supported one — but the others are kept here rather than dropped,
+   * so the attorney can see what else was proposed and swap it in. Renderers
+   * never touch this: it is workspace material, not filing material.
+   */
+  alternatives?: AmendedClaim[]
 }
 
 /** A block in the assembled reply, in skeleton order. */
@@ -155,8 +164,43 @@ const SECTION_LABELS: Record<string, string> = {
   preamble: 'the specification as filed'
 }
 
+/** "claim 1" / "claims 1 and 3" / "claims 1, 3 and 7". */
+function claimList(claims: AmendedClaim[]): string {
+  const nums = uniqNums(claims.map(c => c.claimNumber)).sort((a, b) => a - b)
+  if (nums.length === 1) return `claim ${nums[0]}`
+  return `claims ${nums.slice(0, -1).join(', ')} and ${nums[nums.length - 1]}`
+}
+
+const hasInsertion = (c: AmendedClaim) => /<ins>/i.test(c.markedText || '')
+const isDeletionOnly = (c: AmendedClaim) => /<del>/i.test(c.markedText || '') && !hasInsertion(c)
+
 /**
- * The sentence that states where an amendment finds support.
+ * Whether the textual-support check actually stood behind this amendment.
+ *
+ * A draft written before `basisVerdict` existed carries refs and no verdict;
+ * that still counts, or upgrading the schema would silently drop the basis
+ * sentence from every reply in flight.
+ */
+const isBasisEstablished = (c: AmendedClaim) =>
+  c.basisVerdict === 'pass' || (!c.basisVerdict && (c.basisRefs || []).length > 0)
+
+/**
+ * The sentence that states where the amendments find support.
+ *
+ * It names ONLY the claims whose basis was established, and it is built from
+ * only those claims' refs.
+ *
+ * It used to take the union of every amendment's `basisRefs` and write one
+ * sentence over "the foregoing amendments" — but an amendment whose basis did
+ * not resolve carries no refs, contributes nothing to the union, and was
+ * covered by the sentence anyway. A reply amending claims 1 and 5, where only
+ * claim 1's basis resolved, told the Controller that both fell wholly within
+ * the scope of the claims as originally filed. That is a statement of Section
+ * 59 compliance for an amendment nobody could support.
+ *
+ * The claims left out are not mentioned here. Their gap is the lint's business
+ * (`amendmentBasisReview` blocks on it) and the attorney's to close before
+ * filing; volunteering weak basis to the Controller is not this function's job.
  *
  * Authored numbering cites the document's own paragraph numbers. Derived
  * numbering has none to cite, so it names sections (and pages, where the source
@@ -169,38 +213,59 @@ export function buildBasisSentence(
   paragraphs?: Paragraph[],
   sections?: SectionSpan[]
 ): string {
-  const refs = uniq(amendedClaims.flatMap(c => c.basisRefs || []))
-  if (!refs.length) return ''
+  const filed = amendedClaims.filter(c => (c.markedText || '').trim() || (c.cleanText || '').trim())
+  const deletions = filed.filter(isDeletionOnly)
+  const supported = filed.filter(c => !isDeletionOnly(c) && isBasisEstablished(c))
 
-  const tail = ', and fall wholly within the scope of the claims as originally filed (Section 59).'
+  const parts: string[] = []
+  const refs = uniq(supported.flatMap(c => c.basisRefs || []))
 
-  if (numbering === 'AUTHORED') {
-    // Refs arrive as ranges too — retrieval labels a chunk "[¶0038-¶0041]" and
-    // the prompt asks the model to cite those tags. Taking only the first digit
-    // run understated the support in the filed letter ("at [0038]" for an
-    // amendment supported across [0038]–[0041]).
-    const cited = refs
-      .flatMap(r => {
+  if (supported.length && refs.length) {
+    const one = uniqNums(supported.map(c => c.claimNumber)).length === 1
+    const subject = `The amendment${one ? '' : 's'} to ${claimList(supported)}`
+    const tail = `, and ${one ? 'falls' : 'fall'} wholly within the scope of the claims as originally filed (Section 59).`
+    const finds = one ? 'finds' : 'find'
+
+    if (numbering === 'AUTHORED') {
+      // Refs arrive as ranges too — retrieval labels a chunk "[¶0038-¶0041]" and
+      // the prompt asks the model to cite those tags. Taking only the first digit
+      // run understated the support in the filed letter ("at [0038]" for an
+      // amendment supported across [0038]–[0041]).
+      const cited = refs.flatMap(r => {
         const digits = (String(r).match(/\d{1,6}/g) || []).map(d => d.padStart(4, '0'))
         if (!digits.length) return []
         return digits.length === 1 ? [`[${digits[0]}]`] : [`[${digits[0]}]–[${digits[digits.length - 1]}]`]
       })
-    if (!cited.length) return ''
-    return `The foregoing amendments find support in the specification as filed at ${uniq(cited).join(', ')}${tail}`
+      if (cited.length) {
+        parts.push(`${subject} ${finds} support in the specification as filed at ${uniq(cited).join(', ')}${tail}`)
+      }
+    } else {
+      // Derived: name locations, never numbers.
+      const where: string[] = []
+      if (paragraphs?.length && sections?.length) {
+        const { resolved } = resolveBasisRefs(refs, paragraphs)
+        const keys = uniq(resolved.map(p => sectionKeyForParagraph(p, paragraphs, sections) || '').filter(Boolean))
+        for (const k of keys) where.push(SECTION_LABELS[k] || `the ${k} section`)
+        const pages = uniq(resolved.map(p => (p.pageNumber ? String(p.pageNumber) : '')).filter(Boolean))
+        if (pages.length) where.push(pages.length === 1 ? `page ${pages[0]}` : `pages ${pages.join(', ')}`)
+      }
+      const location = where.length ? ` (see ${where.join(' and ')})` : ''
+      parts.push(`${subject} ${finds} support in the specification as filed${location}${tail}`)
+    }
   }
 
-  // Derived: name locations, never numbers.
-  const where: string[] = []
-  if (paragraphs?.length && sections?.length) {
-    const { resolved } = resolveBasisRefs(refs, paragraphs)
-    const keys = uniq(resolved.map(p => sectionKeyForParagraph(p, paragraphs, sections) || '').filter(Boolean))
-    for (const k of keys) where.push(SECTION_LABELS[k] || `the ${k} section`)
-    const pages = uniq(resolved.map(p => (p.pageNumber ? String(p.pageNumber) : '')).filter(Boolean))
-    if (pages.length) where.push(pages.length === 1 ? `page ${pages[0]}` : `pages ${pages.join(', ')}`)
+  /**
+   * Deletions are stated separately and never carry a basis reference. Section
+   * 59 governs what may be ADDED — cancelling a claim or striking words
+   * introduces no new matter — so citing a supporting paragraph for one would
+   * be citing support for nothing.
+   */
+  if (deletions.length) {
+    const one = uniqNums(deletions.map(c => c.claimNumber)).length === 1
+    parts.push(`The amendment${one ? '' : 's'} to ${claimList(deletions)} ${one ? 'is' : 'are'} by way of deletion only and ${one ? 'introduces' : 'introduce'} no new matter (Section 59).`)
   }
 
-  const location = where.length ? ` (see ${where.join(' and ')})` : ''
-  return `The foregoing amendments find support in the specification as filed${location}${tail}`
+  return parts.join(' ')
 }
 
 function fill(tpl: string | undefined, vars: Record<string, string>): string {
@@ -311,3 +376,4 @@ function signatureLines(meta: CaseMeta): string[] {
 }
 
 function uniq(a: string[]): string[] { return Array.from(new Set(a.filter(Boolean))) }
+function uniqNums(a: number[]): number[] { return Array.from(new Set(a)) }

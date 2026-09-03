@@ -101,7 +101,7 @@ describe('heartbeatRun', () => {
 
   it('extends only a lease this worker still holds, carrying the progress payload', async () => {
     const { heartbeatRun } = await import('../run-lease')
-    await heartbeatRun('run-1', 'worker-a', { phase: 'census', detail: 'counting' })
+    await expect(heartbeatRun('run-1', 'worker-a', { phase: 'census', detail: 'counting' })).resolves.toBe(true)
     expect(updateManyArgs).toHaveLength(1)
     expect(updateManyArgs[0].where).toMatchObject({ id: 'run-1', lockedBy: 'worker-a', status: 'PROCESSING' })
     expect(updateManyArgs[0].data).toMatchObject({ progress: { phase: 'census', detail: 'counting' } })
@@ -118,6 +118,7 @@ describe('heartbeatRun', () => {
       throw new Error('Connection terminated unexpectedly')
     }
     const { heartbeatRun } = await import('../run-lease')
-    await expect(heartbeatRun('run-1', 'worker-a')).resolves.toBeUndefined()
+    // …but says so, so a narration writer can back off instead of stalling.
+    await expect(heartbeatRun('run-1', 'worker-a')).resolves.toBe(false)
   })
 })

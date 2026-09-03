@@ -20,7 +20,7 @@ import { prisma } from '@/lib/prisma'
 import { hamming, hexToWords, WORDS, mulberry32 } from './binary-kmeans'
 import { normalizeElement } from './deep-dive-stage'
 import { resolveFieldDefinition } from './field-definition'
-import { semanticNeighbors, semanticNoveltyScore } from './embedding'
+import { dedupeNeighborsByFamily, semanticNeighbors, semanticNoveltyScore, type SemanticNeighbor } from './embedding'
 import { runWhitespaceLLM, parseModelJson, type WhitespaceLLMContext } from './llm'
 import { buildHypothesizePrompt, WS_HYPOTHESIZE_STAGE_CODE } from './prompts'
 import { CORPUS_FIRST_YEAR } from './types'
@@ -144,15 +144,14 @@ export async function generateHypotheses(input: {
   // Hoisted out of the per-hypothesis loop, and built from the same hybrid field
   // the census and area map used — a nearest-neighbour distance measured against
   // a different field than the percentiles were calibrated on is not a novelty
-  // score, it is noise. Guarded on percentiles: without them no novelty can be
-  // scored, and resolving candidates costs a query-embedding call.
-  let fieldFilter: Prisma.Sql | null = null
-  if (percentiles) {
-    // Consumer: the census's own rule (reuse), so the field is the one the
-    // percentiles were calibrated on.
-    const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
-    fieldFilter = field.where
-  }
+  // score, it is noise. Resolved even when percentiles are null: the novelty
+  // SCORE needs calibration, but the nearest-art capture below is worth having
+  // on a small sample too.
+  //
+  // Consumer: the census's own rule (reuse), so the field is the one the
+  // percentiles were calibrated on.
+  const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
+  const fieldFilter: Prisma.Sql | null = field.where
 
   const created: GeneratedHypothesis[] = []
   for (const raw of (parsed.hypotheses ?? []).slice(0, MAX_HYPOTHESES)) {
@@ -186,15 +185,24 @@ export async function generateHypotheses(input: {
       pair => elementKeys.has(normalizeElement(pair.a)) && elementKeys.has(normalizeElement(pair.b))
     )
 
+    // One probe serves two readings: the nearest distance calibrates semantic
+    // novelty (percentiles permitting), and the nearest DOCUMENTS are kept as
+    // evidence — "the system says novel" means nothing to an attorney without
+    // the closest thing that already exists sitting next to it. Widening the
+    // limit costs no extra index work (the scoped pool is fixed) and no extra
+    // embed calls.
+    const nearest = await semanticNeighbors({
+      queryText: statement,
+      limit: 24,
+      scopeFilter: fieldFilter ?? undefined,
+    })
+
     // Semantic novelty: distance from the statement to the nearest family in
     // the field, against the field's own percentiles. Unavailable → null, and
     // the limitation is recorded rather than a number invented.
     let semanticNovelty: number | null = null
-    if (percentiles) {
-      const nearest = await semanticNeighbors({ queryText: statement, limit: 1, scopeFilter: fieldFilter ?? undefined })
-      if (nearest.available && nearest.neighbors.length) {
-        semanticNovelty = semanticNoveltyScore(nearest.neighbors[0].distance, percentiles.p05, percentiles.p50)
-      }
+    if (percentiles && nearest.available && nearest.neighbors.length) {
+      semanticNovelty = semanticNoveltyScore(nearest.neighbors[0].distance, percentiles.p05, percentiles.p50)
     }
 
     const scores: HypothesisScores = {
@@ -213,6 +221,9 @@ export async function generateHypotheses(input: {
     }
     if (!matchedPair) {
       coverageLimitations.push('No measured rarity signal backs this combination — it rests on area-level signals only.')
+    }
+    if (!nearest.available) {
+      coverageLimitations.push('Closest existing art not captured — semantic search was unavailable at generation time.')
     }
 
     const row = await prisma.whitespaceHypothesis.create({
@@ -244,6 +255,23 @@ export async function generateHypotheses(input: {
       })
     }
 
+    if (nearest.available && nearest.neighbors.length) {
+      await prisma.whitespaceEvidence.createMany({
+        data: nearestArtEvidenceRows(nearest.neighbors, statement).map(evidence => ({
+          studyId: input.studyId,
+          hypothesisId: row.id,
+          clusterId: cluster?.id ?? null,
+          kind: evidence.kind,
+          stance: evidence.stance,
+          refId: evidence.refId,
+          passage: evidence.passage,
+          queryText: evidence.queryText,
+          score: evidence.score,
+          data: evidence.data as unknown as Prisma.InputJsonValue,
+        })),
+      })
+    }
+
     created.push({
       id: row.id,
       statement,
@@ -261,6 +289,42 @@ export async function generateHypotheses(input: {
   }
 
   return { hypotheses: created, modelCode: response.modelCode }
+}
+
+/** How many nearest-art families each hypothesis keeps as evidence. */
+const NEAREST_ART_FAMILIES = 8
+
+/**
+ * The nearest-art evidence rows for one hypothesis, from the same neighbour
+ * probe that scored its semantic novelty. Pure — the write site adds the ids.
+ *
+ * `data.role` is the discriminator: validation also writes PATENT_PASSAGE rows
+ * (stance CONTRADICTORY), so kind alone cannot identify these. `data.rank`
+ * carries display order because createMany stamps near-identical createdAt.
+ * Stance is CONTEXT by design — nobody has read these against the claim; they
+ * are "the closest thing that exists", not a verdict either way.
+ */
+export function nearestArtEvidenceRows(
+  neighbors: SemanticNeighbor[],
+  statement: string
+): Array<{
+  kind: 'PATENT_PASSAGE'
+  stance: 'CONTEXT'
+  refId: string
+  passage: string | null
+  queryText: string
+  score: number
+  data: { role: 'NEAREST_ART'; title: string | null; familyKey: string; rank: number }
+}> {
+  return dedupeNeighborsByFamily(neighbors, NEAREST_ART_FAMILIES).map((neighbor, index) => ({
+    kind: 'PATENT_PASSAGE',
+    stance: 'CONTEXT',
+    refId: neighbor.publicationNumber,
+    passage: neighbor.abstract ? neighbor.abstract.slice(0, 1000) : null,
+    queryText: statement,
+    score: neighbor.distance,
+    data: { role: 'NEAREST_ART', title: neighbor.title, familyKey: neighbor.familyKey, rank: index + 1 },
+  }))
 }
 
 /**
