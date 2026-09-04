@@ -63,6 +63,7 @@ import {
 } from '@/lib/scope-recommendations';
 import {
   completeSupportDataSources,
+  isDetailedDescriptionSourceTableModeActive,
 } from '@/lib/support-data-sources';
 import { ensureDetailedDescriptionSourceSelection } from '@/lib/dd-source-selection-service';
 import { getDdUserDataLlmWrapper } from '@/lib/dd-user-data-wrapper';
@@ -2805,14 +2806,19 @@ ${additionalContext}`)
       // DD USER DATA INJECTION (Only for detailedDescription section)
       // ══════════════════════════════════════════════════════════════════════════════
       if (section === 'detailedDescription') {
+        const tablesAllowed = ctx?.globalRules?.allowTables !== false
+        // Stage 0 source tables count too: if the disclosure already contained a table, the
+        // Detailed Description must render it without the attorney re-pasting the data.
+        if (isDetailedDescriptionSourceTableModeActive(normalizedData, { jurisdiction, tablesAllowed })) {
+          ddTableModeActive = true
+        }
         if (ctx?.ddUserData?.isEnabled && ctx?.ddUserData?.userData) {
           // User data IS provided - inject with legal wrapper and anti-hallucination directive.
           // Table mode is honored only where the jurisdiction's global rules allow tables.
-          const tablesAllowed = ctx?.globalRules?.allowTables !== false
           const useTableWrapper = ctx.ddUserData.renderAsTable === true && tablesAllowed
           // Remember for the OUTPUT CONTROL block (the model's last, most salient instruction),
           // so the table requirement isn't outweighed by the "paragraph" formatting note.
-          ddTableModeActive = useTableWrapper
+          ddTableModeActive = ddTableModeActive || useTableWrapper
           promptParts.push(`
 ${getDdUserDataLlmWrapper(useTableWrapper)}
 

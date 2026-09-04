@@ -10,7 +10,39 @@ import {
   previewSupportDataSource,
   projectSupportDataDestinations,
   updateDetailedDescriptionInjectionControls,
+  isDetailedDescriptionSourceTableModeActive,
 } from '@/lib/support-data-sources'
+
+// A Stage 0 extraction that captured a real table grid (headers + rows).
+function stage0TableData(overrides: Record<string, any> = {}) {
+  return {
+    supportDataSources: coerceSupportDataSources([
+      {
+        kind: 'table',
+        label: 'Dissolution profile',
+        value: 'Dissolution of batches B1 and B2.',
+        claimUse: 'dependent',
+        sectionTargets: ['detailedDescription'],
+        details: {
+          headers: ['Batch', 'Load (mg)', 'Release 60 min (%)'],
+          rows: [['B1', '45', '82.1'], ['B2', '60', '74.3']],
+        },
+      },
+    ]),
+    detailedDescriptionSourceSelection: {
+      schemaVersion: 1,
+      status: 'ready',
+      sectionKey: 'detailedDescription',
+      jurisdiction: 'US',
+      inputHash: 'hash-s0',
+      selectedSources: [{ sourceId: 'SDS-001', role: 'claim_support', confidence: 'high' }],
+      guardrailSources: [],
+      excludedSources: [],
+      warnings: [],
+    },
+    ...overrides,
+  }
+}
 
 describe('support data sources', () => {
   test('coerces, dedupes, filters malformed items, and mints ids for id-less entries', () => {
@@ -312,7 +344,11 @@ describe('support data sources', () => {
       'US',
       { renderSourcesAsTable: false }
     )
-    expect(disabled.jurisdictions?.US?.renderSourcesAsTable).toBeUndefined()
+    // Explicit false is persisted (tri-state), so it beats the auto-on default
+    expect(disabled.jurisdictions?.US?.renderSourcesAsTable).toBe(false)
+
+    // Stage 0 table auto-enables table mode without the attorney touching anything
+    expect(isDetailedDescriptionSourceTableModeActive(stage0TableData(), { jurisdiction: 'US' })).toBe(true)
 
     // Untouched when the update omits the field
     const untouched = updateDetailedDescriptionInjectionControls(
@@ -506,5 +542,53 @@ The software is described as a computer program per se.
 
     expect(previewSupportDataSource(table)).toBe('Table: 3 columns x 2 rows')
     expect(previewSupportDataSource(equation)).toContain('variables: 2')
+  })
+})
+
+describe('Stage 0 tables reach the Detailed Description', () => {
+  test('a table extracted at Stage 0 turns table mode on with no attorney action', () => {
+    const data = stage0TableData()
+    expect(isDetailedDescriptionSourceTableModeActive(data, { jurisdiction: 'US' })).toBe(true)
+    expect(buildDetailedDescriptionEvidencePreview(data, 'US').renderSourcesAsTable).toBe(true)
+  })
+
+  test('the extracted grid is handed to the model as literal Markdown to copy', () => {
+    const block = buildDetailedDescriptionEvidencePromptBlock(stage0TableData(), { jurisdiction: 'US' })
+    expect(block).toContain('BEGIN VERBATIM SOURCE TABLES (COPY THESE EXACTLY)')
+    expect(block).toContain('| Batch | Load (mg) | Release 60 min (%) |')
+    expect(block).toContain('| --- | --- | --- |')
+    expect(block).toContain('| B1 | 45 | 82.1 |')
+    expect(block).toContain('| B2 | 60 | 74.3 |')
+  })
+
+  test('an explicit off from the attorney still wins over the auto default', () => {
+    const off = stage0TableData({
+      detailedDescriptionInjectionControls: {
+        schemaVersion: 1,
+        sectionKey: 'detailedDescription',
+        jurisdictions: { US: { selectionInputHash: 'hash-s0', renderSourcesAsTable: false } },
+      },
+    })
+    expect(isDetailedDescriptionSourceTableModeActive(off, { jurisdiction: 'US' })).toBe(false)
+    expect(buildDetailedDescriptionEvidencePromptBlock(off, { jurisdiction: 'US' }))
+      .not.toContain('VERBATIM SOURCE TABLES')
+  })
+
+  test('a jurisdiction that forbids tables suppresses table mode', () => {
+    expect(isDetailedDescriptionSourceTableModeActive(stage0TableData(), { jurisdiction: 'US', tablesAllowed: false })).toBe(false)
+  })
+
+  test('non-tabular Stage 0 support does not trigger table mode', () => {
+    const prose = {
+      supportDataSources: coerceSupportDataSources([
+        { kind: 'component', label: 'Controller', value: 'Controller 102 receives sensor data.', claimUse: 'core', sectionTargets: ['detailedDescription'] },
+      ]),
+      detailedDescriptionSourceSelection: {
+        schemaVersion: 1, status: 'ready', sectionKey: 'detailedDescription', jurisdiction: 'US', inputHash: 'h',
+        selectedSources: [{ sourceId: 'SDS-001', role: 'component_support', confidence: 'high' }],
+        guardrailSources: [], excludedSources: [], warnings: [],
+      },
+    }
+    expect(isDetailedDescriptionSourceTableModeActive(prose, { jurisdiction: 'US' })).toBe(false)
   })
 })

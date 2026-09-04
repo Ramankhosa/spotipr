@@ -1019,7 +1019,8 @@ function normalizeJurisdictionControls(value: unknown): DetailedDescriptionJuris
     sourceTextOverrides: normalizeSourceTextOverrides(record.sourceTextOverrides),
     ...(customIncludeInstruction ? { customIncludeInstruction } : {}),
     ...(customIntegrationInstruction ? { customIntegrationInstruction } : {}),
-    ...(record.renderSourcesAsTable === true ? { renderSourcesAsTable: true } : {}),
+    // Tri-state: an explicit false must survive, so "unset" can mean "auto-decide".
+    ...(typeof record.renderSourcesAsTable === 'boolean' ? { renderSourcesAsTable: record.renderSourcesAsTable } : {}),
     ...(record.updatedAt ? { updatedAt: cleanString(record.updatedAt, 80) } : {}),
   }
 }
@@ -1162,6 +1163,46 @@ function sourceMapById(sources: SupportDataSource[]) {
   return new Map(sources.map(source => [source.id, source]))
 }
 
+// Stage 0 stores an extracted table as details.headers + details.rows. Treat that as
+// genuine tabular data (a bare `table` kind counts even if the grid wasn't captured).
+export function isTabularSupportSource(item: SupportDataSource | undefined | null): boolean {
+  if (!item) return false
+  if (item.kind === 'table') return true
+  const details = item.details as Record<string, any> | undefined
+  return Array.isArray(details?.rows) && details!.rows.length > 0 &&
+    Array.isArray(details?.headers) && details!.headers.length > 0
+}
+
+// compactDetails flattens a table to "headers=..; row=..; row=.." and caps at 8 rows, which
+// reads as metadata and silently drops data. When table mode is on we additionally hand the
+// model the grid as literal Markdown so it can copy it verbatim instead of reconstructing it.
+const DD_MAX_SOURCE_TABLE_ROWS = 40
+
+function renderSupportSourceMarkdownTable(item: SupportDataSource): string {
+  const details = item.details as Record<string, any> | undefined
+  const headers = Array.isArray(details?.headers) ? details!.headers.map((h: any) => cleanString(h, 120)) : []
+  const rawRows = Array.isArray(details?.rows) ? details!.rows : []
+  if (!headers.length || !rawRows.length) return ''
+  const width = headers.length
+  const cell = (value: unknown) => cleanString(value, 160).replace(/\|/g, '\\|').replace(/\s*\n+\s*/g, ' ').trim()
+  const fit = (cells: unknown[]) => {
+    const out = cells.slice(0, width).map(cell)
+    while (out.length < width) out.push('')
+    return out
+  }
+  const rows = rawRows.slice(0, DD_MAX_SOURCE_TABLE_ROWS)
+    .map((row: any) => Array.isArray(row) ? fit(row) : fit([row]))
+  const lines = [
+    `| ${fit(headers).join(' | ')} |`,
+    `| ${headers.map(() => '---').join(' | ')} |`,
+    ...rows.map((row: string[]) => `| ${row.join(' | ')} |`),
+  ]
+  if (rawRows.length > rows.length) {
+    lines.push(`(${rawRows.length - rows.length} further row(s) exist in the source; do not invent them.)`)
+  }
+  return lines.join('\n')
+}
+
 function formatSelectedSupportLine(
   item: SupportDataSource,
   selection?: DetailedDescriptionSourceSelectionItem,
@@ -1186,6 +1227,37 @@ function formatGuardrailSupportLine(
 ) {
   const reason = selection?.reason ? `\n  Reason: ${selection.reason}` : ''
   return `${formatSupportLine(item)}${reason}`
+}
+
+/**
+ * Whether the Detailed Description should render Stage 0 source data as tables for this
+ * jurisdiction. Mirrors the rule inside buildDetailedDescriptionEvidencePromptBlock so the
+ * caller can restate the requirement in its final OUTPUT CONTROL instruction, where it is
+ * salient enough to beat the base prompt's "express tables in prose" guidance.
+ */
+export function isDetailedDescriptionSourceTableModeActive(
+  normalizedData: unknown,
+  options?: { jurisdiction?: string; tablesAllowed?: boolean }
+): boolean {
+  if (options?.tablesAllowed === false) return false
+  if (!normalizedData || typeof normalizedData !== 'object') return false
+  const sources = coerceSupportDataSources((normalizedData as any).supportDataSources)
+  if (!sources.length) return false
+
+  const selection = selectionFromNormalizedData(normalizedData)
+  const effectiveSelection = selection?.status === 'ready' || selection?.status === 'failed'
+    ? selection
+    : buildDeterministicDetailedDescriptionSelection(normalizedData, [])
+  const { controls } = controlsFromNormalizedData(normalizedData, options?.jurisdiction, effectiveSelection)
+  if (typeof controls.renderSourcesAsTable === 'boolean') return controls.renderSourcesAsTable
+
+  const byId = sourceMapById(sources)
+  const excluded = new Set(controls.excludedSelectedSourceIds || [])
+  return uniqueBySourceId(effectiveSelection.selectedSources || []).some(item => {
+    if (excluded.has(item.sourceId)) return false
+    const source = byId.get(item.sourceId)
+    return !!source && isDetailedDescriptionPositiveCandidate(source) && isTabularSupportSource(source)
+  })
 }
 
 export function buildDetailedDescriptionEvidencePromptBlock(
@@ -1218,7 +1290,6 @@ export function buildDetailedDescriptionEvidencePromptBlock(
   const customIncludeInstruction = coveragePreset === 'custom' ? controls.customIncludeInstruction : undefined
   const customIntegrationInstruction = coveragePreset === 'custom' ? controls.customIntegrationInstruction : undefined
   const tablesAllowed = typeof optionsOrHeading === 'string' ? true : optionsOrHeading.tablesAllowed !== false
-  const renderSourcesAsTable = controls.renderSourcesAsTable === true && tablesAllowed
 
   const selected = uniqueBySourceId(effectiveSelection.selectedSources || [])
     .map(item => ({ selection: item, source: byId.get(item.sourceId) }))
@@ -1226,6 +1297,14 @@ export function buildDetailedDescriptionEvidencePromptBlock(
       !!entry.source && isDetailedDescriptionPositiveCandidate(entry.source) && !excludedSelected.has(entry.selection.sourceId)
     )
     .slice(0, DD_MAX_SELECTED_PROMPT_SOURCES)
+
+  // Table mode: the attorney's explicit choice wins; otherwise it turns itself on when Stage 0
+  // actually extracted a table, so the data need not be pasted again in the DD panel.
+  const renderSourcesAsTable = tablesAllowed && (
+    typeof controls.renderSourcesAsTable === 'boolean'
+      ? controls.renderSourcesAsTable
+      : selected.some(entry => isTabularSupportSource(entry.source))
+  )
 
   const guardrails = uniqueBySourceId(effectiveSelection.guardrailSources || [])
     .map(item => ({ selection: item, source: byId.get(item.sourceId) }))
@@ -1273,6 +1352,24 @@ Detailed Description as a GitHub-style Markdown table (pipe-delimited cells, a h
 - Separate each table from surrounding prose with a blank line on both sides.
 - Source items that do not carry tabular or measured data remain prose.
 END SOURCE DATA TABLE PRESENTATION (ATTORNEY-ENABLED)`)
+
+    // Hand over the extracted grids as literal Markdown. Without this the model only sees the
+    // compacted "headers=..; row=.." form and has to reconstruct the table from metadata.
+    const sourceTables = selected
+      .map(entry => ({ source: entry.source, markdown: renderSupportSourceMarkdownTable(entry.source) }))
+      .filter(entry => entry.markdown)
+    if (sourceTables.length) {
+      blocks.push([
+        'BEGIN VERBATIM SOURCE TABLES (COPY THESE EXACTLY)',
+        'These grids were extracted from the inventor\'s own disclosure at Stage 0. Reproduce each one',
+        'in the Detailed Description exactly as written below — same headers, rows, order, and values.',
+        ...sourceTables.map(entry => [
+          `[${entry.source.id}] ${entry.source.label}`,
+          entry.markdown,
+        ].join('\n')),
+        'END VERBATIM SOURCE TABLES',
+      ].join('\n\n'))
+    }
   }
 
   if (guardrails.length) {
@@ -1390,7 +1487,10 @@ export function buildDetailedDescriptionEvidencePreview(
     coveragePreset,
     ...(controls.customIncludeInstruction ? { customIncludeInstruction: controls.customIncludeInstruction } : {}),
     ...(controls.customIntegrationInstruction ? { customIntegrationInstruction: controls.customIntegrationInstruction } : {}),
-    renderSourcesAsTable: controls.renderSourcesAsTable === true,
+    // Mirror the prompt-side rule so the UI switch shows ON when it auto-enabled.
+    renderSourcesAsTable: typeof controls.renderSourcesAsTable === 'boolean'
+      ? controls.renderSourcesAsTable
+      : selectedSources.some(item => item.included && isTabularSupportSource(byId.get(item.sourceId))),
     includedSelectedCount: selectedSources.filter(item => item.included).length,
     totalSelectedCount: selectedSources.length,
     selectedSources,
@@ -1473,11 +1573,8 @@ export function updateDetailedDescriptionInjectionControls(
     }
   }
   if (update.renderSourcesAsTable !== undefined) {
-    if (update.renderSourcesAsTable === true) {
-      next.renderSourcesAsTable = true
-    } else {
-      delete next.renderSourcesAsTable
-    }
+    // Store the explicit choice (including false) so it wins over the auto default.
+    next.renderSourcesAsTable = update.renderSourcesAsTable === true
   }
   next.selectionInputHash = currentHash
   next.updatedAt = new Date().toISOString()
