@@ -52,6 +52,7 @@ enum ServiceType {
   IDEATION // Mind-map patent ideation engine
   OFFICE_ACTION_RESPONSE // Office Action Studio: FER/OA response drafting
   WHITESPACE_ANALYSIS // Whitespace Studio: field mapping, gap hypotheses, adversarial validation
+  INVENTION_MINER // Invention Miner: mine a field for grant-worthy invention leads
 }
 
 // Team roles within a team
@@ -613,6 +614,7 @@ enum FeatureCode {
   IDEATION // Mind-map patent ideation engine
   OFFICE_ACTION_RESPONSE // Office Action Studio: FER/OA response drafting
   WHITESPACE_ANALYSIS // Whitespace Studio: field mapping, gap hypotheses, adversarial validation
+  INVENTION_MINER // Invention Miner: mine a field for grant-worthy invention leads
 }
 
 enum TaskCode {
@@ -652,6 +654,17 @@ enum TaskCode {
   // Cheap, mechanical extraction — the attorney reviews every field before saving,
   // so the model never decides what goes on a legal document.
   FILING_INVENTOR_PARSE
+  // Invention Miner. Cheap tier: per-publication extraction of admitted
+  // problems, mechanisms and claimed scope, plus lead naming. Premium is only
+  // the inventive-step argument and the invention brief — the two places where
+  // reasoning quality IS the product. The exclusion screen is mid.
+  //
+  // Deliberately its own task family, never WS_*: the whitespace prompts forbid
+  // legal conclusions by design, and the miner's whole job is to reason about
+  // grantability under a named statute from cited evidence.
+  IM_EXTRACT // Patent text -> admitted problems, mechanisms, teaching-away, claimed scope
+  IM_GATE // Inventive-step argument (EPO problem-solution) and the s.3 exclusion screen
+  IM_BRIEF // Invention brief: problem, mechanism, delta, argument, drafted claim set
 }
 
 enum ModelClass {
@@ -695,25 +708,25 @@ model Patent {
 // Address columns mirror Form 1's fixed rows exactly (House No. & Address / Street / City /
 // State / Country / Pin) so no re-parsing happens at render time.
 model PatentInventor {
-  id                String   @id @default(cuid())
-  patentId          String
-  sortOrder         Int // print order on Form 1 para 4, Form 1 para 12(i) and Form 5
-  honorific         String? // "Dr." / "Prof." — split out so name-order lint sees the body alone
-  nameBody          String
-  familyNameFirst   Boolean  @default(false) // Form 1 asks for family name first; drives the lint
-  nationality       String // demonym, e.g. "Indian"
-  countryOfResidence String
-  addressLine1      String // "House No. & Address" row
-  street            String? // empty renders per the firm's emptyFieldStyle (e.g. "-")
-  city              String
-  state             String
-  country           String
-  pinCode           String
+  id                   String   @id @default(cuid())
+  patentId             String
+  sortOrder            Int // print order on Form 1 para 4, Form 1 para 12(i) and Form 5
+  honorific            String? // "Dr." / "Prof." — split out so name-order lint sees the body alone
+  nameBody             String
+  familyNameFirst      Boolean  @default(false) // Form 1 asks for family name first; drives the lint
+  nationality          String // demonym, e.g. "Indian"
+  countryOfResidence   String
+  addressLine1         String // "House No. & Address" row
+  street               String? // empty renders per the firm's emptyFieldStyle (e.g. "-")
+  city                 String
+  state                String
+  country              String
+  pinCode              String
   // Form 5 para 4: inventors who did not sign the application form assent separately.
-  isAdditionalInventor Boolean @default(false)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  patent            Patent   @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  isAdditionalInventor Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  patent               Patent   @relation(fields: [patentId], references: [id], onDelete: Cascade)
 
   @@index([patentId, sortOrder])
   @@map("patent_inventors")
@@ -725,40 +738,40 @@ model PatentInventor {
 // firm changing its house style months later cannot alter what an already-filed
 // application regenerates to.
 model PatentFilingDetail {
-  id              String            @id @default(cuid())
-  patentId        String            @unique
-  applicationType FilingApplicationType @default(ordinary)
-  specType        FilingSpecType    @default(provisional)
-  isDivisional    Boolean           @default(false)
-  isPatentOfAddition Boolean        @default(false)
-  officeBranch    String            @default("Delhi") // Delhi | Mumbai | Chennai | Kolkata
-  applicantRefNo  String? // Form 1 para 1
+  id                  String                @id @default(cuid())
+  patentId            String                @unique
+  applicationType     FilingApplicationType @default(ordinary)
+  specType            FilingSpecType        @default(provisional)
+  isDivisional        Boolean               @default(false)
+  isPatentOfAddition  Boolean               @default(false)
+  officeBranch        String                @default("Delhi") // Delhi | Mumbai | Chennai | Kolkata
+  applicantRefNo      String? // Form 1 para 1
   // Page/count block for Form 1 para 13
-  specPages       Int               @default(0)
-  claimsCount     Int               @default(0)
-  claimsPages     Int               @default(0)
-  abstractPages   Int               @default(0)
-  drawingsCount   Int               @default(0)
-  drawingsPages   Int               @default(0)
-  feeAmount       Int? // rupees; seeded from the First Schedule table by category
-  feeMode         String            @default("efiling")
+  specPages           Int                   @default(0)
+  claimsCount         Int                   @default(0)
+  claimsPages         Int                   @default(0)
+  abstractPages       Int                   @default(0)
+  drawingsCount       Int                   @default(0)
+  drawingsPages       Int                   @default(0)
+  feeAmount           Int? // rupees; seeded from the First Schedule table by category
+  feeMode             String                @default("efiling")
   // Known only after filing. Form 5 prints these as dotted blanks until they exist, so
   // the bundle can be regenerated post-filing with the real particulars.
-  applicationNo   String?
-  filingDate      DateTime?
+  applicationNo       String?
+  filingDate          DateTime?
   // Particulars of the parent/original application (Form 1 paras 10 and 11)
-  parentApplicationNo   String?
-  parentFilingDate      DateTime?
+  parentApplicationNo String?
+  parentFilingDate    DateTime?
   // Patent layer of the cascade: sparse FilingSettingsPatch over firm + project.
-  filingSettings  Json?
+  filingSettings      Json?
   // Signatory override when someone other than the project's default signs this filing.
-  signatoryOverride Json?
-  presetId        String? // which firm preset this filing resolved against
-  resolvedSnapshot Json? // frozen resolved settings from the last generation
-  lastGeneratedAt DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  patent          Patent            @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  signatoryOverride   Json?
+  presetId            String? // which firm preset this filing resolved against
+  resolvedSnapshot    Json? // frozen resolved settings from the last generation
+  lastGeneratedAt     DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  patent              Patent                @relation(fields: [patentId], references: [id], onDelete: Cascade)
 
   @@map("patent_filing_details")
 }
@@ -5388,30 +5401,30 @@ model OaResponseDraft {
 // resolve citations, chart, draft). Lease/heartbeat fields mirror
 // PatentDraftingJob so the worker pattern transfers unchanged.
 model OfficeActionJob {
-  id            String                @id @default(cuid())
-  caseId        String
-  documentId    String?
-  userId        String
-  jobType       String // PARSE | CLASSIFY | RESOLVE_CITATIONS | CLAIM_CHART | DRAFT
-  status        OfficeActionJobStatus @default(QUEUED)
-  currentStep   String?
-  payload       Json
-  result        Json?
-  attemptCount  Int                   @default(0)
-  maxAttempts   Int                   @default(3)
-  nextAttemptAt DateTime              @default(now())
-  lockedBy      String?
-  lockedUntil   DateTime?
-  heartbeatAt   DateTime?
-  lastError     String?
-  startedAt     DateTime?
-  completedAt   DateTime?
-  cancelledAt   DateTime?
+  id              String                @id @default(cuid())
+  caseId          String
+  documentId      String?
+  userId          String
+  jobType         String // PARSE | CLASSIFY | RESOLVE_CITATIONS | CLAIM_CHART | DRAFT
+  status          OfficeActionJobStatus @default(QUEUED)
+  currentStep     String?
+  payload         Json
+  result          Json?
+  attemptCount    Int                   @default(0)
+  maxAttempts     Int                   @default(3)
+  nextAttemptAt   DateTime              @default(now())
+  lockedBy        String?
+  lockedUntil     DateTime?
+  heartbeatAt     DateTime?
+  lastError       String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  cancelledAt     DateTime?
   // Pause request. The worker reads this between objections and stops cleanly,
   // leaving the draft resumable — how the attorney pauses to add prior art.
-  cancelRequested Boolean             @default(false)
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
+  cancelRequested Boolean               @default(false)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 
   @@index([caseId, createdAt])
   @@index([status, nextAttemptAt])
@@ -5590,11 +5603,11 @@ model WhitespaceStudy {
 
   /// WhitespaceScope — concepts, synonyms, cpc[], exclusions[], assumptions[],
   /// dateRange, jurisdictions. Editable by the user before any run.
-  scope        Json
-  scopeVersion Int     @default(1)
-  seedText     String? @db.Text
+  scope         Json
+  scopeVersion  Int     @default(1)
+  seedText      String? @db.Text
   /// UI tailoring only (attorney | rnd | tto | founder | investor). Never gates analysis.
-  role         String?
+  role          String?
   /// FIELD (landscape census pipeline) | INVENTION (dimension-map pipeline).
   /// Chosen at creation; decides which stage graph and layout the study gets.
   kind          String  @default("FIELD")
@@ -5612,6 +5625,8 @@ model WhitespaceStudy {
   hypotheses WhitespaceHypothesis[]
   evidence   WhitespaceEvidence[]
   concepts   WhitespaceConcept[]
+  leads      InventionLead[]
+  fieldPubs  MinerFieldPublication[]
   literature WhitespaceLiteratureItem[]
   trail      WhitespaceTrailEntry[]
 
@@ -5804,6 +5819,10 @@ model WhitespaceEvidence {
   hypothesisId String?
   clusterId    String?
 
+  /// The mining lead this evidence belongs to, when it came from a miner run.
+  /// Cascade like hypothesisId: evidence has no meaning without its subject.
+  leadId String?
+
   kind      String // PATENT_PASSAGE | SCHOLAR | SEARCH_TRACE | STATISTIC | USER
   /// Publication number, DOI, or null for statistics.
   refId     String?
@@ -5818,9 +5837,11 @@ model WhitespaceEvidence {
 
   study      WhitespaceStudy       @relation(fields: [studyId], references: [id], onDelete: Cascade)
   hypothesis WhitespaceHypothesis? @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+  lead       InventionLead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   @@index([hypothesisId, stance])
   @@index([studyId, kind])
+  @@index([leadId, stance])
   @@map("whitespace_evidence")
 }
 
@@ -5828,6 +5849,8 @@ model WhitespaceConcept {
   id           String  @id @default(cuid())
   studyId      String
   hypothesisId String?
+  /// SetNull like hypothesisId: a promoted concept outlives the lead it came from.
+  leadId       String?
 
   title    String
   summary  String @db.Text
@@ -5842,6 +5865,7 @@ model WhitespaceConcept {
 
   study      WhitespaceStudy       @relation(fields: [studyId], references: [id], onDelete: Cascade)
   hypothesis WhitespaceHypothesis? @relation(fields: [hypothesisId], references: [id], onDelete: SetNull)
+  lead       InventionLead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   @@index([studyId])
   @@map("whitespace_concepts")
@@ -5890,6 +5914,266 @@ model WhitespaceTrailEntry {
 
   @@index([studyId, createdAt])
   @@map("whitespace_trail_entries")
+}
+
+// ============================================================================
+// INVENTION MINER - mining a field for grant-worthy invention leads
+// ============================================================================
+//
+// The whitespace pipeline answers "what is absent?". This one answers the
+// harder question an attorney actually pays for: "where could a patent be
+// granted, and on what argument?" Absence is a weak proxy for grantability -
+// most empty combinations are obvious, pointless, or excluded by statute - so
+// the miner reads what the corpus ADMITS is unsolved (background sections and
+// claim scope), proposes combinations from that evidence, and puts each one
+// through a gate that names the closest art, argues inventive step in the
+// problem-solution frame, and screens the statutory exclusions.
+//
+// Two of these tables are corpus-level caches, not study state: extraction is
+// paid once per publication text and shared by every study that reads it.
+
+/// What one publication's text says, extracted once and cached.
+///
+/// The unit is (publication, exact text read) rather than (publication): the
+/// corpus upgrades underneath us - a Google row with a 5,000-character
+/// description snippet later gets EP claims filled in - and an extraction made
+/// from the thinner text must not be served as though it had read the thicker.
+/// A tier upgrade writes a new row and stamps the old one `supersededAt`.
+model PatentTextExtraction {
+  id                String @id @default(cuid())
+  publicationNumber String
+  familyKey         String
+
+  /// The best tier actually READ, not what the corpus might hold:
+  /// description-full | description-5k | claims | abstract. Every consumer
+  /// reads it through resolveTextTier() so the harvest, the coverage strip and
+  /// the report cannot disagree about what was read.
+  textTier String
+  /// sha256(tier + NUL + text). The tier is inside the hash, so an upgrade is a
+  /// new row rather than a silent overwrite.
+  textHash String
+
+  /// [{ statement, kind: 'admitted_drawback' | 'stated_need' | 'objective' }]
+  /// Paraphrases of what the text says about the problem - never the model's
+  /// own opinion of what is wrong with the art.
+  problems         Json
+  /// [{ statement, elements: string[] }] - how this document solves it.
+  mechanisms       Json
+  technicalEffects Json
+  /// [{ quote }] - verbatim sentences where the document argues AGAINST a
+  /// direction. The strongest non-obviousness evidence there is, so it is kept
+  /// as a quote and checked against the source text, never paraphrased.
+  teachingAway     Json
+  /// { independentElements: string[], dependentNarrowings: string[] } - only
+  /// when claims were actually read. Null means "we did not read claims", which
+  /// is a different thing from "this patent claims nothing".
+  claimedScope     Json?
+  /// Normalised four-character CPC/IPC subclass prefixes (A61K, G06F ...).
+  cpcSubclasses    String[] @default([])
+
+  /// The abstract's language when the row carried only `abstractOriginal`.
+  /// A statement extracted through translation cannot be quoted as evidence -
+  /// the quote would not appear in the source text - so it is marked and barred
+  /// from the citation checks rather than silently trusted.
+  language   String?
+  translated Boolean @default(false)
+
+  model        String?
+  stageCode    String?
+  /// Set when a richer-tier extraction replaced this one.
+  supersededAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  statements PatentProblemStatement[]
+
+  @@unique([publicationNumber, textHash])
+  @@index([publicationNumber, supersededAt])
+  @@map("patent_text_extractions")
+}
+
+/// One extracted statement, embedded so problems can be compared across the
+/// corpus - the second vector space.
+///
+/// The corpus index embeds title+abstract, which answers "what is this patent
+/// about". Neither engine needs that; they need "which patents complain about
+/// the same thing" and "has this mechanism ever appeared in this field". So
+/// problems, mechanisms and claim cores get their own vectors.
+///
+/// `embedding`'s declared type is production's (bit(512), Voyage). The real
+/// column is created by the migration's DO block from whichever
+/// local_patent_embeddings column that deployment populates, so a dev box on
+/// OpenAI gets vector(1536). Prisma never reads or writes it - every query is
+/// raw SQL - and checkMinerIndexConfig() refuses to run the engines when the
+/// column and the configured model disagree, which is exactly the failure that
+/// silently emptied Office Action retrieval before its own drift check existed.
+model PatentProblemStatement {
+  id                String @id @default(cuid())
+  extractionId      String
+  publicationNumber String
+  familyKey         String
+
+  /// PROBLEM | MECHANISM | CLAIM_CORE
+  kind     String
+  text     String @db.Text
+  /// sha256 of the normalised text; unique PER PUBLICATION, never globally -
+  /// two documents admitting the same drawback in the same words are two
+  /// families admitting it, and collapsing them would undercount exactly the
+  /// problems the field complains about most.
+  textHash String
+
+  cpcSubclasses String[] @default([])
+  filingYear    Int?
+  /// Normalised applicant name, so a lead can be suppressed when the families
+  /// admitting its problem are the user's own client - and so every lead can
+  /// print who is filing in the space it came from.
+  applicantNorm String?
+  language      String?
+
+  embedding Unsupported("bit(512)")?
+
+  createdAt DateTime @default(now())
+
+  extraction PatentTextExtraction @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+
+  @@unique([publicationNumber, kind, textHash])
+  @@index([kind])
+  @@index([extractionId])
+  /// Counts are per FAMILY, never per publication, so the joins that resolve a
+  /// statement to its family must not scan: this table is corpus-wide and every
+  /// study adds to it.
+  @@index([familyKey])
+  @@index([kind, familyKey])
+  @@map("patent_problem_statements")
+}
+
+/// The field as one mining run staged it: which publications the scope matched,
+/// which text tier each carries, and which were read.
+///
+/// Written because "inside the field" has to be a join, not a CPC guess. A
+/// publication carries several classifications and the scope may accept none,
+/// so the only honest definition of the field is the set the census predicate
+/// produced at that scope version.
+model MinerFieldPublication {
+  id                String  @id @default(cuid())
+  studyId           String
+  /// sha256 of the NORMALISED scope. The partition key, not scopeVersion:
+  /// saving a scope increments the version even when nothing changed, and that
+  /// alone would force a re-stage of the whole field and a new metered
+  /// operation. Two scopes that mean the same thing share a fingerprint.
+  scopeFingerprint  String
+  /// Kept for display only ("staged at scope v3").
+  scopeVersion      Int
+  publicationNumber String
+  familyKey         String
+  textTier          String
+  /// False for a family in the field that the harvest cap left unread.
+  sampled           Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  study WhitespaceStudy @relation(fields: [studyId], references: [id], onDelete: Cascade)
+
+  @@unique([studyId, scopeFingerprint, publicationNumber])
+  @@index([studyId, scopeFingerprint, sampled])
+  @@map("miner_field_publications")
+}
+
+/// A candidate invention: a problem the field admits, a mechanism that could
+/// answer it, and - once gated - the argument for why it could be granted.
+model InventionLead {
+  id      String  @id @default(cuid())
+  studyId String
+  runId   String?
+
+  /// UNSOLVED_PROBLEM | CROSS_DOMAIN_TRANSFER | CLAIM_FRONTIER | EXPIRY_FRONTIER
+  origin           String
+  /// Stable across re-runs of the engines, so a second run updates a lead
+  /// instead of duplicating it - and the attorney's review survives.
+  fingerprint      String
+  /// The scope this lead was mined and screened against. When it no longer
+  /// matches the study's, the lead reads STALE: its verdict was reached against
+  /// a field that no longer exists, so it may not be handed off or reported
+  /// until it is screened again. The human review is kept and annotated.
+  scopeFingerprint String
+
+  title             String
+  problemStatement  String  @db.Text
+  /// Null when the engines found a problem worth solving but no mechanism in
+  /// the field to answer it. That is a real finding, and the gate records it as
+  /// unassessed claimability rather than inventing a mechanism to fill the gap.
+  proposedMechanism String? @db.Text
+  /// The claimable combination, two to six normalised elements.
+  elements          Json
+  rationale         String  @db.Text
+
+  /// Measured numbers WITH their denominators - every count is over the
+  /// families actually read, at a stated text tier, and the UI prints both.
+  signals    Json
+  sourceRefs Json
+
+  /// The ordered ladder: anticipation, inventive step, exclusions,
+  /// claimability, demand. Each rung carries its outcome, what it measured and
+  /// what it cited.
+  gate   Json?
+  /// demand, novelty, obviousnessRisk, exclusionRisk, claimability. Null until
+  /// measured, and deliberately NOT multiplied into a single "grantability"
+  /// number - three of the five are buckets from a model verdict, and a product
+  /// of buckets reads as a probability the system cannot support.
+  scores Json
+
+  /// CANDIDATE | GATING | GRANTABLE | CONDITIONAL | BLOCKED
+  status String @default("CANDIDATE")
+
+  /// The invention brief: problem with citations, mechanism, delta against the
+  /// closest art, the non-obviousness argument, drafted claims, and what the
+  /// applicant must still supply.
+  brief Json?
+
+  /// The attorney's verdict, which OUTRANKS the machine status above it, in the
+  /// same vocabulary hypotheses use (ENDORSED | REJECTED | NEEDS_INVESTIGATION).
+  /// BLOCKED is only ever reached by a cited anticipation or a human rejection -
+  /// never by a model's opinion of eligibility.
+  humanReview Json?
+
+  /// Non-optional by design: what this lead was measured over, at which text
+  /// tier, and what the corpus could not see.
+  coverageLimitations Json
+  /// { noveltySearchId?, draftingSessionId?, draftPrefilledAt? }
+  handoffs            Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  study         WhitespaceStudy      @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  evidence      WhitespaceEvidence[]
+  concepts      WhitespaceConcept[]
+  handoffTokens MinerHandoff[]
+
+  @@unique([studyId, fingerprint])
+  @@index([studyId, status])
+  @@index([studyId, origin])
+  @@index([studyId, scopeFingerprint])
+  @@map("invention_leads")
+}
+
+/// A one-shot, short-lived carrier for a brief on its way into the drafting
+/// module. The brief is attorney work product; putting it in a query string
+/// would write it into every proxy log and the browser history.
+model MinerHandoff {
+  id      String @id @default(cuid())
+  leadId  String
+  userId  String
+  payload Json
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  lead InventionLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([userId, expiresAt])
+  @@map("miner_handoffs")
 }
 
 // ============================================================================

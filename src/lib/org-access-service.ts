@@ -118,7 +118,8 @@ const SERVICE_TO_FEATURE: Record<ServiceType, string> = {
   PATENT_REVIEW: 'PATENT_REVIEW',      // Pro tier feature
   IDEATION: 'IDEATION',
   OFFICE_ACTION_RESPONSE: 'OFFICE_ACTION_RESPONSE',
-  WHITESPACE_ANALYSIS: 'WHITESPACE_ANALYSIS'
+  WHITESPACE_ANALYSIS: 'WHITESPACE_ANALYSIS',
+  INVENTION_MINER: 'INVENTION_MINER'
 }
 
 // Roles that can use each service (default, can be overridden by team/user settings)
@@ -132,7 +133,11 @@ const SERVICE_DEFAULT_ROLES: Record<ServiceType, UserRole[]> = {
   PATENT_REVIEW: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],  // Pro tier feature - role access same, quota-controlled
   IDEATION: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
   OFFICE_ACTION_RESPONSE: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
-  WHITESPACE_ANALYSIS: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
+  WHITESPACE_ANALYSIS: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
+  // Same roles as Whitespace - the miner is research, gated by quota not by seniority.
+  // An entry is mandatory: line ~586 calls .includes on this value, so a missing key
+  // throws a TypeError on the request rather than denying.
+  INVENTION_MINER: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
 }
 
 // ============================================================================
@@ -299,6 +304,11 @@ export async function createTeam(
       }
     })
 
+    // Deliberately excludes OFFICE_ACTION_RESPONSE, WHITESPACE_ANALYSIS and
+    // INVENTION_MINER. An enabled TeamServiceAccess row short-circuits checkServiceAccess
+    // at the team step and returns allowed before the plan is ever consulted, so seeding
+    // one here would hand every new team the paid tiers regardless of subscription. These
+    // services are enabled per team from Settings once the plan actually sells them.
     const serviceTypes: ServiceType[] = [
       'PATENT_DRAFTING',
       'NOVELTY_SEARCH',
@@ -883,7 +893,8 @@ function getTaskCodeForService(serviceType: ServiceType): TaskCode | null {
     PATENT_REVIEW: TaskCode.LLM2_DRAFT,  // Uses drafting task code for review operations
     IDEATION: null,  // IDEATION has multiple task codes
     OFFICE_ACTION_RESPONSE: TaskCode.LLM8_OA_RESPONSE,
-    WHITESPACE_ANALYSIS: null  // Whitespace Studio spans six task codes
+    WHITESPACE_ANALYSIS: null,  // Whitespace Studio spans six task codes
+    INVENTION_MINER: null  // Invention Miner spans three task codes (IM_EXTRACT/IM_GATE/IM_BRIEF), so no single usage meter to check tokens against - completion metering is the control
   }
   return mapping[serviceType]
 }

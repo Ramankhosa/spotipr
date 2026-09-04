@@ -4,21 +4,55 @@ import { prisma } from '@/lib/prisma'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { appendTrail, getOwnedStudy, readScope, startWhitespaceRun } from '@/lib/whitespace/service'
 import { scopeIsRunnable } from '@/lib/whitespace/scope-schema'
-import type { WhitespaceRunStage } from '@/lib/whitespace/types'
+import { isMinerStage, studyKindOf, type WhitespaceRunStage } from '@/lib/whitespace/types'
+import { scopeFingerprint } from '@/lib/whitespace/miner/scope-fingerprint'
 import type { Prisma } from '@prisma/client'
 import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
 
 export const runtime = 'nodejs'
 
-const STAGES: WhitespaceRunStage[] = ['FIELD_MAP', 'CLUSTER', 'SIGNALS', 'DEEP_DIVE', 'VALIDATE', 'DIMENSION_MAP']
+const STAGES: WhitespaceRunStage[] = [
+  'FIELD_MAP',
+  'CLUSTER',
+  'SIGNALS',
+  'DEEP_DIVE',
+  'VALIDATE',
+  'DIMENSION_MAP',
+  'MINER_HARVEST',
+  'MINER_ENGINES',
+]
 
 /**
  * Observatory stages read the corpus with SQL and vector math and cost almost
  * nothing to serve, so they are unmetered — looking should feel free. Only the
  * Lab stages, which spend real model budget, consume quota. DIMENSION_MAP runs
- * up to three discovery model calls, so it meters.
+ * up to three discovery model calls, so it meters; MINER_HARVEST runs up to
+ * 1,500 extraction calls, so it very much does.
+ *
+ * MINER_ENGINES meters too, and for a reason that is easy to miss: three of its
+ * four engines are pure SQL, but the cross-domain transfer engine runs a
+ * bounded mini-harvest over up to 300 publications OUTSIDE the field — real
+ * extraction calls on text no harvest paid for — plus one lead-naming call.
  */
-const METERED_STAGES = new Set<WhitespaceRunStage>(['DEEP_DIVE', 'VALIDATE', 'DIMENSION_MAP'])
+const METERED_STAGES = new Set<WhitespaceRunStage>([
+  'DEEP_DIVE',
+  'VALIDATE',
+  'DIMENSION_MAP',
+  'MINER_HARVEST',
+  'MINER_ENGINES',
+])
+
+/**
+ * Which entitlement a metered stage spends.
+ *
+ * Branched rather than hardcoded to WHITESPACE_ANALYSIS: the miner is its own
+ * product with its own plan feature (INVENTION_MINER), and charging a harvest to
+ * the whitespace quota would let a tenant with no miner entitlement run the
+ * single most expensive stage in the module on a landscape allowance.
+ */
+function entitlementFor(stage: WhitespaceRunStage) {
+  return isMinerStage(stage) ? ('INVENTION_MINER' as const) : ('WHITESPACE_ANALYSIS' as const)
+}
 
 function headersToRecord(request: NextRequest) {
   const headers: Record<string, string> = {}
@@ -119,6 +153,20 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
+    // Same rule, for the study kind: a miner stage on a landscape study used to
+    // enqueue, wait for a worker, stage a whole field and only then refuse. The
+    // executor's own words, now, before the queue.
+    if (isMinerStage(stage) && studyKindOf(study.kind) !== 'MINER') {
+      return NextResponse.json(
+        {
+          error:
+            'The Invention Miner runs on a miner study. Create a study of the Invention Miner kind for this scope, or run the whitespace stages on this one.',
+          code: 'WS_WRONG_STUDY_KIND',
+        },
+        { status: 400 }
+      )
+    }
+
     // Entitlement is checked for every metered stage, tenant or not. Guarding
     // the check on `auth.user.tenantId` meant an account with no tenant — a
     // solo signup, an invited user before assignment — ran deep dives,
@@ -135,7 +183,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
           { status: 403 }
         )
       }
-      const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'WHITESPACE_ANALYSIS')
+      const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, entitlementFor(stage))
       if (!check.allowed) return check.response
     }
 
@@ -171,6 +219,34 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
 
     if (!existing) {
       await appendTrail(study.id, 'RUN', `user:${auth.user.id}`, `${stage} started (scope v${study.scopeVersion})`)
+    }
+
+    // INVENTION_MINER's quota is counted by trackServiceUsage, not by LLM
+    // completions (metering.ts bypasses those for this feature), so a harvest
+    // that never records one can never be blocked — the quota would read as
+    // configured in the admin UI and do nothing.
+    //
+    // The operationId is keyed on the SCOPE FINGERPRINT, not the run id or the
+    // scope version: recording the same id twice counts once, so re-running the
+    // harvest for a field that has already been charged — after a provider
+    // outage, or after a Save that changed nothing — is free, while a genuinely
+    // different scope is a genuinely different unit of work.
+    //
+    // MINER_ENGINES is recorded on the same rule with its own key, so re-running
+    // the engines over an already-charged field — after a scope Save that
+    // changed nothing, or a retry — is free, while a genuinely different scope
+    // is a genuinely different unit of work.
+    if (!existing && isMinerStage(stage) && METERED_STAGES.has(stage) && auth.user.tenantId) {
+      const { recordServiceCompletion } = await import('@/lib/service-completion')
+      const unit = stage === 'MINER_ENGINES' ? 'engines' : 'harvest'
+      await recordServiceCompletion({
+        tenantId: auth.user.tenantId,
+        userId: auth.user.id,
+        serviceType: 'INVENTION_MINER',
+        operationId: `${study.id}:${unit}:${scopeFingerprint(scope)}`,
+        operationType: stage,
+        metadata: { studyId: study.id, runId, scopeVersion: study.scopeVersion },
+      })
     }
 
     return NextResponse.json(

@@ -24,6 +24,7 @@
     "oa:sync-profile": "tsx scripts/sync-oa-profile.ts",
     "oa:seed-feature": "node scripts/add-office-action-feature.js",
     "ws:seed-stages": "node scripts/add-whitespace-stages.js",
+    "im:seed-stages": "node scripts/add-invention-miner-stages.js",
     "ws:worker": "tsx scripts/whitespace-worker.ts",
     "ws:worker:once": "tsx scripts/whitespace-worker.ts --once",
     "seed:llm-models:prod": "node Seed/seed-llm-models-modified.js",
@@ -64,6 +65,9 @@
     "oa:test:anchors": "tsx scripts/test-office-action-anchors.ts",
     "oa:backfill-numbering": "tsx scripts/backfill-oa-paragraph-numbering.ts",
     "oa:fix-embedding-column": "tsx scripts/fix-oa-chunk-embedding-column.ts",
+    "im:fix-embedding-column": "tsx scripts/fix-miner-statement-embedding-column.ts",
+    "im:build-statement-index": "tsx scripts/build-miner-statement-index.ts",
+    "im:seed-fixture": "tsx scripts/seed-miner-fixture.ts",
     "llm:cache-report": "tsx scripts/llm-cache-report.ts"
   },
   "dependencies": {

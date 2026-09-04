@@ -1030,6 +1030,46 @@ async function executeRun(input: {
       )}% of the field unplaced`
       break
     }
+    case 'MINER_HARVEST': {
+      const { runMinerHarvestStage } = await import('./miner/harvest-stage')
+      const result = await runMinerHarvestStage({
+        runId: input.runId,
+        workerId: input.workerId,
+        reporter,
+        studyId: input.studyId,
+        scope: input.scope,
+        llmContext: input.llmContext,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      // Work done, with its denominators — never what was found. How many
+      // distinct problems the field admits is a finding, and findings belong on
+      // the result the user opens, not in the activity trail.
+      trailSummary = `Harvest complete — ${result.extracted.toLocaleString()} of ${result.sampled.toLocaleString()} chosen families read from a field of ${result.familiesInField.toLocaleString()}, ${result.statementsIndexed.toLocaleString()} statements indexed`
+      break
+    }
+    case 'MINER_ENGINES': {
+      const { runMinerEnginesStage } = await import('./miner/engines-stage')
+      const result = await runMinerEnginesStage({
+        runId: input.runId,
+        workerId: input.workerId,
+        reporter,
+        studyId: input.studyId,
+        scope: input.scope,
+        llmContext: input.llmContext,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      // Work done and its denominators, plus which engines did not run — never
+      // what was found. Lead titles and scores belong on the result the user
+      // opens. A skipped engine is stated here because "0 leads" and "0 leads
+      // because three engines could not run" are different facts.
+      const skipped = result.engines.filter(engine => !engine.ran).map(engine => engine.key)
+      trailSummary =
+        `Engines complete — ${result.graph.statements.toLocaleString()} problem statements read from ` +
+        `${result.graph.families.toLocaleString()} of ${result.coverage.familiesInField.toLocaleString()} families, ` +
+        `${result.leadsWritten} lead${result.leadsWritten === 1 ? '' : 's'} saved` +
+        (skipped.length ? ` (${skipped.join(', ')} did not run)` : '')
+      break
+    }
     default:
       throw new Error(`Stage ${input.stage} is not implemented yet.`)
   }

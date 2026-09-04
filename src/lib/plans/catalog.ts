@@ -115,6 +115,16 @@ export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
       'Metered Lab operations only - deep dives and hypothesis validations. Field mapping, clustering and signals are unmetered.',
   },
   {
+    code: 'INVENTION_MINER',
+    name: 'Invention Miner',
+    // Operations, not leads. Reading a field is one, screening a lead is one,
+    // writing a brief is one — a tenant sold "3 leads" would get one field read
+    // and two screens, and no brief at all.
+    unit: 'operations',
+    description:
+      'Mines a technology field for invention leads. One operation to read a field, one per lead screened, one per brief written.',
+  },
+  {
     code: 'PERSONA_SYNC',
     name: 'PersonaSync Style Learning',
     unit: 'trainings',
@@ -190,6 +200,12 @@ export const PLAN_CATALOG: PlanDefinition[] = [
       // Small grant so a trial can actually reach the differentiating feature -
       // a trial that cannot run one deep dive undersells the product.
       WHITESPACE_ANALYSIS: { monthlyQuota: 2, dailyQuota: 1, monthlyTokenLimit: 500_000, dailyTokenLimit: 250_000 },
+      // Not sold on Trial, but granted at zero rather than omitted. Omitting it leaves
+      // `getPlanQuotaLimits` (service-usage-tracker.ts) with all-null limits, and null
+      // reads as "no ceiling" everywhere except `checkServiceQuota`'s hasAnyLimit guard -
+      // one consumer forgetting that guard would hand a trial an unmetered premium
+      // pipeline. A 0/0 grant is exceeded on its first use and denies in every path.
+      INVENTION_MINER: { monthlyQuota: 0, dailyQuota: 0, monthlyTokenLimit: 0, dailyTokenLimit: 0 },
       // OFFICE_ACTION_RESPONSE and PERSONA_SYNC intentionally excluded.
     },
   },
@@ -211,6 +227,10 @@ export const PLAN_CATALOG: PlanDefinition[] = [
       IDEA_BANK: { monthlyQuota: 5, dailyQuota: 3 },
       DIAGRAM_GENERATION: { monthlyQuota: 8, dailyQuota: 4 },
       PATENT_REVIEW: { monthlyQuota: 1, dailyQuota: 1 },
+      // Basic has no Whitespace Studio, so it has no miner either. Zero rather than
+      // omitted, for the same reason as Trial: absence resolves to null limits, and null
+      // means "unlimited" to every reader but the hasAnyLimit guard.
+      INVENTION_MINER: { monthlyQuota: 0, dailyQuota: 0, monthlyTokenLimit: 0, dailyTokenLimit: 0 },
       // OFFICE_ACTION_RESPONSE and PERSONA_SYNC intentionally excluded.
     },
   },
@@ -234,6 +254,10 @@ export const PLAN_CATALOG: PlanDefinition[] = [
       PATENT_REVIEW: { monthlyQuota: 5, dailyQuota: 3 },
       OFFICE_ACTION_RESPONSE: { monthlyQuota: 2, dailyQuota: 1 },
       WHITESPACE_ANALYSIS: { monthlyQuota: 12, dailyQuota: 4, monthlyTokenLimit: 3_000_000, dailyTokenLimit: 1_000_000 },
+      // Leads, not runs. A single mined field yields several leads, and each one costs a
+      // premium inventive-step call plus a premium brief, so the token ceiling is sized
+      // above Whitespace's - the miner reads full passages, not abstracts.
+      INVENTION_MINER: { monthlyQuota: 20, dailyQuota: 8, monthlyTokenLimit: 4_000_000, dailyTokenLimit: 1_500_000 },
       // PERSONA_SYNC stays an Enterprise differentiator.
     },
   },
@@ -257,6 +281,7 @@ export const PLAN_CATALOG: PlanDefinition[] = [
       PATENT_REVIEW: { monthlyQuota: 40, dailyQuota: 10 },
       OFFICE_ACTION_RESPONSE: { monthlyQuota: 15, dailyQuota: 5 },
       WHITESPACE_ANALYSIS: { monthlyQuota: 120, dailyQuota: 25, monthlyTokenLimit: null, dailyTokenLimit: null },
+      INVENTION_MINER: { monthlyQuota: 200, dailyQuota: 40, monthlyTokenLimit: null, dailyTokenLimit: null },
       PERSONA_SYNC: { monthlyQuota: 20, dailyQuota: 5 },
     },
   },
@@ -349,6 +374,9 @@ export const ALL_TASK_CODES: TaskCode[] = [
   'WS_VALIDATE',
   'WS_REDTEAM',
   'WS_DIMENSIONS',
+  'IM_EXTRACT',
+  'IM_GATE',
+  'IM_BRIEF',
   'LLM8_OA_RESPONSE',
   'FILING_INVENTOR_PARSE',
   'IDEA_BANK_ACCESS',
@@ -382,6 +410,9 @@ export const TASK_TO_FEATURE: Record<TaskCode, FeatureCode> = {
   WS_VALIDATE: 'WHITESPACE_ANALYSIS',
   WS_REDTEAM: 'WHITESPACE_ANALYSIS',
   WS_DIMENSIONS: 'WHITESPACE_ANALYSIS',
+  IM_EXTRACT: 'INVENTION_MINER',
+  IM_GATE: 'INVENTION_MINER',
+  IM_BRIEF: 'INVENTION_MINER',
   // Filing forms accompany a draft — no separate quota for the paperwork.
   FILING_INVENTOR_PARSE: 'PATENT_DRAFTING',
   IDEA_BANK_ACCESS: 'IDEA_BANK',
@@ -415,6 +446,9 @@ export const TASK_LABELS: Record<TaskCode, string> = {
   WS_VALIDATE: 'Whitespace: Validation Mapping',
   WS_REDTEAM: 'Whitespace: Red Team',
   WS_DIMENSIONS: 'Whitespace: Viewpoint Discovery',
+  IM_EXTRACT: 'Invention Miner: Signal Extraction',
+  IM_GATE: 'Invention Miner: Grant-Worthiness Gate',
+  IM_BRIEF: 'Invention Miner: Invention Brief',
   FILING_INVENTOR_PARSE: 'Filing: Inventor Extraction',
   IDEA_BANK_ACCESS: 'Idea Bank Access',
   IDEA_BANK_RESERVE: 'Idea Reservation',

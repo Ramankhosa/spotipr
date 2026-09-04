@@ -69,7 +69,8 @@ interface DashboardData {
   modelPrices: ModelPrice[]
 }
 
-// Service display names
+// Service display names. Allow-list: a ServiceType missing here is invisible in the
+// usage tables, so it must list every member of the enum.
 const SERVICE_LABELS: Record<string, string> = {
   PATENT_DRAFTING: 'Patent Drafting',
   NOVELTY_SEARCH: 'Novelty Search',
@@ -78,9 +79,13 @@ const SERVICE_LABELS: Record<string, string> = {
   IDEA_BANK: 'Idea Bank',
   PERSONA_SYNC: 'Persona Sync',
   PATENT_REVIEW: 'Patent Review',
-  IDEATION: 'Patent Ideation Engine'
+  IDEATION: 'Patent Ideation Engine',
+  OFFICE_ACTION_RESPONSE: 'FER / Office Action Response',
+  WHITESPACE_ANALYSIS: 'Whitespace Studio',
+  INVENTION_MINER: 'Invention Miner'
 }
 
+// Allow-list: a feature missing here cannot have its plan quotas edited from this page.
 const FEATURE_CODES = [
   'PATENT_DRAFTING',
   'PRIOR_ART_SEARCH',
@@ -89,7 +94,10 @@ const FEATURE_CODES = [
   'IDEA_BANK',
   'PERSONA_SYNC',
   'PATENT_REVIEW',
-  'IDEATION'
+  'IDEATION',
+  'OFFICE_ACTION_RESPONSE',
+  'WHITESPACE_ANALYSIS',
+  'INVENTION_MINER'
 ]
 
 export default function ServiceControlPage() {

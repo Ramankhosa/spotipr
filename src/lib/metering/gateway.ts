@@ -765,6 +765,11 @@ export class LLMGateway {
       WS_VALIDATE: 'WHITESPACE_ANALYSIS',
       WS_REDTEAM: 'WHITESPACE_ANALYSIS',
       WS_DIMENSIONS: 'WHITESPACE_ANALYSIS',
+      // Invention Miner. Extraction, gating and briefing all meter against one feature so a
+      // plan grants "N leads" rather than three budgets an attorney would have to balance.
+      IM_EXTRACT: 'INVENTION_MINER',
+      IM_GATE: 'INVENTION_MINER',
+      IM_BRIEF: 'INVENTION_MINER',
       // Filing forms accompany a draft, so inventor extraction meters against the drafting
       // feature rather than introducing a quota an attorney would have to think about.
       FILING_INVENTOR_PARSE: 'PATENT_DRAFTING'

@@ -7,12 +7,60 @@
  * analytics and they are invisible unless written down.
  */
 
-export type WhitespaceRunStage = 'FIELD_MAP' | 'CLUSTER' | 'SIGNALS' | 'DEEP_DIVE' | 'VALIDATE' | 'DIMENSION_MAP'
+export type WhitespaceRunStage =
+  | 'FIELD_MAP'
+  | 'CLUSTER'
+  | 'SIGNALS'
+  | 'DEEP_DIVE'
+  | 'VALIDATE'
+  | 'DIMENSION_MAP'
+  // Invention Miner. HARVEST reads the field's text and indexes what it admits;
+  // ENGINES turns that into candidate leads; GATE tests one lead against the
+  // closest art, inventive step and the statutory exclusions; BRIEF writes the
+  // invention up with its claim set.
+  | 'MINER_HARVEST'
+  | 'MINER_ENGINES'
+  | 'MINER_GATE'
+  | 'MINER_BRIEF'
+
+/** The miner's stages, for the entitlement and kind guards that must not drift. */
+export const MINER_STAGES: readonly WhitespaceRunStage[] = [
+  'MINER_HARVEST',
+  'MINER_ENGINES',
+  'MINER_GATE',
+  'MINER_BRIEF',
+] as const
+
+export function isMinerStage(stage: string): boolean {
+  return (MINER_STAGES as readonly string[]).includes(stage)
+}
 
 export type WhitespaceRunStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
 
-/** FIELD = landscape census pipeline; INVENTION = dimension-map pipeline. */
-export type WhitespaceStudyKind = 'FIELD' | 'INVENTION'
+/**
+ * FIELD = landscape census pipeline; INVENTION = dimension-map pipeline;
+ * MINER = invention-lead pipeline (harvest, engines, gate, brief).
+ *
+ * Read through parseStudyKind, never by comparing to one literal: the old
+ * `kind === 'INVENTION' ? … : 'FIELD'` shape silently downgraded any unknown
+ * kind to a landscape study, which would have created a miner study that
+ * quietly behaved as something else.
+ */
+export type WhitespaceStudyKind = 'FIELD' | 'INVENTION' | 'MINER'
+
+export const WHITESPACE_STUDY_KINDS: readonly WhitespaceStudyKind[] = ['FIELD', 'INVENTION', 'MINER'] as const
+
+/** The kind if it is one we know, else null — callers refuse rather than guess. */
+export function parseStudyKind(value: unknown): WhitespaceStudyKind | null {
+  return typeof value === 'string' && (WHITESPACE_STUDY_KINDS as readonly string[]).includes(value)
+    ? (value as WhitespaceStudyKind)
+    : null
+}
+
+/** Reading a stored row, where an unknown value means old data, not bad input. */
+export function studyKindOf(value: unknown): WhitespaceStudyKind {
+  return parseStudyKind(value) ?? 'FIELD'
+}
 
 export type LiveStepState = 'pending' | 'active' | 'done' | 'skipped' | 'failed'
 

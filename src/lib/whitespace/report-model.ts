@@ -454,12 +454,17 @@ function dedupe(lines: string[]): string[] {
 export function buildWhitespaceReportModel(input: WhitespaceReportInput): WhitespaceReportModel {
   const { study, scope, firm, generatedAt } = input
   const isInvention = study.kind === 'INVENTION'
+  const isMiner = study.kind === 'MINER'
 
   // ---- meta + branding ----------------------------------------------------
   const meta: ReportMeta = {
     studyId: study.id,
     title: study.title || 'Untitled study',
-    kindLabel: isInvention ? 'Invention whitespace study' : 'Field whitespace study',
+    kindLabel: isMiner
+      ? 'Invention mining study'
+      : isInvention
+        ? 'Invention whitespace study'
+        : 'Field whitespace study',
     scopeVersion: study.scopeVersion,
     generatedOn: isoDay(generatedAt),
     preparedBy: input.preparedBy,

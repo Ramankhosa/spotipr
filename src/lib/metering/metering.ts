@@ -222,6 +222,20 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           }
         }
 
+        // SPECIAL CASE: INVENTION_MINER is quoted in leads and briefs, not LLM calls.
+        // One mined field fires an extraction call per patent batch, a gate call per lead
+        // and a brief call per lead, so comparing that call count against a monthlyQuota
+        // that means "N leads" would deny long before the tenant has produced N of anything.
+        // The real control is completion metering: trackServiceUsage records a completion
+        // per lead, and checkServiceQuota enforces the lead quota against that count.
+        if (request.featureCode === 'INVENTION_MINER') {
+          console.log('[Metering] INVENTION_MINER: Bypassing LLM completion quota (leads counted by trackServiceUsage)')
+          return {
+            allowed: true,
+            remaining: { monthly: undefined, daily: undefined }  // undefined = unlimited for LLM calls
+          }
+        }
+
         // First check if tenant is in PENDING_PAYMENT status (self-service signup not yet paid)
         const tenant = await prisma.tenant.findUnique({
           where: { id: request.tenantId },

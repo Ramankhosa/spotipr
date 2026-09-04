@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { appendTrail } from '@/lib/whitespace/service'
-import { emptyWhitespaceScope } from '@/lib/whitespace/types'
+import { emptyWhitespaceScope, parseStudyKind, WHITESPACE_STUDY_KINDS } from '@/lib/whitespace/types'
 import type { Prisma } from '@prisma/client'
 
 export const runtime = 'nodejs'
@@ -54,45 +54,89 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}))
-  const kind = body?.kind === 'INVENTION' ? 'INVENTION' : 'FIELD'
+  // An allowlist, not a ternary. `body.kind === 'INVENTION' ? … : 'FIELD'`
+  // silently created a LANDSCAPE study for any kind it did not recognise, so a
+  // client asking for a miner study would have got something else entirely,
+  // with a 201 and no way to tell.
+  const kind = body?.kind === undefined || body?.kind === null ? 'FIELD' : parseStudyKind(body.kind)
+  if (!kind) {
+    return NextResponse.json(
+      { error: `Unknown study kind. Expected one of: ${WHITESPACE_STUDY_KINDS.join(', ')}.` },
+      { status: 400 }
+    )
+  }
 
-  // Invention studies arrive as a structured brief; it is kept verbatim for
-  // display and recompiles, and flattened into seedText for the compiler.
+  // Invention and miner studies both arrive as a structured brief, kept
+  // verbatim for display and recompiles and flattened into seedText for the
+  // compiler. The fields differ because the questions differ: an invention
+  // study describes ONE invention to place, a miner study describes the FIELD
+  // to mine and, optionally, what the user already cares about inside it.
+  const briefFields: Record<'INVENTION' | 'MINER', Array<{ key: string; limit: number; label: string }>> = {
+    INVENTION: [
+      { key: 'problem', limit: 4000, label: 'PROBLEM' },
+      { key: 'approach', limit: 4000, label: 'APPROACH' },
+      { key: 'constraints', limit: 2000, label: 'CONSTRAINTS' },
+    ],
+    MINER: [
+      { key: 'field', limit: 4000, label: 'FIELD' },
+      { key: 'focusProblems', limit: 2000, label: 'PROBLEMS OF INTEREST' },
+      { key: 'constraints', limit: 2000, label: 'CONSTRAINTS' },
+      { key: 'assigneeOfInterest', limit: 500, label: 'ASSIGNEE OF INTEREST' },
+    ],
+  }
+
   const rawInvention = (body?.invention ?? null) as Record<string, unknown> | null
-  if (kind === 'INVENTION' && rawInvention !== null) {
+  const fields = kind === 'FIELD' ? null : briefFields[kind]
+  if (fields && rawInvention !== null) {
     // A string or array here used to truthiness-pass, persist an all-empty
     // brief, and leave a study that compiles from nothing.
     const shaped = typeof rawInvention === 'object' && !Array.isArray(rawInvention)
     const hasSubstance =
       shaped &&
-      ['problem', 'approach', 'constraints'].some(
-        key => typeof rawInvention[key] === 'string' && (rawInvention[key] as string).trim()
-      )
+      fields.some(field => typeof rawInvention[field.key] === 'string' && (rawInvention[field.key] as string).trim())
     if (!shaped || !hasSubstance) {
       return NextResponse.json(
-        { error: 'The invention brief must carry at least one of problem, approach or constraints as text.' },
+        {
+          error:
+            kind === 'MINER'
+              ? 'Say which field to mine — the brief needs at least the field, and may add the problems you care about.'
+              : 'The invention brief must carry at least one of problem, approach or constraints as text.',
+        },
         { status: 400 }
       )
     }
   }
+  // The miner cannot start from nothing: the field IS the input, where an
+  // invention study can be compiled from a free-text seed instead.
+  if (kind === 'MINER') {
+    const fieldText = typeof rawInvention?.field === 'string' ? rawInvention.field.trim() : ''
+    const seed = typeof body?.seedText === 'string' ? body.seedText.trim() : ''
+    if (!fieldText && !seed) {
+      return NextResponse.json(
+        { error: 'Say which field to mine. A miner study reads a whole field, so it needs one to read.' },
+        { status: 400 }
+      )
+    }
+  }
+
   const invention =
-    kind === 'INVENTION' && rawInvention
-      ? {
-          problem: typeof rawInvention.problem === 'string' ? rawInvention.problem.trim().slice(0, 4000) : '',
-          approach: typeof rawInvention.approach === 'string' ? rawInvention.approach.trim().slice(0, 4000) : '',
-          constraints:
-            typeof rawInvention.constraints === 'string' ? rawInvention.constraints.trim().slice(0, 2000) : '',
-        }
+    fields && rawInvention
+      ? Object.fromEntries(
+          fields.map(field => [
+            field.key,
+            typeof rawInvention[field.key] === 'string'
+              ? (rawInvention[field.key] as string).trim().slice(0, field.limit)
+              : '',
+          ])
+        )
       : null
-  const inventionText = invention
-    ? [
-        invention.problem ? `PROBLEM: ${invention.problem}` : null,
-        invention.approach ? `APPROACH: ${invention.approach}` : null,
-        invention.constraints ? `CONSTRAINTS: ${invention.constraints}` : null,
-      ]
-        .filter(Boolean)
-        .join('\n')
-    : ''
+  const inventionText =
+    invention && fields
+      ? fields
+          .map(field => (invention[field.key] ? `${field.label}: ${invention[field.key]}` : null))
+          .filter(Boolean)
+          .join('\n')
+      : ''
 
   const seedText =
     typeof body?.seedText === 'string' && body.seedText.trim()
@@ -123,7 +167,7 @@ export async function POST(request: NextRequest) {
     study.id,
     'SYSTEM',
     `user:${auth.user.id}`,
-    kind === 'INVENTION' ? 'Invention study created' : 'Study created'
+    kind === 'INVENTION' ? 'Invention study created' : kind === 'MINER' ? 'Mining study created' : 'Study created'
   )
   return NextResponse.json({ study }, { status: 201 })
 }
