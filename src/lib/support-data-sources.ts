@@ -1058,9 +1058,17 @@ function controlsFromNormalizedData(
   const controls = normalizeJurisdictionControls(controlsRoot.jurisdictions?.[selectedJurisdiction])
   const selectionHash = selection?.inputHash || ''
   const controlsStale = !!(controls.selectionInputHash && selectionHash && controls.selectionInputHash !== selectionHash)
+  // Staleness invalidates choices that name specific source ids (exclusions, per-source text
+  // overrides). renderSourcesAsTable is a pure formatting preference with no id dependency, so
+  // it must survive a regenerated evidence pack — otherwise ticking the table checkbox is
+  // silently discarded the next time the selection is refreshed.
+  const survivingControls: DetailedDescriptionJurisdictionInjectionControls =
+    typeof controls.renderSourcesAsTable === 'boolean'
+      ? { renderSourcesAsTable: controls.renderSourcesAsTable }
+      : {}
   return {
     jurisdiction: selectedJurisdiction,
-    controls: controlsStale ? {} : controls,
+    controls: controlsStale ? survivingControls : controls,
     controlsStale,
   }
 }
@@ -1163,16 +1171,6 @@ function sourceMapById(sources: SupportDataSource[]) {
   return new Map(sources.map(source => [source.id, source]))
 }
 
-// Stage 0 stores an extracted table as details.headers + details.rows. Treat that as
-// genuine tabular data (a bare `table` kind counts even if the grid wasn't captured).
-export function isTabularSupportSource(item: SupportDataSource | undefined | null): boolean {
-  if (!item) return false
-  if (item.kind === 'table') return true
-  const details = item.details as Record<string, any> | undefined
-  return Array.isArray(details?.rows) && details!.rows.length > 0 &&
-    Array.isArray(details?.headers) && details!.headers.length > 0
-}
-
 // compactDetails flattens a table to "headers=..; row=..; row=.." and caps at 8 rows, which
 // reads as metadata and silently drops data. When table mode is on we additionally hand the
 // model the grid as literal Markdown so it can copy it verbatim instead of reconstructing it.
@@ -1231,9 +1229,11 @@ function formatGuardrailSupportLine(
 
 /**
  * Whether the Detailed Description should render Stage 0 source data as tables for this
- * jurisdiction. Mirrors the rule inside buildDetailedDescriptionEvidencePromptBlock so the
- * caller can restate the requirement in its final OUTPUT CONTROL instruction, where it is
- * salient enough to beat the base prompt's "express tables in prose" guidance.
+ * jurisdiction. Opt-in only: off unless the attorney ticked the table checkbox, so a draft
+ * never grows tables on its own. Mirrors the rule inside
+ * buildDetailedDescriptionEvidencePromptBlock so the caller can restate the requirement in its
+ * final OUTPUT CONTROL instruction, where it is salient enough to beat the base prompt's
+ * "express tables in prose" guidance.
  */
 export function isDetailedDescriptionSourceTableModeActive(
   normalizedData: unknown,
@@ -1249,15 +1249,7 @@ export function isDetailedDescriptionSourceTableModeActive(
     ? selection
     : buildDeterministicDetailedDescriptionSelection(normalizedData, [])
   const { controls } = controlsFromNormalizedData(normalizedData, options?.jurisdiction, effectiveSelection)
-  if (typeof controls.renderSourcesAsTable === 'boolean') return controls.renderSourcesAsTable
-
-  const byId = sourceMapById(sources)
-  const excluded = new Set(controls.excludedSelectedSourceIds || [])
-  return uniqueBySourceId(effectiveSelection.selectedSources || []).some(item => {
-    if (excluded.has(item.sourceId)) return false
-    const source = byId.get(item.sourceId)
-    return !!source && isDetailedDescriptionPositiveCandidate(source) && isTabularSupportSource(source)
-  })
+  return controls.renderSourcesAsTable === true
 }
 
 export function buildDetailedDescriptionEvidencePromptBlock(
@@ -1300,11 +1292,7 @@ export function buildDetailedDescriptionEvidencePromptBlock(
 
   // Table mode: the attorney's explicit choice wins; otherwise it turns itself on when Stage 0
   // actually extracted a table, so the data need not be pasted again in the DD panel.
-  const renderSourcesAsTable = tablesAllowed && (
-    typeof controls.renderSourcesAsTable === 'boolean'
-      ? controls.renderSourcesAsTable
-      : selected.some(entry => isTabularSupportSource(entry.source))
-  )
+  const renderSourcesAsTable = tablesAllowed && controls.renderSourcesAsTable === true
 
   const guardrails = uniqueBySourceId(effectiveSelection.guardrailSources || [])
     .map(item => ({ selection: item, source: byId.get(item.sourceId) }))
@@ -1487,10 +1475,7 @@ export function buildDetailedDescriptionEvidencePreview(
     coveragePreset,
     ...(controls.customIncludeInstruction ? { customIncludeInstruction: controls.customIncludeInstruction } : {}),
     ...(controls.customIntegrationInstruction ? { customIntegrationInstruction: controls.customIntegrationInstruction } : {}),
-    // Mirror the prompt-side rule so the UI switch shows ON when it auto-enabled.
-    renderSourcesAsTable: typeof controls.renderSourcesAsTable === 'boolean'
-      ? controls.renderSourcesAsTable
-      : selectedSources.some(item => item.included && isTabularSupportSource(byId.get(item.sourceId))),
+    renderSourcesAsTable: controls.renderSourcesAsTable === true,
     includedSelectedCount: selectedSources.filter(item => item.included).length,
     totalSelectedCount: selectedSources.length,
     selectedSources,
@@ -1520,7 +1505,10 @@ export function updateDetailedDescriptionInjectionControls(
   const currentHash = selection?.inputHash || ''
   const existing = normalizeJurisdictionControls(root.jurisdictions?.[selectedJurisdiction])
   const existingStale = !!(existing.selectionInputHash && currentHash && existing.selectionInputHash !== currentHash)
-  const next: DetailedDescriptionJurisdictionInjectionControls = existingStale ? {} : existing
+  // Same rule on write: a stale pack resets id-bound choices but keeps the table preference.
+  const next: DetailedDescriptionJurisdictionInjectionControls = existingStale
+    ? (typeof existing.renderSourcesAsTable === 'boolean' ? { renderSourcesAsTable: existing.renderSourcesAsTable } : {})
+    : existing
   const coveragePreset = normalizeCoveragePreset(update.coveragePreset)
 
   if (coveragePreset) {

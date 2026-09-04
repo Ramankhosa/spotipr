@@ -14,7 +14,6 @@ import PersonaManager, { type PersonaSelection } from './PersonaManager'
 import type { ValidationIssue as UnifiedValidationIssue } from '@/types/validation'
 import { isDrawingSectionKey } from '@/lib/figure-availability'
 import { defaultLanguageForJurisdiction } from '@/lib/jurisdiction-language'
-import { detectTabularData } from '@/lib/supporting-data-detection'
 import { useToast } from '@/components/ui/toast'
 import IncompleteFilingDialog from '@/components/filing/IncompleteFilingDialog'
 import SourceCoveragePanel from './SourceCoveragePanel'
@@ -1982,10 +1981,6 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [ddUserDataToggles, setDdUserDataToggles] = useState<Record<string, boolean>>({})
   // Present tabular user data as tables (pharma/chem supporting data) instead of prose
   const [ddRenderAsTable, setDdRenderAsTable] = useState(false)
-  // Shown when table presentation was switched on by paste-detection rather than by hand.
-  // The ref makes auto-enable fire at most once, so unticking is always respected.
-  const [ddTableAutoEnabled, setDdTableAutoEnabled] = useState(false)
-  const ddTableAutoSuggestedRef = useRef(false)
   const [ddUserDataLoading, setDdUserDataLoading] = useState(false)
   const [ddUserDataSaving, setDdUserDataSaving] = useState(false)
   const [ddUserDataSaved, setDdUserDataSaved] = useState(false) // For save confirmation feedback
@@ -2747,9 +2742,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         if (res.ok) {
           const data = await res.json()
           setDdEvidencePreview(data.evidencePreview || null)
+          // One checkbox, two persisted flags: show it ticked if either side has table mode on.
+          setDdRenderAsTable(
+            data.evidencePreview?.renderSourcesAsTable === true || data.data?.renderAsTable === true
+          )
           if (data.data) {
             setDdUserData(data.data.userData || '')
-            setDdRenderAsTable(data.data.renderAsTable === true)
             // Saved toggles are honored only when at least one filing is explicitly included
             // (a deliberate partial selection from the multi-jurisdiction chips). Legacy or
             // "nothing enabled" maps are treated as unconfigured → include everywhere.
@@ -2862,7 +2860,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       if (res.ok) {
         setDdUserData('')
         setDdUserDataToggles(getDefaultDdToggles())
-        setDdRenderAsTable(false)
+        // Leave the table checkbox alone: it also governs Stage 0 source tables, which
+        // survive deleting the pasted additional data.
       }
     } catch (err) {
       console.error('Failed to delete DD user data:', err)
@@ -2968,7 +2967,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     })
   }, [patchDDEvidenceControls])
 
-  const handleToggleDDSourcesAsTable = useCallback((enabled: boolean) => {
+  // One checkbox governs table rendering for BOTH sources of DD data: the Stage 0 extracted
+  // tables (persisted immediately via PATCH) and any pasted additional data (carried on the
+  // next "Save Additional Data"). Opt-in: nothing becomes a table unless this is ticked.
+  const handleToggleDDTables = useCallback((enabled: boolean) => {
+    setDdRenderAsTable(enabled)
     void patchDDEvidenceControls({ renderSourcesAsTable: enabled })
   }, [patchDDEvidenceControls])
 
@@ -4807,6 +4810,39 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
                     {ddUserDataExpanded && (
                       <div className="px-4 pb-4 border-t border-slate-200 bg-slate-50/60">
+                        {/* Table presentation — one opt-in control for BOTH Stage 0 extracted
+                            tables and pasted additional data. Deliberately outside the data box
+                            and always reachable, so it can be found and changed at any time. */}
+                        <label
+                          className={`mt-4 flex items-start gap-3 rounded-lg border p-4 transition-colors ${
+                            ddRenderAsTable
+                              ? 'border-ai-blue-300 bg-ai-blue-50/60'
+                              : 'border-slate-200 bg-white hover:bg-slate-50'
+                          } ${ddEvidenceSaving ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
+                            checked={ddRenderAsTable}
+                            onChange={(e) => handleToggleDDTables(e.target.checked)}
+                            disabled={ddEvidenceSaving}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-ai-graphite-900">
+                              Present supporting data as tables
+                            </span>
+                            <span className="mt-0.5 block text-xs leading-relaxed text-ai-graphite-500">
+                              Off by default: supporting data is written as prose. Tick this to reproduce
+                              tabular data — from the Stage 0 disclosure and from any additional data below —
+                              as formatted tables in the Detailed Description. Values stay verbatim and
+                              non-limiting; applied only where the jurisdiction permits tables.
+                            </span>
+                            <span className="mt-1 block text-xs font-medium text-ai-blue-700">
+                              Takes effect the next time the Detailed Description is generated.
+                            </span>
+                          </span>
+                        </label>
+
                         <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
@@ -5036,35 +5072,6 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                 )}
                               </div>
 
-                              {/* Present Stage 0 source data as tables */}
-                              <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                                <div className="min-w-0">
-                                  <div className="text-xs font-medium text-slate-800">Present source data as tables</div>
-                                  <div className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
-                                    Data-carrying items above (tables, test results, numeric series) are drafted as formatted
-                                    tables instead of prose. Values stay verbatim and non-limiting. Takes effect the next time
-                                    the Detailed Description is generated.
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  role="switch"
-                                  aria-checked={ddEvidencePreview?.renderSourcesAsTable === true}
-                                  aria-label="Present source data as tables"
-                                  onClick={() => handleToggleDDSourcesAsTable(!(ddEvidencePreview?.renderSourcesAsTable === true))}
-                                  disabled={ddEvidenceSaving}
-                                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                    ddEvidencePreview?.renderSourcesAsTable ? 'bg-ai-blue-600' : 'bg-slate-300'
-                                  }`}
-                                >
-                                  <span
-                                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                                      ddEvidencePreview?.renderSourcesAsTable ? 'translate-x-5' : 'translate-x-0'
-                                    }`}
-                                  />
-                                </button>
-                              </div>
-
                               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <button type="button" onClick={handleSelectAllDDEvidence} disabled={ddEvidenceSaving} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">Select all</button>
@@ -5248,48 +5255,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           rows={6}
                           placeholder="Paste experimental data, measurements, or test observations here (max 50KB)..."
                           value={ddUserData}
-                          onChange={(e) => {
-                            const value = e.target.value
-                            setDdUserData(value)
-                            if (!ddRenderAsTable && !ddTableAutoSuggestedRef.current && detectTabularData(value)) {
-                              ddTableAutoSuggestedRef.current = true
-                              setDdRenderAsTable(true)
-                              setDdTableAutoEnabled(true)
-                            }
-                          }}
+                          onChange={(e) => setDdUserData(e.target.value)}
                           disabled={ddUserDataLoading || ddUserDataSaving}
                         />
-
-                        {/* Table presentation checkbox (pharma/chem supporting data) */}
-                        <label className={`mt-3 flex items-start gap-2.5 ${ddUserData.trim() ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-                          <input
-                            type="checkbox"
-                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
-                            checked={ddRenderAsTable}
-                            onChange={(e) => {
-                              setDdRenderAsTable(e.target.checked)
-                              if (!e.target.checked) setDdTableAutoEnabled(false)
-                            }}
-                            disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
-                          />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium text-ai-graphite-700">Present supporting data as tables</span>
-                            <span className="block text-xs text-ai-graphite-500">
-                              Tabular data (e.g. efficacy, stability, or test results) is reproduced as formatted tables
-                              in the Detailed Description instead of prose. Values are kept verbatim and remain non-limiting.
-                              Applied only where the jurisdiction permits tables.
-                            </span>
-                            <span className="mt-0.5 block text-xs font-medium text-ai-blue-700">
-                              Save, then generate (or regenerate) the Detailed Description — tables appear in the newly
-                              generated draft, not the existing one.
-                            </span>
-                            {ddTableAutoEnabled && (
-                              <span className="mt-1 inline-block rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] text-emerald-700">
-                                Tabular data detected — enabled automatically. Untick to keep prose.
-                              </span>
-                            )}
-                          </span>
-                        </label>
 
                         {/* Injection scope. Presence of saved data means "include it" — there is no
                             separate on/off gate. Single-jurisdiction drafts include it silently;

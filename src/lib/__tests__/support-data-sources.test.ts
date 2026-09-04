@@ -13,6 +13,15 @@ import {
   isDetailedDescriptionSourceTableModeActive,
 } from '@/lib/support-data-sources'
 
+// Controls with the attorney's table checkbox ticked for US.
+const TABLE_MODE_ON = {
+  detailedDescriptionInjectionControls: {
+    schemaVersion: 1,
+    sectionKey: 'detailedDescription',
+    jurisdictions: { US: { selectionInputHash: 'hash-s0', renderSourcesAsTable: true } },
+  },
+}
+
 // A Stage 0 extraction that captured a real table grid (headers + rows).
 function stage0TableData(overrides: Record<string, any> = {}) {
   return {
@@ -347,9 +356,6 @@ describe('support data sources', () => {
     // Explicit false is persisted (tri-state), so it beats the auto-on default
     expect(disabled.jurisdictions?.US?.renderSourcesAsTable).toBe(false)
 
-    // Stage 0 table auto-enables table mode without the attorney touching anything
-    expect(isDetailedDescriptionSourceTableModeActive(stage0TableData(), { jurisdiction: 'US' })).toBe(true)
-
     // Untouched when the update omits the field
     const untouched = updateDetailedDescriptionInjectionControls(
       { ...normalizedData, detailedDescriptionInjectionControls: enabled },
@@ -546,14 +552,20 @@ The software is described as a computer program per se.
 })
 
 describe('Stage 0 tables reach the Detailed Description', () => {
-  test('a table extracted at Stage 0 turns table mode on with no attorney action', () => {
+  test('table mode is opt-in: a Stage 0 table alone does not enable it', () => {
     const data = stage0TableData()
-    expect(isDetailedDescriptionSourceTableModeActive(data, { jurisdiction: 'US' })).toBe(true)
-    expect(buildDetailedDescriptionEvidencePreview(data, 'US').renderSourcesAsTable).toBe(true)
+    expect(isDetailedDescriptionSourceTableModeActive(data, { jurisdiction: 'US' })).toBe(false)
+    expect(buildDetailedDescriptionEvidencePreview(data, 'US').renderSourcesAsTable).toBe(false)
+    expect(buildDetailedDescriptionEvidencePromptBlock(data, { jurisdiction: 'US' }))
+      .not.toContain('VERBATIM SOURCE TABLES')
   })
 
-  test('the extracted grid is handed to the model as literal Markdown to copy', () => {
-    const block = buildDetailedDescriptionEvidencePromptBlock(stage0TableData(), { jurisdiction: 'US' })
+  test('once the checkbox is ticked, the extracted grid is handed over as literal Markdown', () => {
+    const data = stage0TableData(TABLE_MODE_ON)
+    expect(isDetailedDescriptionSourceTableModeActive(data, { jurisdiction: 'US' })).toBe(true)
+    expect(buildDetailedDescriptionEvidencePreview(data, 'US').renderSourcesAsTable).toBe(true)
+
+    const block = buildDetailedDescriptionEvidencePromptBlock(data, { jurisdiction: 'US' })
     expect(block).toContain('BEGIN VERBATIM SOURCE TABLES (COPY THESE EXACTLY)')
     expect(block).toContain('| Batch | Load (mg) | Release 60 min (%) |')
     expect(block).toContain('| --- | --- | --- |')
@@ -561,7 +573,7 @@ describe('Stage 0 tables reach the Detailed Description', () => {
     expect(block).toContain('| B2 | 60 | 74.3 |')
   })
 
-  test('an explicit off from the attorney still wins over the auto default', () => {
+  test('an explicit off is persisted and keeps tables out', () => {
     const off = stage0TableData({
       detailedDescriptionInjectionControls: {
         schemaVersion: 1,
@@ -574,21 +586,32 @@ describe('Stage 0 tables reach the Detailed Description', () => {
       .not.toContain('VERBATIM SOURCE TABLES')
   })
 
-  test('a jurisdiction that forbids tables suppresses table mode', () => {
-    expect(isDetailedDescriptionSourceTableModeActive(stage0TableData(), { jurisdiction: 'US', tablesAllowed: false })).toBe(false)
+  test('the table choice survives a regenerated evidence pack (stale controls)', () => {
+    // The pack is regenerated during generation, changing inputHash. Id-bound choices reset,
+    // but the formatting preference must not be silently discarded.
+    const stale = stage0TableData({
+      detailedDescriptionInjectionControls: {
+        schemaVersion: 1,
+        sectionKey: 'detailedDescription',
+        jurisdictions: {
+          US: {
+            selectionInputHash: 'an-older-hash',
+            renderSourcesAsTable: true,
+            excludedSelectedSourceIds: ['SDS-001'],
+          },
+        },
+      },
+    })
+    expect(isDetailedDescriptionSourceTableModeActive(stale, { jurisdiction: 'US' })).toBe(true)
+    const block = buildDetailedDescriptionEvidencePromptBlock(stale, { jurisdiction: 'US' })
+    expect(block).toContain('VERBATIM SOURCE TABLES')
+    // ...while the stale id-bound exclusion is correctly dropped (the source is back in).
+    expect(block).toContain('| B1 | 45 | 82.1 |')
   })
 
-  test('non-tabular Stage 0 support does not trigger table mode', () => {
-    const prose = {
-      supportDataSources: coerceSupportDataSources([
-        { kind: 'component', label: 'Controller', value: 'Controller 102 receives sensor data.', claimUse: 'core', sectionTargets: ['detailedDescription'] },
-      ]),
-      detailedDescriptionSourceSelection: {
-        schemaVersion: 1, status: 'ready', sectionKey: 'detailedDescription', jurisdiction: 'US', inputHash: 'h',
-        selectedSources: [{ sourceId: 'SDS-001', role: 'component_support', confidence: 'high' }],
-        guardrailSources: [], excludedSources: [], warnings: [],
-      },
-    }
-    expect(isDetailedDescriptionSourceTableModeActive(prose, { jurisdiction: 'US' })).toBe(false)
+  test('a jurisdiction that forbids tables suppresses table mode even when ticked', () => {
+    expect(isDetailedDescriptionSourceTableModeActive(
+      stage0TableData(TABLE_MODE_ON), { jurisdiction: 'US', tablesAllowed: false }
+    )).toBe(false)
   })
 })
