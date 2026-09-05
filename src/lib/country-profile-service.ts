@@ -188,14 +188,36 @@ export async function getDraftingPrompts(countryCode: string, sectionId: string,
   // Profiles may store prompts in the canonical topUp shape or the legacy flat shape
   const jsonPrompt = jsonPromptConfig?.topUp ?? jsonPromptConfig
   if (jsonPrompt?.instruction) {
+    // User instructions are the highest-priority layer and must survive this
+    // fallback. They used to be dropped silently here: the branch never called
+    // getUserInstruction and reported hasUser:false, so per-section instructions
+    // the attorney typed were ignored while the B+T+U panel showed "no user
+    // instruction", which reads as "none was entered".
+    let userInstructionBlock = ''
+    let hasUser = false
+    if (sessionId) {
+      try {
+        const { getUserInstruction, buildUserInstructionBlock } = await import('./user-instruction-service')
+        const userInstr = await getUserInstruction(sessionId, sectionId, countryCode.toUpperCase())
+        if (userInstr) {
+          userInstructionBlock = buildUserInstructionBlock(userInstr)
+          hasUser = true
+        }
+      } catch (error) {
+        console.warn(`[getDraftingPrompts] Failed to load user instruction on JSON fallback for ${countryCode}/${sectionId}:`, error)
+      }
+    }
+
     return {
-      instruction: jsonPrompt.instruction || '',
+      instruction: hasUser
+        ? `${jsonPrompt.instruction}\n\n${userInstructionBlock}`
+        : (jsonPrompt.instruction || ''),
       constraints: jsonPrompt.constraints || [],
       importFiguresDirectly: jsonPrompt.importFiguresDirectly === true,
       debug: {
         hasBase: false,
         hasTopUp: true,
-        hasUser: false,
+        hasUser,
         topUpSource: 'json',
         topUpPreview: jsonPrompt.instruction?.substring(0, 100),
         sectionKey: sectionId,
@@ -203,7 +225,7 @@ export async function getDraftingPrompts(countryCode: string, sectionId: string,
       }
     }
   }
-  
+
   return null
 }
 

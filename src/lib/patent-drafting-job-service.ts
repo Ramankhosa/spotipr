@@ -1127,14 +1127,28 @@ async function runAIReviewAndApplyTextFixes(params: {
     },
   })
 
+  // A review that failed or could not be read must not be treated as "no issues".
+  if (review.json?.success === false) {
+    console.warn(`[PatentDraftingJob] AI review did not complete for ${params.jurisdiction}; skipping automated fixes.`)
+    return { issueCount: 0, appliedFixes: 0, skippedIssues: 0, rejectedFixes: 0, reviewCompleted: false }
+  }
+
   const issues = Array.isArray(review.json?.issues) ? review.json.issues : []
-  const fixableIssues = issues
+  const candidateIssues = issues
     .filter((issue: any) => issue?.sectionKey && issue.sectionKey !== 'general')
     .filter((issue: any) => issue.status !== 'fixed' && issue.status !== 'ignored')
     .filter((issue: any) => !isProtectedAIReviewIssue(issue))
-    .slice(0, Math.max(1, params.maxFixes || 8))
+
+  const fixLimit = Math.max(1, params.maxFixes || 8)
+  const fixableIssues = candidateIssues.slice(0, fixLimit)
+  // Issues past the cap used to vanish without record.
+  const skippedIssues = Math.max(0, candidateIssues.length - fixableIssues.length)
+  if (skippedIssues > 0) {
+    console.warn(`[PatentDraftingJob] ${skippedIssues} review issue(s) exceed the automated fix cap of ${fixLimit} for ${params.jurisdiction} and were left for manual review.`)
+  }
 
   let appliedFixes = 0
+  let rejectedFixes = 0
   for (const issue of fixableIssues) {
     const draft = await getLatestDraftForJurisdiction(params.sessionId, params.jurisdiction)
     const sectionMap = draftToSectionMap(draft)
@@ -1143,22 +1157,46 @@ async function runAIReviewAndApplyTextFixes(params: {
     if (!currentContent || typeof currentContent !== 'string') continue
 
     const relatedContent = Object.fromEntries(Object.entries(sectionMap).filter(([key]) => key !== sectionKey))
-    const fix = await invokeDraftingAction({
-      user: params.user,
-      patentId: params.patentId,
-      body: {
-        action: 'apply_ai_fix',
-        sessionId: params.sessionId,
-        jurisdiction: params.jurisdiction,
-        sectionKey,
-        issue,
-        currentContent,
-        relatedContent,
-      },
-    })
+
+    // apply_ai_fix rejects a fix that damaged the section with 422/FIX_REJECTED,
+    // and invokeDraftingAction throws on every non-2xx — so the rejection arrives
+    // here as a thrown error carrying `status` and `body`, not as a JSON field.
+    // Catching it is what keeps one rejected fix from aborting the whole run.
+    let fix: Awaited<ReturnType<typeof invokeDraftingAction>>
+    try {
+      fix = await invokeDraftingAction({
+        user: params.user,
+        patentId: params.patentId,
+        body: {
+          action: 'apply_ai_fix',
+          sessionId: params.sessionId,
+          jurisdiction: params.jurisdiction,
+          sectionKey,
+          issue,
+          currentContent,
+          relatedContent,
+        },
+      })
+    } catch (error: any) {
+      if (error?.status === 422 && error?.body?.code === 'FIX_REJECTED') {
+        rejectedFixes += 1
+        console.warn(`[PatentDraftingJob] Rejected AI fix for "${sectionKey}" (${params.jurisdiction}):`, error.body?.problems)
+        continue
+      }
+      throw error
+    }
 
     const fixedContent = fix.json?.fixedContent
     if (typeof fixedContent !== 'string' || !fixedContent.trim()) continue
+
+    // Even a fix that passed may carry warning-level problems; do not apply those
+    // unattended, because there is no reviewer in this path to weigh them.
+    const warnings = Array.isArray(fix.json?.validation?.problems) ? fix.json.validation.problems : []
+    if (warnings.length > 0) {
+      rejectedFixes += 1
+      console.warn(`[PatentDraftingJob] Skipped AI fix for "${sectionKey}" (${params.jurisdiction}) — unattended runs do not apply fixes with warnings:`, warnings)
+      continue
+    }
 
     await setActiveDraftingJurisdiction(params.sessionId, params.jurisdiction)
     await invokeDraftingAction({
@@ -1185,7 +1223,7 @@ async function runAIReviewAndApplyTextFixes(params: {
     })
   }
 
-  return { issueCount: issues.length, appliedFixes }
+  return { issueCount: issues.length, appliedFixes, skippedIssues, rejectedFixes, reviewCompleted: true }
 }
 
 async function ensureSession(job: any, user: any, payload: PatentDraftingAutomationPayload) {

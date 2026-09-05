@@ -11,7 +11,7 @@ import { createOpenAICompatibleCompletion } from './streaming'
 
 export class DeepSeekProvider implements LLMProvider {
   name = 'deepseek'
-  supportedModels = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
+  supportedModels = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-chat', 'deepseek-reasoner']
 
   private config: ProviderConfig
   private client: any
@@ -130,6 +130,7 @@ export class DeepSeekProvider implements LLMProvider {
     const limits: Record<string, { input: number; output: number }> = {
       'deepseek-v4-pro': { input: 1000000, output: 65536 },
       'deepseek-v4-flash': { input: 1000000, output: 65536 },
+      'deepseek-v4-flash-vision-exp': { input: 1000000, output: 65536 },
       'deepseek-chat': { input: 64000, output: 8192 },
       'deepseek-reasoner': { input: 64000, output: 8192 }
     }
@@ -141,6 +142,7 @@ export class DeepSeekProvider implements LLMProvider {
     const costs: Record<string, { input: number; output: number }> = {
       'deepseek-v4-pro': { input: 0.000000435, output: 0.00000087 },   // $0.435/$0.87 per M
       'deepseek-v4-flash': { input: 0.00000009, output: 0.00000018 },  // $0.09/$0.18 per M
+      'deepseek-v4-flash-vision-exp': { input: 0.00000022, output: 0.00000066 }, // $0.22/$0.66 per M (off-peak)
       'deepseek-chat': { input: 0.00000014, output: 0.00000028 },
       'deepseek-reasoner': { input: 0.00000055, output: 0.00000219 }
     }

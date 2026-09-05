@@ -91,15 +91,77 @@ Here is the claim set:
     expect(claims[1]).toMatchObject({ number: 2, type: 'dependent', dependsOn: 1 })
   })
 
-  test('keeps text-only recovery conservative for later claims', () => {
+  test('classifies a second independent claim from its own text, not its number', () => {
     const claims = parseGeneratedClaimsFromLLMOutput(`
 1. A device comprising a sensor.
 
 2. A method comprising receiving a sensor signal.
 `)
 
+    // Claim 2 opens "A method comprising…" and references no earlier claim, so it
+    // is independent. Defaulting every claim after the first to 'dependent' used
+    // to file it under claim 1, and getIndependentClaims — which trusts the stored
+    // type and never reclassifies — then hid it from the UDB anchor, leaving the
+    // second statutory category with no written-description support.
     expect(claims[0]).toMatchObject({ number: 1, type: 'independent' })
-    expect(claims[1]).toMatchObject({ number: 2, type: 'dependent' })
+    expect(claims[1]).toMatchObject({ number: 2, type: 'independent' })
+    expect(claims[1].dependsOn).toBeUndefined()
+  })
+
+  test('reads EP-style dependent claims that open with an article or no article', () => {
+    // "A method according to claim 1" is the ordinary EP/IN/PCT dependent form.
+    // A "The/Said"-only dependency test filed every one of these as independent.
+    const claims = parseGeneratedClaimsFromLLMOutput(`
+1. A method of drying grain, comprising heating a chamber.
+
+2. A method according to claim 1, wherein the chamber is vented.
+
+3. Apparatus as claimed in claim 1, further comprising a fan.
+
+4. The method according to any one of claims 1 to 2, wherein heating is solar.
+
+5. Apparatus for drying grain, comprising a fan and a chamber.
+`)
+
+    expect(claims[1]).toMatchObject({ number: 2, type: 'dependent', dependsOn: 1 })
+    expect(claims[2]).toMatchObject({ number: 3, type: 'dependent', dependsOn: 1 })
+    expect(claims[3]).toMatchObject({ number: 4, type: 'dependent', dependsOn: 1 })
+    // No article and no parent reference: independent by definition.
+    expect(claims[4]).toMatchObject({ number: 5, type: 'independent' })
+  })
+
+  test('category comes from the earliest noun in the preamble, not from body vocabulary', () => {
+    const claims = parseGeneratedClaimsFromLLMOutput(`
+1. A system for performing a method of sorting, comprising a processor.
+
+2. The system of claim 1, wherein the processor is configured to process the signal.
+
+3. A method of manufacturing a device, comprising moulding a housing.
+
+4. A device for performing a method, comprising a lever.
+`)
+
+    expect(claims[0].category).toBe('system')
+    // A dependent claim takes its category from its own preamble noun; the verb
+    // "process" in its body used to make it a method.
+    expect(claims[1].category).toBe('system')
+    expect(claims[2].category).toBe('method')
+    expect(claims[3].category).toBe('apparatus')
+  })
+
+  test('still reads a dependent claim from its opening reference', () => {
+    const claims = parseGeneratedClaimsFromLLMOutput(`
+1. A device comprising a sensor.
+
+2. The device of claim 1, wherein the sensor is a thermistor.
+
+3. A method of operating the device of claim 1, comprising sampling the sensor.
+`)
+
+    expect(claims[0]).toMatchObject({ number: 1, type: 'independent' })
+    expect(claims[1]).toMatchObject({ number: 2, type: 'dependent', dependsOn: 1 })
+    // Opens "A method…", so it is independent even though it mentions claim 1.
+    expect(claims[2]).toMatchObject({ number: 3, type: 'independent' })
   })
 
   test('escapes newlines inside JSON strings', () => {

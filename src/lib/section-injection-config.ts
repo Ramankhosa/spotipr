@@ -812,13 +812,36 @@ export function filterDetailedDescriptionConstraints(
   sectionKey: string,
   constraints: string[] | null | undefined
 ): string[] {
-  const list = Array.isArray(constraints) ? constraints.filter(Boolean) : []
-  if (!isDetailedDescriptionKey(sectionKey)) return list
+  return partitionDetailedDescriptionConstraints(sectionKey, constraints).kept
+}
 
-  return list.filter(constraint => {
+/**
+ * Same filter, but returns what was removed as well.
+ *
+ * Admins author these constraints in Super Admin and used to get no signal at
+ * all that one had been dropped — a jurisdiction constraint such as "Describe the
+ * best mode contemplated by the inventor" was saved, silently deleted here, and
+ * never reached the model. Callers should record `removed` on the debug trail so
+ * the drop is visible rather than invisible.
+ */
+export function partitionDetailedDescriptionConstraints(
+  sectionKey: string,
+  constraints: string[] | null | undefined
+): { kept: string[]; removed: string[] } {
+  const list = Array.isArray(constraints) ? constraints.filter(Boolean) : []
+  if (!isDetailedDescriptionKey(sectionKey)) return { kept: list, removed: [] }
+
+  const kept: string[] = []
+  const removed: string[] = []
+  for (const constraint of list) {
     const text = String(constraint || '')
-    return !DETAILED_DESCRIPTION_UNSAFE_CONSTRAINTS.some(pattern => pattern.test(text))
-  })
+    if (DETAILED_DESCRIPTION_UNSAFE_CONSTRAINTS.some(pattern => pattern.test(text))) {
+      removed.push(text)
+    } else {
+      kept.push(text)
+    }
+  }
+  return { kept, removed }
 }
 
 export const DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK = `
@@ -990,12 +1013,45 @@ function toScopeValues(value: unknown): string[] {
   return []
 }
 
+/**
+ * Crude English stem, enough to make singular/plural and the common verb endings
+ * compare equal.
+ *
+ * Without this, the matcher was exact-substring only, and its failure mode was
+ * silent deletion of real components: a component named "Temperature Sensors"
+ * against a claim reciting "a temperature sensor" scored one token out of two,
+ * missed the two-token threshold, and was dropped from the Detailed Description —
+ * taking its reference numeral with it. Plurals are not a scope decision.
+ */
+function scopeStem(token: string): string {
+  let stem = token
+  if (stem.length > 4 && stem.endsWith('ies')) return `${stem.slice(0, -3)}y`
+  if (stem.length > 4 && (stem.endsWith('ses') || stem.endsWith('xes') || stem.endsWith('zes') || stem.endsWith('ches') || stem.endsWith('shes'))) {
+    return stem.slice(0, -2)
+  }
+  if (stem.length > 3 && stem.endsWith('s') && !stem.endsWith('ss')) stem = stem.slice(0, -1)
+  if (stem.length > 5 && stem.endsWith('ing')) stem = stem.slice(0, -3)
+  else if (stem.length > 4 && stem.endsWith('ed')) stem = stem.slice(0, -2)
+  return stem
+}
+
 function distinctiveScopeTokens(value: unknown) {
   return uniqueStrings(
     normalizeScopeText(value)
       .split(' ')
       .filter(token => token.length > 2 && !/^\d+$/.test(token) && !SCOPE_STOPWORDS.has(token))
   )
+}
+
+/** Stemmed token set for a whole block of scope text, built once per comparison. */
+function scopeStemSet(paddedScopeText: string): Set<string> {
+  const set = new Set<string>()
+  paddedScopeText.split(' ').forEach(token => {
+    if (!token) return
+    set.add(token)
+    set.add(scopeStem(token))
+  })
+  return set
 }
 
 function scopeContainsCandidate(paddedScopeText: string, candidate: unknown): boolean {
@@ -1010,8 +1066,14 @@ function scopeContainsCandidate(paddedScopeText: string, candidate: unknown): bo
 
   const tokens = distinctiveScopeTokens(candidate)
   if (!tokens.length) return false
-  const hits = tokens.filter(token => paddedScopeText.includes(` ${token} `)).length
-  return tokens.length === 1 ? hits === 1 : hits >= Math.min(2, tokens.length)
+
+  const scopeTokens = scopeStemSet(paddedScopeText)
+  const hits = tokens.filter(token => scopeTokens.has(token) || scopeTokens.has(scopeStem(token))).length
+
+  // One- and two-token names need a single hit (with stemming, a plural mismatch
+  // no longer costs the hit). Longer names need two, so "Power Supply Unit" does
+  // not match a scope text that merely says "power" somewhere.
+  return hits >= Math.min(2, Math.ceil(tokens.length / 2))
 }
 
 function formatReferenceLabel(label: unknown): string {
@@ -1090,13 +1152,25 @@ export function filterComponentsByInventionScope(
   if (!list.length) return []
 
   const scopeText = buildDetailedDescriptionScopeText(normalizedData, idea)
-  if (!scopeText) return []
+  // With no scope text there is nothing to test against, and dropping every
+  // component is the worst possible answer: it strips the entire reference-numeral
+  // set out of the Detailed Description. Keep what the user actually entered.
+  if (!scopeText) return list
 
-  return list.filter(component => {
+  const kept = list.filter(component => {
     const name = componentName(component)
     if (!name) return false
+    // Match on the component's description too, not just its name — a component
+    // named for its role often shares no words with the claim wording that
+    // describes what it does.
     return scopeContainsCandidate(scopeText, name)
+      || scopeContainsCandidate(scopeText, (component as any)?.description)
   })
+
+  // Never let the filter empty the list outright. If nothing matched, the scope
+  // text is unrepresentative rather than the components being out of scope, and
+  // an empty allowed list makes every reference label in the section illegal.
+  return kept.length ? kept : list
 }
 
 function isFigureInInventionScope(
@@ -1119,9 +1193,14 @@ function isFigureInInventionScope(
   const tokens = distinctiveScopeTokens(figureText)
     .filter(token => !GENERIC_FIGURE_TOKENS.has(token))
 
+  // No distinctive tokens means the figure title is entirely generic ("FIG. 2 is a
+  // side view"), which says nothing either way — keep it. The component path makes
+  // the same call now, so the two halves of this guard no longer bias in opposite
+  // directions.
   if (!tokens.length) return true
-  const hits = tokens.filter(token => scopeText.includes(` ${token} `)).length
-  return hits >= Math.min(2, tokens.length)
+  const scopeTokens = scopeStemSet(scopeText)
+  const hits = tokens.filter(token => scopeTokens.has(token) || scopeTokens.has(scopeStem(token))).length
+  return hits > 0
 }
 
 export function filterFiguresByInventionScope(

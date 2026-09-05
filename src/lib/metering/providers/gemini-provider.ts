@@ -49,10 +49,18 @@ export class GeminiProvider implements LLMProvider {
     'gemini-1.5-flash',
     'gemini-1.5-flash-002',
     // Latest Gemini families (2026)
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
     'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
     'gemini-3.1-pro-preview',
     'gemini-3.1-flash-lite',
     'gemini-3-flash-preview',
+    // Image Generation Models (Nano Banana family)
+    'gemini-3-pro-image',
+    'gemini-3.1-flash-image',
+    'gemini-3.1-flash-lite-image',
     // Legacy Image Generation Models (for backwards compatibility)
     'gemini-3.0-nano-banana',
     'gemini-3-pro-preview',
@@ -374,14 +382,22 @@ export class GeminiProvider implements LLMProvider {
       'gemini-1.5-flash': { input: 1048576, output: 8192 }, // legacy config
       'gemini-1.5-flash-002': { input: 1048576, output: 8192 },
       // Latest Gemini families (2026)
+      'gemini-3.8-flash': { input: 1048576, output: 65536 },
+      'gemini-3.7-flash': { input: 1048576, output: 65536 },
+      'gemini-3.6-flash': { input: 1048576, output: 65536 },
       'gemini-3.5-flash': { input: 1048576, output: 65536 },
+      'gemini-3.5-flash-lite': { input: 1048576, output: 65536 },
       'gemini-3.1-pro-preview': { input: 2097152, output: 65536 },
       'gemini-3.1-flash-lite': { input: 1048576, output: 65536 },
       'gemini-3-flash-preview': { input: 1048576, output: 65536 },
       // Legacy image generation models (backwards compatibility)
       'gemini-3.0-nano-banana': { input: 128000, output: 8192 },
       'gemini-3-pro-preview': { input: 2097152, output: 16384 },
-      'gemini-3-pro-image-preview': { input: 128000, output: 8192 }
+      'gemini-3-pro-image-preview': { input: 128000, output: 8192 },
+      // Image generation models (Nano Banana family)
+      'gemini-3-pro-image': { input: 128000, output: 8192 },
+      'gemini-3.1-flash-image': { input: 128000, output: 8192 },
+      'gemini-3.1-flash-lite-image': { input: 128000, output: 8192 }
     }
 
     return limits[normalized] || { input: 2097152, output: 16384 }
@@ -408,14 +424,22 @@ export class GeminiProvider implements LLMProvider {
       'gemini-1.5-flash': { input: 0.0000001, output: 0.0000004 },          // $0.10/$0.40 per M (legacy)
       'gemini-1.5-flash-002': { input: 0.0000001, output: 0.0000004 },
       // Latest Gemini families (2026)
+      'gemini-3.8-flash': { input: 0.00000075, output: 0.00000375 },        // $0.75/$3.75 per M (promo through 2026-12-31)
+      'gemini-3.7-flash': { input: 0.00000075, output: 0.00000375 },        // $0.75/$3.75 per M (promo through 2026-12-31)
+      'gemini-3.6-flash': { input: 0.00000075, output: 0.00000375 },        // $0.75/$3.75 per M (promo through 2026-12-31)
       'gemini-3.5-flash': { input: 0.0000015, output: 0.000009 },           // $1.50/$9.00 per M
+      'gemini-3.5-flash-lite': { input: 0.0000003, output: 0.0000025 },     // $0.30/$2.50 per M
       'gemini-3.1-pro-preview': { input: 0.000002, output: 0.000012 },      // $2.00/$12.00 per M
       'gemini-3.1-flash-lite': { input: 0.00000025, output: 0.0000015 },    // $0.25/$1.50 per M
       'gemini-3-flash-preview': { input: 0.0000005, output: 0.000003 },     // $0.50/$3.00 per M
       // Legacy image generation models (backwards compatibility)
       'gemini-3.0-nano-banana': { input: 0.000001, output: 0.000004 },      // $1.00/$4.00 per M
       'gemini-3-pro-preview': { input: 0.00000125, output: 0.000005 },      // Placeholder - update if pricing differs
-      'gemini-3-pro-image-preview': { input: 0.000001, output: 0.000004 }   // $1.00/$4.00 per M
+      'gemini-3-pro-image-preview': { input: 0.000001, output: 0.000004 },  // $1.00/$4.00 per M
+      // Image generation models (Nano Banana family) - output is image tokens
+      'gemini-3-pro-image': { input: 0.000002, output: 0.00012 },           // $2.00/$120.00 per M
+      'gemini-3.1-flash-image': { input: 0.0000005, output: 0.00006 },      // $0.50/$60.00 per M
+      'gemini-3.1-flash-lite-image': { input: 0.00000025, output: 0.00003 } // $0.25/$30.00 per M
     }
     
     return costs[normalized] || { input: 0.00000125, output: 0.000005 }

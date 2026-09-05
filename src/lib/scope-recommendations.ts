@@ -358,12 +358,32 @@ export function sourceComponentForScopeElement(
     || componentByLabel.get(scopeElementKey(element.id))
 }
 
+/**
+ * Coerce one recommendation's selections.
+ *
+ * The fallbacks matter more than they look. They used to be 'none' /
+ * 'do_not_number' / 'do_not_show', so a scope element the model returned with a
+ * real label but a missing or malformed `recommended` object was silently placed
+ * on the "DO NOT PROMOTE INTO CLAIMS" list in the claim prompt AND dropped from
+ * the Component Planner — a genuine inventor-stated feature excluded from the
+ * claims because one JSON sub-object came back wrong.
+ *
+ * An explicit exclusion from the model is still honoured; only the ABSENCE of a
+ * usable value now defaults permissively, so a parsing accident cannot narrow the
+ * claim set. The user's own selections always override either way.
+ */
 function normalizeSelection(value: unknown): ScopeUseSelection {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+
+  // The only way to exclude an element is to say so with a valid enum value.
+  // A missing field, a missing object, or a value the model misspelled
+  // ("claim1" for "claim_1") all fall to the permissive reading — a parsing
+  // accident must never narrow the claim set or drop a component from the
+  // planner. The user's own selections override these either way.
   return {
-    claim: pickEnum(record.claim, CLAIM_VALUES, 'none'),
-    numbering: pickEnum(record.numbering, NUMBERING_VALUES, 'do_not_number'),
-    figures: pickEnum(record.figures, FIGURE_VALUES, 'do_not_show'),
+    claim: pickEnum(record.claim, CLAIM_VALUES, 'dependent_claim'),
+    numbering: pickEnum(record.numbering, NUMBERING_VALUES, 'number'),
+    figures: pickEnum(record.figures, FIGURE_VALUES, 'optional'),
     description: pickEnum(record.description, DESCRIPTION_VALUES, 'optional'),
   }
 }

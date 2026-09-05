@@ -7,7 +7,7 @@ export const maxDuration = 300; // 5 minutes - matches novelty-search stage rout
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import { DraftingService, deriveNumberingStyle } from '@/lib/drafting-service';
-import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
+import { DRAFTING_CLAIMS_TEMPERATURE, MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import { migrateNormalizedData, type SourceInputMeta } from '@/lib/normalized-data';
 import { IdeaBankService } from '@/lib/idea-bank-service';
 import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from '@/lib/idea-bank-funnel';
@@ -5415,6 +5415,10 @@ async function handleGenerateClaims(
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
       parameters: {
+        // Claims are the legally operative text. Without an explicit temperature
+        // every provider defaults to 0.7, so regenerating a claim set produced
+        // materially different scope each time.
+        temperature: DRAFTING_CLAIMS_TEMPERATURE,
         // The prompt opens with a large static per-jurisdiction prefix; keying the cache
         // by jurisdiction routes same-prefix requests to the same shard so prefix caching
         // can engage on regenerations. Non-OpenAI providers ignore both parameters.
@@ -6226,6 +6230,9 @@ Return ONLY valid JSON:
     prompt,
     idempotencyKey: crypto.randomUUID(),
     inputTokens: Math.ceil(prompt.length / 4),
+    // Refinement narrows claims against cited art; the provider default of 0.7
+    // made the same references produce different amendments run to run.
+    parameters: { temperature: DRAFTING_CLAIMS_TEMPERATURE },
     metadata: {
       patentId,
       sessionId,
@@ -6563,6 +6570,8 @@ Preserve all HTML tags and formatting exactly as in the input.`
       prompt,
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
+      // Inserting reference numerals is a mechanical edit to existing claim text.
+      parameters: { temperature: 0 },
       metadata: { patentId, sessionId, purpose: 'add_component_numbers_to_claims', numberingStyle, patentTypePrimary }
     })
 
@@ -9655,8 +9664,23 @@ CRITICAL: Do NOT suggest sketches that are already covered above.
 `
   }
 
-  return `You are a patent illustration expert operating under STRICT patent-drafting conventions.
+  // Source fidelity reaches the figure stage too. source-fidelity.ts has always
+  // defined a 'figures' rule set ("Depict only the structure, components, and
+  // flows the inventor stated") and its module doc claims every later stage
+  // receives it, but nothing ever passed 'figures' — so in PRESERVE mode the
+  // figure planner could still add inferred architecture and standard blocks,
+  // which then fed the Detailed Description as auxiliary context.
+  const figureFidelityMode = resolveSourceFidelityMode(idea)
+  const figureFidelityBlock = buildSourceFidelityPromptBlock(figureFidelityMode, 'figures')
+  const figureTerminologyBlock = buildInventorTerminologyBlock(figureFidelityMode, components.length ? components : idea?.components)
 
+  return `You are a patent illustration expert operating under STRICT patent-drafting conventions.
+${figureFidelityBlock ? `
+═══════════════════════════════════════════════════════════════════════════════
+SOURCE FIDELITY (USER-SELECTED — CRITICAL)
+═══════════════════════════════════════════════════════════════════════════════
+${figureFidelityBlock}
+${figureTerminologyBlock ? `\n${figureTerminologyBlock}\n` : ''}` : ''}
 ═══════════════════════════════════════════════════════════════════════════════
 STRICT PATENT-DRAFTING CONSTRAINTS (NO EXCEPTIONS)
 ═══════════════════════════════════════════════════════════════════════════════
@@ -13092,6 +13116,7 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     llmMeta: result.llmMeta,
     warnings: result.warnings, // Context warnings (prior art, figures, components missing)
     failedSections: result.failedSections, // Sections that returned no content (no placeholder substituted)
+    guardrailWarnings: result.guardrailWarnings, // Rule violations that were allowed through, not silently swallowed
     personaStyleApplied: result.personaStyleApplied || false,
     personaProvenance: result.personaProvenance || {},
     personaWarnings: result.personaWarnings || []
@@ -14160,7 +14185,10 @@ async function handleTranslateToJurisdiction(
     return NextResponse.json({ error: 'Reference draft not found' }, { status: 404 })
   }
   const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
-  const finalClaimsText = normalizedData.claimsFinal || normalizedData.claimsProvisional || normalizedData.claims || referenceDraft.claims || ''
+  // Resolve through the snapshot so the HTML comes from the same generation as
+  // the structured claims. A bare field chain here put claimsProvisional — the
+  // OLDEST revision — ahead of the working claims.
+  const finalClaimsText = getAuthoritativeClaims(normalizedData).html || referenceDraft.claims || ''
 
   // Resolve target language - from request, then the session's language config
   // (common language or per-jurisdiction entry). If it is still undefined,
@@ -14663,6 +14691,19 @@ async function handleRunAIReview(
     requestHeaders
   )
 
+  // A review that did not happen — the model call failed, or its response could
+  // not be read — is returned to the caller as such and goes no further. It used
+  // to be persisted as a review row, stamped on the session as the last review,
+  // and charged against the PATENT_REVIEW quota, all with an "85, zero issues"
+  // summary that read as a clean pass.
+  if (reviewResult.success === false) {
+    console.warn(`[RunAIReview] Review did not complete for ${sessionId}/${code}: ${reviewResult.error || 'unknown error'}`)
+    return NextResponse.json({
+      reviewId: null,
+      ...reviewResult
+    })
+  }
+
   // Get the latest draft ID for linking
   const latestDraft = session.annexureDrafts.find(
     (d: any) => (d.jurisdiction || '').toUpperCase() === code
@@ -14739,8 +14780,19 @@ interface FixValidationResult {
 }
 
 /**
- * Lightweight validation - only catches critical issues that would break the draft
- * Keeps checks minimal to avoid overwhelming users with warnings
+ * Verify an AI fix did not damage the section.
+ *
+ * This used to sit under the same "verify the fix didn't break anything" comment
+ * while checking exactly one thing: that the output was longer than ten
+ * characters. It computed `changeRatio` and threw it away. A fix could replace a
+ * 900-word Detailed Description with two sentences, strip every reference
+ * numeral, or drop every figure reference, and nothing noticed — and in the
+ * unattended automation path there is no human between the model's self-critique
+ * and the saved specification.
+ *
+ * The checks below are deliberately about DAMAGE, not style: each one compares
+ * the fixed text against what the original already contained, so a fix that adds
+ * or rewords freely still passes.
  */
 async function validateFixedContent(
   originalContent: string,
@@ -14755,14 +14807,74 @@ async function validateFixedContent(
   const fixedWords = fixedContent.trim().split(/\s+/).filter(w => w.length > 0).length
   const changeRatio = originalWords > 0 ? Math.abs(fixedWords - originalWords) / originalWords : 0
 
-  // Only check for critical issues that would truly break the draft
-
-  // 1. Empty content - this is a real problem that needs attention
+  // 1. Empty content
   if (!fixedContent || fixedContent.trim().length < 10) {
     problems.push({
       type: 'error',
       code: 'EMPTY_CONTENT',
-      message: 'Fix resulted in empty content. Please try again.'
+      message: 'The fix produced empty content. Re-run the fix or edit the section manually.'
+    })
+    // Nothing else is meaningful once the content is gone.
+    return {
+      hasProblems: true,
+      problems,
+      metrics: { originalWordCount: originalWords, fixedWordCount: fixedWords, changeRatio }
+    }
+  }
+
+  // 2. Catastrophic shrink. A fix addresses one issue; it does not delete the
+  //    section. Anything under 40% of the original length is a rewrite, not a fix.
+  if (originalWords >= 60 && fixedWords < originalWords * 0.4) {
+    problems.push({
+      type: 'error',
+      code: 'CONTENT_LOST',
+      message: `The fix cut this section from ${originalWords} words to ${fixedWords}. Review it before keeping the change.`
+    })
+  }
+
+  // 3. Reference numerals that were in the original and are now gone. These carry
+  //    the written-description link between the claims and the drawings.
+  const labelPattern = /\((S?\d+|[a-z])\)/gi
+  const labelsIn = (text: string) => new Set(
+    Array.from(text.matchAll(labelPattern)).map(m => String(m[1]).toUpperCase())
+  )
+  const originalLabels = labelsIn(originalContent)
+  const fixedLabels = labelsIn(fixedContent)
+  const droppedLabels = Array.from(originalLabels).filter(label => !fixedLabels.has(label))
+  if (originalLabels.size > 0 && droppedLabels.length > 0) {
+    // Removing one or two labels is often the fix itself ("remove the undeclared
+    // numeral (300)"), so that is a warning. Losing a large share of them is
+    // damage: three or more gone AND at least half of what was there.
+    const wholesale = droppedLabels.length >= 3 && droppedLabels.length * 2 >= originalLabels.size
+    problems.push({
+      type: wholesale ? 'error' : 'warning',
+      code: 'REFERENCE_LABELS_DROPPED',
+      message: `The fix removed ${droppedLabels.length} of ${originalLabels.size} reference label(s) that were in the original: ${droppedLabels.slice(0, 8).join(', ')}${droppedLabels.length > 8 ? '…' : ''}.`
+    })
+  }
+
+  // 4. Figure references that were in the original and are now gone.
+  const figurePattern = /\b(?:FIG|FIGS|FIGURE|FIGURES)\b\.?\s*0*(\d+)/gi
+  const figuresIn = (text: string) => new Set(
+    Array.from(text.matchAll(figurePattern)).map(m => String(Number(m[1])))
+  )
+  const originalFigures = figuresIn(originalContent)
+  const fixedFigures = figuresIn(fixedContent)
+  const droppedFigures = Array.from(originalFigures).filter(fig => !fixedFigures.has(fig))
+  if (originalFigures.size > 0 && droppedFigures.length > 0 && !isDrawingSectionKey(sectionKey)) {
+    problems.push({
+      type: 'warning',
+      code: 'FIGURE_REFERENCES_DROPPED',
+      message: `The fix removed reference(s) to FIG. ${droppedFigures.slice(0, 8).join(', FIG. ')}.`
+    })
+  }
+
+  // 5. The fix left a placeholder or a note to the reader instead of content.
+  if (/\b(TODO|TBD|\[insert|placeholder|lorem ipsum|as an AI|I cannot|I'm sorry)\b/i.test(fixedContent)) {
+    problems.push({
+      type: 'error',
+      code: 'PLACEHOLDER_TEXT',
+      message: 'The fix contains placeholder or assistant text rather than draft content.'
     })
   }
 
@@ -14954,9 +15066,22 @@ async function handleApplyAIFix(
     normalizedIssue
   )
 
-  // If fix validation found critical issues, warn the user
+  // A fix that damaged the section is refused outright rather than saved with a
+  // console warning. Warnings still pass through so the attorney can judge them,
+  // but an error-level problem means the fix destroyed content that was there.
+  const fixErrors = fixValidation.problems.filter(problem => problem.type === 'error')
   if (fixValidation.hasProblems) {
     console.warn(`[ApplyAIFix] Fix validation found problems for ${sectionKey}:`, fixValidation.problems)
+  }
+  if (fixErrors.length > 0) {
+    return NextResponse.json({
+      error: 'The AI fix was rejected because it would have damaged this section.',
+      code: 'FIX_REJECTED',
+      sectionKey,
+      problems: fixErrors,
+      validation: fixValidation,
+      metrics: fixValidation.metrics
+    }, { status: 422 })
   }
 
   // Compute diff data for micro-versioning

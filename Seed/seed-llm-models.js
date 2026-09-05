@@ -31,7 +31,45 @@ async function main() {
 
   const models = [
     // === GOOGLE MODELS ===
-    // Latest Gemini families (2026): 3.5 Flash + 3.1 Pro/Flash-Lite + 3 Flash
+    // Latest Gemini families (2026): 3.8/3.7/3.6/3.5 Flash + 3.1 Pro + 3.5/3.1 Flash-Lite.
+    // The 3.6+ Flash models share a promotional $0.75/$3.75 rate through 2026-12-31;
+    // it rises to $1.50/$7.50 on 2027-01-01.
+    {
+      code: 'gemini-3.8-flash',
+      displayName: 'Gemini 3.8 Flash',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 75,     // $0.75 (promo through 2026-12-31)
+      outputCostPer1M: 375,   // $3.75 (incl. thinking tokens)
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.7-flash',
+      displayName: 'Gemini 3.7 Flash',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 75,     // $0.75 (promo through 2026-12-31)
+      outputCostPer1M: 375,   // $3.75
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.6-flash',
+      displayName: 'Gemini 3.6 Flash',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 75,     // $0.75 (promo through 2026-12-31)
+      outputCostPer1M: 375,   // $3.75
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'gemini-3.5-flash',
       displayName: 'Gemini 3.5 Flash',
@@ -53,6 +91,18 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 200,    // $2.00 (≤200k prompt)
       outputCostPer1M: 1200,  // $12.00 (incl. thinking tokens)
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.5-flash-lite',
+      displayName: 'Gemini 3.5 Flash Lite',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 30,     // $0.30
+      outputCostPer1M: 250,   // $2.50
       isActive: true,
       isDefault: false
     },
@@ -202,9 +252,48 @@ async function main() {
       isActive: true,
       isDefault: false
     },
-    // Google - Image Generation Model (Nano Banana Pro for Sketch Generation)
+    // Google - Image Generation Models (Nano Banana family, used by sketch generation)
     // Reference: https://ai.google.dev/gemini-api/docs/image-generation
-    // gemini-3-pro-image-preview = "Nano Banana Pro" - advanced image generation
+    // gemini-3-pro-image        = "Nano Banana Pro" (GA id)
+    // gemini-3.1-flash-image    = "Nano Banana 2"
+    // gemini-3.1-flash-lite-image = "Nano Banana 2 Lite"
+    // The "-preview" code below is kept so existing stage configs keep resolving.
+    {
+      code: 'gemini-3-pro-image',
+      displayName: 'Gemini 3 Pro Image (Nano Banana Pro)',
+      provider: 'google',
+      contextWindow: 128000,
+      supportsVision: true,
+      supportsStreaming: false,
+      inputCostPer1M: 200,    // $2.00
+      outputCostPer1M: 12000, // $120.00 per 1M image-output tokens
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.1-flash-image',
+      displayName: 'Gemini 3.1 Flash Image (Nano Banana 2)',
+      provider: 'google',
+      contextWindow: 128000,
+      supportsVision: true,
+      supportsStreaming: false,
+      inputCostPer1M: 50,     // $0.50
+      outputCostPer1M: 6000,  // $60.00 per 1M image-output tokens
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.1-flash-lite-image',
+      displayName: 'Gemini 3.1 Flash Lite Image (Nano Banana 2 Lite)',
+      provider: 'google',
+      contextWindow: 128000,
+      supportsVision: true,
+      supportsStreaming: false,
+      inputCostPer1M: 25,     // $0.25
+      outputCostPer1M: 3000,  // $30.00 per 1M image-output tokens
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'gemini-3-pro-image-preview',
       displayName: 'Gemini 3 Pro Image Preview (Nano Banana Pro)',
@@ -284,7 +373,33 @@ async function main() {
       isActive: true,
       isDefault: false
     },
-    // GPT-5.6 Series (latest, 2026) — Sol (flagship) / Terra (balanced) / Luna (budget).
+    // GPT-6 Series (current flagship, released 2026-09-03).
+    // 1.05M context / 128K max output, knowledge cutoff 2026-04-30.
+    {
+      code: 'gpt-6-astra',
+      displayName: 'GPT-6 Astra',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 1000,   // $10.00
+      outputCostPer1M: 5000,  // $50.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-6-astra-thinking',
+      displayName: 'GPT-6 Astra (Thinking)',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 1000,   // $10.00 (billed at base rates)
+      outputCostPer1M: 5000,  // $50.00
+      isActive: true,
+      isDefault: false
+    },
+    // GPT-5.6 Series (2026) — Sol (flagship) / Terra (balanced) / Luna (budget).
     // All share a 1.05M context window and 128K max output. `gpt-5.6` aliases to Sol.
     {
       code: 'gpt-5.6-sol',
@@ -293,8 +408,8 @@ async function main() {
       contextWindow: 1050000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 500,    // $5.00
-      outputCostPer1M: 3000,  // $30.00
+      inputCostPer1M: 400,    // $4.00 (promo short-context rate through 2026-11-21)
+      outputCostPer1M: 2000,  // $20.00
       isActive: true,
       isDefault: false
     },
@@ -305,8 +420,8 @@ async function main() {
       contextWindow: 1050000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 250,    // $2.50
-      outputCostPer1M: 1500,  // $15.00
+      inputCostPer1M: 200,    // $2.00 (cut 20% on 2026-07-30)
+      outputCostPer1M: 1200,  // $12.00
       isActive: true,
       isDefault: false
     },
@@ -317,8 +432,8 @@ async function main() {
       contextWindow: 1050000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 100,    // $1.00
-      outputCostPer1M: 600,   // $6.00
+      inputCostPer1M: 20,     // $0.20 (cut 80% on 2026-07-30)
+      outputCostPer1M: 120,   // $1.20
       isActive: true,
       isDefault: false
     },
@@ -329,8 +444,8 @@ async function main() {
       contextWindow: 1050000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 500,    // $5.00 (routes to Sol)
-      outputCostPer1M: 3000,  // $30.00
+      inputCostPer1M: 400,    // $4.00 (routes to Sol)
+      outputCostPer1M: 2000,  // $20.00
       isActive: true,
       isDefault: false
     },
@@ -343,8 +458,8 @@ async function main() {
       contextWindow: 1050000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 500,    // $5.00
-      outputCostPer1M: 3000,  // $30.00
+      inputCostPer1M: 400,    // $4.00 (billed at base rates)
+      outputCostPer1M: 2000,  // $20.00
       isActive: true,
       isDefault: false
     },
@@ -355,8 +470,8 @@ async function main() {
       contextWindow: 1050000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 250,    // $2.50
-      outputCostPer1M: 1500,  // $15.00
+      inputCostPer1M: 200,    // $2.00 (billed at base rates)
+      outputCostPer1M: 1200,  // $12.00
       isActive: true,
       isDefault: false
     },
@@ -634,7 +749,44 @@ async function main() {
 
     // === ANTHROPIC MODELS ===
     // Provider supports: Claude 5 family, Claude 4.x, and Claude 3.x model codes.
-    // Claude 5 family + Opus 4.8 + Haiku 4.5 are the current generation (2026).
+    // Current generation (2026): Fable 5.1 / Fable 5, Opus 5, Sonnet 5, Haiku 4.5,
+    // plus the still-served Opus 4.8/4.7/4.6 and Sonnet 4.6.
+    {
+      code: 'claude-fable-5-1',
+      displayName: 'Claude Fable 5.1',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 1000,   // $10.00
+      outputCostPer1M: 5000,  // $50.00 (most capable widely released model)
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-opus-5',
+      displayName: 'Claude Opus 5',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-opus-5-thinking',
+      displayName: 'Claude Opus 5 (Thinking)',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00 (billed at base rates)
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'claude-fable-5',
       displayName: 'Claude Fable 5',
@@ -676,6 +828,18 @@ async function main() {
     {
       code: 'claude-sonnet-5',
       displayName: 'Claude Sonnet 5',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 200,    // $2.00
+      outputCostPer1M: 1000,  // $10.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-sonnet-4-6',
+      displayName: 'Claude Sonnet 4.6',
       provider: 'anthropic',
       contextWindow: 1000000,
       supportsVision: true,
@@ -807,8 +971,10 @@ async function main() {
     },
 
     // === DEEPSEEK MODELS ===
-    // DeepSeek V4 (2026) — Pro (1.6T MoE) and Flash (284B MoE), both 1M context.
-    // Note: legacy deepseek-chat / deepseek-reasoner retire after 2026-07-24.
+    // DeepSeek V4 (2026) — Pro (1.6T MoE) and Flash (284B MoE), both 1M context,
+    // plus the image-capable Flash Vision preview.
+    // Note: legacy deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and
+    // are seeded inactive so historical usage rows still resolve a model name.
     {
       code: 'deepseek-v4-pro',
       displayName: 'DeepSeek V4 Pro',
@@ -834,31 +1000,81 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'deepseek-v4-flash-vision-exp',
+      displayName: 'DeepSeek V4 Flash Vision (Experimental)',
+      provider: 'deepseek',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 22,     // $0.22 cache-miss input (off-peak); image tokens bill as input
+      outputCostPer1M: 66,    // $0.66 (off-peak)
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'deepseek-chat',
-      displayName: 'DeepSeek Chat',
+      displayName: 'DeepSeek Chat (retired 2026-07-24)',
       provider: 'deepseek',
       contextWindow: 64000,
       supportsVision: false,
       supportsStreaming: true,
       inputCostPer1M: 27,     // $0.27
       outputCostPer1M: 110,   // $1.10
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
       code: 'deepseek-reasoner',
-      displayName: 'DeepSeek Reasoner (R1)',
+      displayName: 'DeepSeek Reasoner R1 (retired 2026-07-24)',
       provider: 'deepseek',
       contextWindow: 64000,
       supportsVision: false,
       supportsStreaming: true,
       inputCostPer1M: 55,     // $0.55
       outputCostPer1M: 219,   // $2.19
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
 
     // === Z.AI GLM MODELS ===
+    // GLM-5.3 (2026-08-17) is the current flagship; GLM-5.3-Flash is the multimodal
+    // 320B/18B-active model. Both expose reasoning_effort (low | high | max).
+    {
+      code: 'glm-5.3',
+      displayName: 'GLM-5.3',
+      provider: 'zai',
+      contextWindow: 1000000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 140,    // $1.40
+      outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5.3-flash',
+      displayName: 'GLM-5.3 Flash',
+      provider: 'zai',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 8,      // $0.075
+      outputCostPer1M: 25,    // $0.25
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5.2',
+      displayName: 'GLM-5.2',
+      provider: 'zai',
+      contextWindow: 1000000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 140,    // $1.40
+      outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'glm-5.1',
       displayName: 'GLM-5.1',
@@ -1041,7 +1257,33 @@ async function main() {
     },
 
     // === GROQ MODELS (Fast inference) ===
-    // Provider supports: llama-3.3-70b-versatile, llama-3.1-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, gemma2-9b-it
+    // Provider supports: openai/gpt-oss-120b, openai/gpt-oss-20b, llama-3.3-70b-versatile,
+    // llama-3.1-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, gemma2-9b-it.
+    // The gpt-oss codes carry a vendor prefix but are served by Groq, not OpenAI.
+    {
+      code: 'openai/gpt-oss-120b',
+      displayName: 'GPT-OSS 120B (Groq)',
+      provider: 'groq',
+      contextWindow: 131072,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 15,     // $0.15
+      outputCostPer1M: 60,    // $0.60
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'openai/gpt-oss-20b',
+      displayName: 'GPT-OSS 20B (Groq)',
+      provider: 'groq',
+      contextWindow: 131072,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 8,      // $0.075
+      outputCostPer1M: 30,    // $0.30
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'llama-3.3-70b-versatile',
       displayName: 'Llama 3.3 70B Versatile (Groq)',

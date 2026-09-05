@@ -34,7 +34,7 @@ function stringOrEmpty(value: unknown): string {
 function firstStructured(
   normalized: Record<string, any>,
   keys: string[]
-): { structured: DraftClaim[]; source: ClaimSource } {
+): { structured: DraftClaim[]; source: ClaimSource; key?: string } {
   for (const key of keys) {
     const structured = arrayOrEmpty(normalized[key])
     if (structured.length > 0) {
@@ -42,7 +42,7 @@ function firstStructured(
         key === 'claimsStructuredFinal' ? 'final' :
         key === 'claimsStructuredProvisional' ? 'provisional' :
         'working'
-      return { structured, source }
+      return { structured, source, key }
     }
   }
   return { structured: [], source: 'none' }
@@ -83,13 +83,34 @@ export function normalizeClaimsForSession(normalized: Record<string, any> = {}):
   }
 
   if (merged.claimsApprovedAt) {
-    if (!merged.claimsFinal) merged.claimsFinal = merged.claims || merged.claimsProvisional
-    if (!merged.claimsStructuredFinal && merged.claimsStructured) {
+    // Backfill the frozen pair TOGETHER, never field by field.
+    //
+    // These two used to be filled independently, so a session that already had
+    // claimsStructuredFinal but no claimsFinal took its HTML from the working
+    // `claims` — pairing a frozen structured claim set with working HTML, and
+    // letting a section anchor on one revision while rendering another.
+    const hasStructuredFinal = Array.isArray(merged.claimsStructuredFinal) && merged.claimsStructuredFinal.length > 0
+
+    if (!hasStructuredFinal && Array.isArray(merged.claimsStructured) && merged.claimsStructured.length > 0) {
       merged.claimsStructuredFinal = merged.claimsStructured
+      if (!merged.claimsFinal) merged.claimsFinal = merged.claims || merged.claimsProvisional
+    } else if (!hasStructuredFinal && !merged.claimsFinal) {
+      // No structured claims at all on either side — HTML is all there is.
+      merged.claimsFinal = merged.claims || merged.claimsProvisional
     }
+    // When claimsStructuredFinal already exists, claimsFinal is deliberately left
+    // alone: getAuthoritativeClaims renders the frozen structured set instead of
+    // adopting unrelated working HTML.
   }
 
   return merged
+}
+
+/** HTML key that belongs with each structured key, so the pair never desyncs. */
+const HTML_KEY_FOR_STRUCTURED: Record<string, string> = {
+  claimsStructuredFinal: 'claimsFinal',
+  claimsStructured: 'claims',
+  claimsStructuredProvisional: 'claimsProvisional',
 }
 
 export function getAuthoritativeClaims(normalizedInput: Record<string, any> = {}): ClaimsSnapshot {
@@ -98,12 +119,24 @@ export function getAuthoritativeClaims(normalizedInput: Record<string, any> = {}
   const structuredKeys = frozen
     ? ['claimsStructuredFinal', 'claimsStructured', 'claimsStructuredProvisional']
     : ['claimsStructured', 'claimsStructuredProvisional', 'claimsStructuredFinal']
-  const htmlKeys = frozen
-    ? ['claimsFinal', 'claims', 'claimsProvisional']
-    : ['claims', 'claimsProvisional', 'claimsFinal']
 
-  const { structured, source } = firstStructured(normalized, structuredKeys)
-  const html = firstHtml(normalized, htmlKeys) || (structured.length ? formatDraftClaimsAsHtml(structured) : '')
+  const { structured, source, key } = firstStructured(normalized, structuredKeys)
+
+  // Resolve the HTML from the SAME generation as the structured claims.
+  //
+  // These two used to be resolved from independent priority lists: structured
+  // from ['claimsStructuredFinal', …] and html from ['claimsFinal', …]. When a
+  // frozen session had claimsStructuredFinal but no claimsFinal, the structured
+  // claims came from the frozen set while the HTML fell through to the working
+  // `claims` — so the Claim-1 anchor injected into a section and the claims text
+  // rendered beside it could come from different revisions.
+  const pairedHtmlKey = key ? HTML_KEY_FOR_STRUCTURED[key] : undefined
+  const pairedHtml = pairedHtmlKey ? stringOrEmpty(normalized[pairedHtmlKey]) : ''
+  const html = pairedHtml
+    || (structured.length ? formatDraftClaimsAsHtml(structured) : '')
+    || firstHtml(normalized, frozen
+      ? ['claimsFinal', 'claims', 'claimsProvisional']
+      : ['claims', 'claimsProvisional', 'claimsFinal'])
 
   return { structured, html, frozen, source }
 }

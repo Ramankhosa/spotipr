@@ -11,6 +11,9 @@ import { createOpenAICompatibleCompletion } from './streaming'
 export class ZAIProvider implements LLMProvider {
   name = 'zai'
   supportedModels = [
+    'glm-5.3',
+    'glm-5.3-flash',
+    'glm-5.2',
     'glm-5.1',
     'glm-5',
     'glm-5-turbo',
@@ -127,6 +130,9 @@ export class ZAIProvider implements LLMProvider {
 
   getTokenLimits(modelName: string): { input: number; output: number } {
     const limits: Record<string, { input: number; output: number }> = {
+      'glm-5.3': { input: 1000000, output: 128000 },
+      'glm-5.3-flash': { input: 1000000, output: 128000 },
+      'glm-5.2': { input: 1000000, output: 128000 },
       'glm-5.1': { input: 200000, output: 128000 },
       'glm-5': { input: 200000, output: 128000 },
       'glm-5-turbo': { input: 200000, output: 128000 },
@@ -154,6 +160,9 @@ export class ZAIProvider implements LLMProvider {
 
   getCostPerToken(modelName: string): { input: number; output: number } {
     const costs: Record<string, { input: number; output: number }> = {
+      'glm-5.3': { input: 0.0000014, output: 0.0000044 },
+      'glm-5.3-flash': { input: 0.000000075, output: 0.00000025 },
+      'glm-5.2': { input: 0.0000014, output: 0.0000044 },
       'glm-5.1': { input: 0.0000014, output: 0.0000044 },
       'glm-5': { input: 0.000001, output: 0.0000032 },
       'glm-5-turbo': { input: 0.0000012, output: 0.000004 },

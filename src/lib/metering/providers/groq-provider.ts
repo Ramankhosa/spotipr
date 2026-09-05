@@ -14,6 +14,8 @@ const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 export class GroqProvider implements LLMProvider {
   name = 'groq'
   supportedModels = [
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
     'llama-3.3-70b-versatile',
     'llama-3.1-70b-versatile',
     'llama-3.1-8b-instant',
@@ -136,6 +138,8 @@ export class GroqProvider implements LLMProvider {
 
   getTokenLimits(modelName: string): { input: number; output: number } {
     const limits: Record<string, { input: number; output: number }> = {
+      'openai/gpt-oss-120b': { input: 131072, output: 32768 },
+      'openai/gpt-oss-20b': { input: 131072, output: 32768 },
       'llama-3.3-70b-versatile': { input: 128000, output: 8192 },
       'llama-3.1-70b-versatile': { input: 128000, output: 8192 },
       'llama-3.1-8b-instant': { input: 128000, output: 8192 },
@@ -148,6 +152,8 @@ export class GroqProvider implements LLMProvider {
   getCostPerToken(modelName: string): { input: number; output: number } {
     // Cost per token in USD (Groq is very affordable)
     const costs: Record<string, { input: number; output: number }> = {
+      'openai/gpt-oss-120b': { input: 0.00000015, output: 0.0000006 },   // $0.15/$0.60 per M
+      'openai/gpt-oss-20b': { input: 0.000000075, output: 0.0000003 },   // $0.075/$0.30 per M
       'llama-3.3-70b-versatile': { input: 0.00000059, output: 0.00000079 },
       'llama-3.1-70b-versatile': { input: 0.00000059, output: 0.00000079 },
       'llama-3.1-8b-instant': { input: 0.00000005, output: 0.00000008 },

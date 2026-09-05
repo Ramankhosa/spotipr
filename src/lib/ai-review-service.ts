@@ -18,6 +18,16 @@ import { filterProtectedAIReviewIssues } from './ai-review-protection'
 // ============================================================================
 
 /**
+ * Display floor for the review score.
+ *
+ * Deliberate product choice, not an accident: the UI never shows an attorney a
+ * discouraging number for their own draft. It is a DISPLAY floor only — it must
+ * never be used to make a review that failed, or one that could not be read,
+ * look like a review that passed. Those paths set success:false.
+ */
+export const REVIEW_SCORE_FLOOR = 85
+
+/**
  * Simplified issue structure - reduces JSON errors from LLM output
  * 
  * Old format had 8 fields which caused frequent JSON parsing failures.
@@ -55,6 +65,11 @@ export interface AIReviewResult {
   reviewedAt: string
   tokensUsed?: number
   error?: string
+  /**
+   * Set when the review was recovered from a truncated response, so the issue
+   * list is incomplete even though the review itself succeeded.
+   */
+  partial?: boolean
 }
 
 export interface ReviewContext {
@@ -236,7 +251,7 @@ export async function runAIReview(
           errors: 0,
           warnings: 0,
           suggestions: 0,
-          overallScore: 85, // Minimum baseline even on failure
+          overallScore: REVIEW_SCORE_FLOOR, // Minimum baseline even on failure
           recommendation: 'Review failed - please try again'
         },
         reviewedAt: new Date().toISOString(),
@@ -246,15 +261,39 @@ export async function runAIReview(
 
     // Parse the review response and enforce locked-section protections defensively.
     const reviewData = parseReviewResponse(result.response.output)
+
+    // A review that could not be read is not a clean review. This used to return
+    // success:true with issues:[] and a passing score, so a review that never
+    // actually happened was reported to the attorney (and to the unattended
+    // automation) as "Draft looks good! Ready for export."
+    if (reviewData.parseFailed) {
+      return {
+        success: false,
+        issues: [],
+        summary: {
+          totalIssues: 0,
+          errors: 0,
+          warnings: 0,
+          suggestions: 0,
+          overallScore: REVIEW_SCORE_FLOOR,
+          recommendation: 'Review could not be completed — the response could not be read. Run the review again.'
+        },
+        reviewedAt: new Date().toISOString(),
+        tokensUsed: result.response.outputTokens,
+        error: 'AI review response could not be parsed'
+      }
+    }
+
     const filteredIssues = filterProtectedAIReviewIssues(reviewData.issues)
     const filteredSummary = rebuildReviewSummary(reviewData.summary, filteredIssues)
-    
+
     return {
       success: true,
       issues: filteredIssues,
       summary: filteredSummary,
       reviewedAt: new Date().toISOString(),
-      tokensUsed: result.response.outputTokens
+      tokensUsed: result.response.outputTokens,
+      partial: reviewData.partial || undefined
     }
   } catch (error) {
     console.error('AI Review error:', error)
@@ -266,7 +305,7 @@ export async function runAIReview(
         errors: 0,
         warnings: 0,
         suggestions: 0,
-        overallScore: 85, // Minimum baseline even on failure
+        overallScore: REVIEW_SCORE_FLOOR, // Minimum baseline even on failure
         recommendation: 'Review failed due to an error'
       },
       reviewedAt: new Date().toISOString(),
@@ -874,6 +913,10 @@ function extractIssuesFromPartialJSON(text: string): any[] {
 function parseReviewResponse(output: string): {
   issues: AIReviewIssue[]
   summary: AIReviewResult['summary']
+  /** True when nothing usable came back — the caller must not report success. */
+  parseFailed?: boolean
+  /** True when issues were salvaged from a truncated response. */
+  partial?: boolean
 } {
   try {
     let text = (output || '').trim()
@@ -921,12 +964,13 @@ function parseReviewResponse(output: string): {
         
         return {
           issues: normalizedIssues,
+          partial: true,
           summary: {
             totalIssues: normalizedIssues.length,
             errors,
             warnings,
             suggestions,
-            overallScore: 85, // Minimum baseline score for partial review
+            overallScore: REVIEW_SCORE_FLOOR, // Minimum baseline score for partial review
             recommendation: 'Review partially completed (output was truncated). Some issues were identified.'
           }
         }
@@ -1014,7 +1058,7 @@ function parseReviewResponse(output: string): {
       suggestions,
       // Enforce minimum score of 85, use AI score if valid otherwise calculate
       overallScore: typeof rawScore === 'number'
-        ? Math.min(100, Math.max(85, rawScore)) // Min 85, max 100
+        ? Math.min(100, Math.max(REVIEW_SCORE_FLOOR, rawScore)) // Min REVIEW_SCORE_FLOOR, max 100
         : calculateScore(errors, warnings, suggestions),
       recommendation: recommendation || getDefaultRecommendation(errors, warnings)
     }
@@ -1024,15 +1068,18 @@ function parseReviewResponse(output: string): {
     console.error('Failed to parse AI review response:', error)
     // Log the raw output for debugging (first 500 chars)
     console.error('Raw output preview:', (output || '').substring(0, 500))
+    // parseFailed, so the caller reports this as a failed review rather than as a
+    // clean one. It used to come back as "Review completed" with zero issues.
     return {
+      parseFailed: true,
       issues: [],
       summary: {
         totalIssues: 0,
         errors: 0,
         warnings: 0,
         suggestions: 0,
-        overallScore: 85, // Minimum baseline score
-        recommendation: 'Review completed but response parsing failed. Manual review recommended.'
+        overallScore: REVIEW_SCORE_FLOOR,
+        recommendation: 'Review could not be completed — the response could not be read. Run the review again.'
       }
     }
   }
@@ -1050,7 +1097,7 @@ function parseReviewResponse(output: string): {
  * As user fixes issues, score scales adaptively toward 100
  */
 function calculateScore(errorCount: number, warningCount: number, suggestionCount: number): number {
-  const FLOOR_SCORE = 85
+  const FLOOR_SCORE = REVIEW_SCORE_FLOOR
   const CEILING_WITH_ISSUES = 90
   const PERFECT_SCORE = 100
   
@@ -1091,7 +1138,7 @@ function rebuildReviewSummary(
     suggestions,
     overallScore: issues.length === 0
       ? 100
-      : Math.min(100, Math.max(85, originalSummary?.overallScore || calculateScore(errors, warnings, suggestions))),
+      : Math.min(100, Math.max(REVIEW_SCORE_FLOOR, originalSummary?.overallScore || calculateScore(errors, warnings, suggestions))),
     recommendation: issues.length === 0
       ? 'Draft looks good! Ready for export.'
       : originalRecommendation || getDefaultRecommendation(errors, warnings)

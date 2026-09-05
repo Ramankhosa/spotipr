@@ -263,6 +263,28 @@ export class LLMProviderRouter {
     }
   }
 
+  /**
+   * Best-effort guess at the model default priority-based routing would pick.
+   *
+   * The gateway preflights input size against a model before routing. With no
+   * resolved model it used to preflight against a hard-coded 'gemini-2.5-pro'
+   * while execution went through routeAndExecute, which can land on a model with
+   * far smaller limits — so an oversized input passed the check and then failed at
+   * the provider. Returns undefined when nothing is available, and the caller
+   * keeps its own fallback.
+   */
+  getDefaultRoutedModel(request: LLMRequest): string | undefined {
+    if (request.modelClass && this.getProviderForModel(request.modelClass)) {
+      return request.modelClass
+    }
+    const healthy = Array.from(this.providers.values()).filter(provider => this.isProviderHealthy(provider))
+    for (const provider of healthy) {
+      const model = provider.supportedModels?.[0]
+      if (model) return model
+    }
+    return undefined
+  }
+
   async routeAndExecute(
     request: LLMRequest,
     limits: EnforcementDecision,
@@ -424,13 +446,15 @@ export class LLMProviderRouter {
       const errors: Error[] = []
       const requiresVision = this.requestRequiresVision(request)
       const estimatedInputTokens = request.inputTokens || 0
-      
+      const requiredOutputTokens = limits.maxTokensOut
+
       for (const fallbackModel of fallbackModelCodes) {
         // Validate fallback model capabilities BEFORE attempting
         const validationResult = this.validateFallbackModel(
-          fallbackModel, 
-          requiresVision, 
-          estimatedInputTokens
+          fallbackModel,
+          requiresVision,
+          estimatedInputTokens,
+          requiredOutputTokens
         )
         
         if (!validationResult.valid) {
@@ -478,16 +502,17 @@ export class LLMProviderRouter {
   private validateFallbackModel(
     modelCode: string,
     requiresVision: boolean,
-    estimatedInputTokens: number
+    estimatedInputTokens: number,
+    requiredOutputTokens?: number
   ): { valid: boolean; reason?: string } {
     // Check vision capability
     if (requiresVision && !VISION_CAPABLE_MODELS.has(modelCode)) {
-      return { 
-        valid: false, 
-        reason: `Model does not support vision/image inputs` 
+      return {
+        valid: false,
+        reason: `Model does not support vision/image inputs`
       }
     }
-    
+
     // Check context limits
     const limits = MODEL_CONTEXT_LIMITS[modelCode]
     if (limits && estimatedInputTokens > limits.maxInput) {
@@ -496,7 +521,18 @@ export class LLMProviderRouter {
         reason: `Input (${estimatedInputTokens} tokens) exceeds model limit (${limits.maxInput})`
       }
     }
-    
+
+    // Check the OUTPUT ceiling too. Validating only the input let a fallback with
+    // a much smaller output limit take over a long-form drafting call: the
+    // response was truncated, and because section responses must be valid JSON,
+    // that surfaced as a parse failure rather than as shorter text.
+    if (limits && requiredOutputTokens && requiredOutputTokens > limits.maxOutput) {
+      return {
+        valid: false,
+        reason: `Required output (${requiredOutputTokens} tokens) exceeds model output limit (${limits.maxOutput})`
+      }
+    }
+
     return { valid: true }
   }
 

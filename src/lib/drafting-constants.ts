@@ -1,5 +1,19 @@
 export const MAX_DRAFTING_INPUT_CHARS = 25000
 
+/**
+ * Sampling temperature for the stages that produce the filed text.
+ *
+ * Every provider adapter falls back to 0.7 when a call passes no temperature,
+ * and neither the section calls nor the claim calls used to pass one — so the
+ * only two stages whose prompts demand "every sentence must be traceable to the
+ * source" were the ones running on the creative default. Stage 0 normalization
+ * runs at 0.0–0.2 and AI fixes at 0.2; these match that band.
+ */
+export const DRAFTING_SECTION_TEMPERATURE = 0.2
+
+/** Claims are the legally operative text; keep them at the low end. */
+export const DRAFTING_CLAIMS_TEMPERATURE = 0.2
+
 export const MAX_DRAFTING_UPLOAD_MB = 50
 
 export const MAX_DRAFTING_UPLOAD_BYTES = MAX_DRAFTING_UPLOAD_MB * 1024 * 1024

@@ -83,19 +83,65 @@ describe('Latest 2026 models (Claude 5 / GPT-5.6 / Gemini 3.x / DeepSeek V4)', (
     // DeepSeek V4
     expect(getProviderFromModelCode('deepseek-v4-pro')).toBe('deepseek')
     expect(getProviderFromModelCode('deepseek-v4-flash')).toBe('deepseek')
+    expect(getProviderFromModelCode('deepseek-v4-flash-vision-exp')).toBe('deepseek')
+  })
+
+  it('routes the newest Gemini / GLM codes to their providers', () => {
+    expect(getProviderFromModelCode('gemini-3.8-flash')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.7-flash')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.6-flash')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.5-flash-lite')).toBe('gemini-flash-lite')
+    // Nano Banana image models
+    expect(getProviderFromModelCode('gemini-3-pro-image')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.1-flash-image')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.1-flash-lite-image')).toBe('gemini')
+    // Z.AI
+    expect(getProviderFromModelCode('glm-5.3')).toBe('zai')
+    expect(getProviderFromModelCode('glm-5.3-flash')).toBe('zai')
+    expect(getProviderFromModelCode('glm-5.2')).toBe('zai')
+  })
+
+  it('routes Groq-hosted open-weight models to groq, not their upstream vendor', () => {
+    // These carry an "openai/" prefix but are served by Groq. Without an exact-map
+    // entry the prefix fallback would send them to the OpenAI provider.
+    expect(getProviderFromModelCode('openai/gpt-oss-120b')).toBe('groq')
+    expect(getProviderFromModelCode('openai/gpt-oss-20b')).toBe('groq')
   })
 
   it('OpenAIProvider exposes GPT-5.6 limits and pricing', () => {
     const p = new OpenAIProvider({ apiKey: 'x', baseURL: 'https://api.openai.com/v1', model: 'gpt-5.6-sol' })
     expect(p.getTokenLimits('gpt-5.6-sol')).toEqual({ input: 1050000, output: 128000 })
-    expect(p.getCostPerToken('gpt-5.6-terra')).toEqual({ input: 0.0000025, output: 0.000015 })
+    expect(p.getCostPerToken('gpt-5.6-terra')).toEqual({ input: 0.000002, output: 0.000012 })
+  })
+
+  it('OpenAIProvider exposes GPT-6 Astra limits and pricing', () => {
+    const p = new OpenAIProvider({ apiKey: 'x', baseURL: 'https://api.openai.com/v1', model: 'gpt-6-astra' })
+    expect(getProviderFromModelCode('gpt-6-astra')).toBe('openai')
+    expect(p.getTokenLimits('gpt-6-astra')).toEqual({ input: 1050000, output: 128000 })
+    expect(p.getCostPerToken('gpt-6-astra')).toEqual({ input: 0.00001, output: 0.00005 })
+    // the thinking alias normalizes to the base model
+    expect(p.getCostPerToken('gpt-6-astra-thinking')).toEqual({ input: 0.00001, output: 0.00005 })
   })
 
   it('AnthropicProvider exposes Claude 5 family limits and pricing', () => {
     const p = new AnthropicProvider({ apiKey: 'x', baseURL: 'https://api.anthropic.com/v1', model: 'claude-opus-4-8' })
     expect(p.getTokenLimits('claude-opus-4-8')).toEqual({ input: 1000000, output: 128000 })
     expect(p.getTokenLimits('claude-haiku-4-5')).toEqual({ input: 200000, output: 64000 })
-    expect(p.getCostPerToken('claude-sonnet-5')).toEqual({ input: 0.000003, output: 0.000015 })
+    expect(p.getCostPerToken('claude-sonnet-5')).toEqual({ input: 0.000002, output: 0.00001 })
+  })
+
+  it('AnthropicProvider exposes Opus 5 / Fable 5.1 / Sonnet 4.6 limits and pricing', () => {
+    const p = new AnthropicProvider({ apiKey: 'x', baseURL: 'https://api.anthropic.com/v1', model: 'claude-opus-5' })
+    expect(getProviderFromModelCode('claude-opus-5')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-opus-5-thinking')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-fable-5-1')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-sonnet-4-6')).toBe('anthropic')
+    expect(p.getTokenLimits('claude-opus-5')).toEqual({ input: 1000000, output: 128000 })
+    expect(p.getCostPerToken('claude-opus-5')).toEqual({ input: 0.000005, output: 0.000025 })
+    // the thinking alias normalizes to the base model
+    expect(p.getCostPerToken('claude-opus-5-thinking')).toEqual({ input: 0.000005, output: 0.000025 })
+    expect(p.getCostPerToken('claude-fable-5-1')).toEqual({ input: 0.00001, output: 0.00005 })
+    expect(p.getCostPerToken('claude-sonnet-4-6')).toEqual({ input: 0.000003, output: 0.000015 })
   })
 
   it('DeepSeekProvider exposes V4 limits and pricing', () => {

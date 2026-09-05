@@ -160,10 +160,25 @@ export class LLMGateway {
           // Apply stage/task-specific limits if configured. These limits come
           // from Super Admin LLM Config and are the only application-level
           // token ceilings enforced by the LLM gateway.
+          //
+          // When a stage has no configured ceiling we now fall back to the
+          // provider's own maximum rather than deleting the field. Deleting it
+          // left every provider except Gemini on its internal
+          // `limits.maxTokensOut || 4096` default, so the same stage silently had
+          // a 4096-token ceiling on Anthropic/DeepSeek/Groq/z.ai/Grok and a
+          // ~65k one on Gemini — and a Gemini→Anthropic fallback dropped the
+          // ceiling mid-run. A truncated section response is not valid JSON, so
+          // that surfaced as a hard parse failure, not as shorter text.
           if (modelResolution.maxTokensOut) {
             decision.maxTokensOut = modelResolution.maxTokensOut
           } else {
-            delete decision.maxTokensOut
+            const providerCeiling = this.getProviderOutputCeiling(modelResolution.modelCode)
+            if (providerCeiling) {
+              decision.maxTokensOut = providerCeiling
+              console.log(`[Gateway] No stage maxTokensOut configured; using provider ceiling ${providerCeiling} for ${modelResolution.modelCode}`)
+            } else {
+              delete decision.maxTokensOut
+            }
           }
 
           if (modelResolution.maxTokensIn) {
@@ -220,7 +235,16 @@ export class LLMGateway {
       }
 
       // 6. Validate model capabilities (vision, streaming, etc.)
-      const selectedModel = explicitModelCode || modelResolution?.modelCode || 'gemini-2.5-pro' // Default model
+      // When nothing resolved, preflight has to guess a model — and it used to
+      // guess 'gemini-2.5-pro' while execution fell through to default
+      // priority-based routing, which can pick a model with much smaller limits.
+      // Ask the router which model it would actually use so the check matches.
+      const routedModel = (explicitModelCode || modelResolution?.modelCode)
+        ?? llmProviderRouter.getDefaultRoutedModel?.(llmRequest)
+      const selectedModel = routedModel || 'gemini-2.5-pro'
+      if (!explicitModelCode && !modelResolution) {
+        console.warn(`[Gateway] No model resolution; preflighting against default-routed model "${selectedModel}"`)
+      }
       const capabilityCheck = this.validateModelCapabilities(selectedModel, llmRequest)
       if (!capabilityCheck.valid) {
         console.error(`✗ Model capability validation failed: ${capabilityCheck.error}`)
@@ -267,6 +291,25 @@ export class LLMGateway {
       // Apply clamped maxTokensOut if it exceeded provider limits
       if (preflightResult.clampedMaxTokensOut !== undefined) {
         decision.maxTokensOut = preflightResult.clampedMaxTokensOut
+      }
+
+      // A caller may ask for more output headroom for a long section. Honour it as
+      // a raise only, still bounded by the admin ceiling and the provider limit.
+      // This used to be passed as `parameters.maxOutputTokens` and read by nobody:
+      // every provider adapter reads `limits.maxTokensOut` off the enforcement
+      // decision, so the Detailed Description's 6000-token request did nothing.
+      const requestedMaxOut = Number((llmRequest.parameters as any)?.maxOutputTokens)
+      if (Number.isFinite(requestedMaxOut) && requestedMaxOut > 0) {
+        const providerCeiling = this.getProviderOutputCeiling(selectedModel)
+        const ceiling = Math.min(
+          providerCeiling ?? requestedMaxOut,
+          modelResolution?.maxTokensOut ?? requestedMaxOut
+        )
+        const effective = Math.min(requestedMaxOut, ceiling)
+        if (!decision.maxTokensOut || effective > decision.maxTokensOut) {
+          decision.maxTokensOut = effective
+          console.log(`[Gateway] Caller requested ${requestedMaxOut} output tokens; using ${effective} after admin/provider clamping`)
+        }
       }
       
       if (preflightResult.warnings.length > 0) {
@@ -499,17 +542,25 @@ export class LLMGateway {
     // OpenAI
     'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5-mini', 'gpt-5-nano',
     'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.5-pro',
+    'gpt-6-astra', 'gpt-6-astra-thinking',
     'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
     'gpt-5.1-thinking', 'gpt-5.2-thinking', 'gpt-5.6-sol-thinking', 'gpt-5.6-terra-thinking',
     // Anthropic
-    'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-8-thinking', 'claude-sonnet-5', 'claude-haiku-4-5',
-    'claude-opus-4-7', 'claude-opus-4-6',
+    'claude-fable-5-1', 'claude-fable-5',
+    'claude-opus-5', 'claude-opus-5-thinking',
+    'claude-opus-4-8', 'claude-opus-4-8-thinking', 'claude-sonnet-5', 'claude-haiku-4-5',
+    'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6',
     'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
     'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
+    // DeepSeek (image-capable preview)
+    'deepseek-v4-flash-vision-exp',
     // Z.AI GLM
-    'glm-5v-turbo', 'glm-4.5v',
+    'glm-5v-turbo', 'glm-5.3-flash', 'glm-4.5v',
     // Google Gemini
-    'gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview',
+    'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash',
+    'gemini-3.5-flash', 'gemini-3.5-flash-lite',
+    'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview',
+    'gemini-3-pro-image', 'gemini-3.1-flash-image', 'gemini-3.1-flash-lite-image',
     'gemini-2.5-pro',
     'gemini-2.0-flash', 'gemini-2.0-flash-001',
     'gemini-2.0-flash-lite', 'gemini-2.0-flash-lite-001',
@@ -557,6 +608,9 @@ export class LLMGateway {
       'gpt-5.4-pro': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5.5': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5.5-pro': { maxInput: 1050000, maxOutput: 128000 },
+      // OpenAI - GPT-6 Series
+      'gpt-6-astra': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-6-astra-thinking': { maxInput: 1050000, maxOutput: 128000 },
       // OpenAI - GPT-5.6 Series (Sol / Terra / Luna)
       'gpt-5.6': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5.6-sol': { maxInput: 1050000, maxOutput: 128000 },
@@ -581,13 +635,17 @@ export class LLMGateway {
       'o4-mini': { maxInput: 200000, maxOutput: 100000 },
 
       // Anthropic - Claude 5 family + Opus 4.8 + Haiku 4.5 (2026)
+      'claude-fable-5-1': { maxInput: 1000000, maxOutput: 128000 },
       'claude-fable-5': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-opus-5': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-opus-5-thinking': { maxInput: 1000000, maxOutput: 128000 },
       'claude-opus-4-8': { maxInput: 1000000, maxOutput: 128000 },
       'claude-opus-4-8-thinking': { maxInput: 1000000, maxOutput: 128000 },
       'claude-sonnet-5': { maxInput: 1000000, maxOutput: 128000 },
       'claude-haiku-4-5': { maxInput: 200000, maxOutput: 64000 },
       'claude-opus-4-7': { maxInput: 1000000, maxOutput: 128000 },
       'claude-opus-4-6': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-sonnet-4-6': { maxInput: 1000000, maxOutput: 128000 },
       // Anthropic - Friendly names
       'claude-3.5-sonnet': { maxInput: 200000, maxOutput: 8192 },
       'claude-3.5-haiku': { maxInput: 200000, maxOutput: 8192 },
@@ -602,7 +660,11 @@ export class LLMGateway {
       'claude-3-haiku-20240307': { maxInput: 200000, maxOutput: 4096 },
       
       // Gemini - Latest families (2026)
+      'gemini-3.8-flash': { maxInput: 1000000, maxOutput: 65536 },
+      'gemini-3.7-flash': { maxInput: 1000000, maxOutput: 65536 },
+      'gemini-3.6-flash': { maxInput: 1000000, maxOutput: 65536 },
       'gemini-3.5-flash': { maxInput: 1000000, maxOutput: 65536 },
+      'gemini-3.5-flash-lite': { maxInput: 1000000, maxOutput: 65536 },
       'gemini-3.1-pro-preview': { maxInput: 2000000, maxOutput: 65536 },
       'gemini-3.1-flash-lite': { maxInput: 1000000, maxOutput: 65536 },
       'gemini-3-flash-preview': { maxInput: 1000000, maxOutput: 65536 },
@@ -620,14 +682,22 @@ export class LLMGateway {
       'gemini-3-pro-preview': { maxInput: 2000000, maxOutput: 16384 },
       'gemini-3-pro-preview-thinking': { maxInput: 2000000, maxOutput: 16384 },
       'gemini-3-pro-image-preview': { maxInput: 1000000, maxOutput: 8192 },
+      // Gemini - Image generation models (Nano Banana family)
+      'gemini-3-pro-image': { maxInput: 1000000, maxOutput: 8192 },
+      'gemini-3.1-flash-image': { maxInput: 1000000, maxOutput: 8192 },
+      'gemini-3.1-flash-lite-image': { maxInput: 1000000, maxOutput: 8192 },
       
       // DeepSeek
       'deepseek-v4-pro': { maxInput: 1000000, maxOutput: 65536 },
       'deepseek-v4-flash': { maxInput: 1000000, maxOutput: 65536 },
+      'deepseek-v4-flash-vision-exp': { maxInput: 1000000, maxOutput: 65536 },
       'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
       'deepseek-reasoner': { maxInput: 128000, maxOutput: 8192 },
 
       // Z.AI GLM
+      'glm-5.3': { maxInput: 1000000, maxOutput: 128000 },
+      'glm-5.3-flash': { maxInput: 1000000, maxOutput: 128000 },
+      'glm-5.2': { maxInput: 1000000, maxOutput: 128000 },
       'glm-5.1': { maxInput: 200000, maxOutput: 128000 },
       'glm-5': { maxInput: 200000, maxOutput: 128000 },
       'glm-5-turbo': { maxInput: 200000, maxOutput: 128000 },
@@ -650,6 +720,11 @@ export class LLMGateway {
       'groq-llama-3.1-8b': { maxInput: 128000, maxOutput: 8192 },
       'groq-mixtral-8x7b': { maxInput: 32768, maxOutput: 8192 },
       'groq-gemma2-9b': { maxInput: 8192, maxOutput: 8192 },
+      // Groq - OpenAI open-weight models served by Groq. These need exact entries:
+      // no prefix rule below matches an "openai/..." code, so they would otherwise
+      // fall through to the 32K/4K safe defaults.
+      'openai/gpt-oss-120b': { maxInput: 131072, maxOutput: 32768 },
+      'openai/gpt-oss-20b': { maxInput: 131072, maxOutput: 32768 },
       // Groq - Canonical API model IDs
       'llama-3.3-70b-versatile': { maxInput: 128000, maxOutput: 8192 },
       'llama-3.1-70b-versatile': { maxInput: 128000, maxOutput: 8192 },
@@ -802,6 +877,16 @@ export class LLMGateway {
    */
   getModelContextLimits(modelCode: string): { maxInput: number; maxOutput: number } {
     return this.getProviderContextLimits(modelCode)
+  }
+
+  /**
+   * The model's own maximum output, used as the ceiling when a stage has no
+   * configured maxTokensOut. Without it the provider adapters fall back to a
+   * hard-coded 4096, which silently truncates long sections.
+   */
+  private getProviderOutputCeiling(modelCode: string): number | undefined {
+    const limits = this.getProviderContextLimits(modelCode)
+    return limits?.maxOutput && Number.isFinite(limits.maxOutput) ? limits.maxOutput : undefined
   }
 
   // Admin methods for monitoring and control

@@ -20,16 +20,64 @@ import {
   type SectionContextRequirements
 } from '@/lib/multi-jurisdiction-service';
 import { getSectionStageCode } from '@/lib/metering/section-stage-mapping';
+import { dependencyFromClaimText, looksLikeIndependentClaim } from '@/lib/draft-claims-parser';
+
+/**
+ * Stand-in used only when the context-requirements lookup returns nothing at all.
+ * It is always paired with `resolved: false`, which tells the prompt builder to
+ * inject every available context block rather than read these zeros as decisions.
+ */
+/**
+ * Errors where continuing the section loop is pointless because the next call
+ * hits the same wall: quota, entitlement, concurrency and misconfiguration.
+ * Anything else (a single truncated response, one provider hiccup) is specific to
+ * one section, and the run should keep the sections that already succeeded rather
+ * than discard the whole batch.
+ */
+const BATCH_FATAL_LLM_ERROR_CODES = new Set([
+  'TENANT_UNRESOLVED',
+  'PLAN_EXPIRED',
+  'TENANT_SUSPENDED',
+  'INVALID_ATI_TOKEN',
+  'FEATURE_UNAVAILABLE',
+  'FEATURE_NOT_FOUND',
+  'TASK_UNAVAILABLE',
+  'MODEL_CLASS_UNAVAILABLE',
+  'INVALID_MODEL',
+  'QUOTA_EXCEEDED',
+  'DAILY_QUOTA_EXCEEDED',
+  'MONTHLY_QUOTA_EXCEEDED',
+  'CONCURRENCY_LIMIT',
+  'POLICY_VIOLATION',
+  'INVALID_POLICY_CONFIG',
+  'CONFIGURATION_ERROR',
+]);
+
+function isBatchFatalLlmError(error: any): boolean {
+  // Anything carrying a retry-after is a batch-wide throttle, whatever its code.
+  const retryAfter = typeof error?.getRetryAfter === 'function' ? error.getRetryAfter() : undefined;
+  if (retryAfter) return true;
+  const code = String(error?.code || '');
+  return !code || BATCH_FATAL_LLM_ERROR_CODES.has(code);
+}
+
+const SAFE_SECTION_CONTEXT_PLACEHOLDER: SectionContextRequirements = {
+  requiresPriorArt: false,
+  requiresFigures: false,
+  requiresClaims: false,
+  requiresComponents: false,
+  resolved: false
+};
 import {
   buildUniversalDraftingBundle,
   buildAntiHallucinationGuards,
   buildDetailedDescriptionScopeContext,
   buildDetailedDescriptionSourceLockBlock,
-  filterDetailedDescriptionConstraints,
+  partitionDetailedDescriptionConstraints,
   normalizeDraftingArchetypeList,
   determineDraftingArchetype
 } from '@/lib/section-injection-config';
-import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
+import { DRAFTING_SECTION_TEMPERATURE, MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import {
   buildInventorTerminologyBlock,
   buildOriginalDisclosureBlock,
@@ -254,6 +302,8 @@ interface SectionPromptContext {
   contextRequirements?: SectionContextRequirements | null;
   // DD User Data (Detailed Description only - sidecar injection)
   ddUserData?: { userData: string; isEnabled: boolean; renderAsTable?: boolean } | null;
+  /** Called with any admin-authored DD constraints the safety filter removed. */
+  onConstraintsFiltered?: (removed: string[]) => void;
 }
 
 export interface SectionGenerationResult {
@@ -270,6 +320,13 @@ export interface SectionGenerationResult {
   warnings?: Array<{ section: string; type: 'priorArt' | 'figures' | 'components'; message: string; impact: string }>;
   // Sections the model returned no content for; no placeholder was substituted
   failedSections?: string[];
+  /**
+   * Rule violations that were detected but not blocking. Content still ships;
+   * these are returned so the caller can surface or record them, instead of the
+   * violation living only in a console line under a comment claiming the AI
+   * review would catch it.
+   */
+  guardrailWarnings?: Array<{ section: string; reason: string; repairAttempted: boolean }>;
 }
 
 export class DraftingService {
@@ -951,23 +1008,45 @@ export class DraftingService {
     rawIdea: string,
     title: string
   ): { primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' } {
+    // The title carries the invention's own framing; the body is where passing
+    // mentions live. Weighting the title first stops a polymer housing or a
+    // chemical coating mentioned once in a long disclosure from reclassifying a
+    // mechanical invention — which used to flip the numbering style to (a)/(b)
+    // and renumber every component.
+    const titleText = String(title || '').toLowerCase();
     const text = `${title} ${rawIdea}`.toLowerCase();
-    
-    // Check for composition indicators first (most specific)
-    if (/\b(composition|formulation|compound|mixture|substance|polymer|pharmaceutical|drug|chemical|reagent|catalyst|alloy|excipient|solvent|active ingredient|dosage)\b/.test(text)) {
+
+    // No material words here ("polymer", "alloy", "solvent", "chemical"): a
+    // mechanical disclosure names its materials constantly. Only words that
+    // describe the claimed subject matter AS a composition count.
+    const COMPOSITION = /\b(composition|formulation|compound|mixture|pharmaceutical|excipient|active ingredient|dosage form)\b/;
+    const PROCESS = /\b(method|process|procedure|preparing|manufacturing|synthesizing)\b/;
+    const SYSTEM = /\b(system|apparatus|arrangement|assembly|network|platform|device|machine)\b/;
+
+    // 1. Whatever the title says wins outright — it is the inventor's own label.
+    if (titleText) {
+      if (COMPOSITION.test(titleText)) return { primary: 'COMPOSITION' };
+      if (PROCESS.test(titleText)) return { primary: 'PROCESS' };
+      if (SYSTEM.test(titleText)) return { primary: 'SYSTEM' };
+    }
+
+    // 2. Otherwise weigh the whole text. COMPOSITION must carry real weight
+    //    (two or more hits) AND beat the structural vocabulary outright — a
+    //    single "mixture" in a body with no system words is not a composition
+    //    patent, it is a mechanical disclosure mentioning a mixture.
+    const countHits = (pattern: RegExp) =>
+      (text.match(new RegExp(pattern.source, 'g')) || []).length;
+    const compositionHits = countHits(COMPOSITION);
+    const processHits = countHits(PROCESS);
+    const systemHits = countHits(SYSTEM);
+
+    if (compositionHits >= 2 && compositionHits > systemHits && compositionHits >= processHits) {
       return { primary: 'COMPOSITION' };
     }
-    
-    // Check for clear process indicators
-    if (/\b(method|process|steps?|procedure|preparing|manufacturing|synthesizing|treating|detecting|measuring|analyzing)\b/.test(text)) {
+    if (processHits > 0 && processHits > systemHits) {
       return { primary: 'PROCESS' };
     }
-    
-    // Check for system indicators
-    if (/\b(system|apparatus|arrangement|assembly|network|platform|infrastructure|integrated|comprises?.*and.*and)\b/.test(text)) {
-      return { primary: 'SYSTEM' };
-    }
-    
+
     // Default to SYSTEM as safest general default
     return { primary: 'SYSTEM' };
   }
@@ -985,6 +1064,7 @@ export class DraftingService {
   ): Promise<SectionGenerationResult> {
    const debugSteps: Array<{ step: string; status: 'ok'|'fail'|'warning'; meta?: any }> = []
    const failedSections: string[] = []
+   const guardrailWarnings: Array<{ section: string; reason: string; repairAttempted: boolean }> = []
     try {
       const figuresSkipped = areFiguresSkipped(session)
       const requestedSections = [...sections]
@@ -1039,11 +1119,21 @@ export class DraftingService {
           }
         }
       }
-      const baseStyle = countryProfile ? await getBaseStyle(jurisdictionCode) : null
-      const globalRules = countryProfile ? await getGlobalRules(jurisdictionCode) : null
+      // A missing profile used to log status:'fail' and carry on. Everything
+      // downstream then degraded silently — no cross-section checks, no claims
+      // rules, no base style, no global rules, generic tone and voice — and the
+      // draft was indistinguishable in the UI from a jurisdiction-compliant one.
+      // Stop instead: an unconfigured jurisdiction is a setup error, not a draft.
       if (!countryProfile) {
-        debugSteps.push({ step: 'jurisdiction_fallback', status: 'fail', meta: { jurisdiction: jurisdictionCode } })
+        debugSteps.push({ step: 'jurisdiction_profile_missing', status: 'fail', meta: { jurisdiction: jurisdictionCode } })
+        return {
+          success: false,
+          error: `No country profile is configured for jurisdiction "${jurisdictionCode}". Drafting would ignore every jurisdiction rule, section check and claims rule for this office. Import the country profile in Super Admin before drafting.`,
+          debugSteps
+        }
       }
+      const baseStyle = await getBaseStyle(jurisdictionCode)
+      const globalRules = await getGlobalRules(jurisdictionCode)
 
       const crossSectionChecks = countryProfile?.profileData?.validation?.crossSectionChecks || []
       const claimsRules = countryProfile?.profileData?.rules?.claims || null
@@ -1528,6 +1618,21 @@ export class DraftingService {
         } catch (err) {
           console.warn(`[DraftingService] Failed to get context requirements for ${s}:`, err)
         }
+        if (!contextRequirements || contextRequirements.resolved === false) {
+          // Not fatal, but the prompt builder must know the flags are placeholders
+          // rather than admin decisions, or it withholds the component and figure
+          // lists from this section on the strength of a lookup that never answered.
+          debugSteps.push({
+            step: `context_requirements_unresolved_${s}`,
+            status: 'warning',
+            meta: {
+              section: s,
+              jurisdiction: jurisdictionCode,
+              message: `Context requirements for "${s}" could not be resolved from the database; injecting all available context instead of withholding it.`
+            }
+          })
+          contextRequirements = { ...(contextRequirements || SAFE_SECTION_CONTEXT_PLACEHOLDER), resolved: false }
+        }
 
         // ══════════════════════════════════════════════════════════════════════════════
         // CONTEXT AVAILABILITY WARNINGS (Non-blocking)
@@ -1600,7 +1705,19 @@ export class DraftingService {
           userId: session?.userId,
           usePersonaStyle,
           contextRequirements, // Pass database-driven context requirements
-          ddUserData: s === 'detailedDescription' ? ddUserDataContext : null // DD user data injection
+          ddUserData: s === 'detailedDescription' ? ddUserDataContext : null, // DD user data injection
+          onConstraintsFiltered: (removed: string[]) => {
+            debugSteps.push({
+              step: `constraints_filtered_${s}`,
+              status: 'warning',
+              meta: {
+                section: s,
+                jurisdiction: jurisdictionCode,
+                removed,
+                message: `${removed.length} admin-authored constraint(s) for "${s}" were withheld from the prompt because they invite unsupported subject matter.`
+              }
+            })
+          }
         })
         // Add debug info about prompt injection (B+T+U)
         const promptDebug = sectionResources[s]?.prompt?.debug
@@ -1645,7 +1762,8 @@ export class DraftingService {
           }
         })
 
-        // Increase tokens for long sections
+        // Increase tokens for long sections. The gateway treats this as a floor
+        // request and still clamps to the admin ceiling and the provider limit.
         const sectionMaxTokens = s === 'detailedDescription' ? 6000 : undefined
 
         // Get the stage code for section-specific model resolution
@@ -1657,7 +1775,16 @@ export class DraftingService {
           taskCode: 'LLM2_DRAFT',
           stageCode: sectionStageCode, // Pass stage code for section-specific model resolution
           prompt,
-          parameters: { tenantId, ...(sectionMaxTokens && { maxOutputTokens: sectionMaxTokens }) },
+          // Specification text is a faithful restatement of the source, not a
+          // creative task: every provider defaults to temperature 0.7 when none is
+          // passed, which fought the "every sentence must be traceable" rules in
+          // this very prompt and made regenerating a section produce materially
+          // different scope. Stage 0 normalization already runs at 0.0–0.2.
+          parameters: {
+            tenantId,
+            temperature: DRAFTING_SECTION_TEMPERATURE,
+            ...(sectionMaxTokens && { maxOutputTokens: sectionMaxTokens })
+          },
           idempotencyKey: crypto.randomUUID(),
           metadata: {
             patentId: session.patentId,
@@ -1674,7 +1801,16 @@ export class DraftingService {
             : result.error?.message || `LLM failed for ${s}`
 
           debugSteps.push({ step: `llm_call_${s}`, status: 'fail', meta: { error: result.error?.message, userMessage: errorMessage } })
-          return { success: false, error: errorMessage, debugSteps, retryAfter: result.error?.getRetryAfter?.() ?? undefined }
+
+          // Quota, rate limit and misconfiguration are batch-wide conditions: the
+          // next section will hit exactly the same wall, so stop. Anything else is
+          // specific to this section — record it and keep the sections that did
+          // succeed rather than throwing the whole run away.
+          if (isBatchFatalLlmError(result.error)) {
+            return { success: false, error: errorMessage, debugSteps, retryAfter: result.error?.getRetryAfter?.() ?? undefined }
+          }
+          failedSections.push(s)
+          continue
         }
         debugSteps.push({ step: `llm_call_${s}`, status: 'ok', meta: { outputTokens: result.response.outputTokens } })
 
@@ -1743,8 +1879,24 @@ export class DraftingService {
           }
           debugSteps.push({ step: `parse_${s}`, status: 'ok', meta: { parsingMethod: 'normalizeIdea_style' } })
         } catch (parseErr) {
-          debugSteps.push({ step: `parse_${s}`, status: 'fail', meta: { error: parseErr instanceof Error ? parseErr.message : String(parseErr) } })
-          return { success: false, error: `Invalid JSON from LLM for ${s}.`, debugSteps }
+          // A section response is required to be JSON, so a truncated response
+          // fails here. That is one section's problem — it used to abort the
+          // entire run and throw away every section already generated in this
+          // call. Record it and continue; the caller surfaces failedSections.
+          const outputLength = (result.response.output || '').length
+          debugSteps.push({
+            step: `parse_${s}`,
+            status: 'fail',
+            meta: {
+              error: parseErr instanceof Error ? parseErr.message : String(parseErr),
+              outputLength,
+              outputTokens: result.response.outputTokens,
+              likelyTruncated: outputLength > 0,
+              message: `The model's response for "${s}" was not valid JSON, most often because the output hit the token ceiling for this stage. Retry this section, or raise maxTokensOut for its stage in Super Admin.`
+            }
+          })
+          failedSections.push(s)
+          continue
         }
 
         // Guardrails + Background D-label normalization
@@ -1825,8 +1977,11 @@ export class DraftingService {
           // Only title and listOfNumerals have fallbacks built from real session data
           // (the idea title, the reference map). Every other section must fail visibly
           // rather than substitute generic placeholder text that reads as a real draft.
-          if (s === 'title' || s === 'listOfNumerals') {
-            val = this.getFallbackContent(s, payload)
+          const sessionDerived = (s === 'title' || s === 'listOfNumerals')
+            ? this.getFallbackContent(s, payload)
+            : ''
+          if (sessionDerived) {
+            val = sessionDerived
             debugSteps.push({ step: `fallback_${s}`, status: 'ok', meta: { used: true, derivedFromSessionData: true } })
           } else {
             failedSections.push(s)
@@ -1877,14 +2032,19 @@ export class DraftingService {
               // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
             } else {
               debugSteps.push({ step: `fixer_${s}`, status: 'fail', meta: { reason: recheck.reason, fixedTo: val.substring(0, 100) + '...' } })
-              // Allow content to pass through - guardrail issues will be caught during AI review
+              // Content still passes through, but the violation is now a returned
+              // result rather than a line in the debug log. It used to be logged
+              // as "issues will be caught during AI review" — and the AI review
+              // could not fail, so nothing downstream ever saw it.
               debugSteps.push({ step: `guard_${s}`, status: 'warning', meta: { note: `Allowing content despite guardrail issue: ${recheck.reason}`, forReview: true } })
+              guardrailWarnings.push({ section: s, reason: recheck.reason || 'Guardrail check failed', repairAttempted: true })
               generated[s] = val
               // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
             }
           } else {
-            // Allow content to pass through - guardrail issues will be caught during AI review
+            // Content passes through; the violation is returned to the caller.
             debugSteps.push({ step: `guard_${s}`, status: 'warning', meta: { note: `Allowing content despite guardrail issue: ${check.reason}`, forReview: true } })
+            guardrailWarnings.push({ section: s, reason: check.reason || 'Guardrail check failed', repairAttempted: false })
             generated[s] = val
             // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
           }
@@ -1930,6 +2090,7 @@ export class DraftingService {
         llmMeta,
         warnings: warnings.length > 0 ? warnings : undefined,
         failedSections: failedSections.length > 0 ? failedSections : undefined,
+        guardrailWarnings: guardrailWarnings.length > 0 ? guardrailWarnings : undefined,
         personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
         personaProvenance
       }
@@ -2424,42 +2585,68 @@ Background drafting requirements:
 
       // Replace template variables in superset prompts
       // CRITICAL: No empty placeholders - omit variable entirely if data is missing
+      //
+      // Every value below must resolve against a field that actually exists.
+      // IdeaRecord has: title, rawInput, normalizedData, problem, objectives,
+      // components, logic, inputs, outputs, variants, bestMethod, abstract,
+      // searchQuery, cpcCodes, ipcCodes. It has NO description, detailedDescription,
+      // keywords, problemStatement, advantages, benefits, useCases, applications,
+      // noveltyPoint or filingType — nine variables used to read those names and
+      // therefore always resolved empty, silently, while the same data sat one
+      // field name away.
+      const nd: Record<string, any> = (idea?.normalizedData as any) || {}
+      const joinList = (value: unknown): string => {
+        if (Array.isArray(value)) return value.map(v => String(v ?? '').trim()).filter(Boolean).join('; ')
+        const text = String(value ?? '').trim()
+        return /^not stated by source$/i.test(text) ? '' : text
+      }
+      const scalar = (value: unknown): string => {
+        const text = String(value ?? '').trim()
+        return /^not stated by source$/i.test(text) ? '' : text
+      }
       const templateVars: Record<string, string> = {
         '{{COUNTRY_CODE}}': jurisdiction,
-        '{{FILING_TYPE}}': idea?.filingType || 'Complete',
-        '{{ABSTRACT_OR_SUMMARY}}': idea?.abstract || idea?.description || idea?.title || '',
-        '{{INVENTION_TITLE}}': idea?.title || '',
-        '{{CORE_KEYWORDS}}': (idea?.keywords || idea?.normalizedData?.keywords || []).join(', ') || '',
-        '{{PRIOR_ART_SUMMARY}}': manualPriorArt || '',
-        '{{PROBLEM_STATEMENT}}': idea?.problemStatement || idea?.description || '',
-        '{{ADVANTAGES_LIST}}': (idea?.advantages || idea?.benefits || []).join('; ') || '',
+        // Real filing type comes from the patent, not the idea record; 'Complete'
+        // used to be hard-coded, so provisionals were drafted as complete specs.
+        '{{FILING_TYPE}}': scalar((payload as any)?.filingType ?? (idea as any)?.filingType) || 'Complete',
+        '{{ABSTRACT_OR_SUMMARY}}': scalar(idea?.abstract) || scalar(nd.abstract) || scalar(idea?.title),
+        '{{INVENTION_TITLE}}': scalar(idea?.title),
+        '{{CORE_KEYWORDS}}': joinList(nd.googlePatentKeywords) || joinList(nd.epoCombinedKeywords) || joinList(nd.cpcCodes),
+        '{{PRIOR_ART_SUMMARY}}': this.formatPriorArtForBackground(manualPriorArt, selectedPriorArtPatents || []),
+        '{{PROBLEM_STATEMENT}}': scalar(idea?.problem) || scalar(nd.problem),
+        '{{ADVANTAGES_LIST}}': joinList(nd.claimableFeatures),
         '{{INDEPENDENT_CLAIMS}}': independentClaimsText,
-        '{{KEY_EMBODIMENTS}}': '', // Omit if not available
+        '{{KEY_EMBODIMENTS}}': joinList(idea?.variants) || joinList(nd.variants),
         '{{FIGURE_LIST}}': figs || '',
         // The inventor's raw idea text lives on IdeaRecord.rawInput; the legacy
         // description/detailedDescription fields do not exist on IdeaRecord, so
         // without rawInput this variable always resolved empty and the raw
         // disclosure never reached section prompts.
         '{{FULL_DISCLOSURE_TEXT}}': (() => {
-          const disclosure = String(idea?.rawInput || idea?.description || idea?.detailedDescription || '')
+          const disclosure = String(idea?.rawInput || '')
           return disclosure.length > ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT
             ? `${disclosure.slice(0, ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT)}\n[TRUNCATED]`
             : disclosure
         })(),
         '{{ELEMENT_MAP}}': numeralsContext || '',
-        '{{PREFERRED_PARAMS}}': '', // Omit if not available
-        '{{BEST_EXAMPLE}}': '', // Omit if not available
-        '{{USE_CASES}}': (idea?.useCases || idea?.applications || []).join('; ') || '',
-        '{{NOVELTY_POINT}}': idea?.noveltyPoint || '',
+        '{{PREFERRED_PARAMS}}': joinList(nd.fallbackLimitations),
+        '{{BEST_EXAMPLE}}': scalar(idea?.bestMethod) || scalar(nd.bestMethod),
+        '{{USE_CASES}}': joinList(nd.recommendedFocus) || joinList(idea?.outputs) || joinList(nd.outputs),
+        '{{NOVELTY_POINT}}': scalar(nd.coreInventiveConcept),
         '{{ELEMENT_LIST}}': numeralsContext || '',
         '{{FULL_DRAFT_TEXT}}': '' // Omit if not available
       }
 
-      // Replace all template variables case-insensitively
+      // Replace all template variables case-insensitively.
+      // The replacement is passed as a FUNCTION, not a string: String.replace
+      // interprets $&, $`, $' and $<name> inside a string replacement, so a
+      // disclosure containing any of those sequences used to splice fragments of
+      // the prompt into itself. A function replacement is taken literally.
       for (const [key, value] of Object.entries(templateVars)) {
         // Escape special characters in the key (like {{ and }}) for regex
         const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        promptInstruction = promptInstruction.replace(new RegExp(escapedKey, 'gi'), value)
+        const literal = String(value ?? '')
+        promptInstruction = promptInstruction.replace(new RegExp(escapedKey, 'gi'), () => literal)
       }
 
       // FINAL SAFETY: Remove any unreplaced {{VAR}} tags to avoid confusing the LLM
@@ -2473,12 +2660,21 @@ Background drafting requirements:
       }
     }
 
-    const safePromptConstraints = filterDetailedDescriptionConstraints(
+    const constraintPartition = partitionDetailedDescriptionConstraints(
       section,
       ctx?.sectionPrompt?.constraints || []
     )
+    const safePromptConstraints = constraintPartition.kept
     if (safePromptConstraints.length) {
       promptConstraints = safePromptConstraints.join('; ')
+    }
+    if (constraintPartition.removed.length) {
+      // Visible rather than silent: an admin who wrote one of these should be able
+      // to see in the debug trail that it never reached the model.
+      console.warn(
+        `[buildSectionPrompt] Dropped ${constraintPartition.removed.length} unsafe Detailed Description constraint(s) for ${jurisdiction}: ${constraintPartition.removed.join(' | ')}`
+      )
+      ctx?.onConstraintsFiltered?.(constraintPartition.removed)
     }
 
     const targetLine = (guidance as any)?.target || ''
@@ -2629,11 +2825,18 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       
       const ctxReqs = ctx?.contextRequirements
-      const shouldInjectPriorArt = ctxReqs?.requiresPriorArt === true || section === 'background'
-      const shouldInjectFigures = ctxReqs?.requiresFigures === true
-      const shouldInjectComponents = ctxReqs?.requiresComponents === true
+      // An unresolved lookup (missing SupersetSection row, DB error, null passed in)
+      // means "we do not know what this section wants" — NOT "this section wants
+      // nothing". Treating it as the latter drafts the Detailed Description with no
+      // component list and no figure list, which is a silent quality failure that
+      // reads as a complete draft. When nothing answered, inject whatever exists.
+      const contextRequirementsResolved = !!ctxReqs && ctxReqs.resolved !== false
+      const injectWhenUnresolved = !contextRequirementsResolved
+      const shouldInjectPriorArt = ctxReqs?.requiresPriorArt === true || injectWhenUnresolved || section === 'background'
+      const shouldInjectFigures = ctxReqs?.requiresFigures === true || injectWhenUnresolved
+      const shouldInjectComponents = ctxReqs?.requiresComponents === true || injectWhenUnresolved
       // Note: requiresClaims is handled by UDB (Claim 1 anchoring), not here
-      
+
       let additionalContext = ''
       switch (section) {
         case 'background':
@@ -2679,13 +2882,22 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       // ANTI-HALLUCINATION GUARDS (automatic, not admin-controlled)
       // ══════════════════════════════════════════════════════════════════════════════
-      const hasFigures = section === 'detailedDescription'
+      // These key off what actually REACHED the prompt, not off what data exists in
+      // the session. Keying them off mere existence left the worst combination
+      // unguarded: figures exist (so "do not invent figure numbers" was suppressed)
+      // but the injection flag withheld the list (so the model was told nothing and
+      // warned about nothing), and it invented figure numbers.
+      const figuresDataAvailable = section === 'detailedDescription'
         ? !!(detailedDescriptionScope?.scopedFigures.length)
         : !!(figures && figures.length > 0)
-      const hasPriorArt = !!(payload.manualPriorArt?.manualPriorArtText || (payload.selectedPriorArtPatents && payload.selectedPriorArtPatents.length > 0))
-      const hasComponents = section === 'detailedDescription'
+      const priorArtDataAvailable = !!(payload.manualPriorArt?.manualPriorArtText || (payload.selectedPriorArtPatents && payload.selectedPriorArtPatents.length > 0))
+      const componentsDataAvailable = section === 'detailedDescription'
         ? !!(detailedDescriptionScope?.scopedComponents.length)
         : componentsList2.length > 0
+
+      const hasFigures = figuresDataAvailable && shouldInjectFigures
+      const hasPriorArt = priorArtDataAvailable && shouldInjectPriorArt
+      const hasComponents = componentsDataAvailable && shouldInjectComponents
       const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
         figuresSkipped: payload.figuresSkipped === true
       })
@@ -2772,9 +2984,10 @@ ${sectionFidelityBlock}`)
         promptParts.push(udbResult.block)
       }
 
-      // In PRESERVE mode the inventor's raw disclosure is an authoritative source for
-      // the narrative sections, so under-extraction at Stage 0 cannot silently erase
-      // content the inventor wrote.
+      // The inventor's raw disclosure backs the narrative sections in BOTH modes,
+      // so under-extraction at Stage 0 cannot silently erase content the inventor
+      // wrote. In PRESERVE it is authoritative and its wording is canonical; in
+      // STRUCTURE_ONLY it is the factual ceiling for restructured prose.
       if ((ORIGINAL_DISCLOSURE_SECTIONS as readonly string[]).includes(section)) {
         const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, idea?.rawInput)
         if (disclosureBlock) {
@@ -2911,237 +3124,10 @@ Use the Super Admin panel to add the missing prompt.
     throw new Error(`Missing database prompt for section "${section}" in jurisdiction "${jurisdiction}". Please add the prompt via Super Admin panel.`)
   }
 
-  // Enforce conservative hard upper word limits per section to avoid overflows
-  private static enforceMaxWords(
-    section: string,
-    text: string,
-    sectionChecks?: any[] | null,
-    sectionRules?: any | null
-  ): { text: string; clipped: boolean; before: number; after: number } {
-    const wc = (t: string) => (String(t || '').trim().length ? String(t).trim().split(/\s+/).length : 0)
-    const before = wc(text)
-    let max: number | undefined
-    const maxWordLimiter = (sectionChecks || []).find((c: any) => c?.type === 'maxWords' && typeof c.limit === 'number')
-    if (maxWordLimiter) {
-      max = maxWordLimiter.limit
-    } else if (sectionRules?.wordRange?.max) {
-      max = sectionRules.wordRange.max
-    } else if (sectionRules?.maxWords) {
-      max = sectionRules.maxWords
-    } else if (typeof sectionRules?.wordLimit === 'number') {
-      // rules.abstract expresses its cap as wordLimit
-      max = sectionRules.wordLimit
-    }
-    if (!max) {
-      const fallback: Record<string, number> = {
-        title: 15,
-        abstract: 150,
-        fieldOfInvention: 80,
-        background: 400,
-        summary: 300,
-        // IMPORTANT: briefDescriptionOfDrawings - no word limit
-        // Each figure needs its own line with full description (no truncation)
-        briefDescriptionOfDrawings: 10000,
-        detailedDescription: 1200,
-        bestMethod: 350,
-        claims: 900,
-        industrialApplicability: 100,
-        listOfNumerals: 1000
-      }
-      max = fallback[section]
-    }
-    if (!max || before <= max) return { text, clipped: false, before, after: before }
-
-    // Improved sentence split that preserves common abbreviations in patent text
-    // Does NOT split after: Fig., No., e.g., i.e., etc., vs., approx., ref., para., sec., art., pat.
-    const smartSentenceSplit = (t: string): string[] => {
-      // First, temporarily replace common abbreviations with placeholders
-      const abbrevs = [
-        'Fig.', 'FIG.', 'fig.', 'Figs.', 'FIGS.', 'figs.',
-        'No.', 'no.', 'Nos.', 'nos.',
-        'e.g.', 'E.g.', 'i.e.', 'I.e.', 'etc.', 'Etc.',
-        'vs.', 'Vs.', 'approx.', 'Approx.',
-        'ref.', 'Ref.', 'refs.', 'Refs.',
-        'para.', 'Para.', 'paras.', 'Paras.',
-        'sec.', 'Sec.', 'secs.', 'Secs.',
-        'art.', 'Art.', 'arts.', 'Arts.',
-        'pat.', 'Pat.', 'pats.', 'Pats.',
-        'U.S.', 'U.K.', 'E.U.', 'PCT.',
-        'Dr.', 'Mr.', 'Ms.', 'Mrs.', 'Prof.',
-        'Inc.', 'Corp.', 'Ltd.', 'Co.',
-        'al.', 'et al.'
-      ]
-      let temp = t
-      const placeholders: string[] = []
-      for (const abbr of abbrevs) {
-        const placeholder = `__ABBR${placeholders.length}__`
-        if (temp.includes(abbr)) {
-          temp = temp.split(abbr).join(placeholder)
-          placeholders.push(abbr)
-        }
-      }
-      // Now split on sentence boundaries
-      const parts = temp.split(/(?<=[\.!?])\s+/).filter(Boolean)
-      // Restore abbreviations
-      return parts.map(p => {
-        let restored = p
-        placeholders.forEach((abbr, idx) => {
-          restored = restored.split(`__ABBR${idx}__`).join(abbr)
-        })
-        return restored
-      })
-    }
-
-    const wordTrim = (t: string, m: number) => t.split(/\s+/).slice(0, m).join(' ')
-
-    // Claims: preserve numbering; trim from last dependent claims backwards
-    if (section === 'claims') {
-      let blocks = String(text).split(/\n\s*(?=\d+\.)/).map(s => s.trim()).filter(Boolean)
-      const blockWordCount = () => wc(blocks.join('\n'))
-      let current = blockWordCount()
-      // Iteratively shorten last block sentences, then drop last block if still long
-      while (current > max && blocks.length > 0) {
-        const lastIdx = blocks.length - 1
-        const last = blocks[lastIdx]
-        const m = last.match(/^(\d+\.\s*)([\s\S]*)$/)
-        if (!m) { blocks.pop(); current = blockWordCount(); continue }
-        const prefix = m[1]
-        let body = m[2].trim()
-        const sentences = smartSentenceSplit(body)
-        if (sentences.length > 1) {
-          // Remove trailing sentence and re-evaluate
-          sentences.pop()
-          body = sentences.join(' ')
-          blocks[lastIdx] = `${prefix}${body}`.trim()
-        } else {
-          // If only one sentence remains, drop the entire last block
-          blocks.pop()
-        }
-        current = blockWordCount()
-      }
-      const out = blocks.join('\n')
-      const after = wc(out)
-      return { text: out, clipped: after < before, before, after }
-    }
-
-    // Brief Description: keep per-line cap (handled elsewhere) and enforce total cap
-    if (section === 'briefDescriptionOfDrawings') {
-      const lines = String(text).split(/\n+/).map(l => l.trim()).filter(Boolean)
-      const outLines: string[] = []
-      let total = 0
-      for (const l of lines) {
-        const words = l.split(/\s+/)
-        if (total + words.length <= max) {
-          outLines.push(l)
-          total += words.length
-        } else {
-          const remaining = Math.max(0, max - total)
-          if (remaining > 0) {
-            outLines.push(words.slice(0, remaining).join(' '))
-            total = max
-          }
-          break
-        }
-      }
-      const out = outLines.join('\n')
-      const after = wc(out)
-      return { text: out, clipped: after < before, before, after }
-    }
-
-    // Abstract: Pass through without trimming - let the LLM output be preserved
-    // Word limits are enforced via the prompt, not post-processing
-    if (section === 'abstract') {
-      return { text, clipped: false, before, after: before }
-    }
-
-    // Sections that may have multi-paragraph structure - preserve it while enforcing word limit
-    const multiParagraphSections = [
-      'detailedDescription',
-      'background',
-      'summary',
-      'modeOfCarryingOut',
-      'bestMethod',
-      'technicalSolution',
-      'technicalProblem',
-      'advantageousEffects',
-      'objectsOfInvention',
-      'industrialApplicability'
-    ]
-    
-    if (multiParagraphSections.includes(section)) {
-      // Split into paragraphs first to preserve structure
-      const paragraphs = String(text).split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
-      
-      // If no paragraph breaks exist, return text as-is (single paragraph)
-      if (paragraphs.length <= 1) {
-        if (before <= max) return { text, clipped: false, before, after: before }
-        // Single paragraph over limit - use sentence-aware trimming
-        const sentences = smartSentenceSplit(String(text))
-        const outSentences: string[] = []
-        let totalWords = 0
-        for (const s of sentences) {
-          const sWords = wc(s)
-          if (totalWords + sWords <= max) {
-            outSentences.push(s)
-            totalWords += sWords
-          } else {
-            break
-          }
-        }
-        const out = outSentences.length > 0 ? outSentences.join(' ') : wordTrim(text, max)
-        const after = wc(out)
-        return { text: out, clipped: after < before, before, after }
-      }
-      
-      // Multiple paragraphs - preserve structure
-      const outParagraphs: string[] = []
-      let totalWords = 0
-      
-      for (const para of paragraphs) {
-        const paraWords = wc(para)
-        if (totalWords + paraWords <= max) {
-          outParagraphs.push(para)
-          totalWords += paraWords
-        } else {
-          // This paragraph would exceed limit - try to include partial
-          const remaining = max - totalWords
-          if (remaining > 20) { // Only include if we can fit a meaningful chunk
-            const sentences = smartSentenceSplit(para)
-            const partialSentences: string[] = []
-            let partialWords = 0
-            for (const s of sentences) {
-              const sWords = wc(s)
-              if (partialWords + sWords <= remaining) {
-                partialSentences.push(s)
-                partialWords += sWords
-              } else {
-                break
-              }
-            }
-            if (partialSentences.length > 0) {
-              outParagraphs.push(partialSentences.join(' '))
-            }
-          }
-          break
-        }
-      }
-      
-      // Join paragraphs with double newlines to preserve structure
-      const out = outParagraphs.join('\n\n')
-      const after = wc(out)
-      return { text: out, clipped: after < before, before, after }
-    }
-
-    // Default for other sections: drop trailing sentences until within cap; fallback to word trim
-    let sentences = smartSentenceSplit(String(text))
-    while (wc(sentences.join(' ')) > max && sentences.length > 1) {
-      sentences.pop()
-    }
-    let out = sentences.join(' ')
-    if (wc(out) > max) out = wordTrim(out, max)
-    const after = wc(out)
-    return { text: out, clipped: after < before, before, after }
-  }
+  // NOTE: enforceMaxWords was removed. It was ~230 lines of claim-aware trimming
+  // and abbreviation-safe sentence splitting with zero call sites — every former
+  // caller is now a "word limit enforcement DISABLED" comment, because limits are
+  // communicated to the model in the prompt and the attorney adjusts from there.
 
   private static wrapMultiSectionPrompt(prompts: Record<string, string>): string {
     const entries = Object.entries(prompts).map(([k,v]) => `SECTION ${k.toUpperCase()}:\n${v}`).join('\n\n')
@@ -3207,20 +3193,34 @@ Use the Super Admin panel to add the missing prompt.
     }
     if (section === 'abstract') {
       // Only check for prohibited terms, not length
-      if (/(novel|inventive|best|unique|claim|claims)/i.test(text)) return { ok: false, reason: 'Improper tone in abstract' }
+      // Word-anchored: unanchored, this fired on "novelty", "unclaimed",
+      // "proclaimed" and "bestow", while the paired fixer below IS anchored — so
+      // it found nothing to remove and the section fell through the pass-through
+      // branch, producing pure noise in the debug trail.
+      if (/\b(novel|inventive|best|unique|claim|claims)\b/i.test(text)) return { ok: false, reason: 'Improper tone in abstract' }
     }
     // claims-specific normalization should not be performed here; handled in minimalFix
     if (section === 'briefDescriptionOfDrawings') {
       // NOTE: Line length checks DISABLED - LLM output passed through as-is
       // Only check for prohibited terms
-      if (/(advantage|benefit|claim)/i.test(text)) return { ok: false, reason: 'BDOD contains claims/advantages language' }
+      // Word-anchored: unanchored, "beneficial", "disadvantage" and "claimed"
+      // all tripped this and sent a perfectly good Brief Description into the
+      // destructive line filter below.
+      if (/\b(advantage|advantages|benefit|benefits|claim|claims)\b/i.test(text)) return { ok: false, reason: 'BDOD contains claims/advantages language' }
     }
     if (section === 'claims') {
       if (/(and\/or|etc\.|approximately|substantially)/i.test(text)) return { ok: false, reason: 'Claims hygiene violation' }
       // Disallow parentheses around claim numbers (e.g., claim (1))
       if (/\bclaim\s*\(\d+\)/i.test(text)) return { ok: false, reason: 'Parentheses around claim numbers are not allowed' }
 
-      // Sequential numbering and immediate dependency enforcement
+      // Sequential numbering and dependency enforcement.
+      //
+      // Every claim after the first used to be REQUIRED to read "The
+      // system/device/method of claim N" — so any claim set with a second
+      // independent claim failed here, and (until the repair pass was removed)
+      // was then rewritten into a single dependency chain. An independent claim
+      // is now recognised as such and only the dependent-form rules are applied
+      // to claims that actually name a parent.
       const blocks = text.split(/\n\s*(?=\d+\.)/).map(s=>s.trim()).filter(Boolean)
       let expected = 1
       const allowMultipleDependent = ctx?.claimsRules?.allowMultipleDependent !== false
@@ -3231,13 +3231,17 @@ Use the Super Admin panel to add the missing prompt.
         const num = parseInt(m[1],10)
         if (num !== expected) return { ok: false, reason: 'Claims numbering not sequential' }
         if (i >= 1) {
-          const dep = b.match(/^\d+\.\s*The\s+(system|device|method)\s+of\s+claim\s+(\d+)(?:\s+and\s+claim\s+\d+)*/i)
-          if (!dep) return { ok: false, reason: 'Dependent claim must start with "The system/device/method of claim X, ..."' }
-          const refs = Array.from(dep[0].matchAll(/claim\s+(\d+)/gi)).map(r=>parseInt(r[1],10))
-          if (!refs.length) return { ok: false, reason: 'Dependent claim must reference an earlier claim' }
-          if (!allowMultipleDependent && refs.length > 1) return { ok: false, reason: 'Multiple dependency not allowed by jurisdiction' }
-          if (refs.some(r => r >= num || r < 1)) return { ok: false, reason: 'Dependent claim must reference an earlier claim' }
-          if (!allowMultipleDependent && refs[0] !== expected - 1) return { ok: false, reason: 'Dependent claim must depend on immediately preceding claim' }
+          const body = b.replace(/^\d+\.\s*/, '')
+          const parent = dependencyFromClaimText(body)
+          if (parent === undefined) {
+            if (!looksLikeIndependentClaim(body)) {
+              return { ok: false, reason: `Claim ${num} neither opens like an independent claim ("A/An …") nor names the claim it depends on` }
+            }
+          } else {
+            const refs = Array.from(body.slice(0, 200).matchAll(/claims?\s+(\d+)/gi)).map(r=>parseInt(r[1],10))
+            if (!allowMultipleDependent && refs.length > 1) return { ok: false, reason: 'Multiple dependency not allowed by jurisdiction' }
+            if (refs.some(r => r >= num || r < 1)) return { ok: false, reason: `Claim ${num} must reference an earlier claim` }
+          }
         }
         expected++
       }
@@ -3318,17 +3322,16 @@ Use the Super Admin panel to add the missing prompt.
       return rule?.limit
     }
     if (section === 'abstract') {
-      // Remove prohibited tone words and claims language
-      out = out.replace(/\b(novel|inventive|best|unique|claim|claims)\b/gi, '')
-      // Clean up any double spaces created by word removal, but preserve newlines
-      out = out.replace(/[ \t]{2,}/g, ' ').trim()
-      // Enforce starts with title if available
+      // Deleting the banned words in place corrupted the prose: "the best mode of
+      // operation" became "the mode of operation", "a unique arrangement" became
+      // "a arrangement" — and the corrupted text then passed the re-check and was
+      // saved. There is no safe in-place substitution for a prohibited term, so we
+      // only make the repairs that cannot damage the sentence and otherwise return
+      // null, which surfaces the issue for review with the text left intact.
       if (ctx.approvedTitle && ctx.reason && ctx.reason.toLowerCase().includes('title') && !out.startsWith(ctx.approvedTitle)) {
-        out = `${ctx.approvedTitle} ${out}`.trim()
+        return `${ctx.approvedTitle} ${out}`.trim()
       }
-      // NOTE: Word limit enforcement removed - let the LLM output be preserved as-is
-      // The LLM is instructed with proper word limits in the prompt
-      return out
+      return null
     }
     if (section === 'industrialApplicability') {
       // NOTE: Word limit enforcement removed - LLM output passed through as-is
@@ -3336,35 +3339,38 @@ Use the Super Admin panel to add the missing prompt.
     }
     if (section === 'briefDescriptionOfDrawings') {
       const figuresArray = ctx.figures || []
-      const allowed = new Set(figuresArray.map((f:any)=>String(f.figureNo)))
+      const allowed = new Set(figuresArray.map((f:any)=>String(Number(f.figureNo))))
       const lines = out.split(/\n+/).map(l=>l.trim()).filter(Boolean)
-      
-      // If we have a known figures list, filter to only those figures
-      // If no figures list available (empty), pass through all valid figure descriptions
-      const cleaned = lines
-        .filter(l=>{
-          const m = l.match(/Fig\.?\s*(\d+)/i)
-          if (!m) return false
-          // If we have no figures in allowed set, accept all figure references
-          // This prevents filtering out valid content when figures aren't loaded
-          if (allowed.size === 0) return true
-          return allowed.has(String(m[1]))
-        })
-        .map(l=>l.replace(/\b(advantage|advantages|benefit|benefits|claim|claims)\b/gi,'').trim())
-      
-      // If we have valid lines, return them (one figure per line with blank line between)
-      if (cleaned.length > 0) {
+
+      // Accept every spelling a model actually uses. The old pattern was
+      // /Fig\.?\s*(\d+)/i, which does NOT match "FIGURE 1" — so a Brief
+      // Description written that way had every line discarded and was replaced
+      // wholesale by generated text or by a placeholder sentence.
+      const figureLineRe = /\b(?:FIG|FIGS|FIGURE|FIGURES|Drawing)\b\.?\s*0*(\d+)/i
+
+      // The only safe repair is dropping lines that are not figure descriptions
+      // at all — an intro or outro paragraph is usually where the "advantage"
+      // language lives. Words are never deleted in place: that left "shows the
+      // of the assembly" in the draft, the same corruption removed from the
+      // abstract repair above.
+      const cleaned = lines.filter(l => {
+        const m = l.match(figureLineRe)
+        if (!m) return false
+        if (allowed.size === 0) return true
+        return allowed.has(String(Number(m[1])))
+      })
+
+      if (cleaned.length > 0 && cleaned.length < lines.length) {
         return cleaned.join('\n\n')
       }
-      // If original text has figure references but none matched, return original rather than error
-      if (lines.length > 0 && lines.some(l => /Fig\.?\s*\d+/i.test(l))) {
-        return out
-      }
-      // Only show error message if there truly is no figure content
-      // Generate figure descriptions from figures array (one per line with blank line between)
-      return figuresArray.length > 0 
-        ? figuresArray.map((f: any) => `FIG. ${f.figureNo} is ${f.title || 'a view of the invention'}.`).join('\n\n')
-        : out || 'Brief description of drawings will be added when figures are available.'
+
+      // Either every line is a figure line (so the flagged word is inside one and
+      // there is no safe edit) or nothing matched. Never substitute generated or
+      // placeholder prose here: the old fallback wrote "Brief description of
+      // drawings will be added when figures are available." straight into the
+      // draft. Leave the model's text alone and let the guardrail warning carry
+      // the issue to review.
+      return null
     }
     if (section === 'detailedDescription') {
       const figuresArray = ctx.figures || []
@@ -3394,9 +3400,18 @@ Use the Super Admin panel to add the missing prompt.
         .map((c: any) => String(c?.referenceLabel || c?.numeral || '').replace(/^\((.*)\)$/, '$1'))
         .filter(Boolean))
 
-      fixed = fixed.replace(/\(([S]?\d+|[a-z])\)/gi, (match, label) => {
-        return allowedLabels.has(label) ? match : ''
-      })
+      // Only strip labels when we actually have an allowed list to strip against.
+      // With an empty list this deleted EVERY reference numeral in the section —
+      // which happens exactly when the invention-scope filter has over-pruned, so
+      // the repair compounded that bug instead of surfacing it.
+      if (allowedLabels.size > 0) {
+        // Ordinary prose enumeration — "(1)", "(a)" opening a list item — is not a
+        // reference label. Only a parenthetical that follows a word is, so anchor
+        // on the preceding word character and leave standalone enumeration alone.
+        fixed = fixed.replace(/([A-Za-zÀ-ɏ])(\s*)\(([S]?\d+|[a-z])\)/gi, (match, prevChar, _gap, label) => {
+          return allowedLabels.has(label) ? match : String(prevChar)
+        })
+      }
 
       fixed = fixed
         .replace(/[ \t]{2,}/g, ' ')
@@ -3407,42 +3422,22 @@ Use the Super Admin panel to add the missing prompt.
 
       return fixed || null
     }
-    if (section === 'claims') {
-      // Normalize parentheses around claim numbers in text body
-      let fixed = out.replace(/\bclaim\s*\((\d+)\)/gi, 'claim $1')
-
-      // Split into numbered claim blocks. If numbering missing, attempt to infer by splitting on newlines.
-      let blocks = fixed.split(/\n\s*(?=\d+\.)/).map(s=>s.trim()).filter(Boolean)
-      if (blocks.length === 0) {
-        const rough = fixed.split(/\n+/).map(s=>s.trim()).filter(Boolean)
-        blocks = rough.map((s, i) => `${i+1}. ${s.replace(/^\d+\.\s*/, '')}`)
-      }
-
-      const subjectHint = /\b(system|device|method)\b/i.test(blocks[0]) ? (blocks[0].match(/\b(system|device|method)\b/i)![1].toLowerCase()) : 'system'
-
-      const normalized: string[] = []
-      for (let i = 0; i < blocks.length; i++) {
-        const expected = i + 1
-        let body = blocks[i].replace(/^\d+\.\s*/, '').trim()
-
-        if (i === 0) {
-          // Ensure independent claim numbered correctly
-          normalized.push(`${expected}. ${body}`)
-          continue
-        }
-
-        // For dependent claims, enforce immediate dependency preamble
-        // Clean up any duplicate "The X of claim Y" phrases first
-        body = body.replace(/(The\s+(?:system|device|method)\s+of\s+claim\s+\d+,\s*)+/gi, '')
-
-        // Then add the correct preamble
-        body = `The ${subjectHint} of claim ${expected-1}, ${body.replace(/^The\s+/, '').replace(/^,\s*/, '')}`
-
-        normalized.push(`${expected}. ${body}`)
-      }
-
-      return normalized.join('\n')
-    }
+    // NOTE: there is deliberately no 'claims' branch here.
+    //
+    // The previous one rewrote the whole claim set into a single dependency chain:
+    // it took one subject noun from claim 1, stripped every later claim's existing
+    // "The X of claim Y," preamble, and re-prefixed each with
+    // `The <subject> of claim <n-1>,`. A second independent claim came out as
+    // "8. The system of claim 7, A method of…", and a claim that legitimately
+    // depended on claim 1 was silently repointed at claim 4 — a change to the
+    // legal scope of the claim set. Worse, the guardrail that triggered it demands
+    // every claim after the first match "The system/device/method of claim N", so
+    // ANY multi-independent claim set failed, got mangled, and then passed the
+    // re-check because the mangling made it conform.
+    //
+    // There is no safe automated repair for a claim dependency graph. Returning
+    // null leaves the model's claims untouched and lets the guardrail reason reach
+    // review, which is the correct outcome.
     return null
   }
 
@@ -3451,56 +3446,40 @@ Use the Super Admin panel to add the missing prompt.
     return this.validateDraftConsistency(draft, session)
   }
 
+  /**
+   * Content for the only two sections that can be rebuilt from real session data:
+   * the title the user typed at Stage 0, and the numeral list already held in the
+   * reference map. Returns '' for anything else.
+   *
+   * This deliberately has no branches for the narrative sections. It used to carry
+   * fifteen of them — "Conventional approaches have limitations.", "The invention
+   * comprises several components working together.", "1. A system comprising:
+   * components as described." — which are generic filler that reads as a real
+   * draft. The caller was rewritten to stop using them, but leaving them here kept
+   * the pipeline one careless call site away from shipping filler again.
+   */
   private static getFallbackContent(section: string, payload: any): string {
     const { idea, referenceMap } = payload
     // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
     const rawFallbackComps = referenceMap?.components as any
-    const fallbackComps = Array.isArray(rawFallbackComps) 
-      ? rawFallbackComps 
+    const fallbackComps = Array.isArray(rawFallbackComps)
+      ? rawFallbackComps
       : (rawFallbackComps?.components && Array.isArray(rawFallbackComps.components) ? rawFallbackComps.components : [])
-    
+
     switch (section) {
       case 'title':
-        return idea?.title || 'Patent Invention'
-      case 'abstract':
-        return (idea?.title || 'Patent Invention') + ' provides a technical solution.'
-      case 'summary':
-        return 'This invention provides an improved technical solution.'
-      case 'briefDescriptionOfDrawings':
-        return 'Fig. 1 shows the system architecture.'
-      case 'fieldOfInvention':
-        return 'The invention relates to the field of technology.'
-      case 'background':
-        return 'Conventional approaches have limitations.'
-      case 'objectsOfInvention':
-      case 'objects':
-        return 'The principal object of the present invention is to provide an improved solution that overcomes limitations of conventional approaches. Another object is to enhance efficiency and reliability in the relevant technical field.'
-      case 'technicalProblem':
-        return 'The invention addresses a technical problem in the art.'
-      case 'technicalSolution':
-        return 'The invention provides a technical solution comprising the disclosed architecture.'
-      case 'advantageousEffects':
-        return 'The solution yields technical effects that improve performance or reliability.'
-      case 'crossReference':
-        return 'This application is related to prior filings and references identified by the applicant.'
-      case 'detailedDescription':
-        return 'The invention comprises several components working together.'
-      case 'modeOfCarryingOut':
-        return 'A mode for carrying out the invention is described with sufficient detail for a skilled person.'
-      case 'bestMethod':
-        return 'The best method involves the following steps.'
-      case 'claims':
-        return '1. A system comprising: components as described.'
-      case 'listOfNumerals':
+        // The user's own Stage 0 title; never a generated stand-in.
+        return String(idea?.title || '').trim()
+      case 'listOfNumerals': {
         // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
         // Handle edge case where both referenceLabel and numeral are missing
-        const nums = fallbackComps.map((c: any) => {
+        return fallbackComps.map((c: any) => {
           const ref = c.referenceLabel || c.numeral
           return ref ? `( ${ref} ) G ${c.name}` : c.name
-        }).join('\n')
-        return nums || '(100) G Main component'
+        }).filter(Boolean).join('\n')
+      }
       default:
-        return 'Content not available.'
+        return ''
     }
   }
 
@@ -3942,9 +3921,6 @@ Use the Super Admin panel to add the missing prompt.
       }
 
       // Validate draft consistency
-      // Apply basic section-level validation from profile if available
-      await this.applySectionChecks(draftResult.draft, jurisdiction);
-
       const validation = this.validateDraftConsistency(draftResult.draft, session);
 
       return {
@@ -4102,12 +4078,11 @@ Use the Super Admin panel to add the missing prompt.
     return defs
   }
 
-  private static async applySectionChecks(draft: any, jurisdiction: string) {
-    // NOTE: Word/char limit enforcement DISABLED
-    // LLM output is passed through as-is - patent attorney will make adjustments
-    // Limits are communicated to LLM via prompts, not enforced post-generation
-    return
-  }
+  // NOTE: applySectionChecks was removed. It was an empty `return` that still sat
+  // in the reference-draft path directly before validateDraftConsistency, so the
+  // sequence read as two checks when only one ran. Word and character limits are
+  // communicated to the model in the prompt and deliberately not enforced
+  // post-generation; there is nothing for this function to do.
 
   /**
    * Build comprehensive annexure generation prompt using jurisdiction-aware sections
@@ -4369,57 +4344,60 @@ OUTPUT FORMAT:
     };
 
     try {
-      // Extract all numerals from draft text
-      const numeralRegex = /\((\d+)\)/g;
-      const usedNumerals = new Set<number>();
+      // Extract every reference label from the draft, in all four numbering
+      // styles. The old pattern was /\((\d+)\)/ against component.numeral only,
+      // which is blind to STEP_LABEL (S100) and CONSTITUENT_LABEL ((a), (b)) — so
+      // for PROCESS and COMPOSITION drafts this check saw no labels at all,
+      // reported every declared component as "missing", and never found a genuine
+      // invalid reference. Half the patent types got a meaningless report.
+      const normalizeLabel = (value: unknown): string =>
+        String(value ?? '').trim().replace(/^\((.*)\)$/, '$1').toUpperCase();
+
+      const labelRegex = /\((S?\d+|[A-Za-z])\)/g;
+      const usedNumerals = new Set<string>();
       let match;
 
       const fullText = draft.fullText || '';
-      while ((match = numeralRegex.exec(fullText)) !== null) {
-        usedNumerals.add(parseInt(match[1]));
+      while ((match = labelRegex.exec(fullText)) !== null) {
+        usedNumerals.add(normalizeLabel(match[1]));
       }
 
       // Check against reference map
       // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
       const rawRefMapComps2 = session.referenceMap?.components as any
-      const refMapComps2 = Array.isArray(rawRefMapComps2) 
-        ? rawRefMapComps2 
+      const refMapComps2 = Array.isArray(rawRefMapComps2)
+        ? rawRefMapComps2
         : (rawRefMapComps2?.components && Array.isArray(rawRefMapComps2.components) ? rawRefMapComps2.components : [])
-      
-      const referenceNumerals = new Set<number>();
+
+      const referenceNumerals = new Set<string>();
       for (const component of refMapComps2) {
-        const rawNumeral = component?.numeral;
-        const numeral = typeof rawNumeral === 'number'
-          ? rawNumeral
-          : (typeof rawNumeral === 'string' && rawNumeral.trim() ? Number(rawNumeral) : NaN);
-        if (Number.isFinite(numeral)) {
-          referenceNumerals.add(numeral);
-        }
+        const label = normalizeLabel(component?.referenceLabel ?? component?.numeral);
+        if (label) referenceNumerals.add(label);
       }
 
       // Find missing and unused numerals
-      referenceNumerals.forEach((refNum: number) => {
+      referenceNumerals.forEach((refNum: string) => {
         if (!usedNumerals.has(refNum)) {
-          (report.missingNumerals as Array<number>).push(refNum);
+          (report.missingNumerals as Array<string>).push(refNum);
         }
       });
 
-      usedNumerals.forEach((usedNum: number) => {
+      usedNumerals.forEach((usedNum: string) => {
         if (!referenceNumerals.has(usedNum)) {
-          (report.unusedNumerals as Array<number>).push(usedNum);
+          (report.unusedNumerals as Array<string>).push(usedNum);
         }
       });
 
-      // Check figure references
-      const figureRegex = /Fig\.?\s*(\d+)/gi;
+      // Check figure references. Match every spelling a model uses, not just "Fig".
+      const figureRegex = /\b(?:FIG|FIGS|FIGURE|FIGURES)\b\.?\s*0*(\d+)/gi;
       const referencedFigures = new Set<number>();
       while ((match = figureRegex.exec(fullText)) !== null) {
-        referencedFigures.add(parseInt(match[1]));
+        referencedFigures.add(parseInt(match[1], 10));
       }
 
       const availableFigures = areFiguresSkipped(session)
         ? new Set<number>()
-        : new Set<number>((session.figurePlans?.map((f: any) => f.figureNo) || []));
+        : new Set<number>((session.figurePlans?.map((f: any) => Number(f.figureNo)) || []).filter(Number.isFinite));
       referencedFigures.forEach((refFig: number) => {
         if (!availableFigures.has(refFig)) {
           (report.invalidReferences as Array<string | number>).push(`Figure ${refFig}`);

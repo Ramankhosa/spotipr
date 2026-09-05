@@ -32,15 +32,19 @@ export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
   supportedModels = [
     // Claude 5 family + Opus 4.8 + Haiku 4.5 (current generation, 2026)
+    'claude-fable-5-1',
+    'claude-opus-5',
     'claude-fable-5',
     'claude-opus-4-8',
     'claude-sonnet-5',
     'claude-haiku-4-5',
     // "Thinking" alias — enables adaptive extended thinking on the base model
+    'claude-opus-5-thinking',
     'claude-opus-4-8-thinking',
     // Claude 4.x models
     'claude-opus-4-7',
     'claude-opus-4-6',
+    'claude-sonnet-4-6',
     // Claude 3.5 models - use the stable aliases that Anthropic actually supports
     'claude-3-5-sonnet',
     'claude-3-5-haiku',
@@ -158,11 +162,15 @@ export class AnthropicProvider implements LLMProvider {
         messages.push({ role: 'user', content: this.promptContent(request, actualModel) })
       }
 
-      // Adaptive extended thinking is supported on Opus 4.6/4.7/4.8, Sonnet 5, and Fable 5.
+      // Adaptive extended thinking is supported on Opus 5, Opus 4.6/4.7/4.8,
+      // Sonnet 5, Sonnet 4.6, and the Fable 5 family.
       const supportsAdaptiveThinking =
         actualModel.startsWith('claude-opus-4-') ||
+        actualModel === 'claude-opus-5' ||
         actualModel === 'claude-sonnet-5' ||
-        actualModel === 'claude-fable-5'
+        actualModel === 'claude-sonnet-4-6' ||
+        actualModel === 'claude-fable-5' ||
+        actualModel === 'claude-fable-5-1'
       const enableThinking = isThinkingVariant && supportsAdaptiveThinking
 
       const modelLimits = this.getTokenLimits(modelToUse)
@@ -185,12 +193,16 @@ export class AnthropicProvider implements LLMProvider {
         console.log(`Anthropic: adaptive thinking enabled for ${actualModel} (max_tokens=${maxTokens})`)
       }
 
-      // Claude Opus 4.x, Sonnet 5, and Fable 5 reject the `temperature` parameter (HTTP 400);
-      // it is also incompatible with thinking. Haiku 4.5 and Claude 3.x still accept it.
+      // Claude Opus 5 / 4.x, Sonnet 5 / 4.6, and the Fable 5 family reject the
+      // `temperature` parameter (HTTP 400); it is also incompatible with thinking.
+      // Haiku 4.5 and Claude 3.x still accept it.
       const rejectsSampling =
         actualModel.startsWith('claude-opus-4-') ||
+        actualModel === 'claude-opus-5' ||
         actualModel === 'claude-sonnet-5' ||
-        actualModel === 'claude-fable-5'
+        actualModel === 'claude-sonnet-4-6' ||
+        actualModel === 'claude-fable-5' ||
+        actualModel === 'claude-fable-5-1'
       if (!rejectsSampling && !enableThinking) {
         requestBody.temperature = request.parameters?.temperature ?? 0.7
       }
@@ -278,12 +290,15 @@ export class AnthropicProvider implements LLMProvider {
     const normalized = this.normalizeModelCode(modelName).apiModel
     // Claude 3.5 models have 200K context
     const limits: Record<string, { input: number; output: number }> = {
+      'claude-fable-5-1': { input: 1000000, output: 128000 },
       'claude-fable-5': { input: 1000000, output: 128000 },
+      'claude-opus-5': { input: 1000000, output: 128000 },
       'claude-opus-4-8': { input: 1000000, output: 128000 },
       'claude-sonnet-5': { input: 1000000, output: 128000 },
       'claude-haiku-4-5': { input: 200000, output: 64000 },
       'claude-opus-4-7': { input: 1000000, output: 128000 },
       'claude-opus-4-6': { input: 1000000, output: 128000 },
+      'claude-sonnet-4-6': { input: 1000000, output: 128000 },
       'claude-3-5-sonnet': { input: 200000, output: 8192 },
       'claude-3-5-haiku': { input: 200000, output: 8192 },
       'claude-3-opus': { input: 200000, output: 4096 },
@@ -297,12 +312,15 @@ export class AnthropicProvider implements LLMProvider {
     const normalized = this.normalizeModelCode(modelName).apiModel
     // Cost per token in USD (approximate as of Dec 2024)
     const costs: Record<string, { input: number; output: number }> = {
+      'claude-fable-5-1': { input: 0.00001, output: 0.00005 },    // $10/$50 per M
       'claude-fable-5': { input: 0.00001, output: 0.00005 },      // $10/$50 per M
+      'claude-opus-5': { input: 0.000005, output: 0.000025 },     // $5/$25 per M
       'claude-opus-4-8': { input: 0.000005, output: 0.000025 },   // $5/$25 per M
-      'claude-sonnet-5': { input: 0.000003, output: 0.000015 },   // $3/$15 per M
+      'claude-sonnet-5': { input: 0.000002, output: 0.00001 },    // $2/$10 per M
       'claude-haiku-4-5': { input: 0.000001, output: 0.000005 },  // $1/$5 per M
       'claude-opus-4-7': { input: 0.000005, output: 0.000025 },
       'claude-opus-4-6': { input: 0.000005, output: 0.000025 },
+      'claude-sonnet-4-6': { input: 0.000003, output: 0.000015 }, // $3/$15 per M
       'claude-3-5-sonnet': { input: 0.000003, output: 0.000015 },
       'claude-3-5-haiku': { input: 0.0000008, output: 0.000004 },
       'claude-3-opus': { input: 0.000015, output: 0.000075 },

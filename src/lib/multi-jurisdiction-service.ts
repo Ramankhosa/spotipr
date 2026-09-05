@@ -123,6 +123,14 @@ export interface SectionContextRequirements {
   requiresFigures: boolean
   requiresClaims: boolean
   requiresComponents: boolean
+  /**
+   * False when nothing in the database answered for this section, so every flag
+   * above is a placeholder rather than an admin decision. Callers must treat an
+   * unresolved lookup as "inject whatever context exists" — withholding the
+   * component list and figure list from a Detailed Description is a quality
+   * failure, not a safe default.
+   */
+  resolved?: boolean
 }
 
 // ============================================================================
@@ -139,6 +147,44 @@ const SAFE_DEFAULT_CONTEXT: SectionContextRequirements = {
   requiresFigures: false,
   requiresClaims: false,
   requiresComponents: false
+}
+
+/**
+ * What a section gets when the database never answered for it: every context
+ * block that exists, with claims still governed by the section's UDB config so
+ * a title does not receive a claim set. "All false" is not a safe default for
+ * an unresolved lookup — it drafts a Detailed Description with no component
+ * list and no figures, and the result reads as a complete draft.
+ */
+export function injectAllContextRequirements(sectionKey: string): SectionContextRequirements {
+  return {
+    requiresPriorArt: true,
+    requiresFigures: true,
+    requiresComponents: true,
+    requiresClaims: getSectionInjectionConfig(sectionKey).injectClaim1,
+    resolved: false
+  }
+}
+
+/** Replace every unresolved entry of a batch lookup with injectAllContextRequirements. */
+export function withInjectAllWhenUnresolved(
+  requirements: Record<string, SectionContextRequirements>
+): Record<string, SectionContextRequirements> {
+  const out: Record<string, SectionContextRequirements> = {}
+  for (const [key, value] of Object.entries(requirements)) {
+    out[key] = !value || value.resolved === false ? injectAllContextRequirements(key) : value
+  }
+  return out
+}
+
+/** Single-lookup counterpart of withInjectAllWhenUnresolved. */
+export function withInjectAllIfUnresolved(
+  sectionKey: string,
+  requirements: SectionContextRequirements | null | undefined
+): SectionContextRequirements {
+  return !requirements || requirements.resolved === false
+    ? injectAllContextRequirements(sectionKey)
+    : requirements
 }
 
 // ============================================================================
@@ -358,50 +404,58 @@ export async function getSectionContextRequirements(
   sectionKey: string,
   jurisdiction?: string
 ): Promise<SectionContextRequirements> {
-  // Default result
-  let result: SectionContextRequirements = {
-    requiresPriorArt: false,
-    requiresFigures: false,
-    requiresClaims: false,
-    requiresComponents: false
+  // Layering, lowest to highest: SupersetSection universal defaults, then any
+  // non-null CountrySectionMapping override for this jurisdiction.
+  //
+  // This function used to read the mapping FIRST and return early as soon as any
+  // single override was non-null, without ever consulting SupersetSection. One
+  // jurisdiction override therefore silently zeroed the other three flags — e.g.
+  // setting requiresFiguresOverride on detailedDescription dropped the component
+  // list out of that country's Detailed Description prompts. Order matters here;
+  // getBatchSectionContextRequirements below has always layered correctly.
+  let resolvedFromDatabase = false
+  const requirements: SectionContextRequirements = { ...SAFE_DEFAULT_CONTEXT }
+
+  // 1. SupersetSection universal defaults (the base layer)
+  try {
+    const supersetSection = await prisma.supersetSection.findUnique({
+      where: { sectionKey }
+    })
+
+    if (supersetSection) {
+      resolvedFromDatabase = true
+      requirements.requiresPriorArt = (supersetSection as any).requiresPriorArt ?? false
+      requirements.requiresFigures = (supersetSection as any).requiresFigures ?? false
+      requirements.requiresClaims = (supersetSection as any).requiresClaims ?? false
+      requirements.requiresComponents = (supersetSection as any).requiresComponents ?? false
+    }
+  } catch (err) {
+    console.warn(`[getSectionContextRequirements] Error checking SupersetSection for ${sectionKey}:`, err)
   }
 
-  // 1. Check CountrySectionMapping for jurisdiction-specific override
+  // 2. Jurisdiction-specific overrides layered on top; null means "inherit".
   if (jurisdiction) {
     try {
       const mapping = await prisma.countrySectionMapping.findFirst({
-        where: { 
-          countryCode: jurisdiction.toUpperCase(), 
+        where: {
+          countryCode: jurisdiction.toUpperCase(),
           sectionKey,
           isEnabled: true
         }
       })
-      
+
       if (mapping) {
-        // Use overrides if explicitly set (not null)
-        if ((mapping as any).requiresPriorArtOverride !== null) {
-          result.requiresPriorArt = (mapping as any).requiresPriorArtOverride ?? false
-        }
-        if ((mapping as any).requiresFiguresOverride !== null) {
-          result.requiresFigures = (mapping as any).requiresFiguresOverride ?? false
-        }
-        if ((mapping as any).requiresClaimsOverride !== null) {
-          result.requiresClaims = (mapping as any).requiresClaimsOverride ?? false
-        }
-        if ((mapping as any).requiresComponentsOverride !== null) {
-          result.requiresComponents = (mapping as any).requiresComponentsOverride ?? false
-        }
-        
-        // If any override was set, we have a valid result
-        const hasOverride = [
-          (mapping as any).requiresPriorArtOverride,
-          (mapping as any).requiresFiguresOverride,
-          (mapping as any).requiresClaimsOverride,
-          (mapping as any).requiresComponentsOverride
-        ].some(v => v !== null && v !== undefined)
-        
-        if (hasOverride) {
-          return result
+        const overrides: Array<[keyof SectionContextRequirements, unknown]> = [
+          ['requiresPriorArt', (mapping as any).requiresPriorArtOverride],
+          ['requiresFigures', (mapping as any).requiresFiguresOverride],
+          ['requiresClaims', (mapping as any).requiresClaimsOverride],
+          ['requiresComponents', (mapping as any).requiresComponentsOverride],
+        ]
+        for (const [key, value] of overrides) {
+          if (value !== null && value !== undefined) {
+            requirements[key] = value === true
+            resolvedFromDatabase = true
+          }
         }
       }
     } catch (err) {
@@ -409,27 +463,14 @@ export async function getSectionContextRequirements(
     }
   }
 
-  // 2. Check SupersetSection for universal defaults
-  try {
-    const supersetSection = await prisma.supersetSection.findUnique({
-      where: { sectionKey }
-    })
-    
-    if (supersetSection) {
-      return {
-        requiresPriorArt: (supersetSection as any).requiresPriorArt ?? false,
-        requiresFigures: (supersetSection as any).requiresFigures ?? false,
-        requiresClaims: (supersetSection as any).requiresClaims ?? false,
-        requiresComponents: (supersetSection as any).requiresComponents ?? false
-      }
-    }
-  } catch (err) {
-    console.warn(`[getSectionContextRequirements] Error checking SupersetSection for ${sectionKey}:`, err)
+  if (!resolvedFromDatabase) {
+    // Nothing in the database answered for this section. The caller must not read
+    // that as "inject nothing" — see `resolved` on SectionContextRequirements.
+    console.warn(`[getSectionContextRequirements] Section "${sectionKey}" not found in database (SupersetSection/CountrySectionMapping). Callers should fall back to injecting whatever context exists. Please configure SupersetSection.`)
+    return { ...SAFE_DEFAULT_CONTEXT, resolved: false }
   }
 
-  // 3. DATABASE IS THE ONLY SOURCE OF TRUTH - Use safe defaults and log warning
-  console.warn(`[getSectionContextRequirements] Section "${sectionKey}" not found in database (SupersetSection). Using safe defaults (all false). Please configure SupersetSection table.`)
-  return { ...SAFE_DEFAULT_CONTEXT }
+  return { ...requirements, resolved: true }
 }
 
 /**
@@ -473,36 +514,37 @@ export async function getBatchSectionContextRequirements(
       const superset = supersetMap.get(key)
       
       // Start with safe defaults (all false)
-      let requirements: SectionContextRequirements = { ...SAFE_DEFAULT_CONTEXT }
-      
+      let requirements: SectionContextRequirements = { ...SAFE_DEFAULT_CONTEXT, resolved: false }
+
       // Apply SupersetSection defaults from database
       if (superset) {
         requirements = {
           requiresPriorArt: (superset as any).requiresPriorArt ?? false,
           requiresFigures: (superset as any).requiresFigures ?? false,
           requiresClaims: (superset as any).requiresClaims ?? false,
-          requiresComponents: (superset as any).requiresComponents ?? false
+          requiresComponents: (superset as any).requiresComponents ?? false,
+          resolved: true
         }
       } else {
         missingSections.push(key)
       }
-      
+
       // Apply jurisdiction-specific overrides from database
       if (mapping) {
-        if ((mapping as any).requiresPriorArtOverride !== null && (mapping as any).requiresPriorArtOverride !== undefined) {
-          requirements.requiresPriorArt = (mapping as any).requiresPriorArtOverride
-        }
-        if ((mapping as any).requiresFiguresOverride !== null && (mapping as any).requiresFiguresOverride !== undefined) {
-          requirements.requiresFigures = (mapping as any).requiresFiguresOverride
-        }
-        if ((mapping as any).requiresClaimsOverride !== null && (mapping as any).requiresClaimsOverride !== undefined) {
-          requirements.requiresClaims = (mapping as any).requiresClaimsOverride
-        }
-        if ((mapping as any).requiresComponentsOverride !== null && (mapping as any).requiresComponentsOverride !== undefined) {
-          requirements.requiresComponents = (mapping as any).requiresComponentsOverride
+        const overrides: Array<[keyof SectionContextRequirements, unknown]> = [
+          ['requiresPriorArt', (mapping as any).requiresPriorArtOverride],
+          ['requiresFigures', (mapping as any).requiresFiguresOverride],
+          ['requiresClaims', (mapping as any).requiresClaimsOverride],
+          ['requiresComponents', (mapping as any).requiresComponentsOverride],
+        ]
+        for (const [field, value] of overrides) {
+          if (value !== null && value !== undefined) {
+            requirements[field] = value === true
+            requirements.resolved = true
+          }
         }
       }
-      
+
       result[key] = requirements
     }
     
@@ -513,9 +555,9 @@ export async function getBatchSectionContextRequirements(
   } catch (err) {
     console.error('[getBatchSectionContextRequirements] Database error:', err)
     
-    // Use safe defaults for all sections on error
+    // Nothing resolved; callers fall back to injecting whatever context exists.
     for (const key of sectionKeys) {
-      result[key] = { ...SAFE_DEFAULT_CONTEXT }
+      result[key] = { ...SAFE_DEFAULT_CONTEXT, resolved: false }
     }
   }
   
@@ -1425,8 +1467,10 @@ export async function generateReferenceDraft(
     console.log(`[generateReferenceDraft] Loaded ${Object.keys(sectionPrompts).length} section prompts from database`)
 
     // Fetch context requirements for all sections from database (batch query for efficiency)
-    const contextRequirements = await getBatchSectionContextRequirements(dynamicSections)
-    
+    const contextRequirements = withInjectAllWhenUnresolved(
+      await getBatchSectionContextRequirements(dynamicSections)
+    )
+
     // Calculate what context is needed by the batch of sections
     const batchNeeds = getBatchContextNeeds(contextRequirements)
     
@@ -1483,8 +1527,9 @@ export async function generateReferenceDraft(
       let instructionText = prompt.instruction
       let contextAddendum = ''
       
-      // Get database-driven context requirements for this section
-      const requirements = contextRequirements[key] || { requiresPriorArt: false, requiresFigures: false, requiresClaims: false, requiresComponents: false }
+      // Get database-driven context requirements for this section. A section the
+      // batch lookup never answered for gets "inject what exists", never all-false.
+      const requirements = contextRequirements[key] || injectAllContextRequirements(key)
       
       // Special handling for claims - use frozen claims
       if (key === 'claims' && frozenClaimsText) {
@@ -1926,12 +1971,17 @@ ${referenceFidelityBlock}`)
         components.length ? components : (normalizedData as any)?.components
       )
       if (terminologyBlock) promptParts.push(terminologyBlock)
-      const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
-      if (disclosureBlock) {
-        promptParts.push(`
+    }
+
+    // Outside the block above on purpose: the raw disclosure backs the narrative
+    // sections in BOTH modes. Nesting it under the PRESERVE-only fidelity block
+    // meant a STRUCTURE_ONLY reference draft never saw the inventor's own words,
+    // only Stage 0's extraction of them.
+    const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
+    if (disclosureBlock) {
+      promptParts.push(`
 ${disclosureBlock}
-This disclosure is authoritative source support for the ${ORIGINAL_DISCLOSURE_SECTIONS.join(', ')} sections.`)
-      }
+This disclosure is source support for the ${ORIGINAL_DISCLOSURE_SECTIONS.join(', ')} sections.`)
     }
 
     if (dynamicSections.includes('detailedDescription')) {
@@ -2280,8 +2330,12 @@ ${contextParts.join('\n\n')}
       ? `\nConstraints: ${safeConstraints.join('; ')}`
       : ''
 
-    // Get database-driven context requirements for this section
-    const contextRequirements = await getSectionContextRequirements(sectionKey, selectedJurisdictions[0])
+    // Get database-driven context requirements for this section. An unresolved
+    // lookup injects whatever context exists rather than nothing.
+    const contextRequirements = withInjectAllIfUnresolved(
+      sectionKey,
+      await getSectionContextRequirements(sectionKey, selectedJurisdictions[0])
+    )
     console.log(`[generateReferenceDraftSection] Section "${sectionKey}" context requirements (from DB):`, {
       requiresPriorArt: contextRequirements.requiresPriorArt,
       requiresFigures: contextRequirements.requiresFigures,
@@ -2576,10 +2630,13 @@ SOURCE FIDELITY (USER-SELECTED — CRITICAL)
 ${sectionFidelityBlock}`)
       const terminologyBlock = buildInventorTerminologyBlock(sourceFidelityMode, (normalizedData as any)?.components)
       if (terminologyBlock) promptParts.push(terminologyBlock)
-      if ((ORIGINAL_DISCLOSURE_SECTIONS as readonly string[]).includes(sectionKey)) {
-        const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
-        if (disclosureBlock) promptParts.push(`\n${disclosureBlock}`)
-      }
+    }
+
+    // Outside the block above on purpose — see the reference-draft path: the raw
+    // disclosure backs the narrative sections in both modes.
+    if ((ORIGINAL_DISCLOSURE_SECTIONS as readonly string[]).includes(sectionKey)) {
+      const disclosureBlock = buildOriginalDisclosureBlock(sourceFidelityMode, (idea as any)?.rawInput)
+      if (disclosureBlock) promptParts.push(`\n${disclosureBlock}`)
     }
 
     const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(sectionKey, sourceFidelityMode)

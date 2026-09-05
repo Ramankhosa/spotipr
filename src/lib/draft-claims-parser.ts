@@ -180,14 +180,125 @@ function parseJsonCandidate(candidate: string) {
   return null
 }
 
+/**
+ * A claim's category is set by its preamble — "A method of…", "A system for…" —
+ * not by vocabulary anywhere in its body.
+ *
+ * The old version tested `/\bmethod|process\b/` across the whole claim, first.
+ * That alternation binds as `\bmethod` OR `process\b`, so the ordinary verb in
+ * "configured to process the data" matched and every system claim that described
+ * processing was categorised as a method. Read the preamble, and only fall back
+ * to whole-text vocabulary when there is no recognisable preamble.
+ */
+const CATEGORY_NOUNS: Array<[RegExp, NonNullable<DraftClaim['category']>]> = [
+  [/\b(method|process)\b/, 'method'],
+  [/\bsystem\b/, 'system'],
+  [/\b(apparatus|device|assembly|machine|module)\b/, 'apparatus'],
+  [/\b(composition|formulation)\b/, 'composition'],
+  [/\b(product|article)\b/, 'product'],
+]
+
+/**
+ * The claim preamble: the opening noun phrase, cut at whatever starts the body.
+ * "A control system for a vehicle, comprising…" → "a control system for a vehicle".
+ */
+function claimPreamble(lower: string): string {
+  const cut = lower.search(
+    /\s*(?:,|:|;|\bcomprising\b|\bconsisting\b|\bincluding\b|\bwherein\b|\bcharacteri[sz]ed\b|\baccording\s+to\b|\bas\s+(?:claimed|recited|defined|set\s+forth)\s+in\b|\bof\s+claims?\s+\d)/
+  )
+  return (cut >= 0 ? lower.slice(0, cut) : lower).slice(0, 160)
+}
+
 function inferCategory(text: string): DraftClaim['category'] {
-  const lower = text.toLowerCase()
-  if (/\bmethod|process\b/.test(lower)) return 'method'
-  if (/\bsystem\b/.test(lower)) return 'system'
-  if (/\bapparatus|device|assembly|module\b/.test(lower)) return 'apparatus'
-  if (/\bcomposition|formulation\b/.test(lower)) return 'composition'
-  if (/\bproduct|article\b/.test(lower)) return 'product'
+  const lower = String(text || '').toLowerCase()
+
+  // The EARLIEST category noun in the preamble wins: "a method of manufacturing a
+  // device" is a method, "a device for performing a method" is an apparatus. This
+  // works for dependent claims too ("the device of claim 1" → apparatus), which
+  // an "a/an"-only preamble test missed — they fell through to whole-text
+  // vocabulary, where "configured to process the signal" made them methods.
+  const preamble = claimPreamble(lower)
+  let best: { index: number; category: NonNullable<DraftClaim['category']> } | undefined
+  for (const [pattern, category] of CATEGORY_NOUNS) {
+    const match = preamble.match(pattern)
+    if (match && match.index !== undefined && (!best || match.index < best.index)) {
+      best = { index: match.index, category }
+    }
+  }
+  if (best) return best.category
+
+  // No category noun in the preamble at all — fall back to whole-text vocabulary,
+  // most specific first, with every alternation grouped so boundaries apply.
+  for (const [pattern, category] of [CATEGORY_NOUNS[3], CATEGORY_NOUNS[0], CATEGORY_NOUNS[1], CATEGORY_NOUNS[2], CATEGORY_NOUNS[4]]) {
+    if (pattern.test(lower)) return category
+  }
   return undefined
+}
+
+/**
+ * Whether a claim's own text says it depends on another claim.
+ *
+ * Returns the referenced claim number, or undefined for an independent claim.
+ * A dependent claim names its parent in its preamble, in one of two shapes:
+ *
+ *   US style   — "The system of claim 1, wherein…"
+ *   EP/IN/PCT  — "A method according to claim 1, wherein…",
+ *                "Apparatus as claimed in claim 1…",
+ *                "The device according to any one of claims 1 to 3…"
+ *
+ * Only the preamble counts. A parent reference deeper in the body ("…coupled to
+ * the housing of claim 1") is an incorporation by reference inside an otherwise
+ * independent claim, and matching it used to file such claims as dependent.
+ */
+export function dependencyFromClaimText(text: string): number | undefined {
+  const opening = String(text || '').slice(0, 200)
+  const patterns = [
+    // "The/Said <noun phrase> of claim N"
+    /^\s*(?:the|said)\s+[^.;,:]{0,80}?\s+of\s+(?:any\s+(?:one\s+)?of\s+)?claims?\s+(\d+)/i,
+    // "<article?> <noun phrase> according to / as claimed in / as recited in /
+    // as defined in / as set forth in claim N" — any article, including none.
+    /^\s*(?:(?:a|an|the|said)\s+)?[^.;,:]{0,80}?\s+(?:according\s+to|as\s+(?:claimed|recited|defined|described|set\s+forth)\s+in|as\s+in)\s+(?:any\s+(?:one\s+)?of\s+)?(?:the\s+)?(?:preceding\s+)?claims?\s+(\d+)/i,
+  ]
+  for (const pattern of patterns) {
+    const match = opening.match(pattern)
+    if (match) {
+      const parsed = Number(match[1])
+      if (Number.isFinite(parsed) && parsed > 0) return parsed
+    }
+  }
+  return undefined
+}
+
+/**
+ * True when a claim opens the way an independent claim does. Exported for the
+ * section guardrail, which otherwise demanded dependent form of every claim
+ * after the first and flagged every multi-independent claim set.
+ */
+export function looksLikeIndependentClaim(text: string): boolean {
+  return dependencyFromClaimText(text) === undefined && /^\s*(?:a|an)\s+/i.test(String(text || ''))
+}
+
+/**
+ * Classify a claim from its own text when the model omitted the `type` field.
+ *
+ * The previous default was `number === 1 ? 'independent' : 'dependent'`, which
+ * silently filed every second and later independent claim as dependent — with
+ * the claim text ("A method of…" vs "The system of claim 1…") sitting unread. The
+ * UDB anchors Summary, Detailed Description, Abstract and Best Mode on the stored
+ * independent claims, so a claim misfiled that way lost its written-description
+ * support entirely.
+ */
+function inferClaimType(text: string, number: number, dependsOn?: number): DraftClaim['type'] {
+  if (dependsOn && dependsOn !== number) return 'dependent'
+  if (number === 1) return 'independent'
+  // A dependent claim must reference its parent in its preamble; a claim with no
+  // such reference is independent by definition, whatever article it opens with
+  // ("Apparatus for…" and "Method of…" are ordinary EP independent-claim openings).
+  // The one carve-out: an opening "The/Said …" with no parent reference is a
+  // malformed dependent claim, not a new independent one — keep it dependent so
+  // the guardrail reports it rather than the UDB anchoring a section on it.
+  if (/^\s*(?:the|said)\s+/i.test(String(text || ''))) return 'dependent'
+  return 'independent'
 }
 
 function normalizeCategory(value: unknown, text: string): DraftClaim['category'] {
@@ -238,12 +349,16 @@ function normalizeClaim(raw: any, index: number): DraftClaim | null {
   if (!text) return null
 
   const dependsOnRaw = raw.dependsOn ?? raw.depends_on ?? raw.parentClaim ?? raw.parent
-  const dependencyFromText = text.match(/\bclaims?\s+(\d+)\b/i)
-  const dependsOn = Number(dependsOnRaw || dependencyFromText?.[1])
-  const validDependsOn = Number.isFinite(dependsOn) && dependsOn > 0 ? dependsOn : undefined
+  // Only an opening "The <noun> of claim N" counts as a dependency. Matching any
+  // "claim N" anywhere in the body picked up incidental references.
+  const textDependency = dependencyFromClaimText(text)
+  const dependsOn = Number(dependsOnRaw || textDependency)
+  const validDependsOn = Number.isFinite(dependsOn) && dependsOn > 0 && dependsOn !== number
+    ? dependsOn
+    : undefined
 
   const llmType = normalizeDraftClaimType(raw.type ?? raw.claimType ?? raw.claim_type ?? raw.kind)
-  const type: DraftClaim['type'] = llmType || (number === 1 ? 'independent' : 'dependent')
+  const type: DraftClaim['type'] = llmType || inferClaimType(text, number, validDependsOn)
 
   return {
     number,
@@ -352,9 +467,8 @@ function parseClaimsFromNumberedText(output: string): DraftClaim[] {
     const claimText = cleanClaimText(match[2] || '', number)
     if (!claimText) continue
 
-    const dependency = claimText.match(/\bclaims?\s+(\d+)\b/i)
-    const dependsOn = dependency ? Number(dependency[1]) : undefined
-    const type: DraftClaim['type'] = number === 1 ? 'independent' : 'dependent'
+    const dependsOn = dependencyFromClaimText(claimText)
+    const type: DraftClaim['type'] = inferClaimType(claimText, number, dependsOn)
 
     claims.push({
       number,
@@ -395,10 +509,17 @@ export function parseGeneratedClaimsPayloadFromLLMOutput(output: string): DraftC
 
   const textClaims = sortAndDedupeClaims(parseClaimsFromNumberedText(output))
   if (textClaims.length > 0) {
+    // Recovered from plain text because no JSON candidate parsed. The model's own
+    // support matrix and quality warnings are gone with the JSON — downstream,
+    // mergeSupportMatrix falls back to substring matching and isGenericClaimOne
+    // (which wants >= 2 support refs) starts firing on well-supported claims.
+    // Say so rather than returning empty arrays that read as "nothing to report".
     return {
       claims: textClaims,
       supportMatrix: [],
-      qualityWarnings: [],
+      qualityWarnings: [
+        'Claims were recovered from plain text because the model did not return parseable JSON. Source-support references for each claim could not be read and were reconstructed by text matching only; verify claim support before relying on the support matrix.',
+      ],
     }
   }
 

@@ -83,7 +83,11 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gemini-1.5-flash': 'gemini',
     'gemini-1.5-flash-002': 'gemini',
     // Google - Latest Gemini families (2026)
+    'gemini-3.8-flash': 'gemini',
+    'gemini-3.7-flash': 'gemini',
+    'gemini-3.6-flash': 'gemini',
     'gemini-3.5-flash': 'gemini',
+    'gemini-3.5-flash-lite': 'gemini-flash-lite',
     'gemini-3.1-pro-preview': 'gemini',
     'gemini-3.1-flash-lite': 'gemini-flash-lite',
     'gemini-3-flash-preview': 'gemini',
@@ -92,12 +96,19 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gemini-3-pro-preview': 'gemini',
     'gemini-3-pro-preview-thinking': 'gemini',
     'gemini-3-pro-image-preview': 'gemini',
+    // Google - Image Generation Models (Nano Banana family)
+    'gemini-3-pro-image': 'gemini',
+    'gemini-3.1-flash-image': 'gemini',
+    'gemini-3.1-flash-lite-image': 'gemini',
     
     // OpenAI - GPT-4 Series
     'gpt-4o': 'openai',
     'gpt-4o-mini': 'openai',
     'gpt-4-turbo': 'openai',
     'gpt-4': 'openai',
+    // OpenAI - GPT-6 Series
+    'gpt-6-astra': 'openai',
+    'gpt-6-astra-thinking': 'openai',
     // OpenAI - GPT-5.6 Series (Sol / Terra / Luna)
     'gpt-5.6': 'openai',
     'gpt-5.6-sol': 'openai',
@@ -128,6 +139,10 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'o1-preview': 'openai',
     
     // Anthropic - Claude 5 family + Opus 4.8 + Haiku 4.5 (2026)
+    'claude-fable-5-1': 'anthropic',
+    'claude-opus-5': 'anthropic',
+    'claude-opus-5-thinking': 'anthropic',
+    'claude-sonnet-4-6': 'anthropic',
     'claude-fable-5': 'anthropic',
     'claude-opus-4-8': 'anthropic',
     'claude-opus-4-8-thinking': 'anthropic',
@@ -151,10 +166,14 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     // DeepSeek
     'deepseek-v4-pro': 'deepseek',
     'deepseek-v4-flash': 'deepseek',
+    'deepseek-v4-flash-vision-exp': 'deepseek',
     'deepseek-chat': 'deepseek',
     'deepseek-reasoner': 'deepseek',
 
     // Z.AI GLM
+    'glm-5.3': 'zai',
+    'glm-5.3-flash': 'zai',
+    'glm-5.2': 'zai',
     'glm-5.1': 'zai',
     'glm-5': 'zai',
     'glm-5-turbo': 'zai',
@@ -177,6 +196,10 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'groq-llama-3.1-8b': 'groq',
     'groq-mixtral-8x7b': 'groq',
     'groq-gemma2-9b': 'groq',
+    // Groq - OpenAI open-weight models served by Groq. These MUST stay in the exact
+    // map: the prefix fallback below would route "openai/..." to the OpenAI provider.
+    'openai/gpt-oss-120b': 'groq',
+    'openai/gpt-oss-20b': 'groq',
     // Groq - Canonical API model IDs
     'llama-3.3-70b-versatile': 'groq',
     'llama-3.1-70b-versatile': 'groq',
