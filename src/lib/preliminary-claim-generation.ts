@@ -64,6 +64,19 @@ export const PRELIMINARY_CLAIM_RESET_KEYS = [
   'claimsLastSavedAt',
   'claimsJurisdiction',
   'claimGenerationQuality',
+  // Challenge artifacts are scoped to the claim set they were raised against, so
+  // a reset must clear them. They are deliberately NOT counted as downstream
+  // work by hasClaimRefinementWork: a challenge happens inside the preliminary
+  // claims stage, so treating it as work would let a review block the very reset
+  // the attorney runs to start over.
+  'claimsChallenge',
+  'claimsChallengeRefinePreview',
+  'claimsChallengeResolution',
+  // The version history belongs to the claim set it records: a reset is a
+  // fresh start, and keeping switchable copies of the discarded claims would
+  // make "this cannot be undone" untrue.
+  'claimsVersions',
+  'claimsActiveVersionId',
   'claimsRefinementPreview',
   'claimsRefinementApplied',
   'claimsRefinementNotes',

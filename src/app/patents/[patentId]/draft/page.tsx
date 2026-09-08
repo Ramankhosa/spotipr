@@ -388,6 +388,10 @@ export default function PatentDraftingPage() {
           'reset_claims',
           'claim_refinement_preview',
           'claim_refinement_apply',
+          'challenge_claims',
+          'challenge_refine_preview',
+          'challenge_refine_apply',
+          'restore_claims_version',
           'freeze_claims',
           'unfreeze_claims',
           'save_claims',
@@ -417,7 +421,11 @@ export default function PatentDraftingPage() {
             confirmationRequired: result?.confirmationRequired,
             splitProposal: result?.splitProposal,
             personaWarnings: result?.personaWarnings,
-            personaProvenance: result?.personaProvenance
+            personaProvenance: result?.personaProvenance,
+            // The challenge refine handler saves the attorney's review before it
+            // calls the model, and hands it back on failure so the panel can
+            // resume from what was kept rather than re-sending it.
+            challenge: result?.challenge
           }
         }
 
@@ -444,7 +452,11 @@ export default function PatentDraftingPage() {
         'generate_diagrams_llm', 
         'clear_related_art_selections',
         'save_manual_prior_art',
-        'related_art_llm_review' // Component handles state locally, refresh would lose in-progress data
+        'related_art_llm_review', // Component handles state locally, refresh would lose in-progress data
+        // The challenge panel owns the review in progress; a session refetch
+        // remounts the stage and would discard the attorney's dispositions.
+        'challenge_claims',
+        'challenge_refine_preview'
       ]
       
       // Actions that skip immediate refresh but should trigger delayed background refresh

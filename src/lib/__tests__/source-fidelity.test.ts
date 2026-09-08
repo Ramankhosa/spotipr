@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   buildInventorTerminologyBlock,
+  buildInventorTerminologyTranslationBlock,
   buildOriginalDisclosureBlock,
   buildSourceFidelityPromptBlock,
   resolveSourceFidelityMode,
@@ -19,7 +20,7 @@ describe('resolveSourceFidelityMode', () => {
 
 describe('buildSourceFidelityPromptBlock', () => {
   test('empty in STRUCTURE_ONLY mode for every stage', () => {
-    for (const stage of ['claims', 'claimRefinement', 'sections', 'figures'] as const) {
+    for (const stage of ['claims', 'claimRefinement', 'claimChallengeRefine', 'sections', 'figures'] as const) {
       expect(buildSourceFidelityPromptBlock('STRUCTURE_ONLY', stage)).toBe('')
     }
   })
@@ -39,6 +40,56 @@ describe('buildSourceFidelityPromptBlock', () => {
 
     const figures = buildSourceFidelityPromptBlock('PRESERVE', 'figures')
     expect(figures).toContain('Depict only the structure, components, and flows the inventor stated')
+  })
+
+  test('the challenge-refine stage authorizes terminology translation with retention', () => {
+    const block = buildSourceFidelityPromptBlock('PRESERVE', 'claimChallengeRefine')
+    expect(block).toContain('SOURCE FIDELITY MODE: PRESERVE')
+    expect(block).toContain('TERMINOLOGY DEVIATION')
+    expect(block).toContain("a dependent claim recites the inventor's exact original term")
+    // Facts stay locked even though wording does not.
+    expect(block).toContain('Source facts are locked')
+    expect(block).toContain('do not drop or alter any that the inventor did state')
+    expect(block).toContain('Every source-stated claimable feature must remain somewhere in the claim set')
+  })
+
+  test('the challenge-refine stage never relocates or demotes the central mechanism', () => {
+    // Moving species detail out of Claim 1 is a scope move, not a wording one.
+    // The claims stage guards its own loosening with the same carve-out, so the
+    // relaxed stage must too, or a picture-claim remark could hollow Claim 1.
+    const block = buildSourceFidelityPromptBlock('PRESERVE', 'claimChallengeRefine')
+    expect(block).toContain('Never apply this relocation to the mechanism the inventor presents as central')
+    expect(block).toContain('do not demote that mechanism to a dependent claim')
+    expect(block).toContain('PROVIDED the source itself supports the broader class left behind in Claim 1')
+  })
+
+  test('the claims stage still forbids renaming, so first-pass drafting is unchanged', () => {
+    const block = buildSourceFidelityPromptBlock('PRESERVE', 'claims')
+    expect(block).toContain('Do not rename, substitute synonyms for, or abstract away')
+    expect(block).not.toContain('TERMINOLOGY DEVIATION')
+  })
+})
+
+describe('buildInventorTerminologyTranslationBlock', () => {
+  const components = [{ name: 'Delivery Vehicle' }, { name: 'Pep-B2' }, { name: 'Delivery Vehicle' }]
+
+  test('empty outside PRESERVE mode', () => {
+    expect(buildInventorTerminologyTranslationBlock('STRUCTURE_ONLY', components)).toBe('')
+  })
+
+  test('empty without a usable component list', () => {
+    expect(buildInventorTerminologyTranslationBlock('PRESERVE', null)).toBe('')
+    expect(buildInventorTerminologyTranslationBlock('PRESERVE', [])).toBe('')
+  })
+
+  test('lists each term once and licenses translation rather than forbidding it', () => {
+    const block = buildInventorTerminologyTranslationBlock('PRESERVE', components)
+    expect(block).toContain('TRANSLATION TABLE')
+    expect(block).toContain('Delivery Vehicle')
+    expect(block).toContain('Pep-B2')
+    expect(block.match(/Delivery Vehicle/g)).toHaveLength(1)
+    expect(block).toContain('translation permitted with dependent-claim retention')
+    expect(block).not.toContain('do not rename')
   })
 })
 

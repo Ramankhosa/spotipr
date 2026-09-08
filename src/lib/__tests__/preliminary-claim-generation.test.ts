@@ -276,6 +276,11 @@ describe('preliminary claim generation helper', () => {
       claimsLastSavedAt: '2026-05-06T00:00:00.000Z',
       claimsJurisdiction: 'US',
       claimGenerationQuality: { status: 'source_supported' },
+      claimsChallenge: { status: 'OPEN', remarks: [] },
+      claimsChallengeRefinePreview: { refinedClaims: [] },
+      claimsChallengeResolution: { appliedAt: '2026-05-06T00:00:00.000Z' },
+      claimsVersions: [{ id: 'v1', number: 1, claimsStructured: [] }],
+      claimsActiveVersionId: 'v1',
       claimsRefinementPreview: { refinedClaims: [] },
       claimsRefinementApplied: true,
       claimsRefinementNotes: 'Claim 1 refined.',
@@ -301,6 +306,11 @@ describe('preliminary claim generation helper', () => {
     expect(reset).not.toHaveProperty('claimsLastSavedAt')
     expect(reset).not.toHaveProperty('claimsJurisdiction')
     expect(reset).not.toHaveProperty('claimGenerationQuality')
+    expect(reset).not.toHaveProperty('claimsChallenge')
+    expect(reset).not.toHaveProperty('claimsChallengeRefinePreview')
+    expect(reset).not.toHaveProperty('claimsChallengeResolution')
+    expect(reset).not.toHaveProperty('claimsVersions')
+    expect(reset).not.toHaveProperty('claimsActiveVersionId')
     expect(reset).not.toHaveProperty('claimsRefinementPreview')
     expect(reset).not.toHaveProperty('claimsRefinementApplied')
     expect(reset).not.toHaveProperty('claimsRefinementNotes')
@@ -333,6 +343,20 @@ describe('preliminary claim generation helper', () => {
         claimsRefinementPreview: { refinedClaims: [] },
       },
     })).toBe(true)
+  })
+
+  test('a claim challenge is not downstream work and must never block a reset', () => {
+    // The challenge happens inside the preliminary claims stage itself. Counting
+    // it as downstream work would let an adversarial review the attorney ran on
+    // these claims block the very reset they run to start the claims over.
+    expect(shouldBlockPreliminaryClaimReset({
+      normalizedData: {
+        claims: '<p>1. A system...</p>',
+        claimsChallenge: { status: 'APPLIED', remarks: [{ id: 'R1' }] },
+        claimsChallengeRefinePreview: { refinedClaims: [{ number: 1 }] },
+        claimsChallengeResolution: { appliedAt: '2026-05-06T00:00:00.000Z' },
+      },
+    })).toBe(false)
   })
 
   test('reset is judged by artifacts, not by where the user has navigated', () => {

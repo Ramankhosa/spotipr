@@ -14,7 +14,12 @@ import { escapeReadOnlyPromptData } from '@/lib/idea-normalization-prompt'
 
 export type SourceFidelityMode = 'PRESERVE' | 'STRUCTURE_ONLY'
 
-export type SourceFidelityStage = 'claims' | 'claimRefinement' | 'sections' | 'figures'
+export type SourceFidelityStage =
+  | 'claims'
+  | 'claimRefinement'
+  | 'claimChallengeRefine'
+  | 'sections'
+  | 'figures'
 
 /** Characters of raw disclosure injected into section prompts before truncation. */
 export const ORIGINAL_DISCLOSURE_PROMPT_CHAR_LIMIT = 15_000
@@ -67,6 +72,17 @@ const PRESERVE_RULES_BY_STAGE: Record<SourceFidelityStage, string> = {
   claimRefinement: `- Narrow ONLY with limitations already present in the inventor's disclosure or the normalized source context.
 - Never reposition or re-center the invention around the cited prior art; the inventor's stated inventive concept must remain the core of every independent claim.
 - Prefer KEEP_AS_IS when a claim already distinguishes the references; prefer the smallest source-supported edit otherwise.`,
+  // The challenge-refine stage is the one place where PRESERVE's vocabulary rule
+  // is deliberately relaxed. Fidelity of FACTS is absolute here as everywhere
+  // else; fidelity of WORDING is not, because an inventor's internal label
+  // reproduced verbatim in an independent claim is an indefiniteness rejection,
+  // and the attorney has explicitly asked for that defect to be fixed. The
+  // inventor's term is not lost: it is required to survive in a dependent claim.
+  claimChallengeRefine: `- Source facts are locked: do not introduce any element, step, material, value, condition, effect, or use case the inventor did not state, and do not drop or alter any that the inventor did state. Every source-stated claimable feature must remain somewhere in the claim set after your edits.
+- The mechanism the inventor presents as central must remain central to every independent claim, recited at the inventor's own level of specificity; do not re-center the invention on a secondary feature and do not demote that mechanism to a dependent claim.
+- TERMINOLOGY DEVIATION (explicitly authorized for this pass): inventor-coined jargon, internal project labels, marketing monikers, and arbitrary code names MAY be translated into standard art-recognized terminology in the independent claims, PROVIDED a dependent claim recites the inventor's exact original term verbatim. Never translate a term without that dependent-claim retention, and never translate away the identity of the central mechanism itself.
+- Species-level detail, named examples, and the claim set's only numeric range may be moved out of Claim 1 into a dependent claim, PROVIDED the source itself supports the broader class left behind in Claim 1. The exact source-stated value, name, or grade must be preserved verbatim in that dependent claim. Never apply this relocation to the mechanism the inventor presents as central: its species identity stays in Claim 1.
+- Every other PRESERVE guarantee still holds: no new embodiments, no invented alternatives, no broadened class that the source does not support.`,
   sections: `- Every sentence must be traceable to the inventor's original disclosure, the Normalized Data, or the Frozen Claims.
 - Use the inventor's own terminology as the canonical vocabulary; do not substitute synonyms or renamed labels for the inventor's terms.
 - Keep the inventor's framing of the problem, objectives, and solution; do not re-frame the invention.
@@ -114,6 +130,38 @@ export function buildInventorTerminologyBlock(
   return `CANONICAL INVENTOR TERMS (PRESERVE MODE)
 Use these exact terms for these elements throughout; do not rename, generalize, or substitute synonyms:
 ${unique.map(name => `- ${name}`).join('\n')}`
+}
+
+/**
+ * The same inventor vocabulary, rendered as a translation licence rather than a
+ * lock.
+ *
+ * `buildInventorTerminologyBlock` forbids renaming, which is right for the
+ * description and for first-pass drafting. It is wrong for the challenge-refine
+ * pass, whose entire purpose is to cure claim defects the inventor's own wording
+ * introduced. Injecting the do-not-rename form there would order the model to
+ * preserve exactly the defect the attorney accepted a remark to fix, so this
+ * variant is used instead and the two must never both appear in one prompt.
+ */
+export function buildInventorTerminologyTranslationBlock(
+  mode: SourceFidelityMode,
+  components: unknown
+): string {
+  if (mode !== 'PRESERVE' || !Array.isArray(components)) return ''
+  const names = components
+    .map((c: any) => (typeof c?.name === 'string' ? c.name.replace(/\s+/g, ' ').trim() : ''))
+    .filter(Boolean)
+  if (!names.length) return ''
+  const seen = new Set<string>()
+  const unique = names.filter((name) => {
+    const key = name.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  return `INVENTOR TERMINOLOGY TRANSLATION TABLE (PRESERVE MODE)
+Each term below is the inventor's own wording. In an independent claim you may substitute the art-recognized equivalent ONLY IF a dependent claim recites the inventor's exact term verbatim. Outside the claims, and wherever no such dependent claim exists, the inventor's term stands unchanged:
+${unique.map(name => `- ${name} -> translation permitted with dependent-claim retention`).join('\n')}`
 }
 
 /**

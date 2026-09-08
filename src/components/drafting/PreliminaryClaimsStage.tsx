@@ -16,6 +16,8 @@ import {
   Lightbulb,
   Scale,
   Trash2,
+  ShieldAlert,
+  History,
   FileSearch,
   BookOpen,
   PenLine,
@@ -34,6 +36,8 @@ import {
   stripTrailingClaimDependencyLabel,
   stripTrailingClaimDependencyLabelsFromHtml
 } from '@/lib/draft-claims-parser'
+import ClaimChallengePanel from '@/components/drafting/ClaimChallengePanel'
+import ClaimVersionsPanel from '@/components/drafting/ClaimVersionsPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -352,6 +356,12 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const [personasAvailable, setPersonasAvailable] = useState<{ myCount: number; orgCount: number } | null>(null)
   const [checkingPersonas, setCheckingPersonas] = useState(false)
 
+  // ---- Claim challenge (adversarial review, opt-in) ----
+  const [challengeOpen, setChallengeOpen] = useState(false)
+
+  // ---- Claim version history ----
+  const [versionsOpen, setVersionsOpen] = useState(false)
+
   // ---- Navigation state ----
   const [isNavigating, setIsNavigating] = useState(false)
   const [skipPriorArtClicked, setSkipPriorArtClicked] = useState(false)
@@ -471,6 +481,16 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const hasClaims = strippedClaims.length > 0 || claims.length > 0
   const canProceed = hasClaims
   const controlsLocked = claimsFrozen || isGeneratingClaims || isResettingClaims
+  // Badge on the Challenge button: objections raised but not yet dealt with.
+  // An applied challenge is finished; whatever it left pending was the
+  // attorney's decision, not outstanding work.
+  const storedChallenge = (session?.ideaRecord?.normalizedData as any)?.claimsChallenge
+  const pendingChallengeRemarks = storedChallenge?.status !== 'APPLIED' && Array.isArray(storedChallenge?.remarks)
+    ? (storedChallenge.remarks as any[])
+        .filter((remark: any) => (remark?.disposition || 'pending') === 'pending').length
+    : 0
+  const storedVersions = (session?.ideaRecord?.normalizedData as any)?.claimsVersions
+  const claimsVersionCount = Array.isArray(storedVersions) ? storedVersions.length : 0
 
   // ---------------------------------------------------------------------------
   // Persona handlers
@@ -1173,6 +1193,44 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                   <Button
                     variant="outline"
                     size="sm"
+                    onClick={() => setChallengeOpen(true)}
+                    disabled={isResettingClaims}
+                    title="Review these claims against the objections an examiner could raise"
+                    className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+                  >
+                    <ShieldAlert className="mr-1 h-3 w-3" />
+                    Challenge
+                    {pendingChallengeRemarks > 0 && (
+                      <span className="ml-1 rounded bg-ai-blue-100 px-1 text-[10px] font-semibold text-ai-blue-800">
+                        {pendingChallengeRemarks}
+                      </span>
+                    )}
+                  </Button>
+                )}
+                {hasClaims && !isGeneratingClaims && claimsVersionCount > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setVersionsOpen(true)}
+                    disabled={isResettingClaims || isEditingClaims}
+                    title={isEditingClaims
+                      ? 'Finish editing before switching versions'
+                      : 'Switch between earlier and later versions of this claim set'}
+                    className="h-7 border-paper-300 px-2 text-[11px] font-medium text-ai-graphite-700 hover:border-ai-blue-300 hover:text-ai-blue-700"
+                  >
+                    <History className="mr-1 h-3 w-3" />
+                    Versions
+                    {claimsVersionCount > 1 && (
+                      <span className="ml-1 rounded bg-paper-100 px-1 text-[10px] font-semibold text-ai-graphite-700">
+                        {claimsVersionCount}
+                      </span>
+                    )}
+                  </Button>
+                )}
+                {hasClaims && !isGeneratingClaims && (
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={handleResetClaims}
                     disabled={isResettingClaims}
                     title="Delete this claim set and start over"
@@ -1359,6 +1417,28 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
           )}
         </div>
       </div>
+
+      {/* ---- Claim challenge (opt-in adversarial review) ---- */}
+      <ClaimChallengePanel
+        session={session}
+        open={challengeOpen}
+        onClose={() => setChallengeOpen(false)}
+        claimsStructured={claims}
+        claimsFrozen={claimsFrozen}
+        onComplete={onComplete}
+        onRefresh={onRefresh}
+      />
+
+      {/* ---- Claim version history ---- */}
+      <ClaimVersionsPanel
+        session={session}
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        currentClaims={claims}
+        claimsFrozen={claimsFrozen}
+        onComplete={onComplete}
+        onRefresh={onRefresh}
+      />
 
       {/* ---- Persona Manager Modal ---- */}
       {showPersonaManager && (

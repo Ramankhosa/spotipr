@@ -88,9 +88,43 @@ import {
 } from '@/lib/preliminary-claim-generation';
 import {
   buildInventorTerminologyBlock,
+  buildInventorTerminologyTranslationBlock,
   buildSourceFidelityPromptBlock,
   resolveSourceFidelityMode,
 } from '@/lib/source-fidelity';
+import {
+  computeClaimsFingerprint,
+  runClaimChallengeLint,
+} from '@/lib/claim-challenge-lint';
+import { captureClaimsVersion, restoreClaimsVersion } from '@/lib/claims-versions';
+import { fetchLocalPatentClaimEvidence } from '@/lib/local-patent-claims-service';
+import {
+  ART_REF_CANDIDATES,
+  ART_REF_K,
+  ART_REF_PROMPT_CHARS,
+  ART_REF_SEARCH_POOL,
+  ART_REF_TIMEOUT_MS,
+  candidatesFromRelatedArtResults,
+  findVerbatimReuse,
+  fitArtVocabularyBlock,
+  memoizeArtReferenceCandidates,
+  retrieveArtVocabularyReferences,
+  toReferenceDescriptors,
+  type ArtVocabularyReference,
+  type ChallengeReferencesStatus,
+} from '@/lib/claim-challenge-references';
+import {
+  buildChallengeChangeNotes,
+  buildChallengeRefinePrompt,
+  buildClaimChallengePrompt,
+  ChallengeOutputSchema,
+  ChallengeRefineOutputSchema,
+  expandChallengeRemarks,
+  mergeChallengeRefinedClaims,
+  nextUserRemarkId,
+  type ChallengeRemark,
+} from '@/lib/claim-challenge';
+import { isTruncatedLlmResponse, parseLlmJsonObject } from '@/lib/llm-json-parser';
 import { computeDraftFidelityReport } from '@/lib/draft-fidelity-report';
 import { buildNoveltyGuidanceBlock } from '@/lib/novelty-drafting-handoff';
 import {
@@ -1254,11 +1288,23 @@ export async function POST(
       case 'unfreeze_claims':
         return await handleUnfreezeClaims(authResult.user, patentId, data);
 
+      case 'restore_claims_version':
+        return await handleRestoreClaimsVersion(authResult.user, patentId, data);
+
       case 'claim_refinement_preview':
         return await handleClaimRefinementPreview(authResult.user, patentId, data, requestHeaders);
 
       case 'claim_refinement_apply':
         return await handleClaimRefinementApply(authResult.user, patentId, data);
+
+      case 'challenge_claims':
+        return await handleChallengeClaims(authResult.user, patentId, data, requestHeaders);
+
+      case 'challenge_refine_preview':
+        return await handleChallengeRefinePreview(authResult.user, patentId, data, requestHeaders);
+
+      case 'challenge_refine_apply':
+        return await handleChallengeRefineApply(authResult.user, patentId, data);
 
       case 'add_component_numbers_to_claims':
         return await handleAddComponentNumbersToClaims(authResult.user, patentId, data, requestHeaders);
@@ -5523,8 +5569,17 @@ async function handleGenerateClaims(
       claimsCappedToDefault: limitedClaimsPayload.capped,
       claimCapSource,
       claimsJurisdiction: activeJurisdiction,
-      claimsGeneratedAt: new Date().toISOString()
+      claimsGeneratedAt: new Date().toISOString(),
+      // Every claim set the session has held stays switchable from the
+      // version history; a regeneration is a new version, not an overwrite.
+      ...captureClaimsVersion(existingNormalized, { source: 'generated', html: claimsHtml, structured: generatedClaims }),
     }
+
+    // A regenerated claim set voids any challenge raised against the old one:
+    // the remarks cite claim numbers and wording that no longer exist.
+    delete (updatedNormalized as any).claimsChallenge
+    delete (updatedNormalized as any).claimsChallengeRefinePreview
+    delete (updatedNormalized as any).claimsChallengeResolution
 
     onProgress?.({
       type: 'stage',
@@ -5616,7 +5671,12 @@ async function handleSaveClaims(user: any, patentId: string, data: any) {
     ...existingNormalized,
     claims: nextClaims,
     claimsStructured: nextStructured,
-    claimsLastSavedAt: new Date().toISOString()
+    claimsLastSavedAt: new Date().toISOString(),
+    ...captureClaimsVersion(existingNormalized, {
+      source: 'manual_edit',
+      html: nextClaims,
+      structured: Array.isArray(nextStructured) ? nextStructured : [],
+    }),
   }
 
   // Keep provisional copy in sync until claims are frozen
@@ -5872,7 +5932,14 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
     ...existingNormalized,
     claims: claimsContent,
     claimsStructured: effectiveStructured,
-    claimsJurisdiction: jurisdiction || existingNormalized.claimsJurisdiction || session.activeJurisdiction || 'US'
+    claimsJurisdiction: jurisdiction || existingNormalized.claimsJurisdiction || session.activeJurisdiction || 'US',
+    // Usually identical to the working set (then nothing is recorded); when
+    // the caller supplied different claims this is the set drafting will use.
+    ...captureClaimsVersion(existingNormalized, {
+      source: 'finalized',
+      html: claimsContent,
+      structured: Array.isArray(effectiveStructured) ? effectiveStructured : [],
+    }),
   }
 
   if (lockClaims) {
@@ -5975,6 +6042,56 @@ async function handleUnfreezeClaims(user: any, patentId: string, data: any) {
   })
 
   return NextResponse.json({ success: true, unfrozenAt: new Date().toISOString() })
+}
+
+/**
+ * Switches the working claim set to a recorded version.
+ *
+ * A switch is always reversible because the history is never rewritten, so no
+ * downstream-work check applies (editing the claims is not blocked by one
+ * either). Locked claims are refused, exactly as a manual save would be.
+ */
+async function handleRestoreClaimsVersion(user: any, patentId: string, data: any) {
+  const { sessionId, versionId } = data
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+  if (!versionId || typeof versionId !== 'string') {
+    return NextResponse.json({ error: 'versionId is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { ideaRecord: true }
+  })
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
+  const result = restoreClaimsVersion(normalized, versionId)
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error, code: result.code }, { status: result.code === 'NO_SUCH_VERSION' ? 404 : 409 })
+  }
+
+  await prisma.ideaRecord.update({
+    where: { sessionId },
+    data: { normalizedData: result.normalized }
+  })
+
+  console.log(`[restore_claims_version] session=${sessionId} version=${result.version.id} (${result.version.source})`)
+  return NextResponse.json({
+    success: true,
+    version: {
+      id: result.version.id,
+      number: result.version.number,
+      label: result.version.label,
+      source: result.version.source,
+      createdAt: result.version.createdAt,
+    },
+    claims: result.normalized.claimsStructured,
+    claimsHtml: result.normalized.claims,
+  })
 }
 
 async function handleClaimRefinementPreview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
@@ -6403,6 +6520,7 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
     claimsStructured: merged,
     claims: mergedHtml,
     claimsLastSavedAt: now,
+    ...captureClaimsVersion(normalized, { source: 'refinement_apply', html: mergedHtml, structured: merged, note: changeNotes, now }),
     claimsRefinementNotes: changeNotes,
     claimsRefinementSource: {
       autoRunId: preview.autoRunId || null,
@@ -6429,6 +6547,665 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
     claims: merged,
     claimsHtml: mergedHtml,
     notes: changeNotes
+  })
+}
+
+// ============================================================================
+// CLAIM CHALLENGE
+//
+// An opt-in adversarial review of the preliminary claim set: a challenger raises
+// examiner-style objections, the attorney accepts, edits or dismisses each one,
+// and a second pass amends the claims to resolve only what was accepted.
+//
+// Deliberately kept separate from the prior-art claim refinement stage. Sharing
+// its storage key would make a Stage-1 review look like downstream refinement
+// work, which blocks claim resets and leaks challenge output into the later
+// refinement screen as bogus prior-art suggestions.
+//
+// LLM configuration reuses the DRAFT_CLAIM_REFINEMENT stage (same pattern as
+// handleAddComponentNumbersToClaims reusing DRAFT_CLAIM_GENERATION) so no new
+// WorkflowStage or per-plan model configuration is required.
+// ============================================================================
+
+/** Shared setup for the three challenge handlers. */
+async function loadChallengeSession(user: any, patentId: string, sessionId: string) {
+  if (!sessionId) {
+    return { error: NextResponse.json({ error: 'sessionId required' }, { status: 400 }) }
+  }
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: {
+      ideaRecord: true,
+      referenceMap: true,
+      // The latest prior-art run, when one exists, is the first source of art
+      // vocabulary references: the attorney has already seen those patents.
+      relatedArtRuns: { orderBy: { ranAt: 'desc' }, take: 1 },
+    }
+  })
+  if (!session) {
+    return { error: NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 }) }
+  }
+  const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
+  if (normalized.claimsApprovedAt) {
+    return {
+      error: NextResponse.json({
+        error: 'Claims are locked. Unlock the claims before challenging or amending them.',
+        code: 'CLAIMS_LOCKED'
+      }, { status: 400 })
+    }
+  }
+  return { session, normalized }
+}
+
+function challengeFeatureDisabled() {
+  if (process.env.CLAIM_CHALLENGE_DISABLED === '1') {
+    return NextResponse.json({
+      error: 'Claim challenge is currently unavailable.',
+      code: 'FEATURE_DISABLED'
+    }, { status: 503 })
+  }
+  return null
+}
+
+/** Longest focus text forwarded to the challenger. Bounds the prompt. */
+const MAX_CHALLENGE_FOCUS_CHARS = 2000
+
+/**
+ * Re-reads the record after an LLM call so the write that follows spreads the
+ * live record, never the snapshot taken before the call.
+ *
+ * The staleness fingerprint is evaluated before the model runs. Without this
+ * re-read, a save_claims landing during the call would be overwritten by the
+ * pre-call snapshot, and the fingerprint stored with the result would describe
+ * the reverted claims, so the very check meant to catch the edit would pass.
+ */
+async function reloadChallengeClaims(sessionId: string, expectedFingerprint: string) {
+  const record = await prisma.ideaRecord.findUnique({
+    where: { sessionId },
+    select: { normalizedData: true }
+  })
+  const fresh = normalizeClaimsForSession((record?.normalizedData as any) || {})
+  if (fresh.claimsApprovedAt) {
+    return {
+      error: NextResponse.json({
+        error: 'The claims were locked while the model was running. Nothing was saved.',
+        code: 'CLAIMS_LOCKED'
+      }, { status: 409 })
+    }
+  }
+  const working = getWorkingClaims(fresh)
+  const structured: any[] = Array.isArray(working.structured) ? working.structured : []
+  if (computeClaimsFingerprint(structured) !== expectedFingerprint) {
+    return {
+      error: NextResponse.json({
+        error: 'The claims were edited while the model was running, so its output no longer matches them. Nothing was saved - run it again.',
+        code: 'CHALLENGE_STALE'
+      }, { status: 409 })
+    }
+  }
+  return { fresh }
+}
+
+/** Invention context blocks shared by the challenge and refine prompts. */
+function buildChallengeContextBlocks(session: any, normalized: Record<string, any>) {
+  const ideaBasics = {
+    title: session.ideaRecord?.title || 'Untitled',
+    problem: session.ideaRecord?.problem || '',
+    objectives: session.ideaRecord?.objectives || '',
+    abstract: session.ideaRecord?.abstract || ''
+  }
+
+  const componentsFromReference = extractComponentsArray(session.referenceMap)
+  const componentsFromIdea = Array.isArray(session.ideaRecord?.components) ? session.ideaRecord.components : []
+  const components = componentsFromReference.length > 0 ? componentsFromReference : componentsFromIdea
+  const componentList = components
+    .map((c: any, idx: number) => {
+      const name = c?.name || c?.title || c?.component || `Component ${idx + 1}`
+      const desc = c?.description ? `: ${c.description}` : ''
+      return `- ${name}${desc}`
+    })
+    .join('\n')
+
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    normalized,
+    normalized.sourceFactLedger,
+    'claims',
+    'SUPPORT DATA SOURCES FOR CLAIM AMENDMENT SUPPORT',
+    'SOURCE FACT LEDGER FOR CLAIM AMENDMENT SUPPORT'
+  )
+
+  return { ideaBasics, components, componentList, sourceFactLedgerBlock }
+}
+
+async function handleChallengeClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const disabled = challengeFeatureDisabled()
+  if (disabled) return disabled
+
+  const { sessionId, focusText } = data
+  const loaded = await loadChallengeSession(user, patentId, sessionId)
+  if (loaded.error) return loaded.error
+  const { session, normalized } = loaded as { session: any; normalized: Record<string, any> }
+
+  const working = getWorkingClaims(normalized)
+  const structured: any[] = Array.isArray(working.structured) ? working.structured : []
+  if (structured.length === 0) {
+    return NextResponse.json({
+      error: 'There are no claims to challenge yet. Generate claims first.',
+      code: 'NO_CLAIMS_TO_CHALLENGE'
+    }, { status: 400 })
+  }
+
+  const { ideaBasics, components, componentList, sourceFactLedgerBlock } =
+    buildChallengeContextBlocks(session, normalized)
+  const sourceFidelityMode = resolveSourceFidelityMode(normalized)
+
+  const lintFindings = runClaimChallengeLint(structured, { components })
+  const focus = typeof focusText === 'string' ? focusText.trim().slice(0, MAX_CHALLENGE_FOCUS_CHARS) : ''
+  const claimsFingerprint = computeClaimsFingerprint(structured)
+  const claimNumbers = structured
+    .map((claim: any) => Number(claim?.number))
+    .filter((number: number) => Number.isFinite(number) && number > 0)
+
+  // Art vocabulary references: opt-in, and never a reason for the challenge to
+  // fail. Candidates come from the prior-art stage's own search: the session's
+  // latest related-art run when one exists, otherwise the same corpus-only
+  // search run in memory with a small pool. No RelatedArtRun row is written
+  // here: that row is what blocks a claim reset, and a vocabulary lookup must
+  // never do that.
+  const wantReferences = data?.useArtReferences === true
+  let references: ArtVocabularyReference[] = []
+  let referencesStatus: ChallengeReferencesStatus = { requested: wantReferences, used: 0 }
+  if (wantReferences) {
+    try {
+      const idea: any = session.ideaRecord || {}
+      const storedRun = Array.isArray(session.relatedArtRuns) ? session.relatedArtRuns[0] : null
+      const searchText = normalizeRelatedArtSearchText(
+        String(idea.searchQuery || '').trim() || [idea.title, idea.abstract].filter(Boolean).join(' ')
+      )
+      const searchJurisdiction = String(session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'IN').toUpperCase()
+      const runSearch = () => memoizeArtReferenceCandidates(`${sessionId}|${searchText}`, async () => {
+        if (!searchText) throw new Error('no search text is available for this session yet')
+        const plan = buildDraftingRelatedArtSearchPlan(idea, searchText, {}, {}) as Partial<PatentSearchQueryPlan> & { inventionText?: string }
+        const { inventionText, ...queryPlan } = plan
+        // Same option set as handleRelatedArtSearchFromProviders, at a smaller pool.
+        const response = await patentSearchOrchestrator.search({
+          searchMode: 'intelligent',
+          query: searchText,
+          title: idea.title || '',
+          inventionText: inventionText || idea.rawInput || idea.abstract || '',
+          filters: {},
+          jurisdictions: [searchJurisdiction],
+          llmExpansion: false,
+          queryPlan,
+          limit: ART_REF_CANDIDATES,
+          candidateLimit: ART_REF_SEARCH_POOL,
+          requestHeaders,
+          disableProviderFallback: true,
+        })
+        return candidatesFromRelatedArtResults(response.results.map(toDraftingRelatedArtResult))
+      })
+      const result = await retrieveArtVocabularyReferences({
+        storedResults: storedRun?.resultsJson,
+        runSearch,
+        lookup: fetchLocalPatentClaimEvidence,
+        k: ART_REF_K,
+        timeoutMs: ART_REF_TIMEOUT_MS,
+      })
+      if (result.ok) {
+        references = result.references
+        referencesStatus = { requested: true, used: references.length, found: references.length, origin: result.origin }
+      } else {
+        referencesStatus = { requested: true, used: 0, reason: result.reason }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn('[challenge_claims] art references unavailable:', message)
+      referencesStatus = { requested: true, used: 0, reason: `Reference retrieval failed: ${message}.` }
+    }
+  }
+
+  const promptParams = {
+    ideaBasics,
+    componentList,
+    sourceFactLedgerBlock,
+    claims: structured,
+    lintFindings,
+    focusText: focus,
+    sourceFidelityMode,
+    jurisdiction: String(session.activeJurisdiction || normalized.claimsJurisdiction || 'US').toUpperCase(),
+  }
+  // Measure the prompt without the block, then fit as many references as the
+  // budget allows; a reference dropped here is reported, not silently lost.
+  const basePrompt = buildClaimChallengePrompt(promptParams)
+  const fitted = fitArtVocabularyBlock(references, ART_REF_PROMPT_CHARS - basePrompt.length)
+  const usedReferences = fitted.used
+  if (references.length > 0) {
+    referencesStatus = {
+      ...referencesStatus,
+      used: usedReferences.length,
+      found: references.length,
+      ...(usedReferences.length < references.length
+        ? { reason: `Prompt budget allowed ${usedReferences.length} of ${references.length} references.` }
+        : {}),
+    }
+  }
+  const prompt = fitted.block
+    ? buildClaimChallengePrompt({ ...promptParams, artVocabularyBlock: fitted.block })
+    : basePrompt
+
+  const request = { headers: requestHeaders || {} }
+  const llmResult = await llmGateway.executeLLMOperation(request, {
+    taskCode: 'LLM1_CLAIM_REFINEMENT',
+    stageCode: 'DRAFT_CLAIM_REFINEMENT', // Reuses the refinement stage config; see block comment above.
+    prompt,
+    idempotencyKey: crypto.randomUUID(),
+    inputTokens: Math.ceil(prompt.length / 4),
+    // The challenge must be reproducible: the same claims should not yield a
+    // different objection list run to run.
+    parameters: { temperature: DRAFTING_CLAIMS_TEMPERATURE, response_format: { type: 'json_object' } },
+    metadata: {
+      patentId,
+      sessionId,
+      purpose: 'claim_challenge',
+      jurisdiction: (session.activeJurisdiction || 'US').toUpperCase(),
+      artReferences: usedReferences.length,
+      artReferencesOrigin: referencesStatus.origin || null,
+    }
+  })
+
+  if (!llmResult.success || !llmResult.response) {
+    console.error('[challenge_claims] LLM error:', llmResult.error)
+    return NextResponse.json({
+      error: llmResult.error?.message || 'The claim challenge could not be completed.',
+      code: 'CLAIM_CHALLENGE_FAILED'
+    }, { status: 502 })
+  }
+
+  const parsedJson = parseLlmJsonObject(llmResult.response)
+  const parsed = parsedJson.ok ? ChallengeOutputSchema.safeParse(parsedJson.data) : null
+  if (!parsedJson.ok || !parsed?.success) {
+    const truncated = !parsedJson.ok
+      ? parsedJson.truncated
+      : isTruncatedLlmResponse(llmResult.response.metadata)
+    console.error('[challenge_claims] output unreadable; nothing persisted')
+    return NextResponse.json({
+      error: truncated
+        ? 'The challenge result was cut short before it could be read. Nothing was saved - please run it again.'
+        : 'The challenge result could not be read. Nothing was saved - please run it again.',
+      code: 'CLAIM_CHALLENGE_PARSE_FAILED'
+    }, { status: 502 })
+  }
+
+  const remarks = expandChallengeRemarks(
+    parsed.data,
+    lintFindings,
+    claimNumbers,
+    usedReferences.map(reference => reference.publicationNumber),
+  )
+  if (remarks.length === 0) {
+    return NextResponse.json({
+      error: 'The challenge returned no readable objections. Nothing was saved - please run it again.',
+      code: 'CLAIM_CHALLENGE_PARSE_FAILED'
+    }, { status: 502 })
+  }
+
+  // The block's rules forbid copying more than individual terms from a
+  // reference. A fix that reproduces a run of reference wording is flagged so
+  // the attorney sees it before accepting; the claims under challenge are
+  // excluded so quoting the applicant's own claim is never mistaken for reuse.
+  if (usedReferences.length > 0) {
+    const ownTexts = structured.map((claim: any) => claim?.text)
+    for (const remark of remarks) {
+      if (remark.source !== 'llm') continue
+      const reuse = findVerbatimReuse(remark.fix, usedReferences, ownTexts)
+      if (reuse.length) remark.verbatimReuse = reuse
+    }
+  }
+
+  const reloaded = await reloadChallengeClaims(sessionId, claimsFingerprint)
+  if (reloaded.error) return reloaded.error
+
+  const challenge = {
+    version: 1,
+    status: 'OPEN' as const,
+    generatedAt: new Date().toISOString(),
+    claimsFingerprint,
+    focusText: focus || undefined,
+    lintFindings,
+    remarks,
+    useArtReferences: wantReferences,
+    // Descriptors only: the panel needs provenance, not the claims text.
+    references: toReferenceDescriptors(usedReferences),
+    referencesStatus,
+  }
+
+  const updatedNormalized: Record<string, any> = { ...reloaded.fresh, claimsChallenge: challenge }
+  // A fresh challenge supersedes any amendments drafted from the previous one.
+  delete updatedNormalized.claimsChallengeRefinePreview
+  delete updatedNormalized.claimsChallengeResolution
+
+  await prisma.ideaRecord.update({
+    where: { sessionId },
+    data: { normalizedData: updatedNormalized }
+  })
+
+  console.log(`[challenge_claims] remarks=${remarks.length}, lint=${lintFindings.length}, refs=${usedReferences.length}${referencesStatus.origin ? ` (${referencesStatus.origin})` : ''}`)
+  return NextResponse.json({ success: true, challenge })
+}
+
+async function handleChallengeRefinePreview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const disabled = challengeFeatureDisabled()
+  if (disabled) return disabled
+
+  const { sessionId, remarkDispositions, userRemarks } = data
+  const loaded = await loadChallengeSession(user, patentId, sessionId)
+  if (loaded.error) return loaded.error
+  const { session, normalized } = loaded as { session: any; normalized: Record<string, any> }
+
+  const challenge = normalized.claimsChallenge
+  if (!challenge || !Array.isArray(challenge.remarks)) {
+    return NextResponse.json({
+      error: 'Run a challenge before drafting amendments.',
+      code: 'NO_CHALLENGE'
+    }, { status: 400 })
+  }
+
+  const working = getWorkingClaims(normalized)
+  const structured: any[] = Array.isArray(working.structured) ? working.structured : []
+  if (structured.length === 0) {
+    return NextResponse.json({
+      error: 'There are no claims to amend.',
+      code: 'NO_CLAIMS_TO_CHALLENGE'
+    }, { status: 400 })
+  }
+
+  const currentFingerprint = computeClaimsFingerprint(structured)
+  if (challenge.claimsFingerprint && challenge.claimsFingerprint !== currentFingerprint) {
+    return NextResponse.json({
+      error: 'The claims changed after this challenge ran, so its remarks no longer match them. Run the challenge again.',
+      code: 'CHALLENGE_STALE'
+    }, { status: 409 })
+  }
+
+  // Review work is persisted BEFORE the LLM call so that a failed or slow
+  // amendment pass never costs the attorney their dispositions.
+  const dispositionMap = new Map<string, { disposition?: string; editedFix?: string }>()
+  if (Array.isArray(remarkDispositions)) {
+    for (const entry of remarkDispositions) {
+      const id = String(entry?.id || '').trim()
+      if (id) dispositionMap.set(id, entry)
+    }
+  }
+
+  const updatedRemarks: ChallengeRemark[] = challenge.remarks.map((remark: ChallengeRemark) => {
+    const entry = dispositionMap.get(remark.id)
+    if (!entry) return remark
+    const disposition = String(entry.disposition || '').toLowerCase()
+    const editedFix = typeof entry.editedFix === 'string' ? entry.editedFix.trim() : undefined
+    return {
+      ...remark,
+      disposition: disposition === 'accepted' || disposition === 'dismissed' || disposition === 'pending'
+        ? (disposition as ChallengeRemark['disposition'])
+        : remark.disposition,
+      ...(editedFix !== undefined ? { editedFix: editedFix || undefined } : {}),
+    }
+  })
+
+  if (Array.isArray(userRemarks)) {
+    // A remark the attorney typed is persisted before the model runs, so a
+    // failed draft followed by a retry would carry it again. Match on content
+    // so the retry updates the stored copy instead of adding a twin.
+    const userRemarkKey = (remark: { claims: number[]; objection: string; fix: string }) =>
+      `${[...remark.claims].sort((a, b) => a - b).join(',')}|${remark.objection.toLowerCase()}|${remark.fix.toLowerCase()}`
+    const existingUserRemarks = new Map<string, ChallengeRemark>()
+    for (const remark of updatedRemarks) {
+      if (remark.source === 'user') existingUserRemarks.set(userRemarkKey(remark), remark)
+    }
+
+    for (const entry of userRemarks) {
+      const objection = String(entry?.objection || '').trim().slice(0, MAX_CHALLENGE_FOCUS_CHARS)
+      const fix = String(entry?.fix || '').trim().slice(0, MAX_CHALLENGE_FOCUS_CHARS)
+      if (!objection && !fix) continue
+      const claims = Array.isArray(entry?.claims)
+        ? entry.claims.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n > 0)
+        : []
+      const candidate: ChallengeRemark = {
+        id: '',
+        source: 'user',
+        claims: claims.length ? claims : [1],
+        cat: 'USER_FOCUS',
+        sev: String(entry?.sev || '').toUpperCase() === 'H' ? 'H' : String(entry?.sev || '').toUpperCase() === 'L' ? 'L' : 'M',
+        objection: objection || fix,
+        fix: fix || objection,
+        disposition: 'accepted',
+      }
+      const existing = existingUserRemarks.get(userRemarkKey(candidate))
+      if (existing) {
+        existing.disposition = 'accepted'
+        continue
+      }
+      candidate.id = nextUserRemarkId(updatedRemarks)
+      updatedRemarks.push(candidate)
+      existingUserRemarks.set(userRemarkKey(candidate), candidate)
+    }
+  }
+
+  // The dispositions now differ from whatever the previous preview was drafted
+  // against, so that preview is void from this point: if the model call below
+  // fails, the next session load must not resurrect it into the diff step.
+  const challengeAfterReview = {
+    ...challenge,
+    status: 'OPEN' as const,
+    remarks: updatedRemarks,
+    dispositionsSavedAt: new Date().toISOString(),
+  }
+  const reviewedNormalized: Record<string, any> = { ...normalized, claimsChallenge: challengeAfterReview }
+  delete reviewedNormalized.claimsChallengeRefinePreview
+  await prisma.ideaRecord.update({
+    where: { sessionId },
+    data: { normalizedData: reviewedNormalized }
+  })
+
+  // A prior-art signal is routed to the prior-art stage by the attorney; it is
+  // never an amendment instruction, so it must not reach the refiner even if a
+  // client marks it accepted.
+  const acceptedRemarks = updatedRemarks.filter(
+    remark => remark.disposition === 'accepted' && remark.cat !== 'PRIOR_ART_SIGNAL'
+  )
+  if (acceptedRemarks.length === 0) {
+    return NextResponse.json({
+      error: 'Accept at least one remark before drafting amendments.',
+      code: 'NO_ACCEPTED_REMARKS',
+      challenge: challengeAfterReview,
+    }, { status: 400 })
+  }
+
+  const { ideaBasics, components, componentList, sourceFactLedgerBlock } =
+    buildChallengeContextBlocks(session, normalized)
+  const sourceFidelityMode = resolveSourceFidelityMode(normalized)
+  const nextClaimNumber = structured.reduce((max: number, claim: any) => Math.max(max, Number(claim?.number) || 0), 0) + 1
+
+  const prompt = buildChallengeRefinePrompt({
+    ideaBasics,
+    componentList,
+    sourceFactLedgerBlock,
+    claims: structured,
+    acceptedRemarks,
+    fidelityBlock: buildSourceFidelityPromptBlock(sourceFidelityMode, 'claimChallengeRefine'),
+    // The translation-table variant, never the do-not-rename list: this pass
+    // exists to cure defects that verbatim inventor wording introduced.
+    terminologyTranslationBlock: buildInventorTerminologyTranslationBlock(sourceFidelityMode, components),
+    nextClaimNumber,
+  })
+
+  const request = { headers: requestHeaders || {} }
+  const llmResult = await llmGateway.executeLLMOperation(request, {
+    taskCode: 'LLM1_CLAIM_REFINEMENT',
+    stageCode: 'DRAFT_CLAIM_REFINEMENT',
+    prompt,
+    idempotencyKey: crypto.randomUUID(),
+    inputTokens: Math.ceil(prompt.length / 4),
+    parameters: { temperature: DRAFTING_CLAIMS_TEMPERATURE, response_format: { type: 'json_object' } },
+    metadata: {
+      patentId,
+      sessionId,
+      purpose: 'claim_challenge_refine',
+      jurisdiction: (session.activeJurisdiction || 'US').toUpperCase()
+    }
+  })
+
+  // Every failure below returns the reviewed challenge: the dispositions and
+  // any typed remark are already saved, and the panel needs them to avoid
+  // re-sending the typed remark on retry.
+  if (!llmResult.success || !llmResult.response) {
+    console.error('[challenge_refine_preview] LLM error:', llmResult.error)
+    return NextResponse.json({
+      error: llmResult.error?.message || 'The amendments could not be drafted.',
+      code: 'CLAIM_CHALLENGE_REFINE_FAILED',
+      challenge: challengeAfterReview,
+    }, { status: 502 })
+  }
+
+  const parsedJson = parseLlmJsonObject(llmResult.response)
+  const parsed = parsedJson.ok ? ChallengeRefineOutputSchema.safeParse(parsedJson.data) : null
+  if (!parsedJson.ok || !parsed?.success || parsed.data.refined_claims.length === 0) {
+    const truncated = !parsedJson.ok
+      ? parsedJson.truncated
+      : isTruncatedLlmResponse(llmResult.response.metadata)
+    console.error('[challenge_refine_preview] output unreadable or empty; nothing persisted')
+    return NextResponse.json({
+      error: truncated
+        ? 'The amendments were cut short before they could be read. Your review was kept - please try again.'
+        : 'The amendment result could not be read. Your review was kept - please try again.',
+      code: 'CLAIM_CHALLENGE_REFINE_PARSE_FAILED',
+      challenge: challengeAfterReview,
+    }, { status: 502 })
+  }
+
+  const reloaded = await reloadChallengeClaims(sessionId, currentFingerprint)
+  if (reloaded.error) return reloaded.error
+  const fresh = reloaded.fresh
+  // The remark ids the preview resolves belong to THIS challenge run. If the
+  // challenge was re-run while the model was drafting, those ids now name
+  // different objections and the preview must not attach to them.
+  if (fresh.claimsChallenge?.generatedAt !== challenge.generatedAt) {
+    return NextResponse.json({
+      error: 'The challenge was re-run while amendments were being drafted. Review the new objections and draft again.',
+      code: 'CHALLENGE_STALE'
+    }, { status: 409 })
+  }
+
+  const preview = {
+    generatedAt: new Date().toISOString(),
+    claimsFingerprint: currentFingerprint,
+    resolvedRemarkIds: acceptedRemarks.map(remark => remark.id),
+    refinedClaims: parsed.data.refined_claims,
+    addedClaims: parsed.data.added_claims || [],
+    unresolvedRemarks: parsed.data.unresolved || [],
+  }
+  const challengeReady = { ...(fresh.claimsChallenge || challengeAfterReview), status: 'REFINE_READY' as const }
+
+  await prisma.ideaRecord.update({
+    where: { sessionId },
+    data: {
+      normalizedData: {
+        ...fresh,
+        claimsChallenge: challengeReady,
+        claimsChallengeRefinePreview: preview,
+      }
+    }
+  })
+
+  console.log(`[challenge_refine_preview] accepted=${acceptedRemarks.length}, refined=${preview.refinedClaims.length}, added=${preview.addedClaims.length}`)
+  return NextResponse.json({ success: true, preview, challenge: challengeReady })
+}
+
+async function handleChallengeRefineApply(user: any, patentId: string, data: any) {
+  const disabled = challengeFeatureDisabled()
+  if (disabled) return disabled
+
+  const { sessionId, acceptedClaimNumbers, acceptAll, acceptedAddedClaimNumbers } = data
+  const loaded = await loadChallengeSession(user, patentId, sessionId)
+  if (loaded.error) return loaded.error
+  const { normalized } = loaded as { session: any; normalized: Record<string, any> }
+
+  const preview = normalized.claimsChallengeRefinePreview
+  if (!preview || !Array.isArray(preview.refinedClaims) || preview.refinedClaims.length === 0) {
+    return NextResponse.json({
+      error: 'There are no drafted amendments to apply. Run the challenge again.',
+      code: 'EMPTY_CHALLENGE_REFINEMENT_PREVIEW'
+    }, { status: 409 })
+  }
+
+  const working = getWorkingClaims(normalized)
+  const baseStructured: any[] = Array.isArray(working.structured) ? working.structured : []
+  const currentFingerprint = computeClaimsFingerprint(baseStructured)
+  if (preview.claimsFingerprint && preview.claimsFingerprint !== currentFingerprint) {
+    return NextResponse.json({
+      error: 'The claims changed after these amendments were drafted. Run the challenge again.',
+      code: 'CHALLENGE_STALE'
+    }, { status: 409 })
+  }
+
+  const result = mergeChallengeRefinedClaims({
+    baseStructured,
+    refinedClaims: preview.refinedClaims,
+    addedClaims: preview.addedClaims || [],
+    acceptedClaimNumbers,
+    acceptAll,
+    acceptedAddedClaimNumbers,
+  })
+
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error, code: result.code }, { status: 409 })
+  }
+
+  const notes = buildChallengeChangeNotes(
+    preview.refinedClaims,
+    result.changedClaimNumbers,
+    preview.addedClaims || [],
+    result.addedClaimNumbers,
+  )
+  const mergedHtml = structuredClaimsToHtml(result.merged)
+  const now = new Date().toISOString()
+
+  const updatedNormalized: Record<string, any> = {
+    ...normalized,
+    claimsStructured: result.merged,
+    claims: mergedHtml,
+    claimsLastSavedAt: now,
+    ...captureClaimsVersion(normalized, { source: 'challenge_apply', html: mergedHtml, structured: result.merged, note: notes, now }),
+    claimsChallenge: { ...(normalized.claimsChallenge || {}), status: 'APPLIED' },
+    claimsChallengeResolution: {
+      appliedAt: now,
+      appliedClaimNumbers: result.changedClaimNumbers,
+      addedClaimNumbers: result.addedClaimNumbers,
+      resolvedRemarkIds: preview.resolvedRemarkIds || [],
+      notes,
+    },
+  }
+  delete updatedNormalized.claimsChallengeRefinePreview
+
+  // The provisional pair follows the working set unconditionally, exactly as
+  // handleSaveClaims does while the claims are unlocked (and they are: the
+  // loader refuses locked claims). The prior-art refinement stage drafts from
+  // and diffs against the provisional pair, so a backfill-only write here would
+  // leave that stage working on the pre-challenge claims and its refined text
+  // would later be merged onto wording it was never drafted against.
+  updatedNormalized.claimsProvisional = mergedHtml
+  updatedNormalized.claimsStructuredProvisional = result.merged
+
+  await prisma.ideaRecord.update({
+    where: { sessionId },
+    data: { normalizedData: updatedNormalized }
+  })
+
+  console.log(`[challenge_refine_apply] changed=${result.changedClaimNumbers.length}, added=${result.addedClaimNumbers.length}`)
+  return NextResponse.json({
+    success: true,
+    claims: result.merged,
+    claimsHtml: mergedHtml,
+    notes,
   })
 }
 
