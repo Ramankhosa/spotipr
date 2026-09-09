@@ -44,8 +44,7 @@ function canonicalSupport(value: unknown): unknown {
  */
 export function computeClaimStrategyFingerprint(
   normalized: Record<string, any> | null | undefined,
-  session: any,
-  jurisdiction?: string | null
+  session: any
 ): string {
   const nd = normalized || {}
   const idea = session?.ideaRecord || {}
@@ -72,7 +71,9 @@ export function computeClaimStrategyFingerprint(
     sourceHandlingMode: nd.sourceHandlingMode || 'STRUCTURE_ONLY',
     patentTypePrimary: session?.patentTypePrimary || nd.patentTypePrimary || '',
     inventionType: nd.inventionType || null,
-    jurisdiction: String(jurisdiction || session?.activeJurisdiction || (Array.isArray(session?.draftingJurisdictions) ? session.draftingJurisdictions[0] : '') || 'US').toUpperCase(),
+    // The office is deliberately NOT part of the fingerprint: a plan made for
+    // one jurisdiction is reused for another, because every office-specific
+    // rule is applied by the rules block and the validator at claim time.
     noveltySearchId: session?.noveltyHandoff?.searchId || null,
   }
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 20)

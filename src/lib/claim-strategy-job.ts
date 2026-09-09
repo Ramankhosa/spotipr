@@ -24,8 +24,11 @@ import { buildClaimStrategyPrompt, parseClaimStrategy } from '@/lib/claim-rules/
 import {
   CLAIM_STRATEGY_STAGE_CODE,
   computeClaimStrategyFingerprint,
+  readClaimStrategyState,
+  readyClaimStrategy,
   type ClaimStrategyState,
 } from '@/lib/claim-rules/strategy-state'
+import type { ClaimStrategy } from '@/lib/claim-rules/strategy'
 import { buildClaimContextBlocks, type PreliminaryClaimContext } from '@/lib/preliminary-claim-generation'
 
 export {
@@ -127,7 +130,7 @@ export async function runClaimStrategy(params: RunClaimStrategyParams): Promise<
   const jurisdiction = params.jurisdiction
     ? String(params.jurisdiction).toUpperCase()
     : await resolveStrategyJurisdiction(session)
-  const fingerprint = computeClaimStrategyFingerprint(normalized, session, jurisdiction)
+  const fingerprint = computeClaimStrategyFingerprint(normalized, session)
 
   const failed = async (error: string): Promise<ClaimStrategyState> => {
     const state: ClaimStrategyState = { status: 'failed', inputFingerprint: fingerprint, jurisdiction, reason: params.reason, startedAt, completedAt: new Date().toISOString(), error }
@@ -216,9 +219,36 @@ export async function runClaimStrategy(params: RunClaimStrategyParams): Promise<
 // ── Background trigger ──────────────────────────────────────────────────────
 
 function backgroundEnabled(): boolean {
-  if (process.env.CLAIM_STRATEGY_BACKGROUND === 'false' || process.env.CLAIM_STRATEGY_BACKGROUND === '0') return false
-  if (process.env.CLAIM_STRATEGY_BACKGROUND === 'true') return true
-  return Boolean(process.env.NEXT_RUNTIME) // set by Next.js in server bundles; absent in tests and scripts
+  const flag = String(process.env.CLAIM_STRATEGY_BACKGROUND || '').toLowerCase()
+  if (['false', '0', 'off', 'no'].includes(flag)) return false
+  if (['true', '1', 'on', 'yes'].includes(flag)) return true
+  // On by default. The old gate keyed on NEXT_RUNTIME, which a build can leave
+  // unset in a bundled route; a silently disabled background job costs every
+  // generation a full strategy call, so the default is now "run unless this
+  // is a test process".
+  return !process.env.VITEST
+}
+
+/** Polls the record for a strategy run already in flight; never blocks past `timeoutMs`. */
+export async function waitForClaimStrategy(params: {
+  sessionId: string
+  fingerprint: string
+  timeoutMs?: number
+  intervalMs?: number
+}): Promise<{ strategy: ClaimStrategy | null; state: ClaimStrategyState | null }> {
+  const timeoutMs = params.timeoutMs ?? 20_000
+  const intervalMs = params.intervalMs ?? 2_000
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+    const record = await prisma.ideaRecord.findUnique({ where: { sessionId: params.sessionId }, select: { normalizedData: true } })
+    const normalized = (record?.normalizedData as any) || {}
+    const state = readClaimStrategyState(normalized)
+    if (!state || state.inputFingerprint !== params.fingerprint) return { strategy: null, state }
+    if (state.status === 'ready') return { strategy: readyClaimStrategy(normalized, params.fingerprint), state }
+    if (state.status === 'failed') return { strategy: null, state }
+  }
+  return { strategy: null, state: null }
 }
 
 const debounceTimers = new Map<string, NodeJS.Timeout>()

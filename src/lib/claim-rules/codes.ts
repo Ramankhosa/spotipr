@@ -40,6 +40,10 @@ export const OFFICE_FORM_CODES = [
   'OMNIBUS_CLAIM_EXPECTED',
   'CLAIM_COUNT_OVER_FREE',
   'INDEPENDENT_COUNT_OVER_FREE',
+  'TAUTOLOGY',
+  // Normalisation-only codes (never findings): terminology substitution from the strategy map.
+  'TERMINOLOGY_MAP',
+  'TERMINOLOGY_RETAINED',
 ] as const
 
 export type OfficeFormCode = (typeof OFFICE_FORM_CODES)[number]

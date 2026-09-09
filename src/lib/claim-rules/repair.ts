@@ -171,6 +171,14 @@ function recipeFor(finding: OfficeFormFinding, rules: ClaimRuleProfile): string 
       return `Split the claim into a preamble of conventional context and a characterising portion introduced by "${rules.preferredTransitions.find(t => /characteri|caracteriz|отлича/i.test(t)) || 'characterized in that'}".`
     case 'PREAMBLE_NOUN_MISMATCH':
       return 'Use the parent claim\'s preamble noun in the dependent claim\'s opening.'
+    case 'SOURCE_JARGON':
+      return 'Replace the internal label or code name with the standard, art-recognised term for that element (use the CLAIM STRATEGY terminology map where given); keep the inventor\'s exact term in a dependent claim.'
+    case 'INDEFINITE_MODIFIER':
+      return 'Delete the subjective modifier, or replace it with the concrete numeric or structural limitation the source states; where the source states none, delete it.'
+    case 'SEQUENCE_CONFLATION':
+      return 'Recite the biological sequence and the chemical conjugate as separate limitations joined by the stated linkage ("a peptide having the sequence X, conjugated to polyethylene glycol"), never as one hyphenated string.'
+    case 'TAUTOLOGY':
+      return 'Delete the clause that merely restates the preamble, or replace it with the actual structural relationship (which element contains, is bonded to, or is coupled to which).'
     default:
       return 'Cure the stated defect with the smallest edit that keeps every source-stated element.'
   }

@@ -23,6 +23,92 @@ export type NormaliseClaimSetResult = {
   changes: ClaimNormalisationChange[]
 }
 
+export type TerminologyMapEntry = { element?: string; claimTerm: string; inventorTerm?: string; retainInDependent?: boolean }
+
+export type NormaliseClaimSetOptions = {
+  /** The strategy's terminology map; inventor terms are replaced in independent claims. */
+  terminology?: TerminologyMapEntry[] | null
+  /** PRESERVE keeps the inventor's term alive in a dependent claim after every substitution. */
+  fidelityMode?: 'PRESERVE' | 'STRUCTURE_ONLY'
+}
+
+const CODE_LIKE = /[A-Za-z]\d|\d[A-Za-z]|[A-Z]{3,}/
+
+function stripLeadingArticle(term: string): string {
+  return term.replace(/^\s*(?:a|an|the)\s+/i, '').trim()
+}
+
+function articleFor(term: string, previous: string): string {
+  if (/^the$/i.test(previous)) return previous
+  const vowel = /^[aeiou]/i.test(term)
+  const article = vowel ? 'an' : 'a'
+  return /^[A-Z]/.test(previous) ? article[0].toUpperCase() + article.slice(1) : article
+}
+
+/**
+ * Replaces the inventor's terms with the art-recognised claim terms decided
+ * by the strategy, in independent claims only. Zero LLM cost: the mapping was
+ * produced in the background at Stage 0. Where the mode or the entry requires
+ * it, a dependent claim reciting the inventor's exact term is added so the
+ * original wording survives (the same licence the challenge refine pass has).
+ */
+export function applyTerminologyMap(
+  claims: DraftClaim[],
+  rules: ClaimRuleProfile,
+  options: NormaliseClaimSetOptions
+): { claims: DraftClaim[]; changes: ClaimNormalisationChange[] } {
+  const changes: ClaimNormalisationChange[] = []
+  const entries = (options.terminology || [])
+    .map(entry => ({
+      claimTerm: stripLeadingArticle(String(entry?.claimTerm || '')),
+      inventorTerm: String(entry?.inventorTerm || '').trim(),
+      retain: options.fidelityMode === 'PRESERVE' || entry?.retainInDependent === true,
+    }))
+    .filter(entry =>
+      entry.claimTerm && entry.inventorTerm && entry.inventorTerm.length >= 3 &&
+      entry.claimTerm.toLowerCase() !== entry.inventorTerm.toLowerCase() &&
+      !CODE_LIKE.test(entry.claimTerm)
+    )
+  if (!entries.length || rules.language !== 'en') return { claims, changes }
+
+  const out = claims.map(claim => ({ ...claim }))
+  const retentions: Array<{ parent: DraftClaim; entry: (typeof entries)[number] }> = []
+
+  for (const claim of out) {
+    if (claim.type !== 'independent') continue
+    for (const entry of entries) {
+      const escaped = entry.inventorTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const withArticle = new RegExp(`\\b(a|an|the|A|An|The)\\s+${escaped}\\b`, 'g')
+      const bare = new RegExp(`\\b${escaped}\\b`, 'gi')
+      if (!bare.test(claim.text)) continue
+      const before = claim.text
+      let text = before.replace(withArticle, (_m, article: string) => `${articleFor(entry.claimTerm, article)} ${entry.claimTerm}`)
+      text = text.replace(bare, entry.claimTerm)
+      if (text !== before) {
+        claim.text = text
+        changes.push({ claimNumber: claim.number, code: 'TERMINOLOGY_MAP', before, after: text })
+        if (entry.retain) retentions.push({ parent: claim, entry })
+      }
+    }
+  }
+
+  // Retention: the inventor's exact term must still appear somewhere in the set.
+  let next = out.reduce((max, claim) => Math.max(max, Number(claim.number) || 0), 0) + 1
+  for (const { parent, entry } of retentions) {
+    const escaped = entry.inventorTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (out.some(claim => new RegExp(`\\b${escaped}\\b`, 'i').test(claim.text))) continue
+    const noun = preambleNounPhrase(parent.text) || 'invention'
+    const article = rules.dependentClaimPhrase === 'according_to' || rules.dependentClaimPhrase === 'characterized' ? 'The' : 'The'
+    const text = `${article} ${noun} ${connectorFor(rules)} claim ${parent.number}, wherein the ${entry.claimTerm} is ${entry.inventorTerm}.`
+    const added: DraftClaim = { number: next, type: 'dependent', dependsOn: parent.number, text, category: parent.category }
+    out.push(added)
+    changes.push({ claimNumber: next, code: 'TERMINOLOGY_RETAINED', before: '', after: text })
+    next += 1
+  }
+
+  return { claims: out, changes }
+}
+
 const GENERIC_DEPENDENT_NOUNS = new Set([
   'device', 'apparatus', 'system', 'method', 'process', 'composition', 'product', 'invention', 'assembly',
   'article', 'kit', 'medium', 'compound', 'formulation', 'arrangement', 'unit', 'machine',
@@ -104,7 +190,11 @@ function orderByDependency(claims: DraftClaim[]): DraftClaim[] {
   return ordered
 }
 
-export function normaliseClaimSet(claims: DraftClaim[] | null | undefined, rules: ClaimRuleProfile): NormaliseClaimSetResult {
+export function normaliseClaimSet(
+  claims: DraftClaim[] | null | undefined,
+  rules: ClaimRuleProfile,
+  options: NormaliseClaimSetOptions = {}
+): NormaliseClaimSetResult {
   const changes: ClaimNormalisationChange[] = []
   const input = (Array.isArray(claims) ? claims : [])
     .filter(claim => claim && Number.isFinite(Number(claim.number)))
@@ -148,8 +238,13 @@ export function normaliseClaimSet(claims: DraftClaim[] | null | undefined, rules
     return { ...claim, number, text }
   })
 
-  // 3. Text rewrites (English only).
-  const output = renumbered.map((claim) => {
+  // 3. Terminology from the strategy map (English only; independent claims).
+  const mapped = applyTerminologyMap(renumbered, rules, options)
+  changes.push(...mapped.changes)
+  const withTerms = mapped.claims
+
+  // 4. Text rewrites (English only).
+  const output = withTerms.map((claim) => {
     let text = claim.text
     const record = (code: string, before: string, after: string) => {
       if (before !== after) changes.push({ claimNumber: claim.number, code, before, after })
@@ -181,7 +276,7 @@ export function normaliseClaimSet(claims: DraftClaim[] | null | undefined, rules
         }
 
         const parentNumber = dependencyFromClaimText(text)
-        const parent = parentNumber !== undefined ? renumbered.find(candidate => candidate.number === parentNumber) : undefined
+        const parent = parentNumber !== undefined ? withTerms.find(candidate => candidate.number === parentNumber) : undefined
         if (parent && parent.number !== claim.number) {
           const parentNoun = preambleNounPhrase(parent.text)
           const head = singularHead(noun)
@@ -275,6 +370,8 @@ export function summariseNormalisation(changes: ClaimNormalisationChange[]): str
     CHARACTERISED_SPELLING: 'spelling aligned',
     OPENING_ARTICLE: 'capitalised',
     TRAILING_PERIOD: 'terminal period added',
+    TERMINOLOGY_MAP: "inventor's term translated to the art term",
+    TERMINOLOGY_RETAINED: "dependent claim added to retain the inventor's term",
   }
   return Array.from(counts.entries())
     .map(([code, count]) => `${count} ${labels[code] || code.toLowerCase().replace(/_/g, ' ')}${count > 1 && labels[code] ? 's' : ''}`)

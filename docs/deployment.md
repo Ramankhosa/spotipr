@@ -74,8 +74,11 @@ schema change is involved (everything new lives in `IdeaRecord.normalizedData`),
 so the normal deploy applies; then, in this order:
 
 1. `node scripts/add-claim-strategy-stage.js` — registers the `DRAFT_CLAIM_STRATEGY`
-   workflow stage and mirrors a model config from `DRAFT_CLAIM_GENERATION` for
-   every plan. Stage-coded model resolution fails closed: until this has run,
+   workflow stage and mirrors a model config from `DRAFT_CLAIM_REFINEMENT` (the
+   fast tier) for every plan. If the stage was registered by an earlier version
+   of the script that mirrored the reasoning model, re-run it with
+   `--update-model` to re-point the existing rows; a thinking model on this stage
+   costs 60-90 seconds per plan. Stage-coded model resolution fails closed: until this has run,
    every strategy run logs `CONFIGURATION_ERROR` and the claims stage drafts
    without a strategy (it still works, with a "Preparing claim strategy" step).
 2. `node scripts/sync-claims-base-prompt.js` (dry run) then `--apply` — pushes

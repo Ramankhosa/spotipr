@@ -150,7 +150,7 @@ DECIDE, USING ONLY THE SOURCE CONTEXT ABOVE:
 4. optionalFeatures — the ladder for dependent claims: disclosed classes, preferred features, values, conditions, embodiment details (from Claimable Features, Fallback Limitations, support data), each as a one-line claim-ready limitation, broadest first.
 5. categoryPlan — the independent claims to draft, in order: role "primary" for the detected patent type, then "mirror" claims in other statutory categories that the JURISDICTION CLAIM RULES permit and the source supports (apparatus/system, method/process, composition, medium or program in the office's formulation, kit, use where allowed), so that maker, user and seller are each caught by a single-actor claim. For each: category (one of method, system, apparatus, composition, product, medium, program, kit, compound, use), the opening words of the claim ("A ... comprising"), and a one-line justification. Never two claims in one category unless the rules block allows it; never a category the rules block excludes.
 6. eligibility — risk (none/low/medium/high) that an examiner objects to the subject-matter as such under the doctrine named in the rules block; doctrine (the statute or guideline); mitigation (what Claim 1 must recite — technical means, technical effect, converted claim form — to survive it).
-7. terminology — one entry per claimed element: the art-recognised claim term to use; the inventor's own term where it differs; retainInDependent true when the SOURCE FIDELITY MODE block requires the inventor's term to survive in a dependent claim (in PRESERVE mode the claimTerm is the inventor's term itself).
+7. terminology — one entry per claimed element. claimTerm is ALWAYS the standard, art-recognised term (a lipid nanoparticle, a cell-penetrating peptide, a therapeutic agent), never an internal code name, project label, marketing moniker or capitalised inventor label. inventorTerm is the inventor's own wording where it differs. retainInDependent is true whenever the two differ and the SOURCE FIDELITY MODE is PRESERVE, so the inventor's exact term survives in a dependent claim.
 8. singleActor — who performs the method claim (manufacturer, operator, server, user) and which steps were moved or rephrased so that no method claim needs two actors.
 9. numericLadder — every claim-relevant disclosed value: the parameter, the broad disclosed range (if any), the preferred range (if any), the example value, and the source reference (a SF-/SDS- id or the field name). Never invent a range from a single value.
 10. claimForm — "two_part" only when the rules block requires two-part form now or CLOSEST ART is present and the split is clean; otherwise "one_part_pre_search".
@@ -201,8 +201,11 @@ export function buildClaimStrategyBlock(strategy: ClaimStrategy | null | undefin
     sections.push(`Eligibility: risk ${strategy.eligibility.risk}${strategy.eligibility.doctrine ? ` under ${strategy.eligibility.doctrine}` : ''}${strategy.eligibility.mitigation ? ` — Claim 1 must ${strategy.eligibility.mitigation}` : ''}`)
   }
   if (strategy.terminology.length) {
-    sections.push('Terminology (use the claim term; retain the inventor\'s term in a dependent claim where marked):')
-    sections.push(strategy.terminology.map(item => `- ${item.element}: "${item.claimTerm}"${item.inventorTerm && item.inventorTerm !== item.claimTerm ? ` (inventor: "${item.inventorTerm}"${item.retainInDependent ? '; retain verbatim in a dependent claim' : ''})` : ''}`).join('\n'))
+    sections.push('Terminology map (MANDATORY):')
+    sections.push(strategy.terminology.map(item => `- ${item.element}: "${item.claimTerm}"${item.inventorTerm && item.inventorTerm !== item.claimTerm ? ` (inventor's term: "${item.inventorTerm}"${item.retainInDependent ? '; recite it verbatim in a dependent claim' : ''})` : ''}`).join('\n'))
+    if (strategy.terminology.some(item => item.inventorTerm && item.inventorTerm !== item.claimTerm)) {
+      sections.push('CRITICAL: an independent claim uses ONLY the claim terms above. An inventor\'s term from the map may appear in a dependent claim only, unless the SOURCE FIDELITY MODE block says the inventor\'s wording is canonical, in which case that block wins and the terms are translated after drafting.')
+    }
   }
   if (strategy.singleActor.actor) {
     sections.push(`Single actor for method claims: ${strategy.singleActor.actor}${strategy.singleActor.avoidedDividedSteps.length ? ` (steps kept to one actor: ${strategy.singleActor.avoidedDividedSteps.join('; ')})` : ''}`)

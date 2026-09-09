@@ -137,7 +137,7 @@ import {
 } from '@/lib/claim-rules';
 import { repairClaimFormIfNeeded } from '@/lib/claim-rules/repair';
 import { buildClaimStrategyBlock, buildClaimStrategyDigest } from '@/lib/claim-rules/strategy';
-import { computeClaimStrategyFingerprint, enqueueClaimStrategy, readyClaimStrategy, runClaimStrategy } from '@/lib/claim-strategy-job';
+import { claimStrategyInFlight, computeClaimStrategyFingerprint, enqueueClaimStrategy, readyClaimStrategy, waitForClaimStrategy } from '@/lib/claim-strategy-job';
 import {
   generateSketch,
   detectExternalImageContent,
@@ -5453,31 +5453,25 @@ async function handleGenerateClaims(
       claimCapSource = resolvedLimit.source
     }
 
-    // Claim strategy: normally planned in the background when Stage 0 completed
-    // (see enqueueClaimStrategy). It is used when it still describes these inputs
-    // and this office; otherwise it is planned now and the attorney sees the step.
-    const strategyFingerprint = computeClaimStrategyFingerprint(existingNormalized, session, activeJurisdiction)
+    // Claim strategy: planned in the background when Stage 0 completed (see
+    // enqueueClaimStrategy). The claims stage NEVER plans synchronously: a
+    // ready plan is used; a run still in flight is waited for briefly; anything
+    // else drafts without a plan and queues one for the next generation. The
+    // old inline call put a full strategy round-trip on every generation whose
+    // plan was missing or stale, which is where the multi-minute waits came from.
+    const strategyFingerprint = computeClaimStrategyFingerprint(existingNormalized, session)
     let claimStrategy = readyClaimStrategy(existingNormalized, strategyFingerprint)
-    if (!claimStrategy) {
-      onProgress?.({ type: 'stage', key: 'strategy', label: 'Preparing claim strategy' })
-      const strategyState = await runClaimStrategy({
-        sessionId,
-        session,
-        normalized: existingNormalized,
-        requestHeaders: requestHeaders || {},
-        reason: 'claims_stage',
-        jurisdiction: activeJurisdiction,
-        rules: officeRules,
-        rulesBlock,
-        patentId,
-      })
+    if (!claimStrategy && claimStrategyInFlight(existingNormalized, strategyFingerprint)) {
+      onProgress?.({ type: 'stage', key: 'strategy', label: 'Waiting for claim strategy' })
+      const waited = await waitForClaimStrategy({ sessionId, fingerprint: strategyFingerprint, timeoutMs: 20_000 })
+      claimStrategy = waited.strategy
       // The later normalizedData write spreads existingNormalized; carry the
-      // state the run just persisted so that write does not roll it back.
-      ;(existingNormalized as any).claimStrategy = strategyState
-      claimStrategy = strategyState.status === 'ready' ? strategyState.strategy ?? null : null
-      if (!claimStrategy) {
-        console.warn(`[handleGenerateClaims] claim strategy unavailable (${strategyState.status}: ${strategyState.error || 'n/a'}); drafting without it`)
-      }
+      // state the background run persisted so that write does not roll it back.
+      if (waited.state) (existingNormalized as any).claimStrategy = waited.state
+    }
+    const claimStrategyPending = !claimStrategy
+    if (claimStrategyPending) {
+      console.log('[handleGenerateClaims] no ready claim strategy for these inputs; drafting without it and queuing one')
     }
     const claimStrategyBlock = buildClaimStrategyBlock(claimStrategy)
 
@@ -5653,11 +5647,15 @@ async function handleGenerateClaims(
     generatedClaims = limitedClaimsPayload.claims
     generatedSupportMatrix = limitedClaimsPayload.supportMatrix
     generatedQualityWarnings = limitedClaimsPayload.qualityWarnings
-    if (limitedClaimsPayload.capped) {
-      const secondPass = normaliseClaimSet(generatedClaims, officeRules)
-      generatedClaims = secondPass.claims
-      normalisationChanges.push(...secondPass.changes)
-    }
+    // Second pass always: renumbers after a cap, and applies the strategy's
+    // terminology map (inventor terms -> art terms in independent claims, with a
+    // retention dependent where the mode requires it). Deterministic; no LLM.
+    const secondPass = normaliseClaimSet(generatedClaims, officeRules, {
+      terminology: claimStrategy?.terminology,
+      fidelityMode: resolveSourceFidelityMode(existingNormalized),
+    })
+    generatedClaims = secondPass.claims
+    normalisationChanges.push(...secondPass.changes)
 
     onProgress?.({ type: 'stage', key: 'checking', label: `Checking claim form for ${officeRules.office}` })
     const officeFormContext = {
@@ -5750,6 +5748,12 @@ async function handleGenerateClaims(
       where: { sessionId },
       data: { normalizedData: updatedNormalized }
     })
+
+    // Queue the plan AFTER the write above, so the job's re-read-then-write
+    // cannot be clobbered by this handler's whole-object spread.
+    if (claimStrategyPending) {
+      enqueueClaimStrategy({ sessionId, userId: user.id, reason: 'claims_stage_missing' })
+    }
 
     return NextResponse.json({
       claims: generatedClaims,

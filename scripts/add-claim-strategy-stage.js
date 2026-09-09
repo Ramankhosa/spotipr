@@ -9,18 +9,22 @@
  * strategy run fails with CONFIGURATION_ERROR and the claims stage falls back
  * to drafting without a strategy.
  *
- * The strategy is the "think before drafting" step for the claim set, so it
- * mirrors DRAFT_CLAIM_GENERATION's model per plan (a reasoning model) with a
- * smaller output ceiling. Retune per plan in Super Admin if the cost matters.
+ * The strategy is structured planning (about 800 tokens of JSON), not
+ * drafting, so it mirrors DRAFT_CLAIM_REFINEMENT's model per plan: the fast,
+ * non-reasoning tier. Mirroring the claims model (a thinking model) put a
+ * 60-90 second call on the path; do not do that again.
  *
  * Idempotent. Run with: node scripts/add-claim-strategy-stage.js
+ * To re-point rows created earlier (e.g. ones mirrored from the reasoning
+ * model): node scripts/add-claim-strategy-stage.js --update-model
  */
 const { PrismaClient } = require('@prisma/client')
 const prisma = new PrismaClient()
 
 const STAGE_CODE = 'DRAFT_CLAIM_STRATEGY'
-const MIRROR_SOURCE = 'DRAFT_CLAIM_GENERATION'
+const MIRROR_SOURCE = 'DRAFT_CLAIM_REFINEMENT'
 const MAX_TOKENS_OUT = 6000
+const UPDATE_MODEL = process.argv.includes('--update-model')
 
 async function main() {
   const stage = await prisma.workflowStage.upsert({
@@ -51,22 +55,31 @@ async function main() {
 
   const sourceConfigs = await prisma.planStageModelConfig.findMany({ where: { stageId: source.id } })
   let created = 0
+  let updated = 0
   for (const config of sourceConfigs) {
+    const { id, stageId, createdAt, updatedAt, ...rest } = config
+    const data = {
+      ...rest,
+      stageId: stage.id,
+      ...(typeof rest.maxTokensOut === 'number' ? { maxTokensOut: Math.min(rest.maxTokensOut, MAX_TOKENS_OUT) } : {}),
+    }
     const existing = await prisma.planStageModelConfig.findFirst({
       where: { planId: config.planId, stageId: stage.id },
     })
-    if (existing) continue
-    const { id, stageId, createdAt, updatedAt, ...rest } = config
-    await prisma.planStageModelConfig.create({
-      data: {
-        ...rest,
-        stageId: stage.id,
-        ...(typeof rest.maxTokensOut === 'number' ? { maxTokensOut: Math.min(rest.maxTokensOut, MAX_TOKENS_OUT) } : {}),
-      },
-    })
+    if (existing) {
+      if (!UPDATE_MODEL) continue
+      const { planId, ...updates } = data
+      await prisma.planStageModelConfig.update({ where: { id: existing.id }, data: updates })
+      updated++
+      continue
+    }
+    await prisma.planStageModelConfig.create({ data })
     created++
   }
-  console.log(`Mirrored ${created} plan stage config(s) from ${MIRROR_SOURCE} (${sourceConfigs.length} plan(s) checked).`)
+  console.log(`Mirrored ${created} new and re-pointed ${updated} existing plan stage config(s) from ${MIRROR_SOURCE} (${sourceConfigs.length} plan(s) checked).`)
+  if (!UPDATE_MODEL && created === 0) {
+    console.log('All plans already had a row. Re-run with --update-model to re-point them to the fast tier.')
+  }
 
   await prisma.$disconnect()
 }

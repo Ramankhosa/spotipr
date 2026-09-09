@@ -280,12 +280,17 @@ function reusedSeverity(code: string, rules: ClaimRuleProfile): { severity: Offi
       return null // permitted or customary: an omnibus reference is not a defect
     case 'MEANS_PLUS_FUNCTION':
       return ['US', 'CN'].includes(rules.jurisdiction) ? { severity: 'warn', fix: 'llm' } : { severity: 'info', fix: 'llm' }
+    // Hard rejections at every office (indefiniteness; ST.26 sequence desk):
+    // blocking, so the repair pass cures them when the prompt did not.
     case 'INDEFINITE_MODIFIER':
-    case 'TRADEMARK':
+    case 'SEQUENCE_CONFLATION':
+      return { severity: 'block', fix: 'llm' }
+    // Jargon is blocking in an independent claim (fromChallengeLint promotes it
+    // there); in a dependent claim the inventor's term is allowed and expected.
     case 'SOURCE_JARGON':
+    case 'TRADEMARK':
     case 'AND_OR':
     case 'FUNCTIONAL_RESULT_STATIC':
-    case 'SEQUENCE_CONFLATION':
       return { severity: 'warn', fix: 'llm' }
     case 'NEGATIVE_LIMITATION':
     case 'PICTURE_CLAIM_1':
@@ -295,11 +300,15 @@ function reusedSeverity(code: string, rules: ClaimRuleProfile): { severity: Offi
   }
 }
 
-function fromChallengeLint(findings: ChallengeLintFinding[], rules: ClaimRuleProfile): Draft[] {
+function fromChallengeLint(findings: ChallengeLintFinding[], rules: ClaimRuleProfile, claims: DraftClaim[] = []): Draft[] {
   const out: Draft[] = []
+  const independentNumbers = new Set(claims.filter(isIndependent).map(claim => Number(claim.number)))
   for (const finding of findings) {
     const mapped = reusedSeverity(finding.code, rules)
     if (!mapped) continue
+    if (finding.code === 'SOURCE_JARGON' && independentNumbers.has(Number(finding.claimNumber))) {
+      mapped.severity = 'block'
+    }
     let message = finding.message
     if (finding.code === 'MULTIPLE_DEPENDENT_CHAIN') {
       message = rules.multiOnMultiProhibited
@@ -693,6 +702,31 @@ function checkCategories(claims: DraftClaim[], rules: ClaimRuleProfile, context:
   return out
 }
 
+const TAUTOLOGY = /\b(?:to|so\s+as\s+to|thereby\s+to)\s+(?:form|forming|constitute|constituting|provide|providing|define|defining|produce|producing|yield|yielding)\s+(?:a|an|the|said)\s+([a-z][a-z\s-]{2,40}?)\s*\.?\s*$/i
+
+/** An independent claim whose last clause merely restates its own preamble. */
+function checkTautology(claims: DraftClaim[], rules: ClaimRuleProfile): Draft[] {
+  const out: Draft[] = []
+  for (const claim of claims) {
+    if (!isIndependent(claim)) continue
+    const text = String(claim.text || '')
+    const match = TAUTOLOGY.exec(text)
+    if (!match) continue
+    const noun = preambleNounPhrase(text)
+    if (!noun || !nounMatches(match[1], noun)) continue
+    out.push({
+      code: 'TAUTOLOGY',
+      severity: 'warn',
+      fix: 'llm',
+      claimNumber: Number(claim.number),
+      excerpt: excerptAround(text, match[0].trim().slice(0, 40)),
+      message: `Claim ${claim.number} ends by restating its own preamble ("${match[0].trim()}"); the clause adds no limitation. Recite the structural relationship between the elements, or delete it.`,
+      basis: ({ US: '35 USC 112(b); MPEP 2173.05(g)', EP: 'Article 84 EPC (conciseness)' } as Record<string, string>)[rules.jurisdiction] || 'Clarity and conciseness',
+    })
+  }
+  return out
+}
+
 function checkNumbersAgainstSource(claims: DraftClaim[], rules: ClaimRuleProfile, context: OfficeFormLintContext): Draft[] {
   const out: Draft[] = []
   const source = normaliseSource(String(context.sourceText || ''))
@@ -757,7 +791,8 @@ export function runOfficeFormLint(
     ...checkCategories(list, rules, context),
     ...checkNumbersAgainstSource(list, rules, context),
     ...checkCounts(list, rules),
-    ...fromChallengeLint(reused, rules),
+    ...fromChallengeLint(reused, rules, list),
+    ...checkTautology(list, rules),
   ]
 
   const seen = new Set<string>()

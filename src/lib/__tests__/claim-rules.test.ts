@@ -357,6 +357,56 @@ describe('claim-set normaliser', () => {
   })
 })
 
+describe('terminology map and jargon handling', () => {
+  const jargon = [
+    claim(1, 'A composition comprising: (i) a Pep-B2; (ii) a delivery vehicle comprising DSPC; and (iii) a payload encapsulated in the delivery vehicle, wherein the delivery vehicle encapsulates the payload to form the composition.'),
+    claim(2, 'The composition of claim 1, wherein the Pep-B2 has the sequence KLVFF-RGD-PEG2000 and is high-fidelity.'),
+  ]
+  const terminology = [
+    { element: 'peptide', claimTerm: 'a cell-penetrating peptide', inventorTerm: 'Pep-B2', retainInDependent: false },
+    { element: 'carrier', claimTerm: 'lipid nanoparticle', inventorTerm: 'delivery vehicle', retainInDependent: false },
+    { element: 'cargo', claimTerm: 'therapeutic agent', inventorTerm: 'payload', retainInDependent: false },
+  ]
+
+  test('substitutes inventor terms in independent claims only, fixing the article', () => {
+    const { claims, changes } = normaliseClaimSet(jargon, rulesFor('US'), { terminology, fidelityMode: 'STRUCTURE_ONLY' })
+    expect(claims[0].text).toContain('(i) a cell-penetrating peptide;')
+    expect(claims[0].text).toContain('a lipid nanoparticle comprising DSPC')
+    expect(claims[0].text).toContain('a therapeutic agent encapsulated in the lipid nanoparticle')
+    expect(claims[0].text).not.toMatch(/Pep-B2|delivery vehicle|payload/)
+    expect(claims[1].text).toContain('the Pep-B2')
+    expect(changes.filter(c => c.code === 'TERMINOLOGY_MAP')).toHaveLength(3)
+    expect(claims).toHaveLength(2)
+  })
+
+  test('PRESERVE mode keeps the inventor term alive in a dependent claim', () => {
+    const only = [claim(1, 'A composition comprising a Pep-B2 and a carrier.')]
+    const { claims, changes } = normaliseClaimSet(only, rulesFor('IN'), { terminology, fidelityMode: 'PRESERVE' })
+    expect(claims[0].text).toBe('A composition comprising a cell-penetrating peptide and a carrier.')
+    expect(claims).toHaveLength(2)
+    expect(claims[1].text).toBe('The composition as claimed in claim 1, wherein the cell-penetrating peptide is Pep-B2.')
+    expect(claims[1].dependsOn).toBe(1)
+    expect(changes.some(c => c.code === 'TERMINOLOGY_RETAINED')).toBe(true)
+  })
+
+  test('jargon blocks in an independent claim, warns in a dependent; sequence conflation and indefinite modifiers block', () => {
+    const findings = runOfficeFormLint(jargon, { rules: rulesFor('US') })
+    expect(findings.find(f => f.code === 'SOURCE_JARGON' && f.claimNumber === 1)?.severity).toBe('block')
+    expect(findings.find(f => f.code === 'SOURCE_JARGON' && f.claimNumber === 2)?.severity).toBe('warn')
+    expect(findings.find(f => f.code === 'SEQUENCE_CONFLATION')?.severity).toBe('block')
+    expect(findings.find(f => f.code === 'INDEFINITE_MODIFIER')?.severity).toBe('block')
+  })
+
+  test('a closing clause that restates the preamble is a tautology', () => {
+    const findings = runOfficeFormLint(jargon, { rules: rulesFor('US') })
+    const tautology = findings.find(f => f.code === 'TAUTOLOGY')
+    expect(tautology?.claimNumber).toBe(1)
+    expect(tautology?.message).toContain('to form the composition')
+    const clean = [claim(1, 'A composition comprising a peptide and a carrier, wherein the peptide is bonded to the carrier.')]
+    expect(codes(runOfficeFormLint(clean, { rules: rulesFor('US') }))).not.toContain('TAUTOLOGY')
+  })
+})
+
 describe('claim form report', () => {
   test('carries a client-computable signature that detects edits', () => {
     const set = [claim(1, 'A dryer comprising a chamber.')]

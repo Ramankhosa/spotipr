@@ -126,7 +126,9 @@ describe('claim strategy state', () => {
     expect(computeClaimStrategyFingerprint({ ...normalized }, { ...session })).toBe(a)
     expect(computeClaimStrategyFingerprint({ ...normalized, components: [{ name: 'night lid' }] }, session)).not.toBe(a)
     expect(computeClaimStrategyFingerprint(normalized, { ...session, patentTypePrimary: 'PROCESS' })).not.toBe(a)
-    expect(computeClaimStrategyFingerprint(normalized, session, 'US')).not.toBe(a)
+    // The office is not part of the plan's identity: a plan made for one
+    // jurisdiction is reused for another, and the rules block handles the rest.
+    expect(computeClaimStrategyFingerprint(normalized, { ...session, activeJurisdiction: 'US', draftingJurisdictions: ['US'] })).toBe(a)
     expect(computeClaimStrategyFingerprint(normalized, { ...session, noveltyHandoff: { searchId: 's1' } })).not.toBe(a)
     // Keys the plan does not depend on leave it alone.
     expect(computeClaimStrategyFingerprint({ ...normalized, claims: '<p>1. x</p>', claimFormReport: {} }, session)).toBe(a)

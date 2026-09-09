@@ -74,6 +74,7 @@ const CODE_LABELS: Record<string, string> = {
   TRAILING_PERIOD: 'Claim form',
   DUPLICATE_CLAIM: 'Duplicate',
   SEQUENCE_CONFLATION: 'Sequence',
+  TAUTOLOGY: 'Tautology',
   PICTURE_CLAIM_1: 'Claim 1 scope',
 }
 
