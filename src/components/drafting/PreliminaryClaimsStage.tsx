@@ -37,6 +37,7 @@ import {
   stripTrailingClaimDependencyLabelsFromHtml
 } from '@/lib/draft-claims-parser'
 import ClaimChallengePanel from '@/components/drafting/ClaimChallengePanel'
+import { ClaimFormFindingsPanel } from '@/components/drafting/ClaimFormFindingsPanel'
 import ClaimVersionsPanel from '@/components/drafting/ClaimVersionsPanel'
 
 // ---------------------------------------------------------------------------
@@ -96,9 +97,29 @@ const GENERATION_STEPS: Array<{ key: string; label: string; icon: React.Componen
   { key: 'reading', label: 'Reading disclosure', icon: FileSearch },
   { key: 'rules', label: 'Applying jurisdiction rules', icon: BookOpen },
   { key: 'drafting', label: 'Drafting claims', icon: PenLine },
-  { key: 'checking', label: 'Checking dependencies', icon: ListChecks },
+  { key: 'checking', label: 'Checking claim form', icon: ListChecks },
   { key: 'saving', label: 'Saving', icon: Save },
 ]
+
+// Steps the server performs only sometimes: the claim strategy is normally
+// prepared in the background after Stage 0 and only runs here when it is
+// missing; the correction pass runs only when the form check found defects.
+// They are shown in the rail only once their event arrives, so an ordinary
+// run never displays steps that did not happen.
+const OPTIONAL_GENERATION_STEPS: Array<{ key: string; after: string; label: string; icon: React.ComponentType<any> }> = [
+  { key: 'strategy', after: 'rules', label: 'Preparing claim strategy', icon: BookOpen },
+  { key: 'repairing', after: 'checking', label: 'Correcting claim form', icon: RefreshCw },
+]
+
+function visibleGenerationSteps(activeStep: string | null, completedSteps: string[]) {
+  const steps = [...GENERATION_STEPS]
+  for (const optional of OPTIONAL_GENERATION_STEPS) {
+    if (optional.key !== activeStep && !completedSteps.includes(optional.key)) continue
+    const index = steps.findIndex(step => step.key === optional.after)
+    steps.splice(index + 1, 0, { key: optional.key, label: optional.label, icon: optional.icon })
+  }
+  return steps
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -217,7 +238,8 @@ function ClaimGenerationProgress({
     return () => window.clearInterval(timer)
   }, [startedAt])
 
-  const activeIndex = activeStep ? GENERATION_STEPS.findIndex(step => step.key === activeStep) : -1
+  const visibleSteps = visibleGenerationSteps(activeStep, completedSteps)
+  const activeIndex = activeStep ? visibleSteps.findIndex(step => step.key === activeStep) : -1
   const doneCount = completedSteps.length
   const streamingClaim = streamedClaims.find(claim => !claim.complete)
   const detail = activeStep ? stepDetails[activeStep] : undefined
@@ -229,7 +251,7 @@ function ClaimGenerationProgress({
         <div className="flex items-center gap-2.5 min-w-0">
           <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-ai-blue-600" />
           <span className="truncate text-[13px] font-medium text-ai-graphite-900" aria-live="polite">
-            {activeIndex >= 0 ? GENERATION_STEPS[activeIndex].label : 'Starting'}
+            {activeIndex >= 0 ? visibleSteps[activeIndex].label : 'Starting'}
             {detail && <span className="ml-2 font-normal text-ai-graphite-500">{detail}</span>}
           </span>
         </div>
@@ -245,7 +267,7 @@ function ClaimGenerationProgress({
 
       {/* Step rail */}
       <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-paper-200 px-4 py-2.5">
-        {GENERATION_STEPS.map((step, index) => {
+        {visibleSteps.map((step, index) => {
           const Icon = step.icon
           const complete = completedSteps.includes(step.key)
           const active = step.key === activeStep
@@ -272,7 +294,7 @@ function ClaimGenerationProgress({
           )
         })}
         <span className="ml-auto hidden text-[11px] tabular-nums text-ai-graphite-400 sm:block">
-          {doneCount}/{GENERATION_STEPS.length}
+          {doneCount}/{visibleSteps.length}
         </span>
       </div>
 
@@ -380,6 +402,14 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const normalizedRecord = (session?.ideaRecord?.normalizedData as any) || {}
   const activeJurisdiction = (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase()
   const allJurisdictions = session?.draftingJurisdictions || [activeJurisdiction]
+  // The server substitutes another office when the requested one has no drafting
+  // profile. That changes the claim form, so it is shown rather than logged.
+  const jurisdictionFallback =
+    typeof normalizedRecord.claimsJurisdictionRequested === 'string' &&
+    typeof normalizedRecord.claimsJurisdiction === 'string' &&
+    normalizedRecord.claimsJurisdictionRequested !== normalizedRecord.claimsJurisdiction
+      ? { requested: normalizedRecord.claimsJurisdictionRequested as string, used: normalizedRecord.claimsJurisdiction as string }
+      : null
 
   const title = session?.ideaRecord?.title || ''
   const rawIdea = session?.ideaRecord?.rawInput || ''
@@ -743,7 +773,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         sessionId: session.id,
         jurisdiction: activeJurisdiction,
         userInstructions: regenerateInstructions.trim() || undefined,
-        userClaimRemarks: userClaimRemarks.trim() || undefined,
+        // Always a string: `undefined` means "leave the stored remarks alone" on the
+        // server, so clearing the box would silently reuse the previous generation's.
+        userClaimRemarks: userClaimRemarks.trim(),
         claimScopeStyle,
         usePersonaStyle,
         personaSelection,
@@ -1087,6 +1119,14 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                 assumed — confirm
               </span>
             )}
+            {jurisdictionFallback && (
+              <span
+                title={`No drafting profile exists for ${jurisdictionFallback.requested}. These claims follow ${jurisdictionFallback.used} claim rules; add a ${jurisdictionFallback.requested} profile or change the session jurisdiction.`}
+                className="whitespace-nowrap rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+              >
+                drafted under {jurisdictionFallback.used} rules
+              </span>
+            )}
           </ControlGroup>
 
           <ToolbarDivider />
@@ -1417,6 +1457,15 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
           )}
         </div>
       </div>
+
+      {/* ---- Office-form findings (deterministic, statute-based; hidden when stale) ---- */}
+      {!isGeneratingClaims && (
+        <ClaimFormFindingsPanel
+          report={normalizedRecord.claimFormReport}
+          claims={claims}
+          officeName={normalizedRecord.claimsJurisdiction || activeJurisdiction}
+        />
+      )}
 
       {/* ---- Claim challenge (opt-in adversarial review) ---- */}
       <ClaimChallengePanel

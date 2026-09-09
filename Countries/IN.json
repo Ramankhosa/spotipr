@@ -195,7 +195,21 @@
       "maxTotalClaimsRecommended": 10,
       "allowReferenceNumeralsInClaims": true,
       "requireSupportInDescription": true,
-      "unityStandard": "single_inventive_concept_Section_10_5"
+      "unityStandard": "single_inventive_concept_Section_10_5",
+      "dependentClaimPhrase": "as_claimed_in",
+      "multipleDependencyMode": "any",
+      "multiOnMultiProhibited": false,
+      "twoPartForm": "optional",
+      "characterisedSpelling": "s",
+      "useClaims": "not_allowed",
+      "medicalMethodClaims": "composition_only",
+      "crmClaimForm": "not_recommended",
+      "softwareEligibilityDoctrine": "in_3k",
+      "omnibusClaims": "forbidden",
+      "referenceNumerals": "permitted",
+      "freeTotalClaims": 10,
+      "freeIndependentClaims": null,
+      "defaultClaimBudget": 10
     },
     "description": {
       "requireBestModeDisclosure": true,
@@ -325,19 +339,19 @@
       "title": {
         "topUp": {
           "instruction": "For Indian jurisdiction under Rule 13(7)(a), ensure the title is specific, indicates the features of the invention, and is normally expressed in not more than 15 words.",
-        "constraints": [
+          "constraints": [
             "Avoid trademarks and personal names per Indian Patent Manual guidelines",
             "Focus on brevity and clarity per Patents Rules, 2003"
-        ]
+          ]
         }
       },
       "fieldOfInvention": {
         "topUp": {
           "instruction": "Per Indian Patent Office Manual of Practice and Procedure, this section opens the description and indicates the technical field to which the invention relates.",
-        "constraints": [
+          "constraints": [
             "Limit to 1–3 sentences as per Manual guidelines",
             "State the general and specific technical field without advantages or embodiments"
-        ]
+          ]
         }
       },
       "background": {
@@ -353,7 +367,7 @@
       "objectsOfInvention": {
         "topUp": {
           "instruction": "Per Indian Patent Office practice, draft the 'Object(s) of the Invention' section to clearly articulate the technical problems with existing prior art and the specific solutions provided by the invention. This section is placed after Background and before Summary in Indian Complete Specifications (Form 2).",
-        "constraints": [
+          "constraints": [
             "Use statements beginning with 'The principal object of this invention is to...' or 'Another object of this invention is to...'",
             "NEVER use 'The object...' (singular definite) as this implies only one objective",
             "Focus on technical results achieved (e.g., 'to improve efficiency'), not the means",
@@ -366,44 +380,45 @@
             "Do not admit non-patentability or state invention is obvious",
             "Avoid vague or non-technical goals focusing only on commercial success",
             "Do not overstate benefits - stick to demonstrable technical advantages"
-        ]
+          ]
         }
       },
       "summary": {
         "topUp": {
           "instruction": "Per Manual of Patent Office Practice and Procedure, provide a concise summary highlighting essential features and distinguishing aspects over known art, consistent with independent claims.",
-        "constraints": [
+          "constraints": [
             "This summary should precede the detailed description for clarity",
             "Ensure consistency with the scope of independent claims"
-        ]
+          ]
         }
       },
       "detailedDescription": {
         "topUp": {
           "instruction": "Per Section 10(4) of the Patents Act, 1970, describe the invention in full detail including the best method of performing it, so that a person skilled in the art can work the invention.",
-        "constraints": [
+          "constraints": [
             "Include best method of performing the invention as required by Section 10(4)(b)",
             "Provide sufficient embodiments to support all claims",
             "Refer consistently to reference numerals in drawings"
           ],
           "additions": [
             "Each independent claim must have at least one supporting embodiment"
-        ]
+          ]
         }
       },
       "claims": {
         "topUp": {
-          "instruction": "Draft claims compliant with Section 10(4) and (5) of the Indian Patents Act, 1970. Claims must define the matter for which protection is sought, be clear and succinct, and be fairly based on the matter disclosed in the specification.",
-        "constraints": [
-            "Use 'comprising' as preferred open connector; 'including' acceptable; 'consisting of' for narrow scope",
-            "Prefer two-part format (preamble + 'characterised in that') when defining improvements",
-            "Multiple dependent claims permitted including on other multiple dependent claims",
-            "Maintain unity of invention under Section 10(5)"
+          "instruction": "Draft the claims for the Indian Patent Office under Section 10(4) and 10(5) of the Patents Act 1970: claims define the matter for which protection is sought, must be clear and succinct, and must be fairly based on the matter disclosed. Eligibility governs claim form. Section 3(k): a computer programme per se, an algorithm, a mathematical or business method is not an invention, so a computer-implemented claim must recite the technical effect and the hardware the steps act on or cooperate with (CRI Guidelines; Ferid Allani v. Union of India), and a bare computer-readable medium or program claim is objected to. Section 3(i): no method of medicinal, surgical, curative, prophylactic, diagnostic or therapeutic treatment of humans or animals may be claimed, and no second-medical-use or Swiss-type claim is accepted; claim the composition with its compositional distinction and, where disclosed, its process of preparation. Section 3(d): a new form of a known substance (salt, ester, polymorph, isomer, particle size, combination) is the same substance unless the disclosure shows significantly enhanced efficacy. Section 3(e): a mere admixture must recite the synergistic or non-additive relationship the source states. A use claim is not a permitted category (Section 2(1)(j)): claim a product or a process. Dependent claims read 'as claimed in claim N'; the opening 'I/We claim:' is added at export.",
+          "constraints": [
+            "Clear, succinct and fairly based on the disclosure (Section 10(4)(c), 10(5))",
+            "No method of treatment, no second medical use, no Swiss-type claim (Section 3(i), 3(d))",
+            "Computer-implemented claims recite technical effect and hardware cooperation (Section 3(k))",
+            "No use claims (Section 2(1)(j)); claim a product or a process",
+            "Unity of invention under Section 10(5)"
           ],
           "additions": [
-            "All claims must be fully supported by the detailed description",
-            "Each claim must define matter for which protection is sought per Section 10(4)"
-        ]
+            "All claims must be fully supported by the complete specification",
+            "Ten claims are covered by the basic fee; each further claim carries a fee (First Schedule)"
+          ]
         }
       },
       "abstract": {
@@ -423,10 +438,10 @@
         "importFiguresDirectly": true,
         "topUp": {
           "instruction": "List each drawing figure with a one-line description ensuring figure numbering and captions match the drawing sheets filed under Rule 15.",
-        "constraints": [
+          "constraints": [
             "Use format: 'FIG. X is a [type] view of [subject]'",
             "Ensure consistent numbering with actual drawing sheets"
-        ]
+          ]
         }
       }
     }
@@ -512,7 +527,9 @@
       "code": "IN",
       "office": "Office of the Controller General of Patents, Designs & Trade Marks (CGPDTM)",
       "moduleLabel": "FER Response",
-      "languages": ["en"],
+      "languages": [
+        "en"
+      ],
       "lawVersion": "Patents Act 1970 + Patents Rules 2003 as amended by the Patents (Amendment) Rules 2024",
       "reviewedOn": "2026-07-17",
       "status": "draft"
@@ -532,19 +549,52 @@
           "DETAILED TECHNICAL REPORT",
           "Statement of Objections"
         ],
-        "extractFields": ["applicationNumber", "dateOfReport", "dateOfDispatch", "dateOfFiling", "dateOfPublication", "requestForExaminationDate", "applicantName", "examinerName", "controllerName", "controllerEmail", "citedDocuments", "claimsExamined", "statedDueDate"]
+        "extractFields": [
+          "applicationNumber",
+          "dateOfReport",
+          "dateOfDispatch",
+          "dateOfFiling",
+          "dateOfPublication",
+          "requestForExaminationDate",
+          "applicantName",
+          "examinerName",
+          "controllerName",
+          "controllerEmail",
+          "citedDocuments",
+          "claimsExamined",
+          "statedDueDate"
+        ]
       },
       {
         "id": "SER",
         "label": "Subsequent Examination Report",
-        "detectionHints": ["SUBSEQUENT EXAMINATION REPORT", "Subsequent Examination Report", "outstanding objections"],
-        "extractFields": ["applicationNumber", "dateOfReport", "citedDocuments"]
+        "detectionHints": [
+          "SUBSEQUENT EXAMINATION REPORT",
+          "Subsequent Examination Report",
+          "outstanding objections"
+        ],
+        "extractFields": [
+          "applicationNumber",
+          "dateOfReport",
+          "citedDocuments"
+        ]
       },
       {
         "id": "HEARING_NOTICE",
         "label": "Hearing Notice under Section 14",
-        "detectionHints": ["HEARING NOTICE", "hearing under section 14", "u/s 14", "opportunity of being heard", "fixed for hearing"],
-        "extractFields": ["applicationNumber", "hearingDate", "hearingMode", "outstandingObjections"]
+        "detectionHints": [
+          "HEARING NOTICE",
+          "hearing under section 14",
+          "u/s 14",
+          "opportunity of being heard",
+          "fixed for hearing"
+        ],
+        "extractFields": [
+          "applicationNumber",
+          "hearingDate",
+          "hearingMode",
+          "outstandingObjections"
+        ]
       }
     ],
     "timeline": {
@@ -559,7 +609,10 @@
           "extension": {
             "period": "P3M",
             "form": "Form 4",
-            "feePerMonth": { "naturalPersonStartupSmallEntityEdu": 1000, "others": 4000 },
+            "feePerMonth": {
+              "naturalPersonStartupSmallEntityEdu": 1000,
+              "others": 4000
+            },
             "requestWindow": "P9M",
             "note": "2024 Amendment Rules: the Form 4 request may be filed any time within 9 months of the FER date (Rule 24B(6))."
           },
@@ -580,7 +633,9 @@
           "extension": {
             "period": "P3M",
             "form": "Form 4",
-            "feePerMonth": { "all": 10000 },
+            "feePerMonth": {
+              "all": 10000
+            },
             "note": "Condonable up to 3 months on request (2024 Rules)."
           }
         },
@@ -606,94 +661,267 @@
       {
         "canonical": "NOVELTY",
         "localLabel": "Lack of novelty",
-        "legalBasis": ["Section 2(1)(j)", "Section 13"],
+        "legalBasis": [
+          "Section 2(1)(j)",
+          "Section 13"
+        ],
         "citationDriven": true,
         "track": "SUBSTANTIVE",
-        "detectionHints": ["lack novelty", "lacks novelty", "not novel", "anticipated by", "novelty is objected", "does not constitute an invention under section 2(1)(j)"],
-        "strategies": ["DISTINGUISH_ART", "AMEND_CLAIMS", "BOTH"],
+        "detectionHints": [
+          "lack novelty",
+          "lacks novelty",
+          "not novel",
+          "anticipated by",
+          "novelty is objected",
+          "does not constitute an invention under section 2(1)(j)"
+        ],
+        "strategies": [
+          "DISTINGUISH_ART",
+          "AMEND_CLAIMS",
+          "BOTH"
+        ],
         "argumentSkeleton": "For each cited document relied on for novelty: (1) identify the claim feature absent from that single document; (2) quote the exact passage the examiner relied on; (3) state the technical difference and its effect; (4) conclude that the document does not disclose all claimed features arranged as claimed.",
         "caseLawWhitelist": [
-          { "name": "Lallubhai Chakubhai Jariwala v. Chimanlal Chunilal", "citation": "AIR 1936 Bom 99", "point": "Anticipation requires a single prior disclosure containing the whole of the invention." }
+          {
+            "name": "Lallubhai Chakubhai Jariwala v. Chimanlal Chunilal",
+            "citation": "AIR 1936 Bom 99",
+            "point": "Anticipation requires a single prior disclosure containing the whole of the invention."
+          }
         ]
       },
       {
         "canonical": "INVENTIVE_STEP",
         "localLabel": "Lack of inventive step",
-        "legalBasis": ["Section 2(1)(ja)"],
+        "legalBasis": [
+          "Section 2(1)(ja)"
+        ],
         "citationDriven": true,
         "track": "SUBSTANTIVE",
         "doctrine": "TECHNICAL_ADVANCE_IN",
-        "detectionHints": ["inventive step", "obvious to a person skilled in the art", "2(1)(ja)", "combination of D1", "in view of D"],
-        "strategies": ["ATTACK_COMBINATION", "SHOW_TECHNICAL_ADVANCE", "AMEND_CLAIMS", "BOTH"],
+        "detectionHints": [
+          "inventive step",
+          "obvious to a person skilled in the art",
+          "2(1)(ja)",
+          "combination of D1",
+          "in view of D"
+        ],
+        "strategies": [
+          "ATTACK_COMBINATION",
+          "SHOW_TECHNICAL_ADVANCE",
+          "AMEND_CLAIMS",
+          "BOTH"
+        ],
         "argumentSkeleton": "Address the combination the examiner actually articulated: (1) what each cited document teaches on its own; (2) why the skilled person had no reason to combine them (or why the combination still misses a claim feature); (3) the technical advance or economic significance of the claimed feature over the closest art, tracking the words of s.2(1)(ja); (4) hindsight caution.",
         "caseLawWhitelist": [
-          { "name": "F. Hoffmann-La Roche Ltd v. Cipla Ltd", "citation": "2015 (64) PTC 1 (Del)", "point": "Obviousness must be assessed without hindsight, from the perspective of the person skilled in the art." },
-          { "name": "Avery Dennison Corp v. Controller of Patents", "citation": "2022/DHC/004697", "point": "Even a small technical advance may support inventive step; examiner must give reasons for the combination." }
+          {
+            "name": "F. Hoffmann-La Roche Ltd v. Cipla Ltd",
+            "citation": "2015 (64) PTC 1 (Del)",
+            "point": "Obviousness must be assessed without hindsight, from the perspective of the person skilled in the art."
+          },
+          {
+            "name": "Avery Dennison Corp v. Controller of Patents",
+            "citation": "2022/DHC/004697",
+            "point": "Even a small technical advance may support inventive step; examiner must give reasons for the combination."
+          }
         ]
       },
       {
         "canonical": "ELIGIBILITY",
         "localLabel": "Non-patentable subject matter",
-        "legalBasis": ["Section 3"],
+        "legalBasis": [
+          "Section 3"
+        ],
         "track": "SUBSTANTIVE",
-        "detectionHints": ["not patentable under section 3", "falls within the scope of section 3", "per se", "computer programme", "algorithm", "known substance", "method of treatment"],
-        "strategies": ["ARGUE_TECHNICAL_EFFECT", "AMEND_CLAIMS", "PROVIDE_EFFICACY_DATA", "DELETE_OR_CONVERT_CLAIMS"],
+        "detectionHints": [
+          "not patentable under section 3",
+          "falls within the scope of section 3",
+          "per se",
+          "computer programme",
+          "algorithm",
+          "known substance",
+          "method of treatment"
+        ],
+        "strategies": [
+          "ARGUE_TECHNICAL_EFFECT",
+          "AMEND_CLAIMS",
+          "PROVIDE_EFFICACY_DATA",
+          "DELETE_OR_CONVERT_CLAIMS"
+        ],
         "subTypes": [
-          { "id": "3k", "basis": "Section 3(k)", "guidance": "CRI Guidelines 2025 (final, July 2025): demonstrate technical effect/technical contribution beyond the program per se; no novel-hardware requirement; anchor on how the claimed steps solve a technical problem (e.g. resource use, latency, reliability). Avoid arguing business advantage." },
-          { "id": "3d", "basis": "Section 3(d)", "guidance": "New form / new use / new property of a known substance needs enhanced known efficacy — for pharmaceuticals, therapeutic efficacy per Novartis v. Union of India; comparative data against the known substance is expected; bioavailability alone is insufficient. Examiners often pair 3(d) with an inventive-step objection." },
-          { "id": "3e", "basis": "Section 3(e)", "guidance": "Mere admixture / aggregation of known components: rebut by demonstrating a synergistic effect of the combination beyond the additive properties of the components, with data or worked examples in the specification." },
-          { "id": "3c", "basis": "Section 3(c)", "guidance": "Discovery of a living thing or non-living substance occurring in nature / mere discovery of a scientific principle: argue the claim is to a human-made product or a technical application, not the discovery itself." },
-          { "id": "3f", "basis": "Section 3(f)", "guidance": "Mere arrangement / re-arrangement of known devices each functioning independently: show functional interdependence producing a new combined result." },
-          { "id": "3i", "basis": "Section 3(i)", "guidance": "Methods of treatment/diagnosis of humans or animals are excluded — convert to product, composition, apparatus or in-vitro method claims." },
-          { "id": "3m", "basis": "Section 3(m)", "guidance": "Mere mental act / method of playing a game — show steps that necessarily involve technical means." }
+          {
+            "id": "3k",
+            "basis": "Section 3(k)",
+            "guidance": "CRI Guidelines 2025 (final, July 2025): demonstrate technical effect/technical contribution beyond the program per se; no novel-hardware requirement; anchor on how the claimed steps solve a technical problem (e.g. resource use, latency, reliability). Avoid arguing business advantage."
+          },
+          {
+            "id": "3d",
+            "basis": "Section 3(d)",
+            "guidance": "New form / new use / new property of a known substance needs enhanced known efficacy — for pharmaceuticals, therapeutic efficacy per Novartis v. Union of India; comparative data against the known substance is expected; bioavailability alone is insufficient. Examiners often pair 3(d) with an inventive-step objection."
+          },
+          {
+            "id": "3e",
+            "basis": "Section 3(e)",
+            "guidance": "Mere admixture / aggregation of known components: rebut by demonstrating a synergistic effect of the combination beyond the additive properties of the components, with data or worked examples in the specification."
+          },
+          {
+            "id": "3c",
+            "basis": "Section 3(c)",
+            "guidance": "Discovery of a living thing or non-living substance occurring in nature / mere discovery of a scientific principle: argue the claim is to a human-made product or a technical application, not the discovery itself."
+          },
+          {
+            "id": "3f",
+            "basis": "Section 3(f)",
+            "guidance": "Mere arrangement / re-arrangement of known devices each functioning independently: show functional interdependence producing a new combined result."
+          },
+          {
+            "id": "3i",
+            "basis": "Section 3(i)",
+            "guidance": "Methods of treatment/diagnosis of humans or animals are excluded — convert to product, composition, apparatus or in-vitro method claims."
+          },
+          {
+            "id": "3m",
+            "basis": "Section 3(m)",
+            "guidance": "Mere mental act / method of playing a game — show steps that necessarily involve technical means."
+          }
         ],
         "caseLawWhitelist": [
-          { "name": "Novartis AG v. Union of India", "citation": "(2013) 6 SCC 1", "point": "Section 3(d) efficacy for pharmaceuticals means therapeutic efficacy.", "subTypes": ["3d"] },
-          { "name": "Ferid Allani v. Union of India", "citation": "2019 SCC OnLine Del 11867", "point": "Computer-implemented inventions with technical effect are not excluded by s.3(k).", "subTypes": ["3k"] }
+          {
+            "name": "Novartis AG v. Union of India",
+            "citation": "(2013) 6 SCC 1",
+            "point": "Section 3(d) efficacy for pharmaceuticals means therapeutic efficacy.",
+            "subTypes": [
+              "3d"
+            ]
+          },
+          {
+            "name": "Ferid Allani v. Union of India",
+            "citation": "2019 SCC OnLine Del 11867",
+            "point": "Computer-implemented inventions with technical effect are not excluded by s.3(k).",
+            "subTypes": [
+              "3k"
+            ]
+          }
         ]
       },
       {
         "canonical": "SUFFICIENCY",
         "localLabel": "Insufficient disclosure",
-        "legalBasis": ["Section 10(4)"],
+        "legalBasis": [
+          "Section 10(4)"
+        ],
         "track": "SUBSTANTIVE",
-        "detectionHints": ["sufficiently describe", "does not sufficiently disclose", "best method", "fully and particularly describe"],
-        "strategies": ["POINT_TO_SPEC_SUPPORT", "AMEND_DESCRIPTION"],
+        "detectionHints": [
+          "sufficiently describe",
+          "does not sufficiently disclose",
+          "best method",
+          "fully and particularly describe"
+        ],
+        "strategies": [
+          "POINT_TO_SPEC_SUPPORT",
+          "AMEND_DESCRIPTION"
+        ],
         "argumentSkeleton": "Map each allegedly undisclosed element to the specification paragraph(s) and drawing(s) where it is described; where the objection targets best method, identify the embodiment disclosing it."
       },
       {
         "canonical": "CLARITY",
         "localLabel": "Claims not clear, concise or definitive",
-        "legalBasis": ["Section 10(4)(c)", "Section 10(5)"],
-        "track": "SUBSTANTIVE",
-        "detectionHints": ["CLARITY AND CONCISENESS", "DEFINITIVENESS", "SCOPE", "not clearly worded", "are not clearly and distinctly defined", "do not sufficiently define the invention", "does not define the scope", "do not define the scope", "not clearly defined", "claims should be definitive", "antecedent basis", "vague, subjective", "relative in nature", "lacks clear technical", "overly broad", "functional and result-oriented"],
-        "subTypes": [
-          { "id": "clarity", "basis": "Section 10(5) & 10(4)(c)", "guidance": "Clarity & conciseness: for each impugned/relative term give its meaning as the skilled person reads it in light of the specification (cite paragraphs), or amend to a precise, measurable formulation with basis." },
-          { "id": "scope", "basis": "Section 10(4)(c)", "guidance": "Scope: examiner lists specific terms (e.g. 'ultrathin', 'lower frequencies') that are said to be overly broad / not defining the scope. Handle each listed term: add a structural/measurable limitation from the specification, or construe it definitely with a paragraph cite." },
-          { "id": "definitiveness", "basis": "Section 10(5) & 10(4)(c)", "guidance": "Definitiveness: often an antecedent-basis point ('a'/'an' for first use, 'the'/'said' thereafter) or functional/result-oriented language without structural limits. Fix antecedent basis by amendment; for functional language add objectively verifiable structural limitations from the specification." }
+        "legalBasis": [
+          "Section 10(4)(c)",
+          "Section 10(5)"
         ],
-        "strategies": ["CLARIFY_AMEND", "ARGUE_CLARITY"],
+        "track": "SUBSTANTIVE",
+        "detectionHints": [
+          "CLARITY AND CONCISENESS",
+          "DEFINITIVENESS",
+          "SCOPE",
+          "not clearly worded",
+          "are not clearly and distinctly defined",
+          "do not sufficiently define the invention",
+          "does not define the scope",
+          "do not define the scope",
+          "not clearly defined",
+          "claims should be definitive",
+          "antecedent basis",
+          "vague, subjective",
+          "relative in nature",
+          "lacks clear technical",
+          "overly broad",
+          "functional and result-oriented"
+        ],
+        "subTypes": [
+          {
+            "id": "clarity",
+            "basis": "Section 10(5) & 10(4)(c)",
+            "guidance": "Clarity & conciseness: for each impugned/relative term give its meaning as the skilled person reads it in light of the specification (cite paragraphs), or amend to a precise, measurable formulation with basis."
+          },
+          {
+            "id": "scope",
+            "basis": "Section 10(4)(c)",
+            "guidance": "Scope: examiner lists specific terms (e.g. 'ultrathin', 'lower frequencies') that are said to be overly broad / not defining the scope. Handle each listed term: add a structural/measurable limitation from the specification, or construe it definitely with a paragraph cite."
+          },
+          {
+            "id": "definitiveness",
+            "basis": "Section 10(5) & 10(4)(c)",
+            "guidance": "Definitiveness: often an antecedent-basis point ('a'/'an' for first use, 'the'/'said' thereafter) or functional/result-oriented language without structural limits. Fix antecedent basis by amendment; for functional language add objectively verifiable structural limitations from the specification."
+          }
+        ],
+        "strategies": [
+          "CLARIFY_AMEND",
+          "ARGUE_CLARITY"
+        ],
         "argumentSkeleton": "Handle each impugned term individually: quote the examiner's specific term, then either (a) construe it definitely from the specification with a paragraph cite, or (b) amend to a precise/structural formulation and cite its basis. Indian FERs frequently split this into separate 'Clarity and Conciseness' and 'Definitiveness' objections — answer both if present."
       },
       {
         "canonical": "UNITY",
         "localLabel": "Plurality of distinct inventions",
-        "legalBasis": ["Section 10(5)"],
+        "legalBasis": [
+          "Section 10(5)"
+        ],
         "track": "SUBSTANTIVE",
-        "detectionHints": ["plurality of distinct inventions", "unity of invention", "single inventive concept"],
-        "strategies": ["ARGUE_SINGLE_CONCEPT", "ELECT_AND_DIVIDE"],
+        "detectionHints": [
+          "plurality of distinct inventions",
+          "unity of invention",
+          "single inventive concept"
+        ],
+        "strategies": [
+          "ARGUE_SINGLE_CONCEPT",
+          "ELECT_AND_DIVIDE"
+        ],
         "argumentSkeleton": "Identify the shared special technical feature linking the claim groups; if election is unavoidable, elect the commercially central group and note the right to file a divisional under s.16 while the application is pending.",
-        "actions": ["Consider divisional application under Section 16 before grant if election is taken"]
+        "actions": [
+          "Consider divisional application under Section 16 before grant if election is taken"
+        ]
       },
       {
         "canonical": "PROCEDURAL_DISCLOSURE",
         "localLabel": "Statutory disclosure requirements (Section 8; biological source)",
         "replySentence": "The Applicant notes this statutory disclosure requirement and submits that the same stands complied with, the necessary document(s) being filed along with this reply.",
-        "legalBasis": ["Section 8", "Rule 12", "Section 10(4)(d)(ii)(D)", "Biological Diversity Act 2002, Section 6"],
+        "legalBasis": [
+          "Section 8",
+          "Rule 12",
+          "Section 10(4)(d)(ii)(D)",
+          "Biological Diversity Act 2002, Section 6"
+        ],
         "responseType": "PROCEDURAL",
         "track": "FORMAL",
-        "detectionHints": ["section 8", "Form 3", "details of corresponding applications", "particulars of applications filed outside India", "NBA", "National Biodiversity Authority", "biodiversity act", "biological material", "biological resource", "source and geographical origin", "geographical origin"],
-        "strategies": ["FILE_UPDATED_FORM3", "DECLARE_BIOLOGICAL_SOURCE", "OBTAIN_NBA_APPROVAL"],
+        "detectionHints": [
+          "section 8",
+          "Form 3",
+          "details of corresponding applications",
+          "particulars of applications filed outside India",
+          "NBA",
+          "National Biodiversity Authority",
+          "biodiversity act",
+          "biological material",
+          "biological resource",
+          "source and geographical origin",
+          "geographical origin"
+        ],
+        "strategies": [
+          "FILE_UPDATED_FORM3",
+          "DECLARE_BIOLOGICAL_SOURCE",
+          "OBTAIN_NBA_APPROVAL"
+        ],
         "argumentSkeleton": "Answer each disclosure requirement separately and evidence the compliance: for Section 8, list every corresponding foreign application with its current status and confirm the updated Form 3 filed with this reply; for biological material, identify the source and geographical origin as disclosed in the specification (cite the paragraph) and state the status of the National Biodiversity Authority approval. Where an approval is still pending, say so plainly and undertake to file it before grant — never assert a compliance that has not happened.",
         "subTypes": [
           {
@@ -726,12 +954,27 @@
         "canonical": "FORMALITIES",
         "localLabel": "Formal requirements",
         "replySentence": "The Applicant submits that the formal requirement raised is complied with, the corresponding form(s)/document(s) being filed along with this reply.",
-        "legalBasis": ["Patents Rules 2003"],
+        "legalBasis": [
+          "Patents Rules 2003"
+        ],
         "responseType": "PROCEDURAL",
         "track": "FORMAL",
-        "detectionHints": ["Form 1", "Form 5", "power of authority", "Form 26", "abstract", "title of the invention", "marked copy", "proof of right"],
-        "strategies": ["COMPLY"],
-        "actions": ["File or rectify the identified forms/documents; list each with the compliance made"]
+        "detectionHints": [
+          "Form 1",
+          "Form 5",
+          "power of authority",
+          "Form 26",
+          "abstract",
+          "title of the invention",
+          "marked copy",
+          "proof of right"
+        ],
+        "strategies": [
+          "COMPLY"
+        ],
+        "actions": [
+          "File or rectify the identified forms/documents; list each with the compliance made"
+        ]
       }
     ],
     "doctrines": {
@@ -744,16 +987,26 @@
         ],
         "styleNotes": "Track the statutory wording of s.2(1)(ja) explicitly; engage the examiner's actual combination rather than reciting generalities.",
         "leadingCases": [
-          { "name": "F. Hoffmann-La Roche Ltd v. Cipla Ltd" },
-          { "name": "Avery Dennison Corp v. Controller of Patents" }
+          {
+            "name": "F. Hoffmann-La Roche Ltd v. Cipla Ltd"
+          },
+          {
+            "name": "Avery Dennison Corp v. Controller of Patents"
+          }
         ]
       }
     },
     "amendments": {
-      "legalBasis": ["Section 57", "Section 59"],
+      "legalBasis": [
+        "Section 57",
+        "Section 59"
+      ],
       "scopeRule": "Amendments only by way of disclaimer, correction or explanation, for incorporation of actual fact; no new matter; amended claims must fall wholly within the scope of the claims before amendment (Section 59(1)).",
       "basisRequired": true,
-      "voluntaryForm": { "form": "Form 13", "requiredForOaReply": false },
+      "voluntaryForm": {
+        "form": "Form 13",
+        "requiredForOaReply": false
+      },
       "format": {
         "markedCopy": true,
         "cleanCopy": true,
@@ -793,7 +1046,10 @@
         "proceduralCompliance": "The Applicant notes this requirement and submits that the same stands complied with, the necessary document(s) being filed along with this reply."
       },
       "export": {
-        "formats": ["docx", "pdf"],
+        "formats": [
+          "docx",
+          "pdf"
+        ],
         "formatting": {
           "font": "Times New Roman",
           "fontSizePt": 12,
@@ -816,7 +1072,12 @@
       "available": true,
       "trigger": "Objections outstanding after the FER reply",
       "writtenSubmissionsAfter": "P15D",
-      "adjournment": { "requestBefore": "P3D", "max": 2, "eachUpTo": "P30D", "basis": "Rule 28(6)" },
+      "adjournment": {
+        "requestBefore": "P3D",
+        "max": 2,
+        "eachUpTo": "P30D",
+        "basis": "Rule 28(6)"
+      },
       "guidance": "Address only the objections maintained in the hearing notice; annex proposed claim amendments. Written submissions under Rule 28(7) must be filed within 15 days of the hearing and cannot introduce new arguments or reopen the debate."
     },
     "prompts": {

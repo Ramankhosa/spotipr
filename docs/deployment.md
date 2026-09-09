@@ -63,3 +63,34 @@ command, and aborts if it finds `NEXT_DIST_DIR` in `.env`.
 Eliminating the ~2s restart needs two instances on different ports behind the reverse
 proxy (start the new build on port B, flip the upstream, stop port A). That is not set
 up today; the swap-and-restart above is the current deploy.
+
+## Claim drafting: office rules, strategy stage and base prompt
+
+The preliminary-claims stage now resolves a structured claim-rule profile per
+office (`src/lib/claim-rules`), plans the claim set in a background LLM stage
+(`DRAFT_CLAIM_STRATEGY`), validates and repairs claim form after generation,
+and reads its base prompt from `Countries/prompts/claims-base.v2.md`. No Prisma
+schema change is involved (everything new lives in `IdeaRecord.normalizedData`),
+so the normal deploy applies; then, in this order:
+
+1. `node scripts/add-claim-strategy-stage.js` — registers the `DRAFT_CLAIM_STRATEGY`
+   workflow stage and mirrors a model config from `DRAFT_CLAIM_GENERATION` for
+   every plan. Stage-coded model resolution fails closed: until this has run,
+   every strategy run logs `CONFIGURATION_ERROR` and the claims stage drafts
+   without a strategy (it still works, with a "Preparing claim strategy" step).
+2. `node scripts/sync-claims-base-prompt.js` (dry run) then `--apply` — pushes
+   the v2 base prompt into `SupersetSection('claims')`. Verify in Super Admin
+   that the claims prompt preview starts with `CLAIMS-BASE-V2`, then clear the
+   section-prompt cache (or wait two minutes).
+3. Import the updated country profiles for IN, US, EP and PCT (their claims
+   top-ups and `rules.claims` fields changed) through Super Admin → Countries →
+   Import, or edit the four claims top-ups by hand. Never run
+   `Countries/MasterSeed.js --force` on a live database to push a prompt: it
+   reseeds every section and every country.
+4. Optional environment flags: `CLAIM_FORM_REPAIR_ENABLED=false` disables the
+   automatic office-form repair pass (findings are still reported);
+   `CLAIM_STRATEGY_BACKGROUND=false` disables the background strategy job (the
+   claims stage then plans inline). Both need a restart to change.
+
+Rollback: the runtime tolerates the v1 prompt and an unregistered strategy
+stage, so reverting the code alone is safe; the two scripts are idempotent.

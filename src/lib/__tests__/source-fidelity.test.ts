@@ -20,7 +20,7 @@ describe('resolveSourceFidelityMode', () => {
 
 describe('buildSourceFidelityPromptBlock', () => {
   test('empty in STRUCTURE_ONLY mode for every stage', () => {
-    for (const stage of ['claims', 'claimRefinement', 'claimChallengeRefine', 'sections', 'figures'] as const) {
+    for (const stage of ['claims', 'claimRefinement', 'claimChallengeRefine', 'claimFormRepair', 'sections', 'figures'] as const) {
       expect(buildSourceFidelityPromptBlock('STRUCTURE_ONLY', stage)).toBe('')
     }
   })

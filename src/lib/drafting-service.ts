@@ -1,3 +1,4 @@
+import { renderJurisdictionClaimRulesBlock, resolveClaimRuleProfile } from '@/lib/claim-rules'
 import { llmGateway } from './metering/gateway';
 import { prisma } from './prisma';
 import { verifyJWT } from './auth';
@@ -2699,29 +2700,10 @@ Background drafting requirements:
       }
     }
     if (section === 'claims' && ctx?.claimsRules) {
-      const cr = ctx.claimsRules
-      if (cr.twoPartFormPreferred === false) ruleLines.push('- Avoid two-part "characterized in that" format; use single-part claims.')
-      if (cr.allowMultipleDependent === false) ruleLines.push('- Each dependent claim must reference a single prior claim (no multiple dependency).')
-      if (Array.isArray(cr.discouragedConnectors) && cr.discouragedConnectors.length) {
-        ruleLines.push(`- Discouraged connectors: ${cr.discouragedConnectors.join(', ')}.`)
-      }
-      if (Array.isArray(cr.forbiddenPhrases) && cr.forbiddenPhrases.length) {
-        ruleLines.push(`- Forbidden phrases: ${cr.forbiddenPhrases.join(', ')}.`)
-      }
-      if (typeof cr.maxIndependentClaimsBeforeExtraFee === 'number') {
-        ruleLines.push(`- Keep independent claims ≤ ${cr.maxIndependentClaimsBeforeExtraFee} before extra fees.`)
-      }
-      if (typeof cr.maxTotalClaimsRecommended === 'number') {
-        ruleLines.push(`- Recommended total claims ≤ ${cr.maxTotalClaimsRecommended}.`)
-      }
-      if (cr.requireSupportInDescription) {
-        ruleLines.push('- Every claim element must be supported in the Detailed Description.')
-      }
-      if (cr.allowReferenceNumeralsInClaims === false) {
-        ruleLines.push('- Do not use reference numerals inside claims.')
-      } else if (cr.allowReferenceNumeralsInClaims === true) {
-        ruleLines.push('- You may include reference numerals where helpful.')
-      }
+      // Same structured block the preliminary-claims stage renders, so the two
+      // paths cannot tell the model different office rules.
+      const resolved = resolveClaimRuleProfile(jurisdiction, ctx.claimsRules)
+      ruleLines.push(...renderJurisdictionClaimRulesBlock(resolved.rules).split('\n'))
     }
     // Jurisdiction abstract rules (rules.abstract from the country profile)
     if (section === 'abstract' && ctx?.sectionRules) {

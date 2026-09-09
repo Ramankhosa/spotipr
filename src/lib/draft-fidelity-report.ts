@@ -96,6 +96,20 @@ export type DraftFidelityReport = {
   /** Source material intentionally excluded by the user's own selections. */
   excluded: DraftFidelityExclusion[]
   draft: { sectionKeys: string[] }
+  /**
+   * Per-claim source coverage. Claims were previously exempt from every check
+   * and even fed the source vocabulary, so an element hallucinated into a claim
+   * was never flagged and then legitimised itself across the specification.
+   */
+  claims: DraftFidelityClaimRow[]
+}
+
+export type DraftFidelityClaimRow = {
+  claimNumber: number
+  status: 'supported' | 'partial' | 'unsupported'
+  supportRefs: string[]
+  /** Distinctive claim terms with no match anywhere in the source. */
+  unmatchedTokens: string[]
 }
 
 export type DraftFidelityInput = {
@@ -103,8 +117,10 @@ export type DraftFidelityInput = {
   normalizedData: Record<string, any> | null | undefined
   /** Final section texts keyed by section key (HTML or plain text). */
   sections: Record<string, string | null | undefined>
-  /** Final claims text (plain or HTML); counted as accepted scope, not as an addition. */
+  /** Final claims text (plain or HTML); used for omission detection only. */
   claimsText?: string
+  /** Structured claims, for the per-claim coverage rows. */
+  claimsStructured?: Array<{ number?: number | string; text?: string | null }> | null
 }
 
 const MAXIMUM_REPORTED_ADDITIONS = 25
@@ -433,8 +449,10 @@ export function computeDraftFidelityReport(input: DraftFidelityInput): DraftFide
   })
 
   // ── Additions: draft sentences with no source-vocabulary anchor ────────────
-  // Source vocabulary = raw idea + normalized record + accepted claims. Claims
-  // are included because by review time they are the user-approved scope.
+  // Source vocabulary = raw idea + normalized record. Claims are deliberately
+  // NOT included: they are drafted from the source, not part of it, and a
+  // claim that added an element must not whitelist that element for the
+  // specification.
   const sourceVocabulary = new Set<string>()
   const feedVocabulary = (value: unknown) => {
     distinctiveTokens(value).forEach(token => {
@@ -443,7 +461,6 @@ export function computeDraftFidelityReport(input: DraftFidelityInput): DraftFide
     })
   }
   feedVocabulary(input.rawIdea)
-  feedVocabulary(input.claimsText)
   feedVocabulary(normalizedData.title)
   ;['problem', 'objectives', 'logic', 'bestMethod', 'abstract', 'coreInventiveConcept', 'variants', 'inputs', 'outputs'].forEach(key => feedVocabulary(normalizedData[key]))
   supportEntries.forEach(entry => feedVocabulary(entry.value))
@@ -454,7 +471,6 @@ export function computeDraftFidelityReport(input: DraftFidelityInput): DraftFide
   const numericVocabulary = new Set(
     tokens([
       input.rawIdea,
-      input.claimsText,
       ...supportEntries.map(entry => entry.value),
       normalizedData.logic,
       normalizedData.abstract,
@@ -500,7 +516,23 @@ export function computeDraftFidelityReport(input: DraftFidelityInput): DraftFide
   })
   const missingTerms = terms.filter(term => term.status === 'missing').map(term => term.term)
 
+  // ── Per-claim coverage ────────────────────────────────────────────────────
+  const claimRows: DraftFidelityClaimRow[] = (Array.isArray(input.claimsStructured) ? input.claimsStructured : [])
+    .map((claim) => {
+      const number = Number(claim?.number)
+      const text = String(claim?.text || '')
+      if (!Number.isFinite(number) || !text.trim()) return null
+      const supportRefs = supportEntries.filter(entry => entryMatchesClaim(text, entry.value)).map(entry => entry.id)
+      const unmatchedTokens = distinctiveTokens(text).filter(token => !sourceVocabulary.has(token) && !sourceVocabulary.has(stemLight(token))).slice(0, 8)
+      const status: DraftFidelityClaimRow['status'] = unmatchedTokens.length === 0
+        ? 'supported'
+        : supportRefs.length > 0 ? 'partial' : 'unsupported'
+      return { claimNumber: number, status, supportRefs, unmatchedTokens }
+    })
+    .filter((row): row is DraftFidelityClaimRow => row !== null)
+
   return {
+    claims: claimRows,
     generatedAt: new Date().toISOString(),
     sourceHandlingMode: mode,
     coverage: { covered, total: supportEntries.length },

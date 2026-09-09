@@ -237,7 +237,9 @@
     },
     "pageLayout": {
       "defaultPageSize": "A4",
-      "allowedPageSizes": ["A4"],
+      "allowedPageSizes": [
+        "A4"
+      ],
       "minMarginTopCm": 2.0,
       "minMarginBottomCm": 2.0,
       "minMarginLeftCm": 2.5,
@@ -296,7 +298,23 @@
         "Rule 43(3)-(4) EPC: dependent claims must contain all features of the claim referred to and be grouped appropriately; multiple dependencies are permitted.",
         "Article 84 EPC clarity: avoid relative terms ('thin', 'strong'), vague terms ('about', 'substantially') and result-to-be-achieved wording except where allowed (Guidelines F-IV, 4.10).",
         "Article 82 EPC: the application must relate to one invention or a group of inventions linked by a single general inventive concept."
-      ]
+      ],
+      "dependentClaimPhrase": "according_to",
+      "multipleDependencyMode": "any",
+      "multiOnMultiProhibited": false,
+      "twoPartForm": "preferred",
+      "characterisedSpelling": "s",
+      "singleIndependentPerCategory": true,
+      "useClaims": "allowed",
+      "medicalMethodClaims": "for_use_only",
+      "crmClaimForm": "program_and_medium",
+      "softwareEligibilityDoctrine": "ep_technical_character",
+      "omnibusClaims": "forbidden",
+      "referenceNumerals": "recommended_if_drawings",
+      "productByProcess": "only_if_necessary",
+      "freeTotalClaims": 15,
+      "freeIndependentClaims": null,
+      "defaultClaimBudget": 15
     },
     "abstract": {
       "wordLimit": 150,
@@ -374,7 +392,9 @@
       "allowLateFurnishing": true,
       "lateFurnishingNotes": "A sequence listing not filed on the date of filing must be furnished upon invitation within two months together with a late-furnishing fee (Rule 30(3) EPC); failure leads to refusal.",
       "affectsFilingDate": false,
-      "additionalFormatsAllowedForReference": ["XML"]
+      "additionalFormatsAllowedForReference": [
+        "XML"
+      ]
     }
   },
   "validation": {
@@ -435,7 +455,9 @@
         "id": "claims_supported_by_description",
         "type": "support",
         "from": "claims",
-        "mustBeSupportedBy": ["detailed_description"],
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ],
         "severity": "error",
         "message": "Claims appear broader than, or use terminology absent from, the detailed description. Article 84 EPC requires the claims to be supported by the description; align terminology and add embodiments or fallback positions."
       },
@@ -443,7 +465,9 @@
         "id": "claims_vs_summary_consistency",
         "type": "consistency",
         "from": "claims",
-        "mustBeConsistentWith": ["summary_of_invention"],
+        "mustBeConsistentWith": [
+          "summary_of_invention"
+        ],
         "severity": "warning",
         "message": "The Summary of Invention does not mirror the independent claims. Rule 42(1)(c) EPC requires the description to disclose the invention as claimed; update the consistory clauses to match the claim wording."
       },
@@ -451,7 +475,10 @@
         "id": "abstract_vs_claims_consistency",
         "type": "consistency",
         "from": "abstract",
-        "mustBeConsistentWith": ["claims", "detailed_description"],
+        "mustBeConsistentWith": [
+          "claims",
+          "detailed_description"
+        ],
         "severity": "warning",
         "message": "The abstract does not reflect the claimed invention. Rule 47(2) EPC requires the abstract to summarise the technical field, problem, gist of the solution and principal use as disclosed."
       },
@@ -459,7 +486,9 @@
         "id": "drawings_reference_consistency",
         "type": "reference",
         "from": "brief_description_of_drawings",
-        "mustReference": ["detailed_description"],
+        "mustReference": [
+          "detailed_description"
+        ],
         "severity": "error",
         "message": "One or more figures or reference signs in the Brief Description of Drawings are not explained in the Detailed Description. Rule 49(10) EPC requires reference signs to be used consistently throughout the application."
       }
@@ -569,19 +598,19 @@
       },
       "claims": {
         "topUp": {
-          "instruction": "Draft the claims per Article 84 and Rule 43 EPC. Use the two-part form of Rule 43(1) EPC wherever appropriate — this is the expected default at the EPO: a preamble designating the subject-matter and stating the technical features which, in combination, are part of the closest prior art, followed by a characterising portion introduced by 'characterized in that' or 'characterized by', stating the features for which protection is sought in combination with the preamble. Draft only one independent claim per category (Rule 43(2) EPC) — product, process, apparatus or use — unless one of the exceptions applies (a plurality of interrelated products, different uses of a product or apparatus, or alternative solutions to a particular problem where a single claim is inappropriate). Ensure clarity under Article 84: define the invention by technical features, avoid relative or vague terms ('about', 'substantially', 'thin'), avoid result-to-be-achieved formulations except where the criteria of Guidelines F-IV, 4.10 are met, and do not rely on references to the description or drawings ('as described in ...', Rule 43(6) EPC). Dependent claims must include all features of the claim they reference (Rule 43(3) EPC), be grouped by category, and may use multiple dependencies. Include reference signs in parentheses after the technical features where drawings exist (Rule 43(7) EPC) — they aid clarity and do not limit scope. Keep the total number of claims at or under 15 to avoid claims fees (Rule 45 EPC), and preserve unity of invention as a single general inventive concept (Article 82 EPC).",
+          "instruction": "Draft the claims under Article 84 and Rule 43 EPC. Two-part form (Rule 43(1)) is the expected form once the closest prior art is known: a preamble designating the subject-matter and the features that, in combination, are part of the closest prior art, then a characterising portion introduced by 'characterised in that' stating the distinguishing features; without a completed search draft one-part 'comprising' claims and let the refinement stage convert them, and never put a distinguishing feature in the preamble. One independent claim per category (product, process, apparatus, use) unless the claims cover interrelated products, different uses of a product or apparatus, or alternative solutions to a particular problem (Rule 43(2)). Article 52(2)-(3): programs for computers, mathematical and business methods and presentations of information are excluded as such; a computer-implemented invention needs technical character and is claimed as a computer-implemented method, a data-processing system comprising means configured to carry out the method, 'a computer program comprising instructions which, when the program is executed by a computer, cause the computer to carry out the method of claim N', and 'a computer-readable medium having stored thereon the computer program of claim M' (Guidelines F-IV 3.9.1). Article 53(c): methods of treatment, surgery and diagnosis practised on the human or animal body are excluded; claim the substance as 'X for use in the treatment of Y' (Article 54(4)-(5)); Swiss-type claims are not accepted (G 2/08). Clarity under Article 84: technical features only; no relative or vague terms ('about', 'substantially', 'thin') without a standard; no result-to-be-achieved wording except where Guidelines F-IV 4.10 allows it; no reference to the description or drawings (Rule 43(6)). Dependent claims read 'X according to claim N' or 'according to any one of claims N to M', contain all features of the claim referred to (Rule 43(3)), and may depend on multiple claims without fee penalty. Include reference signs in parentheses after the claimed features where drawings exist (Rule 43(7)); they do not limit the claim.",
           "constraints": [
-            "Two-part form per Rule 43(1) EPC with 'characterized in that' wherever appropriate",
-            "One independent claim per category (Rule 43(2) EPC)",
-            "Clear, concise, supported by the description (Article 84 EPC)",
-            "Reference signs in parentheses (Rule 43(7) EPC)",
-            "No references to description or drawings in claims (Rule 43(6) EPC)",
-            "Target 15 claims or fewer to avoid claims fees (Rule 45 EPC)"
+            "Two-part form with 'characterised in that' where the closest art is known (Rule 43(1)); one-part 'comprising' claims before the search",
+            "One independent claim per category unless a Rule 43(2) exception applies",
+            "Clear, concise and supported by the description (Article 84 EPC)",
+            "Medical: 'X for use in the treatment of Y'; never a method of treatment or a Swiss-type claim (Article 53(c), Article 54(4)-(5), G 2/08)",
+            "Computer-implemented: method, system with means configured to, program and medium in the Guidelines F-IV 3.9.1 formulations",
+            "No reference to description or drawings in claims (Rule 43(6) EPC)"
           ],
           "additions": [
-            "Claims fees: payable for the 16th and each subsequent claim; substantially higher from the 51st (RFees Art. 2(1), item 15)",
-            "Multiple dependent claims are permitted and are not penalised by fees",
-            "Unity of invention: single general inventive concept (Article 82, Rule 44 EPC)"
+            "Fifteen claims are fee-free; fees from the 16th and a higher rate from the 51st claim (Rule 45 EPC)",
+            "Reference signs in parentheses where drawings exist (Rule 43(7) EPC)",
+            "Unity: single general inventive concept (Article 82, Rule 44 EPC)"
           ]
         }
       },

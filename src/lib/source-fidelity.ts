@@ -18,6 +18,7 @@ export type SourceFidelityStage =
   | 'claims'
   | 'claimRefinement'
   | 'claimChallengeRefine'
+  | 'claimFormRepair'
   | 'sections'
   | 'figures'
 
@@ -83,6 +84,14 @@ const PRESERVE_RULES_BY_STAGE: Record<SourceFidelityStage, string> = {
 - TERMINOLOGY DEVIATION (explicitly authorized for this pass): inventor-coined jargon, internal project labels, marketing monikers, and arbitrary code names MAY be translated into standard art-recognized terminology in the independent claims, PROVIDED a dependent claim recites the inventor's exact original term verbatim. Never translate a term without that dependent-claim retention, and never translate away the identity of the central mechanism itself.
 - Species-level detail, named examples, and the claim set's only numeric range may be moved out of Claim 1 into a dependent claim, PROVIDED the source itself supports the broader class left behind in Claim 1. The exact source-stated value, name, or grade must be preserved verbatim in that dependent claim. Never apply this relocation to the mechanism the inventor presents as central: its species identity stays in Claim 1.
 - Every other PRESERVE guarantee still holds: no new embodiments, no invented alternatives, no broadened class that the source does not support.`,
+  // The automatic office-form repair runs unattended right after generation, so
+  // it gets the challenge-refine licence (translate jargon with dependent-claim
+  // retention; relocate species detail) narrowed to the listed defects only.
+  claimFormRepair: `- Only the listed office-form defects may be cured; no other wording changes.
+- Source facts are locked: do not introduce any element, step, material, value, condition, effect, or use case the inventor did not state, and do not drop or alter any that the inventor did state. Every source-stated claimable feature must remain somewhere in the claim set after your edits.
+- The mechanism the inventor presents as central must remain central to every independent claim, recited at the inventor's own level of specificity; never re-center the invention or demote that mechanism to a dependent claim.
+- TERMINOLOGY DEVIATION (authorized for this pass only where a listed defect requires it): inventor-coined jargon and internal labels MAY be translated into art-recognized terminology in an independent claim, PROVIDED a dependent claim recites the inventor's exact original term verbatim. Never translate away the identity of the central mechanism itself.
+- Converting a claim's statutory form (a use claim to a method, a treatment method to a purpose-limited product or composition claim, a program to the office's accepted formulation) is a change of form, not of substance: keep every source-stated element of the converted claim.`,
   sections: `- Every sentence must be traceable to the inventor's original disclosure, the Normalized Data, or the Frozen Claims.
 - Use the inventor's own terminology as the canonical vocabulary; do not substitute synonyms or renamed labels for the inventor's terms.
 - Keep the inventor's framing of the problem, objectives, and solution; do not re-frame the invention.

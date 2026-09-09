@@ -6,16 +6,22 @@
     "continent": "Continent Name",
     "office": "Patent Office Name",
     "officeUrl": "https://patent-office-url.com",
-    "applicationTypes": ["standard"],
-    "languages": ["en"],
+    "applicationTypes": [
+      "standard"
+    ],
+    "languages": [
+      "en"
+    ],
     "version": 1,
     "status": "active",
     "inheritsFrom": null,
-    "tags": ["tag1", "tag2"],
+    "tags": [
+      "tag1",
+      "tag2"
+    ],
     "createdAt": "2025-01-01T00:00:00Z",
     "updatedAt": "2025-01-01T00:00:00Z"
   },
-
   "structure": {
     "defaultVariant": "standard",
     "variants": [
@@ -28,7 +34,9 @@
             "id": "title",
             "label": "Title",
             "order": 1,
-            "canonicalKeys": ["title"],
+            "canonicalKeys": [
+              "title"
+            ],
             "required": true,
             "group": "header",
             "maxLengthChars": 500,
@@ -41,7 +49,9 @@
             "id": "cross_reference",
             "label": "Cross-Reference to Related Applications",
             "order": 2,
-            "canonicalKeys": ["cross_reference"],
+            "canonicalKeys": [
+              "cross_reference"
+            ],
             "required": false,
             "group": "header",
             "ui": {
@@ -53,7 +63,9 @@
             "id": "field",
             "label": "Technical Field",
             "order": 3,
-            "canonicalKeys": ["technical_field"],
+            "canonicalKeys": [
+              "technical_field"
+            ],
             "required": true,
             "group": "body",
             "ui": {
@@ -65,7 +77,9 @@
             "id": "background",
             "label": "Background Art",
             "order": 4,
-            "canonicalKeys": ["background"],
+            "canonicalKeys": [
+              "background"
+            ],
             "required": true,
             "group": "body",
             "ui": {
@@ -77,7 +91,9 @@
             "id": "summary",
             "label": "Summary of the Invention",
             "order": 5,
-            "canonicalKeys": ["summary_of_invention"],
+            "canonicalKeys": [
+              "summary_of_invention"
+            ],
             "required": true,
             "group": "body",
             "ui": {
@@ -89,7 +105,9 @@
             "id": "brief_drawings",
             "label": "Brief Description of Drawings",
             "order": 6,
-            "canonicalKeys": ["brief_description_of_drawings"],
+            "canonicalKeys": [
+              "brief_description_of_drawings"
+            ],
             "required": false,
             "group": "body",
             "ui": {
@@ -101,7 +119,9 @@
             "id": "detailed_description",
             "label": "Description of the Invention",
             "order": 7,
-            "canonicalKeys": ["detailed_description"],
+            "canonicalKeys": [
+              "detailed_description"
+            ],
             "required": true,
             "group": "body",
             "ui": {
@@ -113,7 +133,9 @@
             "id": "claims",
             "label": "Claims",
             "order": 8,
-            "canonicalKeys": ["claims"],
+            "canonicalKeys": [
+              "claims"
+            ],
             "required": true,
             "group": "claims",
             "ui": {
@@ -125,7 +147,9 @@
             "id": "abstract",
             "label": "Abstract",
             "order": 9,
-            "canonicalKeys": ["abstract"],
+            "canonicalKeys": [
+              "abstract"
+            ],
             "required": true,
             "group": "abstract",
             "ui": {
@@ -137,7 +161,6 @@
       }
     ]
   },
-
   "rules": {
     "global": {
       "paragraphNumberingRequired": false,
@@ -155,14 +178,36 @@
       "twoPartFormPreferred": false,
       "allowMultipleDependent": true,
       "prohibitMultipleDependentOnMultipleDependent": false,
-      "preferredConnectors": ["comprising"],
+      "preferredConnectors": [
+        "comprising"
+      ],
       "discouragedConnectors": [],
       "forbiddenPhrases": [],
       "maxIndependentClaimsBeforeExtraFee": 0,
       "maxTotalClaimsRecommended": 20,
       "allowReferenceNumeralsInClaims": true,
       "requireSupportInDescription": true,
-      "unityStandard": "single_inventive_concept"
+      "unityStandard": "single_inventive_concept",
+      "dependentClaimPhrase": "according_to",
+      "multipleDependencyMode": "alternative_only",
+      "multiOnMultiProhibited": true,
+      "twoPartForm": "optional",
+      "characterisedSpelling": "z",
+      "singleIndependentPerCategory": false,
+      "referenceNumerals": "permitted",
+      "omnibusClaims": "forbidden",
+      "claimOrdering": "grouped_by_category",
+      "useClaims": "allowed",
+      "medicalMethodClaims": "allowed_with_for_use_mirror",
+      "crmClaimForm": "program_and_medium",
+      "softwareEligibilityDoctrine": "technical_character",
+      "excludedSubjectMatter": [],
+      "productByProcess": "allowed",
+      "freeTotalClaims": null,
+      "freeIndependentClaims": null,
+      "defaultClaimBudget": 15,
+      "feeNote": "",
+      "language": "en"
     },
     "description": {
       "requireBestModeDisclosure": true,
@@ -191,7 +236,9 @@
       "allowProvisionalPriority": true
     },
     "language": {
-      "allowedLanguages": ["en"],
+      "allowedLanguages": [
+        "en"
+      ],
       "requiresOfficialTranslation": false
     },
     "sequenceListing": {
@@ -200,11 +247,16 @@
       "allowLateFurnishing": true,
       "lateFurnishingNotes": "Sequence listing may be furnished after filing.",
       "affectsFilingDate": false,
-      "additionalFormatsAllowedForReference": ["TXT", "PDF"]
+      "additionalFormatsAllowedForReference": [
+        "TXT",
+        "PDF"
+      ]
     },
     "pageLayout": {
       "defaultPageSize": "A4",
-      "allowedPageSizes": ["A4"],
+      "allowedPageSizes": [
+        "A4"
+      ],
       "minMarginTopCm": 2.0,
       "minMarginBottomCm": 2.0,
       "minMarginLeftCm": 2.5,
@@ -214,7 +266,6 @@
       "recommendedLineSpacing": 1.5
     }
   },
-
   "validation": {
     "sectionChecks": {
       "title": [
@@ -257,7 +308,9 @@
         "id": "claims_supported_by_description",
         "type": "support",
         "from": "claims",
-        "mustBeSupportedBy": ["detailed_description"],
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ],
         "severity": "error",
         "message": "Some claims may lack explicit support in the description."
       },
@@ -265,13 +318,14 @@
         "id": "abstract_consistent_with_claims",
         "type": "consistency",
         "from": "abstract",
-        "mustBeConsistentWith": ["claims"],
+        "mustBeConsistentWith": [
+          "claims"
+        ],
         "severity": "warning",
         "message": "Abstract may cover features not reflected in the claims."
       }
     ]
   },
-
   "prompts": {
     "baseStyle": {
       "tone": "technical, neutral, precise",
@@ -337,7 +391,6 @@
       }
     }
   },
-
   "export": {
     "documentTypes": [
       {
@@ -375,10 +428,14 @@
       "abstract": "ABSTRACT"
     }
   },
-
   "diagrams": {
     "requiredWhenApplicable": true,
-    "supportedDiagramTypes": ["block", "flowchart", "schematic", "perspective_view"],
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view"
+    ],
     "figureLabelFormat": "Fig. {number}",
     "autoGenerateReferenceTable": true,
     "diagramGenerationHints": {
@@ -388,7 +445,6 @@
       "perspective_view": "Use when overall physical form is important."
     }
   },
-
   "crossChecks": {
     "enableSemanticCrossCheck": true,
     "checkList": [
@@ -396,13 +452,17 @@
         "id": "drawings_vs_description",
         "description": "Verify that all reference numerals in drawings are defined in the description.",
         "from": "brief_drawings",
-        "mustBeExplainedIn": ["detailed_description"]
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
       },
       {
         "id": "claims_vs_drawings",
         "description": "Verify that major claimed elements appear in at least one figure when drawings are provided.",
         "from": "claims",
-        "mustBeShownIn": ["brief_drawings"]
+        "mustBeShownIn": [
+          "brief_drawings"
+        ]
       }
     ]
   }

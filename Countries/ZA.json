@@ -446,6 +446,15 @@
           "severity": "error",
           "message": "Abstract exceeds 150 words. Regulation 31 limits the abstract on Form P8 to a single narrative paragraph of not more than 150 words."
         }
+      ],
+      "claims": [
+        {
+          "id": "claims_count_recommended",
+          "type": "maxCount",
+          "limit": 30,
+          "severity": "info",
+          "message": "No excess-claim fees apply, but keep the set within the single inventive concept required by section 32(4)."
+        }
       ]
     },
     "crossSectionChecks": [

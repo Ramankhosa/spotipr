@@ -49,6 +49,61 @@ describe('preliminary claim generation helper', () => {
     expect(prompt).toContain('Selected style: Default Style')
   })
 
+  test('renders the source fact ledger alongside support data sources, minus duplicates', () => {
+    // The ledger used to be dropped whenever any support-data source existed, which
+    // hid the code-backfilled numbers and conditions from the model.
+    const prompt = buildPreliminaryClaimsPrompt({
+      ...basePromptParams,
+      context: {
+        ...basePromptParams.context,
+        supportDataSources: [
+          {
+            id: 'SDS-001',
+            kind: 'numeric_value',
+            label: 'Moisture threshold',
+            value: '18 percent',
+            sourceText: '18 percent',
+            sectionTargets: ['claims'],
+            claimUse: 'core',
+            figureUse: 'none',
+            status: 'confirmed',
+          },
+        ],
+      },
+    })
+
+    expect(prompt).toContain('SUPPORT DATA SOURCES FOR CLAIM SUPPORT')
+    expect(prompt).toContain('SDS-001')
+    // The condition is not carried by any support-data source, so the ledger keeps it.
+    expect(prompt).toContain('SOURCE FACT LEDGER FOR CLAIM SUPPORT (additional source-stated facts)')
+    expect(prompt).toContain('SF-conditionsAndRules-1')
+    // The threshold is already an SDS entry, so its ledger line is dropped.
+    expect(prompt).not.toContain('SF-numericValuesAndUnits-1')
+  })
+
+  test('the runtime blocks no longer contradict the base prompt', () => {
+    const prompt = buildPreliminaryClaimsPrompt(basePromptParams)
+
+    expect(prompt).not.toContain('exactly ONE limitation')
+    expect(prompt).not.toContain('most commercially valuable')
+    expect(prompt).not.toContain('Independent Claim Policy in the claims base prompt')
+    expect(prompt).not.toContain('type-specific drafting rules from the database prompt')
+    expect(prompt).toContain('ONE coherent narrowing theme')
+    // The output example must not invite numbering gaps.
+    expect(prompt).not.toContain('"number": 5')
+    expect(prompt).toContain('"dependsOn": 3')
+    expect(prompt).toContain('Number the claims consecutively starting at 1')
+  })
+
+  test('renders the closest-art block only when the novelty findings are supplied', () => {
+    const findings = 'CLOSEST ART (from a completed novelty assessment)\n<novelty_findings>\nUS1 teaches a valve\n</novelty_findings>'
+    expect(buildPreliminaryClaimsPrompt(basePromptParams)).not.toContain('<novelty_findings>')
+    const prompt = buildPreliminaryClaimsPrompt({ ...basePromptParams, noveltyFindingsBlock: findings })
+    expect(prompt).toContain('US1 teaches a valve')
+    // Session-specific blocks stay after the static jurisdiction prefix so prefix caching holds.
+    expect(prompt.indexOf('JURISDICTION RULES (US)')).toBeLessThan(prompt.indexOf('<novelty_findings>'))
+  })
+
   test('allows an explicit higher claim count to override the default cap', () => {
     const prompt = buildPreliminaryClaimsPrompt({
       ...basePromptParams,

@@ -267,6 +267,52 @@ export function completeSourceFactLedger(
   }
 }
 
+/**
+ * Drops ledger entries that merely repeat a support-data source value, so the
+ * two support blocks can be rendered together without saying everything twice.
+ * Surviving entries keep their original ids: the ids are positional in the
+ * ledger, and renumbering them here would make the prompt disagree with the
+ * support matrix built from the same ledger.
+ */
+export function dedupeSourceFactLedgerEntries(
+  entries: SourceFactLedgerEntry[],
+  supportValues: string[]
+): SourceFactLedgerEntry[] {
+  const haystacks = supportValues
+    .map(value => normalizeForSearch(String(value || '')))
+    .filter(value => value.length > 0)
+  if (!haystacks.length) return entries
+  return entries.filter((entry) => {
+    const needle = normalizeForSearch(entry.value)
+    if (!needle) return false
+    return !haystacks.some(haystack => haystack === needle || (needle.length >= 8 && haystack.includes(needle)))
+  })
+}
+
+/**
+ * Renders ledger entries with the ids they already carry. Used where the caller
+ * has filtered the entries and must not let the ids shift.
+ */
+export function renderSourceFactLedgerEntriesBlock(
+  entries: SourceFactLedgerEntry[],
+  heading = 'SOURCE FACT LEDGER (SOURCE-STATED FACTS ONLY)'
+): string {
+  if (!entries.length) return ''
+  const lines: string[] = []
+  let currentCategory: string | null = null
+  entries.forEach((entry) => {
+    if (entry.category !== currentCategory) {
+      currentCategory = entry.category
+      const label = entry.category.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase())
+      lines.push(`${label}:`)
+    }
+    lines.push(`- [${entry.id}] ${entry.value}`)
+  })
+  return `${heading}
+Use these facts as source support. Do not invent missing facts and do not convert optional facts into mandatory claim elements.
+${lines.join('\n')}`
+}
+
 export function buildSourceFactLedgerPromptBlock(
   value: unknown,
   heading = 'SOURCE FACT LEDGER (SOURCE-STATED FACTS ONLY)'

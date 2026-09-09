@@ -79,7 +79,6 @@ import {
   normalizeClaimsForSession as normalizeClaimsForSessionShared,
 } from '@/lib/claims-context';
 import {
-  analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
   DEFAULT_PRELIMINARY_MAX_CLAIMS,
   normalizePreliminaryClaimScopeStyle,
@@ -126,7 +125,19 @@ import {
 } from '@/lib/claim-challenge';
 import { isTruncatedLlmResponse, parseLlmJsonObject } from '@/lib/llm-json-parser';
 import { computeDraftFidelityReport } from '@/lib/draft-fidelity-report';
-import { buildNoveltyGuidanceBlock } from '@/lib/novelty-drafting-handoff';
+import { buildNoveltyFindingsBlock, buildNoveltyGuidanceBlock } from '@/lib/novelty-drafting-handoff';
+import {
+  buildClaimFormReport,
+  normaliseClaimSet,
+  renderJurisdictionClaimRulesBlock,
+  resolveClaimRuleProfile,
+  runOfficeFormLint,
+  summariseNormalisation,
+  type ClaimRuleProfile,
+} from '@/lib/claim-rules';
+import { repairClaimFormIfNeeded } from '@/lib/claim-rules/repair';
+import { buildClaimStrategyBlock, buildClaimStrategyDigest } from '@/lib/claim-rules/strategy';
+import { computeClaimStrategyFingerprint, enqueueClaimStrategy, readyClaimStrategy, runClaimStrategy } from '@/lib/claim-strategy-job';
 import {
   generateSketch,
   detectExternalImageContent,
@@ -4736,6 +4747,10 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
     console.warn('Failed to persist raw idea to disk:', e)
   }
 
+  // Stage 0 edits change what the claim strategy depends on; re-plan in the
+  // background (debounced, fingerprinted — a no-op save costs nothing).
+  enqueueClaimStrategy({ sessionId, userId: user.id, reason: 'stage0_edited' })
+
   return NextResponse.json({ ideaRecord })
 }
 
@@ -4832,6 +4847,8 @@ async function handleUpdatePatentType(user: any, patentId: string, data: any) {
   });
 
   console.log(`[handleUpdatePatentType] Patent type manually updated to: ${patentType} for session: ${sessionId}`);
+  // The category plan depends on the patent type.
+  enqueueClaimStrategy({ sessionId, userId: user.id, reason: 'patent_type_changed' })
 
   return NextResponse.json({
     success: true,
@@ -4943,23 +4960,86 @@ function extractExplicitClaimCount(value: unknown): number | null {
   return null
 }
 
+// An attorney may ask for more claims than an office covers fee-free, but not
+// without limit: a request above this is clamped, and the office-form report
+// records the fee exposure either way.
+const MAX_EXPLICIT_CLAIM_LIMIT = 50
+
 function resolveGeneratedClaimLimit(
   data: any,
   userInstructions: unknown,
-  userClaimRemarks: unknown
-): { limit: number; source: 'user_requested' | 'default' } {
+  userClaimRemarks: unknown,
+  rules?: ClaimRuleProfile | null
+): { limit: number; source: 'user_requested' | 'jurisdiction_default' | 'default' } {
   const requested = Number(data?.maxClaims ?? data?.claimCount ?? data?.claimsCount)
   if (Number.isInteger(requested) && requested > 0 && requested <= 200) {
-    return { limit: requested, source: 'user_requested' }
+    return { limit: Math.min(requested, MAX_EXPLICIT_CLAIM_LIMIT), source: 'user_requested' }
   }
 
   const explicitFromInstructions = extractExplicitClaimCount([
     userInstructions,
     userClaimRemarks,
   ].filter(Boolean).join('\n\n'))
-  if (explicitFromInstructions) return { limit: explicitFromInstructions, source: 'user_requested' }
+  if (explicitFromInstructions) {
+    return { limit: Math.min(explicitFromInstructions, MAX_EXPLICIT_CLAIM_LIMIT), source: 'user_requested' }
+  }
 
+  // The default used to be a flat 10 for every office. The offices differ (EP
+  // covers 15 claims, the USPTO 20, India and China 10), so the budget comes
+  // from the resolved claim rules when they are known.
+  if (rules && Number.isInteger(rules.defaultClaimBudget) && rules.defaultClaimBudget > 0) {
+    return { limit: rules.defaultClaimBudget, source: 'jurisdiction_default' }
+  }
   return { limit: DEFAULT_GENERATED_CLAIM_LIMIT, source: 'default' }
+}
+
+/**
+ * Re-runs the deterministic office-form checks over an edited claim set so the
+ * stored report always describes the claims on screen. No LLM, no normaliser
+ * rewrites (an attorney's edits are not second-guessed); only findings.
+ */
+async function recomputeClaimFormReport(
+  session: any,
+  normalized: Record<string, any>,
+  claims: any[]
+): Promise<Record<string, any> | null> {
+  try {
+    const structured = Array.isArray(claims) ? claims.filter(claim => claim && String(claim?.text || '').trim()) : []
+    if (!structured.length) return null
+    const jurisdiction = String(normalized.claimsJurisdiction || session?.activeJurisdiction || 'US').toUpperCase()
+    const [profile, rawRules] = await Promise.all([
+      getCountryProfile(jurisdiction),
+      getSectionRules(jurisdiction, 'claims'),
+    ])
+    const { rules } = resolveClaimRuleProfile(jurisdiction, rawRules, profile?.profileData?.meta)
+    const idea = session?.ideaRecord || {}
+    const findings = runOfficeFormLint(structured, {
+      rules,
+      context: {
+        components: normalized.components || idea.components,
+        inventionType: normalized.inventionType,
+        patentTypePrimary: normalized.patentTypePrimary,
+        sourceText: [
+          idea.rawInput, idea.title, normalized.problem, normalized.objectives, normalized.logic,
+          normalized.bestMethod, normalized.abstract, normalized.coreInventiveConcept,
+          JSON.stringify(normalized.claimableFeatures || ''), JSON.stringify(normalized.fallbackLimitations || ''),
+          JSON.stringify(normalized.sourceFactLedger || ''), JSON.stringify(normalized.supportDataSources || ''),
+          JSON.stringify(normalized.components || idea.components || ''),
+        ].filter(Boolean).join(' '),
+      },
+    })
+    const previous = normalized.claimFormReport && typeof normalized.claimFormReport === 'object' ? normalized.claimFormReport : null
+    return buildClaimFormReport({
+      claims: structured,
+      rules,
+      findings,
+      normalisation: [],
+      repair: previous?.repair ?? null,
+    })
+  } catch (error) {
+    console.warn('[recomputeClaimFormReport] skipped:', error instanceof Error ? error.message : error)
+    return null
+  }
 }
 
 function applyGeneratedClaimLimit(params: {
@@ -5105,7 +5185,9 @@ async function handleGenerateClaims(
     return NextResponse.json({ error: 'Claims are locked. Unlock them to regenerate.' }, { status: 400 })
   }
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle ?? existingNormalized.claimScopeStyle)
-  const { limit: maxClaims, source: claimCapSource } = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks)
+  // Resolved again once the office rules are known; this first pass only decides
+  // whether the attorney asked for an explicit count.
+  let { limit: maxClaims, source: claimCapSource } = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // PATENT TYPE DECISION - from Stage 0 normalization or user override
@@ -5206,6 +5288,20 @@ async function handleGenerateClaims(
     }
 
     const activeJurisdiction = finalJurisdiction
+
+    // A substituted jurisdiction changes the claim form (dependent-claim phrasing,
+    // eligibility conversions, claim budget). It used to be recorded only in a
+    // console line, so the attorney received another office's claims without
+    // being told. The response carries it and the record keeps the request.
+    const generationWarnings: Array<{ code: string; message: string; requested?: string; used?: string }> = []
+    if (activeJurisdiction !== requestedJurisdiction) {
+      generationWarnings.push({
+        code: 'JURISDICTION_FALLBACK',
+        requested: requestedJurisdiction,
+        used: activeJurisdiction,
+        message: `No drafting profile exists for ${requestedJurisdiction}; the claims were drafted under ${activeJurisdiction} rules.`,
+      })
+    }
 
     // Fetch all profile data in parallel for better performance
     const [countryProfile, mergedClaimsPrompt, baseStyle, claimRulesRaw] = await Promise.all([
@@ -5339,52 +5435,51 @@ async function handleGenerateClaims(
       subfield: firstMeaningful(ideaContext?.subfield, idea.subfield, existingNormalized.subfield)
     }
 
-    // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
-    const ruleLines: string[] = []
+    // Structured office rules: the built-in profile for the office overlaid with
+    // whatever the country profile carries under rules.claims. The same object
+    // renders the prompt block, sizes the claim budget, drives the normaliser
+    // and the office-form validator, so the model is told exactly the rules
+    // that are later enforced.
+    const resolvedClaimRules = resolveClaimRuleProfile(activeJurisdiction, claimRules, countryProfile?.profileData?.meta)
+    const officeRules = resolvedClaimRules.rules
+    if (resolvedClaimRules.drift.length) {
+      console.warn(`[handleGenerateClaims] Ignored invalid rules.claims fields for ${activeJurisdiction}:`, resolvedClaimRules.drift)
+    }
+    const rulesBlock = renderJurisdictionClaimRulesBlock(officeRules)
 
-    if (claimRules.twoPartFormPreferred === true) {
-      ruleLines.push('- Use two-part claim format: preamble + "characterized in that" + characterizing portion')
-    } else if (claimRules.twoPartFormPreferred === false) {
-      ruleLines.push('- Use single-part claims (avoid two-part "characterized in that" format)')
+    if (claimCapSource !== 'user_requested') {
+      const resolvedLimit = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks, officeRules)
+      maxClaims = resolvedLimit.limit
+      claimCapSource = resolvedLimit.source
     }
 
-    if (claimRules.allowMultipleDependent === false) {
-      ruleLines.push('- Each dependent claim must reference a single prior claim (no multiple dependency)')
-    } else if (claimRules.allowMultipleDependent === true) {
-      ruleLines.push('- Multiple dependent claims are allowed (can reference multiple prior claims)')
+    // Claim strategy: normally planned in the background when Stage 0 completed
+    // (see enqueueClaimStrategy). It is used when it still describes these inputs
+    // and this office; otherwise it is planned now and the attorney sees the step.
+    const strategyFingerprint = computeClaimStrategyFingerprint(existingNormalized, session, activeJurisdiction)
+    let claimStrategy = readyClaimStrategy(existingNormalized, strategyFingerprint)
+    if (!claimStrategy) {
+      onProgress?.({ type: 'stage', key: 'strategy', label: 'Preparing claim strategy' })
+      const strategyState = await runClaimStrategy({
+        sessionId,
+        session,
+        normalized: existingNormalized,
+        requestHeaders: requestHeaders || {},
+        reason: 'claims_stage',
+        jurisdiction: activeJurisdiction,
+        rules: officeRules,
+        rulesBlock,
+        patentId,
+      })
+      // The later normalizedData write spreads existingNormalized; carry the
+      // state the run just persisted so that write does not roll it back.
+      ;(existingNormalized as any).claimStrategy = strategyState
+      claimStrategy = strategyState.status === 'ready' ? strategyState.strategy ?? null : null
+      if (!claimStrategy) {
+        console.warn(`[handleGenerateClaims] claim strategy unavailable (${strategyState.status}: ${strategyState.error || 'n/a'}); drafting without it`)
+      }
     }
-
-    if (Array.isArray(claimRules.preferredConnectors) && claimRules.preferredConnectors.length) {
-      ruleLines.push(`- Preferred connectors: ${claimRules.preferredConnectors.join(', ')}`)
-    }
-
-    if (Array.isArray(claimRules.discouragedConnectors) && claimRules.discouragedConnectors.length) {
-      ruleLines.push(`- Discouraged connectors: ${claimRules.discouragedConnectors.join(', ')}`)
-    }
-
-    if (Array.isArray(claimRules.forbiddenPhrases) && claimRules.forbiddenPhrases.length) {
-      ruleLines.push(`- Forbidden phrases: ${claimRules.forbiddenPhrases.join(', ')}`)
-    }
-
-    if (typeof claimRules.maxIndependentClaimsBeforeExtraFee === 'number') {
-      ruleLines.push(`- Keep independent claims ≤ ${claimRules.maxIndependentClaimsBeforeExtraFee} before extra fees`)
-    }
-
-    if (typeof claimRules.maxTotalClaimsRecommended === 'number') {
-      ruleLines.push(`- Recommended total claims ≤ ${claimRules.maxTotalClaimsRecommended}`)
-    }
-
-    if (claimRules.requireSupportInDescription) {
-      ruleLines.push('- Every claim element must be supported in the Detailed Description')
-    }
-
-    if (claimRules.allowReferenceNumeralsInClaims === false) {
-      ruleLines.push('- Do not use reference numerals inside claims')
-    } else if (claimRules.allowReferenceNumeralsInClaims === true) {
-      ruleLines.push('- You may include reference numerals where helpful')
-    }
-
-    const rulesBlock = ruleLines.length > 0 ? `JURISDICTION RULES (${activeJurisdiction}):\n${ruleLines.join('\n')}` : ''
+    const claimStrategyBlock = buildClaimStrategyBlock(claimStrategy)
 
     // Build style header
     const countryName = countryProfile?.profileData?.meta?.name || activeJurisdiction
@@ -5424,6 +5519,14 @@ async function handleGenerateClaims(
       // Positioning carried over when this session came from a novelty assessment. Read from
       // the session rather than normalizedData so re-running Stage 0 cannot drop it.
       noveltyGuidanceBlock: buildNoveltyGuidanceBlock((session as any).noveltyHandoff?.claimGuidance),
+      // The per-reference teaches / does-not-teach digest from the same assessment. It was
+      // stored on the session for the idea-refinement prompt only, so claim drafting saw the
+      // abstracted focus lines but never the references Claim 1 has to clear.
+      noveltyFindingsBlock: buildNoveltyFindingsBlock(
+        (session as any).noveltyHandoff?.findingsDigest,
+        (session as any).noveltyHandoff?.claimGuidance?.reviewBeforeDrafting
+      ),
+      claimStrategyBlock,
       sourceFidelityMode: resolveSourceFidelityMode(existingNormalized),
     })
 
@@ -5505,8 +5608,6 @@ async function handleGenerateClaims(
       }, { status: 500 })
     }
 
-    onProgress?.({ type: 'stage', key: 'checking', label: 'Checking numbering and dependencies' })
-
     // Parse the LLM response. Do not silently save an empty claim set:
     // LLMs sometimes wrap valid claims in markdown/prose or return numbered text instead of JSON.
     //
@@ -5536,6 +5637,13 @@ async function handleGenerateClaims(
       }, { status: 502 })
     }
 
+    // Deterministic form pass before the cap (so references are consistent when
+    // the cap truncates) and again after it (truncation leaves numbering gaps).
+    const normalisationChanges: ReturnType<typeof normaliseClaimSet>['changes'] = []
+    const firstPass = normaliseClaimSet(generatedClaims, officeRules)
+    generatedClaims = firstPass.claims
+    normalisationChanges.push(...firstPass.changes)
+
     const limitedClaimsPayload = applyGeneratedClaimLimit({
       claims: generatedClaims,
       supportMatrix: generatedSupportMatrix,
@@ -5545,16 +5653,55 @@ async function handleGenerateClaims(
     generatedClaims = limitedClaimsPayload.claims
     generatedSupportMatrix = limitedClaimsPayload.supportMatrix
     generatedQualityWarnings = limitedClaimsPayload.qualityWarnings
+    if (limitedClaimsPayload.capped) {
+      const secondPass = normaliseClaimSet(generatedClaims, officeRules)
+      generatedClaims = secondPass.claims
+      normalisationChanges.push(...secondPass.changes)
+    }
+
+    onProgress?.({ type: 'stage', key: 'checking', label: `Checking claim form for ${officeRules.office}` })
+    const officeFormContext = {
+      components: context.components,
+      inventionType: context.inventionType,
+      patentTypePrimary,
+      sourceText: [
+        context.rawIdea, context.title, context.problem, context.objectives, context.logic,
+        context.bestMethod, context.abstract, context.coreInventiveConcept,
+        JSON.stringify(context.claimableFeatures || ''), JSON.stringify(context.fallbackLimitations || ''),
+        JSON.stringify(context.sourceFactLedger || ''), JSON.stringify(context.supportDataSources || ''),
+        JSON.stringify(context.components || ''),
+      ].filter(Boolean).join(' '),
+    }
+    let officeFormFindings = runOfficeFormLint(generatedClaims, { rules: officeRules, context: officeFormContext })
+    const claimFormRepair = await repairClaimFormIfNeeded({
+      claims: generatedClaims,
+      findings: officeFormFindings,
+      rules: officeRules,
+      rulesBlock,
+      context,
+      normalized: existingNormalized,
+      requestHeaders: requestHeaders || {},
+      sessionId,
+      patentId,
+      jurisdiction: activeJurisdiction,
+      strategyDigest: buildClaimStrategyDigest(claimStrategy),
+      onProgress,
+    })
+    if (claimFormRepair.claims) {
+      generatedClaims = claimFormRepair.claims
+      normalisationChanges.push(...claimFormRepair.normalisation)
+      officeFormFindings = runOfficeFormLint(generatedClaims, { rules: officeRules, context: officeFormContext })
+    }
+    const claimFormReport = buildClaimFormReport({
+      claims: generatedClaims,
+      rules: officeRules,
+      findings: officeFormFindings,
+      normalisation: normalisationChanges,
+      repair: claimFormRepair.record,
+    })
 
     // Format claims as HTML for the editor
     const claimsHtml = formatDraftClaimsAsHtml(generatedClaims)
-    const claimGenerationQuality = analyzePreliminaryClaimQuality({
-      claims: generatedClaims,
-      patentTypePrimary,
-      context,
-      llmSupportMatrix: generatedSupportMatrix,
-      llmQualityWarnings: generatedQualityWarnings
-    })
 
     // Save to ideaRecord normalizedData
     const updatedNormalized = {
@@ -5563,16 +5710,27 @@ async function handleGenerateClaims(
       claimsStructured: generatedClaims,
       claimsProvisional: claimsHtml,
       claimsStructuredProvisional: generatedClaims,
-      claimGenerationQuality,
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaimsRequested: maxClaims,
       claimsCappedToDefault: limitedClaimsPayload.capped,
       claimCapSource,
       claimsJurisdiction: activeJurisdiction,
+      claimsJurisdictionRequested: requestedJurisdiction,
       claimsGeneratedAt: new Date().toISOString(),
+      claimFormReport,
       // Every claim set the session has held stays switchable from the
       // version history; a regeneration is a new version, not an overwrite.
-      ...captureClaimsVersion(existingNormalized, { source: 'generated', html: claimsHtml, structured: generatedClaims }),
+      ...captureClaimsVersion(existingNormalized, {
+        source: 'generated',
+        html: claimsHtml,
+        structured: generatedClaims,
+        note: [
+          summariseNormalisation(normalisationChanges),
+          claimFormRepair.record?.attempted && claimFormRepair.record.resolvedFindingIds.length
+            ? `${claimFormRepair.record.resolvedFindingIds.length} office-form correction${claimFormRepair.record.resolvedFindingIds.length === 1 ? '' : 's'} applied`
+            : '',
+        ].filter(Boolean).join('; ') || undefined,
+      }),
     }
 
     // A regenerated claim set voids any challenge raised against the old one:
@@ -5596,7 +5754,6 @@ async function handleGenerateClaims(
     return NextResponse.json({
       claims: generatedClaims,
       claimsHtml,
-      claimGenerationQuality,
       jurisdiction: activeJurisdiction,
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaims,
@@ -5604,6 +5761,8 @@ async function handleGenerateClaims(
       claimCapSource,
       patentType: patentTypePrimary, // Return patent type for UI display
       patentTypeAssumed,
+      warnings: generationWarnings,
+      claimFormReport,
       personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
       personaProvenance,
       personaWarnings: [],
@@ -5667,11 +5826,13 @@ async function handleSaveClaims(user: any, patentId: string, data: any) {
       }
     })
   }
+  const claimFormReport = await recomputeClaimFormReport(session, existingNormalized, nextStructured)
   const updatedNormalized: Record<string, any> = {
     ...existingNormalized,
     claims: nextClaims,
     claimsStructured: nextStructured,
     claimsLastSavedAt: new Date().toISOString(),
+    ...(claimFormReport ? { claimFormReport } : {}),
     ...captureClaimsVersion(existingNormalized, {
       source: 'manual_edit',
       html: nextClaims,
@@ -8109,6 +8270,9 @@ async function handleComputeSourceFidelity(user: any, patentId: string, data: an
     normalizedData: normalized,
     sections,
     claimsText,
+    claimsStructured: Array.isArray(normalized.claimsStructuredFinal) && normalized.claimsStructuredFinal.length
+      ? normalized.claimsStructuredFinal
+      : normalized.claimsStructured,
   })
 
   const coverageReview = (extraSections as any)._coverageReview
@@ -8389,6 +8553,10 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
       'Stage 0 normalization changed components or logic. Re-save the component plan before using figures.'
     )
   }
+
+  // Plan the claim set in the background now, so the claims stage starts with
+  // the strategy ready instead of paying for it.
+  enqueueClaimStrategy({ sessionId: session.id, userId: user.id, reason: 'stage0_normalized' })
 
   return NextResponse.json({
     ideaRecord,

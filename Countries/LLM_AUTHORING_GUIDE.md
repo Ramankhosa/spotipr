@@ -305,3 +305,31 @@ one should be richer, especially the top-ups):
 5. Have a patent professional review the top-ups and limits against the
    office's current rules — the importer guarantees structure, not legal
    accuracy.
+
+## Structured claim rules (`rules.claims`)
+
+The runtime builds one claim-rule profile per office (`src/lib/claim-rules`): a built-in default for the fourteen profiled offices, overlaid with whatever `rules.claims` carries. The legacy booleans still work; the structured fields below are optional and, when present, override the default. The same profile renders the `JURISDICTION CLAIM RULES` prompt block, sizes the default claim budget, drives the deterministic normaliser and the office-form validator, so a rule written here is a rule that is enforced.
+
+| Field | Values |
+|---|---|
+| `dependentClaimPhrase` | `of` · `according_to` · `as_claimed_in` · `characterized` |
+| `multipleDependencyMode` | `none` · `alternative_only` · `any` |
+| `multiOnMultiProhibited` | boolean |
+| `twoPartForm` | `required` · `preferred` · `optional` · `discouraged` |
+| `characterisedSpelling` | `s` · `z` |
+| `singleIndependentPerCategory` | boolean (EPC Rule 43(2)) |
+| `useClaims` | `allowed` · `allowed_as_method` · `not_allowed` |
+| `medicalMethodClaims` | `allowed` · `allowed_with_for_use_mirror` · `for_use_only` · `swiss_type_only` · `composition_only` · `use_claim_only` |
+| `crmClaimForm` | `non_transitory_medium` · `program_and_medium` · `program_stored_in_medium` · `medium_and_program_product` · `medium_only` · `not_recommended` |
+| `softwareEligibilityDoctrine` | free text (e.g. `us_101`, `ep_technical_character`, `in_3k`) |
+| `excludedSubjectMatter` | array of codes rendered as prose (see `src/lib/claim-rules/render.ts`) |
+| `productByProcess` | `allowed` · `only_if_necessary` |
+| `referenceNumerals` | `optional` · `recommended_if_drawings` · `permitted` · `not_allowed` |
+| `omnibusClaims` | `forbidden` · `permitted` · `customary` |
+| `claimOrdering` | `grouped_by_category` · `decreasing_scope` |
+| `freeTotalClaims` / `freeIndependentClaims` | integer, `null` for no threshold, `0` when every claim carries a fee |
+| `defaultClaimBudget` | 5–30; the generation cap when the attorney asks for no count |
+| `feeNote` | one sentence rendered under COUNT AND FEES |
+| `language` | `en` · `pt-BR` · `ru` (text rewrites by the normaliser apply to `en` only) |
+
+An invalid value is ignored and logged; it never reaches the model. The claims top-up prose should carry office nuance and case law, not the form and count rules, which the block above already states.

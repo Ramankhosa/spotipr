@@ -84,7 +84,30 @@ const countryProfileSchema = z.object({
       maxTotalClaimsRecommended: z.number().int().min(1),
       allowReferenceNumeralsInClaims: z.boolean(),
       requireSupportInDescription: z.boolean(),
-      unityStandard: z.string().min(1)
+      unityStandard: z.string().min(1),
+      // Structured claim-form fields (src/lib/claim-rules). All optional: a
+      // present field overrides the built-in default for the office; the
+      // runtime validates the value and ignores anything it does not recognise.
+      dependentClaimPhrase: z.string().optional(),
+      multipleDependencyMode: z.string().optional(),
+      multiOnMultiProhibited: z.boolean().optional(),
+      twoPartForm: z.string().optional(),
+      characterisedSpelling: z.string().optional(),
+      singleIndependentPerCategory: z.boolean().optional(),
+      referenceNumerals: z.string().optional(),
+      omnibusClaims: z.string().optional(),
+      claimOrdering: z.string().optional(),
+      useClaims: z.string().optional(),
+      medicalMethodClaims: z.string().optional(),
+      crmClaimForm: z.string().optional(),
+      softwareEligibilityDoctrine: z.string().optional(),
+      excludedSubjectMatter: z.array(z.string()).optional(),
+      productByProcess: z.string().optional(),
+      freeTotalClaims: z.number().int().min(0).nullable().optional(),
+      freeIndependentClaims: z.number().int().min(0).nullable().optional(),
+      defaultClaimBudget: z.number().int().min(3).max(50).optional(),
+      feeNote: z.string().optional(),
+      language: z.string().optional(),
     }),
 
     description: z.object({

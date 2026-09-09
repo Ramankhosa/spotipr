@@ -1,3 +1,4 @@
+import { enqueueClaimStrategy } from '@/lib/claim-strategy-job'
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyJWT } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
@@ -253,6 +254,10 @@ export async function POST(
           } as any,
         },
       })
+
+      // The closest-art findings just stored change the claim strategy; plan it
+      // in the background so the claims stage finds it ready.
+      enqueueClaimStrategy({ sessionId: session.id, userId: user.id, reason: 'novelty_handoff' })
 
       await prisma.noveltySearchRun.update({
         where: { id: searchRun.id },

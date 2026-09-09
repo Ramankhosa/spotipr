@@ -59,6 +59,8 @@ function evidenceCatalogBlock(catalog: Array<{ id: string; value: string }>): st
 // PLANNER REGISTRY section already renders verbatim.
 const NON_FIGURE_CONTEXT_KEYS = new Set([
   'claimGenerationQuality',
+  'claimFormReport',
+  'claimStrategy',
   'components',
   'claims',
   'claimsFinal',

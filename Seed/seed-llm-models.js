@@ -1400,6 +1400,7 @@ async function main() {
     // === PATENT DRAFTING STAGES (LLM-Powered) ===
     { code: 'DRAFT_IDEA_ENTRY', displayName: 'Idea Entry & Normalization', featureCode: 'PATENT_DRAFTING', sortOrder: 1, description: 'Initial idea input and AI-based normalization' },
     { code: 'DRAFT_CLAIM_GENERATION', displayName: 'Initial Claims Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 2, description: 'Generate initial patent claims from idea' },
+    { code: 'DRAFT_CLAIM_STRATEGY', displayName: 'Claim Strategy', featureCode: 'PATENT_DRAFTING', sortOrder: 2, description: 'Plan the claim set before drafting (inventive concept, essential features, category plan per office, eligibility, terminology); runs in the background after Stage 0' },
     { code: 'DRAFT_PRIOR_ART_ANALYSIS', displayName: 'Prior Art Analysis', featureCode: 'PATENT_DRAFTING', sortOrder: 3, description: 'Analyze prior art relevance' },
     { code: 'DRAFT_CLAIM_REFINEMENT', displayName: 'Claim Refinement', featureCode: 'PATENT_DRAFTING', sortOrder: 4, description: 'Refine claims based on prior art' },
     { code: 'DRAFT_FIGURE_COVERAGE', displayName: 'Figure Claim Coverage', featureCode: 'PATENT_DRAFTING', sortOrder: 5, description: 'Extract drawing-relevant claim limitations for figure coverage (mechanical quote-and-map; suits a fast model)' },
@@ -1518,6 +1519,7 @@ async function main() {
     // Core drafting stages - HIGH LIMITS for complex generation
     'DRAFT_IDEA_ENTRY':                   { maxTokensIn: 20000,  maxTokensOut: 16000 },
     'DRAFT_CLAIM_GENERATION':             { maxTokensIn: 30000,  maxTokensOut: 16000 },
+    'DRAFT_CLAIM_STRATEGY':           { maxTokensIn: 30000,  maxTokensOut: 6000 },
     'DRAFT_PRIOR_ART_ANALYSIS':           { maxTokensIn: 50000,  maxTokensOut: 16000 },
     'DRAFT_CLAIM_REFINEMENT':             { maxTokensIn: 30000,  maxTokensOut: 16000 },
     'DRAFT_FIGURE_COVERAGE':              { maxTokensIn: 30000,  maxTokensOut: 16000 },
@@ -1590,6 +1592,7 @@ async function main() {
       // Core drafting stages — latest cost-effective Gemini 3.x (2026)
       'DRAFT_IDEA_ENTRY':                   'gemini-3.1-flash-lite',
       'DRAFT_CLAIM_GENERATION':             'gpt-5.6-terra-thinking',  // reasoning model for claims
+      'DRAFT_CLAIM_STRATEGY':           'gpt-5.6-terra-thinking',  // plans the claim set; mirrors the claims model
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.5-flash',       // Major: use 3.5 Flash
       'DRAFT_CLAIM_REFINEMENT':             'gemini-3.1-flash-lite',
       'DRAFT_FIGURE_COVERAGE':              'gemini-3.1-flash-lite',   // mechanical extraction - fast model
@@ -1657,6 +1660,7 @@ async function main() {
       // Core drafting stages — balanced latest models (2026)
       'DRAFT_IDEA_ENTRY':                   'gemini-3.1-pro-preview',
       'DRAFT_CLAIM_GENERATION':             'gpt-5.6-sol-thinking',    // reasoning model for claims
+      'DRAFT_CLAIM_STRATEGY':           'gpt-5.6-sol-thinking',  // plans the claim set; mirrors the claims model
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.1-pro-preview',
       'DRAFT_CLAIM_REFINEMENT':             'gpt-5.6-terra',
       // Measured 2026-08-04: a smaller model is NOT faster here. gpt-5-mini took
@@ -1728,6 +1732,7 @@ async function main() {
       // Core drafting stages — latest frontier models (2026)
       'DRAFT_IDEA_ENTRY':                   'gpt-5.6-terra',
       'DRAFT_CLAIM_GENERATION':             'claude-opus-4-8-thinking',  // reasoning model for claims
+      'DRAFT_CLAIM_STRATEGY':           'claude-opus-4-8-thinking',  // plans the claim set; mirrors the claims model
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.1-pro-preview',
       'DRAFT_CLAIM_REFINEMENT':             'gpt-5.6-sol',
       // See the PRO_PLAN note: coverage stays on the planner-class model because
@@ -1795,6 +1800,7 @@ async function main() {
     ENTERPRISE_PLAN: {
       DRAFT_IDEA_ENTRY: { maxTokensIn: 40000, maxTokensOut: 20000 },
       DRAFT_CLAIM_GENERATION: { maxTokensIn: 30000, maxTokensOut: 16000 },
+      DRAFT_CLAIM_STRATEGY: { maxTokensIn: 30000, maxTokensOut: 6000 },
       DRAFT_PRIOR_ART_ANALYSIS: { maxTokensIn: 50000, maxTokensOut: 16000 },
       DRAFT_CLAIM_REFINEMENT: { maxTokensIn: 30000, maxTokensOut: 16000 },
       DRAFT_FIGURE_COVERAGE: { maxTokensIn: 30000, maxTokensOut: 16000 },

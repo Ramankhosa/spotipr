@@ -6,12 +6,20 @@
     "continent": "North America",
     "office": "USPTO",
     "officeUrl": "https://www.uspto.gov",
-    "applicationTypes": ["utility"],
-    "languages": ["en"],
+    "applicationTypes": [
+      "utility"
+    ],
+    "languages": [
+      "en"
+    ],
     "version": 2,
     "status": "active",
     "inheritsFrom": null,
-    "tags": ["anglophone", "strict_claims", "national_phase"],
+    "tags": [
+      "anglophone",
+      "strict_claims",
+      "national_phase"
+    ],
     "createdAt": "2025-01-01T00:00:00Z",
     "updatedAt": "2025-01-01T00:00:00Z"
   },
@@ -27,7 +35,9 @@
             "id": "title",
             "label": "Title",
             "order": 1,
-            "canonicalKeys": ["title"],
+            "canonicalKeys": [
+              "title"
+            ],
             "required": true,
             "group": "header",
             "maxLengthChars": 500,
@@ -40,7 +50,9 @@
             "id": "cross_reference",
             "label": "Cross-Reference to Related Applications",
             "order": 2,
-            "canonicalKeys": ["cross_reference"],
+            "canonicalKeys": [
+              "cross_reference"
+            ],
             "required": false,
             "group": "header",
             "ui": {
@@ -52,7 +64,9 @@
             "id": "field",
             "label": "Field of the Invention",
             "order": 3,
-            "canonicalKeys": ["field_of_invention"],
+            "canonicalKeys": [
+              "field_of_invention"
+            ],
             "required": true,
             "group": "body",
             "ui": {
@@ -64,7 +78,9 @@
             "id": "background",
             "label": "Background of the Invention",
             "order": 4,
-            "canonicalKeys": ["background"],
+            "canonicalKeys": [
+              "background"
+            ],
             "required": false,
             "group": "body",
             "ui": {
@@ -76,7 +92,9 @@
             "id": "summary",
             "label": "Summary of the Invention",
             "order": 5,
-            "canonicalKeys": ["summary_of_invention"],
+            "canonicalKeys": [
+              "summary_of_invention"
+            ],
             "required": false,
             "group": "body",
             "ui": {
@@ -88,7 +106,9 @@
             "id": "brief_drawings",
             "label": "Brief Description of the Drawings",
             "order": 6,
-            "canonicalKeys": ["brief_description_of_drawings"],
+            "canonicalKeys": [
+              "brief_description_of_drawings"
+            ],
             "required": false,
             "group": "body",
             "ui": {
@@ -100,7 +120,9 @@
             "id": "detailed_description",
             "label": "Detailed Description",
             "order": 7,
-            "canonicalKeys": ["detailed_description"],
+            "canonicalKeys": [
+              "detailed_description"
+            ],
             "required": true,
             "group": "body",
             "ui": {
@@ -112,7 +134,9 @@
             "id": "claims",
             "label": "Claims",
             "order": 8,
-            "canonicalKeys": ["claims"],
+            "canonicalKeys": [
+              "claims"
+            ],
             "required": true,
             "group": "claims",
             "ui": {
@@ -124,7 +148,9 @@
             "id": "abstract",
             "label": "Abstract",
             "order": 9,
-            "canonicalKeys": ["abstract"],
+            "canonicalKeys": [
+              "abstract"
+            ],
             "required": true,
             "group": "abstract",
             "ui": {
@@ -153,14 +179,32 @@
       "twoPartFormPreferred": false,
       "allowMultipleDependent": true,
       "prohibitMultipleDependentOnMultipleDependent": true,
-      "preferredConnectors": ["comprising"],
-      "discouragedConnectors": ["consisting of"],
+      "preferredConnectors": [
+        "comprising"
+      ],
+      "discouragedConnectors": [
+        "consisting of"
+      ],
       "forbiddenPhrases": [],
       "maxIndependentClaimsBeforeExtraFee": 3,
       "maxTotalClaimsRecommended": 20,
       "allowReferenceNumeralsInClaims": true,
       "requireSupportInDescription": true,
-      "unityStandard": "US_restriction_practice"
+      "unityStandard": "US_restriction_practice",
+      "dependentClaimPhrase": "of",
+      "multipleDependencyMode": "alternative_only",
+      "multiOnMultiProhibited": true,
+      "twoPartForm": "discouraged",
+      "characterisedSpelling": "z",
+      "useClaims": "not_allowed",
+      "medicalMethodClaims": "allowed",
+      "crmClaimForm": "non_transitory_medium",
+      "softwareEligibilityDoctrine": "us_101",
+      "omnibusClaims": "forbidden",
+      "referenceNumerals": "optional",
+      "freeTotalClaims": 20,
+      "freeIndependentClaims": 3,
+      "defaultClaimBudget": 20
     },
     "description": {
       "requireBestModeDisclosure": true,
@@ -189,7 +233,9 @@
       "allowProvisionalPriority": true
     },
     "language": {
-      "allowedLanguages": ["en"],
+      "allowedLanguages": [
+        "en"
+      ],
       "requiresOfficialTranslation": false
     },
     "sequenceListing": {
@@ -198,11 +244,16 @@
       "allowLateFurnishing": true,
       "lateFurnishingNotes": "Required for nucleotide and amino acid sequence listings as per USPTO adoption of WIPO ST.26.",
       "affectsFilingDate": false,
-      "additionalFormatsAllowedForReference": ["PDF"]
+      "additionalFormatsAllowedForReference": [
+        "PDF"
+      ]
     },
     "pageLayout": {
       "defaultPageSize": "LETTER",
-      "allowedPageSizes": ["A4", "LETTER"],
+      "allowedPageSizes": [
+        "A4",
+        "LETTER"
+      ],
       "minMarginTopCm": 2.0,
       "minMarginBottomCm": 1.0,
       "minMarginLeftCm": 2.5,
@@ -254,7 +305,9 @@
         "id": "claims_supported_by_description",
         "type": "support",
         "from": "claims",
-        "mustBeSupportedBy": ["detailed_description"],
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ],
         "severity": "error",
         "message": "Some claim elements may not be clearly supported in the detailed description."
       },
@@ -262,7 +315,9 @@
         "id": "abstract_consistent_with_claims",
         "type": "consistency",
         "from": "abstract",
-        "mustBeConsistentWith": ["claims"],
+        "mustBeConsistentWith": [
+          "claims"
+        ],
         "severity": "warning",
         "message": "Abstract may describe features not clearly reflected in the independent claims."
       }
@@ -400,18 +455,17 @@
           "Claims must be supported by the detailed description."
         ],
         "topUp": {
-          "instruction": "Draft claims compliant with 35 USC 112 and 37 CFR 1.75. Use open-ended 'comprising' language for flexibility.",
+          "instruction": "Draft the claims for the USPTO under 35 USC 112 and 37 CFR 1.75. Use open-ended 'comprising' in one-part form; do not use two-part (Jepson) form, because the preamble is then an admission of prior art. Subject-matter eligibility under 35 USC 101 (Alice/Mayo) governs computer-implemented and data-processing claims: every independent claim must recite the specific technical improvement (what the recited steps change in the machine, signal, memory or data structure) and the hardware that performs them, never an abstract idea implemented on a generic computer; draft the method, the system (processor and memory with the operative steps) and a 'non-transitory computer-readable medium' claim mirroring the method. A use claim ('Use of X for Y') is not a statutory category: claim a method with steps. Methods of medical treatment are patentable and may be claimed with the source-stated regimen. Functional language at the point of novelty invokes 35 USC 112(f) when it uses 'means for' or a nonce word plus function ('module for'); recite the structure, or use 'configured to' with the operative detail. Dependent claims read 'The X of claim N, wherein'; a multiple dependent claim refers to earlier claims in the alternative only ('claim 1 or 2'), never depends on another multiple dependent claim (35 USC 112(e)), and attracts a surcharge.",
           "constraints": [
-            "Each claim must be a single sentence",
-            "Maintain proper antecedent basis ('a processor'...'the processor')",
-            "Independent claims: system/apparatus, method, and optionally CRM claims",
-            "Dependent claims must reference only one prior claim (no multiple dependencies in US)",
-            "Avoid 'means for' unless invoking 35 USC 112(f)"
+            "Each claim a single sentence with strict antecedent basis",
+            "Independent set: system/apparatus, method and non-transitory CRM mirrors where the source supports them",
+            "Multiple dependent claims in the alternative only; none on another multiple dependent claim (35 USC 112(e))",
+            "No 'means for' or nonce-word functional claiming at the point of novelty (35 USC 112(f))",
+            "Every independent claim recites the specific technical improvement (35 USC 101)"
           ],
           "additions": [
-            "Per 37 CFR 1.75(c), multiple dependent claims are allowed but incur extra fees",
-            "Consider 3 independent claims and 17 dependent claims before excess claim fees apply",
-            "Use 'configured to' or 'adapted to' for functional language without invoking 112(f)"
+            "Twenty total and three independent claims are covered by the basic fee; excess claims and multiple dependent claims attract fees (37 CFR 1.16)",
+            "Use 'configured to' with the operative detail rather than bare 'adapted to'"
           ]
         }
       },
@@ -478,7 +532,12 @@
   },
   "diagrams": {
     "requiredWhenApplicable": true,
-    "supportedDiagramTypes": ["block", "flowchart", "schematic", "perspective_view"],
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view"
+    ],
     "figureLabelFormat": "Fig. {number}",
     "autoGenerateReferenceTable": true,
     "diagramGenerationHints": {
@@ -493,13 +552,17 @@
         "id": "drawings_vs_description",
         "description": "Ensure all reference numerals in drawings are defined in the detailed description.",
         "from": "brief_drawings",
-        "mustBeExplainedIn": ["detailed_description"]
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
       },
       {
         "id": "claims_vs_drawings",
         "description": "Ensure key claimed elements appear in at least one figure when drawings are present.",
         "from": "claims",
-        "mustBeShownIn": ["brief_drawings"]
+        "mustBeShownIn": [
+          "brief_drawings"
+        ]
       }
     ]
   }

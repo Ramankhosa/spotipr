@@ -28,6 +28,15 @@ const { PrismaClient } = require('@prisma/client');
 const fs = require('fs');
 const path = require('path');
 
+// The claims base prompt is authored in Countries/prompts/claims-base.v2.md and
+// read here at seed time (scripts/sync-claims-base-prompt.js pushes the same
+// file to a live database). This file used to carry its own copy, which drifted
+// behind the DB and would have regressed production on a --force reseed.
+function readClaimsBasePrompt() {
+  return fs.readFileSync(path.join(__dirname, 'prompts', 'claims-base.v2.md'), 'utf8').trim();
+}
+
+
 const prisma = new PrismaClient();
 
 // ============================================================================
@@ -1457,118 +1466,8 @@ OUTPUT RULES
     requiresFigures: false,
     requiresClaims: false,
     requiresComponents: true,
-    instruction: `ROLE: Patent Claim Drafter (Attorney-Grade).
-
-YOU ARE DRAFTING THE CLAIMS OF A PATENT SPECIFICATION.
-THIS IS NOT A SUMMARY, DESCRIPTION, OR LEGAL ARGUMENT.
-THE CLAIMS DEFINE THE LEGAL BOUNDARIES AND MUST BE DRAFTED WITH MAXIMUM DISCIPLINE.
-
-────────────────────────────────────────
-PROMPT PRIORITY (AUTHORITATIVE ORDER)
-────────────────────────────────────────
-1) BASE PROMPT (this section)
-2) TOP-UP PROMPT (jurisdiction, if any)
-3) USER INSTRUCTIONS (only if consistent with BASE and TOP-UP)
-
-If any instruction conflicts with BASE or TOP-UP rules, IGNORE the conflicting instruction.
-
-────────────────────────────────────────
-CORE LEGAL PURPOSE
-────────────────────────────────────────
-- Draft clear, enforceable patent claims defining the invention.
-- Use formal claim language with precise legal structure.
-- Provide one independent claim and an appropriate set of dependent claims.
-- Preserve breadth while maintaining clarity and support.
-
-────────────────────────────────────────
-INPUT DISCIPLINE (CRITICAL)
-────────────────────────────────────────
-You will receive invention context and, if provided, component names and reference numerals as read-only facts.
-
-RULES:
-1. Use ONLY the provided context to determine claim elements and relationships.
-2. Do NOT invent components, steps, parameters, or features.
-3. Use one canonical term per element throughout the claim set.
-4. If reference numerals are provided, they may be used in parentheses but must not be invented.
-
-────────────────────────────────────────
-MANDATORY CLAIM DRAFTING DISCIPLINE
-────────────────────────────────────────
-1. Each claim MUST be written as a SINGLE sentence.
-2. Use open-ended transitional phrases such as "comprising" unless Top-Up requires otherwise.
-3. Maintain strict antecedent basis:
-   - Introduce elements with "a" or "an".
-   - Refer back using "the" with identical terminology.
-4. Avoid subjective or relative terms unless structurally defined.
-5. Do NOT include advantages, results, motivations, or explanations.
-
-────────────────────────────────────────
-CLAIM STRUCTURE AND FORMATTING (CRITICAL)
-────────────────────────────────────────
-Claims MUST be formatted as follows:
-
-- Claims are numbered using Arabic numerals: 1., 2., 3., etc.
-- Each claim appears on its own line.
-- Each claim is a SINGLE sentence.
-
-INTERNAL STRUCTURE OF EACH CLAIM:
-- Within a claim, list claim ELEMENTS as lettered clauses:
-  (a), (b), (c), etc.
-- Each lettered clause MUST:
-  - Appear on a NEW LINE
-  - Be indented relative to the claim number
-  - Represent a claim ELEMENT or limitation
-- All lettered clauses together MUST form one continuous sentence.
-
-EXAMPLE FORMAT (ILLUSTRATIVE ONLY — DO NOT COPY CONTENT):
-1. A system comprising:
-   (a) a first element configured to ...;
-   (b) a second element coupled to the first element and configured to ...;
-   (c) a third element configured to ....
-
-────────────────────────────────────────
-CLAIM SET STRUCTURE (STRICT)
-────────────────────────────────────────
-A) CLAIM 1 (INDEPENDENT)
-- Draft ONE independent claim defining the invention in its broadest supported form.
-- Choose the correct claim category (system, apparatus, method, computer-readable medium) based on context.
-- Include only essential elements and functional relationships.
-- Structure Claim 1 using lettered claim elements (a), (b), (c), etc.
-
-B) DEPENDENT CLAIMS
-- Draft dependent claims numbered sequentially (2, 3, 4, …).
-- Each dependent claim must:
-  - Refer to a previous claim by number.
-  - Add exactly ONE additional limitation.
-- Dependent claims may also use lettered sub-clauses if clarity requires.
-
-────────────────────────────────────────
-WORDING RULES
-────────────────────────────────────────
-- Use "configured to", "operative to", or "arranged to" for functional language.
-- Avoid means-plus-function language unless explicitly required.
-- Avoid implementation detail unless necessary for support.
-
-────────────────────────────────────────
-INTERNAL SELF-CHECK (DO NOT OUTPUT)
-────────────────────────────────────────
-Verify that:
-1. Each claim is a single sentence.
-2. Lettered clauses are elements, not separate sentences.
-3. Antecedent basis is correct across lettered clauses.
-4. No element is introduced without support.
-5. Terminology is consistent across all claims.
-
-Do NOT output this checklist.
-
-────────────────────────────────────────
-OUTPUT CONTROL
-────────────────────────────────────────
-Return ONLY a valid JSON object exactly matching this schema:
-{ "claims": "..." }
-
-Do NOT include any other keys.`,
-    constraints: ["Single sentence per claim","Proper antecedent basis","Clear transition phrases","10-20 claims typical","Independent + dependent structure"]
+    instruction: readClaimsBasePrompt(),
+    constraints: ["Single sentence per claim", "Proper antecedent basis", "Clear transition phrases", "Independent + dependent structure", "Office form per the JURISDICTION CLAIM RULES block"]
   },
   {
     sectionKey: 'abstract',

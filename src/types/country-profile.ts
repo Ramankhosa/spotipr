@@ -185,6 +185,34 @@ export interface ClaimsRules {
   allowReferenceNumeralsInClaims: boolean
   requireSupportInDescription: boolean
   unityStandard: string
+  /**
+   * Structured claim-form fields read by src/lib/claim-rules. Every field is
+   * optional; a present value overrides the built-in default for the office.
+   * Enum values are listed in src/lib/claim-rules/types.ts.
+   */
+  dependentClaimPhrase?: 'of' | 'according_to' | 'as_claimed_in' | 'characterized'
+  multipleDependencyMode?: 'none' | 'alternative_only' | 'any'
+  multiOnMultiProhibited?: boolean
+  twoPartForm?: 'required' | 'preferred' | 'optional' | 'discouraged'
+  characterisedSpelling?: 's' | 'z'
+  singleIndependentPerCategory?: boolean
+  referenceNumerals?: 'optional' | 'recommended_if_drawings' | 'permitted' | 'not_allowed'
+  omnibusClaims?: 'forbidden' | 'permitted' | 'customary'
+  claimOrdering?: 'grouped_by_category' | 'decreasing_scope'
+  useClaims?: 'allowed' | 'allowed_as_method' | 'not_allowed'
+  medicalMethodClaims?: 'allowed' | 'allowed_with_for_use_mirror' | 'for_use_only' | 'swiss_type_only' | 'composition_only' | 'use_claim_only'
+  crmClaimForm?: 'non_transitory_medium' | 'program_and_medium' | 'program_stored_in_medium' | 'medium_and_program_product' | 'medium_only' | 'not_recommended'
+  softwareEligibilityDoctrine?: string
+  excludedSubjectMatter?: string[]
+  productByProcess?: 'allowed' | 'only_if_necessary'
+  freeTotalClaims?: number | null
+  freeIndependentClaims?: number | null
+  defaultClaimBudget?: number
+  feeNote?: string
+  language?: 'en' | 'pt-BR' | 'ru'
+  /** Legacy prose fields some profiles carry; rendered after the structured rules. */
+  feeModel?: Record<string, unknown>
+  notes?: string[]
 }
 
 export interface DescriptionRules {

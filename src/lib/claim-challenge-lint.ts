@@ -18,6 +18,7 @@
 // unsolicited quality warnings and must not be surfaced elsewhere.
 
 import type { DraftClaim } from '@/lib/draft-claims-parser'
+import type { OfficeFormCode } from '@/lib/claim-rules/codes'
 
 export { computeClaimsFingerprint } from '@/lib/claims-fingerprint'
 
@@ -39,7 +40,8 @@ export type ClaimChallengeLintCode =
   | 'NEGATIVE_LIMITATION'
 
 export type ChallengeLintFinding = {
-  code: ClaimChallengeLintCode
+  /** A jurisdiction-blind code from this module, or an office-form code merged in by the challenge handler. */
+  code: ClaimChallengeLintCode | OfficeFormCode
   claimNumber: number
   excerpt: string
   message: string
@@ -153,7 +155,7 @@ const RESULT_VERBS = [
 ]
 
 /** Claim categories that are static: no active steps or outcomes may be recited. */
-const STATIC_CATEGORIES = new Set(['apparatus', 'system', 'composition', 'product'])
+const STATIC_CATEGORIES = new Set(['apparatus', 'system', 'composition', 'product', 'medium', 'program', 'kit', 'compound'])
 
 /** Structural anchors that convert a result into a capability. */
 const CAPABILITY_ANCHORS = /\b(configured to|programmed to|adapted to|arranged to|operable to|structured to)\b/i

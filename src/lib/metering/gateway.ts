@@ -187,6 +187,18 @@ export class LLMGateway {
             delete decision.maxTokensIn
           }
 
+          // The per-stage temperature configured in Super Admin used to be
+          // resolved and then dropped, so the control did nothing. A caller
+          // that sets an explicit temperature still wins (claims pin 0.2).
+          if (
+            typeof modelResolution.temperature === 'number' &&
+            Number.isFinite(modelResolution.temperature) &&
+            (llmRequest.parameters as any)?.temperature === undefined
+          ) {
+            llmRequest.parameters = { ...(llmRequest.parameters || {}), temperature: modelResolution.temperature }
+            console.log(`[Gateway] Applied stage temperature ${modelResolution.temperature} from LLM config`)
+          }
+
           console.log(`[Gateway] LLM config token limits: in=${decision.maxTokensIn ?? 'provider-only'}, out=${decision.maxTokensOut ?? 'provider-only'}`)
 
           console.log(`[Gateway] ✓ Model resolved: ${modelResolution.modelCode} (source: ${modelResolution.source}, provider: ${modelResolution.provider})`)

@@ -4,7 +4,8 @@ import type {
 } from '@/lib/draft-claims-parser'
 import {
   buildSourceFactLedgerEntries,
-  buildSourceFactLedgerPromptBlock,
+  dedupeSourceFactLedgerEntries,
+  renderSourceFactLedgerEntriesBlock,
 } from '@/lib/source-fact-ledger'
 import { buildClaimScopePromptBlock } from '@/lib/scope-recommendations'
 import {
@@ -81,6 +82,10 @@ export const PRELIMINARY_CLAIM_RESET_KEYS = [
   'claimsRefinementApplied',
   'claimsRefinementNotes',
   'claimsRefinementSource',
+  // The office-form report and the claim strategy describe the claim set that
+  // was generated; a reset starts over, so they go with it.
+  'claimFormReport',
+  'claimStrategy',
 ] as const
 
 export function resetPreliminaryClaimFields(normalizedData: Record<string, any> | null | undefined): Record<string, any> {
@@ -191,6 +196,18 @@ type BuildPreliminaryClaimsPromptParams = {
    * originate from one.
    */
   noveltyGuidanceBlock?: string
+  /**
+   * The per-reference "teaches / does not teach" digest from the same novelty
+   * assessment (DraftingSession.noveltyHandoff.findingsDigest), rendered by
+   * buildNoveltyFindingsBlock. Lets Claim 1 be positioned against the closest
+   * references instead of against the disclosure alone. Empty when absent.
+   */
+  noveltyFindingsBlock?: string
+  /**
+   * The approved claim strategy (src/lib/claim-rules/strategy.ts) rendered by
+   * buildClaimStrategyBlock. Empty when no strategy is ready for these inputs.
+   */
+  claimStrategyBlock?: string
   /**
    * The user's Stage-0 idea-handling choice (normalizedData.sourceHandlingMode).
    * PRESERVE adds strict idea-scope guard rules; STRUCTURE_ONLY leaves the prompt unchanged.
@@ -412,6 +429,93 @@ ${body}${truncated ? '\n[TRUNCATED: disclosure exceeds the prompt budget; rely o
 </original_source_excerpt>`
 }
 
+/**
+ * Claimable Features, partitioned by the user's scope selections.
+ *
+ * A feature the attorney de-selected in the Scope tab (effective claim use
+ * "none") used to stay listed under Claimable Features while the same label
+ * sat under DO NOT PROMOTE INTO CLAIMS, leaving the model to resolve the
+ * contradiction. The de-selected ones are now listed separately as excluded.
+ */
+export function partitionClaimableFeaturesByScope(
+  claimableFeatures: unknown,
+  scopeRecommendations: unknown
+): { kept: string[]; excluded: string[] } {
+  const features = toStringArray(claimableFeatures)
+  const scope = scopeRecommendations as any
+  const excludedLabels: string[] = Array.isArray(scope?.elements)
+    ? scope.elements
+        .filter((element: any) => (element?.user?.claim ?? element?.recommended?.claim) === 'none')
+        .map((element: any) => normalizeText(element?.label))
+        .filter((label: string) => label.length >= 6)
+    : []
+  if (!excludedLabels.length) return { kept: features, excluded: [] }
+  const kept: string[] = []
+  const excluded: string[] = []
+  for (const feature of features) {
+    const normalized = normalizeText(feature)
+    const hit = excludedLabels.some(label => normalized.includes(label) || label.includes(normalized))
+    if (hit) excluded.push(feature)
+    else kept.push(feature)
+  }
+  return { kept, excluded }
+}
+
+/**
+ * The invention-context blocks shared by the claims prompt and the claim
+ * strategy prompt, so the two calls describe the same source the same way.
+ */
+export function buildClaimContextBlocks(context: PreliminaryClaimContext): {
+  supportDataBlock: string
+  sourceFactLedgerBlock: string
+  claimScopeBlock: string
+  originalSourceExcerptBlock: string
+  normalizedContextBlock: string
+} {
+  // Both support blocks are rendered. The ledger used to be suppressed whenever
+  // any support-data source existed, which almost always held, so the numeric
+  // values and conditions that completeSourceFactLedger back-fills from the raw
+  // idea (the facts Stage 0 missed) never reached the model. Ledger lines that
+  // merely repeat a support-data source are dropped; the surviving lines keep
+  // their original SF ids so the prompt and the support matrix agree.
+  const supportDataBlock = buildSupportDataSourcePromptBlock(
+    context,
+    'claims',
+    'SUPPORT DATA SOURCES FOR CLAIM SUPPORT'
+  )
+  const sourceFactLedgerBlock = renderSourceFactLedgerEntriesBlock(
+    dedupeSourceFactLedgerEntries(
+      buildSourceFactLedgerEntries(context.sourceFactLedger),
+      supportDataBlock ? buildSupportDataSourceEntries(context).map(entry => entry.value) : []
+    ),
+    supportDataBlock ? 'SOURCE FACT LEDGER FOR CLAIM SUPPORT (additional source-stated facts)' : 'SOURCE FACT LEDGER FOR CLAIM SUPPORT'
+  )
+  const claimScopeBlock = buildClaimScopePromptBlock(context.scopeRecommendations)
+  const features = partitionClaimableFeaturesByScope(context.claimableFeatures, context.scopeRecommendations)
+
+  const normalizedContextBlock = `NORMALIZED INVENTION CONTEXT:
+${context.title ? `Title: ${context.title}` : ''}
+${context.problem ? `Problem: ${context.problem}` : ''}
+${context.objectives ? `Objectives: ${context.objectives}` : ''}
+${context.logic ? `Technical Logic: ${context.logic}` : ''}
+${formatComponents(context.components)}
+${context.bestMethod ? `Best Method: ${context.bestMethod}` : ''}
+${context.abstract ? `Abstract: ${context.abstract}` : ''}
+${context.coreInventiveConcept ? `Core Inventive Concept: ${context.coreInventiveConcept}` : ''}
+${formatListBlock('Claimable Features', features.kept)}
+${formatListBlock('Claimable Features excluded by the user\'s scope selections (do not claim)', features.excluded)}
+${formatListBlock('Fallback Limitations', context.fallbackLimitations)}
+${formatListBlock('Do Not Claim / Missing Facts', context.doNotClaim)}`
+
+  return {
+    supportDataBlock,
+    sourceFactLedgerBlock,
+    claimScopeBlock,
+    originalSourceExcerptBlock: buildOriginalSourceExcerptBlock(context.rawIdea),
+    normalizedContextBlock,
+  }
+}
+
 export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromptParams): string {
   const {
     jurisdiction,
@@ -430,22 +534,15 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     claimScopeStyle,
     maxClaims = DEFAULT_PRELIMINARY_MAX_CLAIMS,
     noveltyGuidanceBlock,
+    noveltyFindingsBlock,
+    claimStrategyBlock,
     sourceFidelityMode = 'STRUCTURE_ONLY',
   } = params
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle)
   const sourceFidelityBlock = buildSourceFidelityPromptBlock(sourceFidelityMode, 'claims')
   const inventorTerminologyBlock = buildInventorTerminologyBlock(sourceFidelityMode, context.components)
 
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
-    context.sourceFactLedger,
-    'SOURCE FACT LEDGER FOR CLAIM SUPPORT'
-  )
-  const supportDataBlock = buildSupportDataSourcePromptBlock(
-    context,
-    'claims',
-    'SUPPORT DATA SOURCES FOR CLAIM SUPPORT'
-  )
-  const claimScopeBlock = buildClaimScopePromptBlock(context.scopeRecommendations)
+  const { supportDataBlock, sourceFactLedgerBlock, claimScopeBlock, originalSourceExcerptBlock, normalizedContextBlock } = buildClaimContextBlocks(context)
 
   const claimType = patentTypePrimary === 'PRODUCT'
     ? 'product, device, article, or apparatus'
@@ -502,24 +599,13 @@ DOMAIN / ARCHETYPE CONTEXT
 Use this block only to adapt claim vocabulary, statutory claim category, and breadth strategy. Do not use it to introduce unsupported components, steps, materials, values, algorithms, use cases, therapeutic effects, or embodiments.
 ${writingSampleBlock || ''}
 
-${buildOriginalSourceExcerptBlock(context.rawIdea)}
+${originalSourceExcerptBlock}
 
 ${claimScopeBlock ? `${claimScopeBlock}\n` : ''}
-${noveltyGuidanceBlock ? `${noveltyGuidanceBlock}\n` : ''}
+${noveltyGuidanceBlock ? `${noveltyGuidanceBlock}\n` : ''}${noveltyFindingsBlock ? `${noveltyFindingsBlock}\n` : ''}${claimStrategyBlock ? `${claimStrategyBlock}\n` : ''}
 
-NORMALIZED INVENTION CONTEXT:
-${context.title ? `Title: ${context.title}` : ''}
-${context.problem ? `Problem: ${context.problem}` : ''}
-${context.objectives ? `Objectives: ${context.objectives}` : ''}
-${context.logic ? `Technical Logic: ${context.logic}` : ''}
-${formatComponents(context.components)}
-${context.bestMethod ? `Best Method: ${context.bestMethod}` : ''}
-${context.abstract ? `Abstract: ${context.abstract}` : ''}
-${context.coreInventiveConcept ? `Core Inventive Concept: ${context.coreInventiveConcept}` : ''}
-${formatListBlock('Claimable Features', context.claimableFeatures)}
-${formatListBlock('Fallback Limitations', context.fallbackLimitations)}
-${formatListBlock('Do Not Claim / Missing Facts', context.doNotClaim)}
-${supportDataBlock ? `\n${supportDataBlock}` : sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
+${normalizedContextBlock}
+${supportDataBlock ? `\n${supportDataBlock}` : ''}${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 ${formatWarnings(context.normalizationReviewWarnings)}
 
 SOURCE SUPPORT DISCIPLINE:
@@ -530,10 +616,10 @@ Do not cite source-fact identifiers anywhere in your output, including inside cl
 PATENT TYPE ENFORCEMENT:
 Detected patent type: ${patentTypePrimary}
 Expected Claim 1 category: ${claimType}.
-Use the type-specific drafting rules from the database prompt for this detected category.
+Draft Claim 1 in this category unless the source clearly proves the detected type wrong; in that case draft the best source-supported category.
 
-MULTI-INDEPENDENT CLAIM RUNTIME NOTE:
-Use the Independent Claim Policy in the claims base prompt. The detected patent type is ${renderedPatentType}. The invention archetype is ${inventionType}. Additional independent claims must be included only when source-supported, jurisdictionally permitted, and allowed by the output contract.
+INDEPENDENT CLAIM RUNTIME NOTE:
+Default to one independent claim in the detected category. The invention archetype is ${inventionType}. Add a mirror independent claim in another statutory category (apparatus/system, method/process, composition, computer-readable medium or program, kit, use) only when the source supports it, the JURISDICTION CLAIM RULES permit it, and it fits within the claim count. Every independent claim must share the distinguishing features of Claim 1 (unity); never restate the same invention twice in one category.
 
 CLAIM COUNT CONTROL:
 ${typeof maxClaims === 'number' && maxClaims > 0
@@ -541,12 +627,12 @@ ${typeof maxClaims === 'number' && maxClaims > 0
   : 'The user explicitly requested a claim set above the default 10-claim cap. Follow the explicit requested count if source-supported and jurisdictionally permitted; do not pad the claim set.'}
 
 CLAIM NARROWING STRATEGY:
-For dependent claims under each independent claim:
-- Order from broadest narrowing to most specific.
-- First dependents: add the most commercially valuable limitations.
-- Middle dependents: add structural/operational detail from claimableFeatures.
-- Final dependents: add fallback limitations, specific ranges, or embodiment details from fallbackLimitations.
-- Each dependent adds exactly ONE limitation — no compound narrowing.
+For dependent claims under each independent claim, follow the ladder:
+- Level 2: disclosed classes of components, materials, steps, data flows, or configurations (from Claimable Features).
+- Level 3: preferred named features, structures, algorithms, ranges, or ratios.
+- Level 4: example values, process conditions, and embodiment details (from Fallback Limitations).
+- Each dependent claim adds ONE coherent narrowing theme; tightly linked features that only make sense together may be bundled inside that theme.
+- List dependents after the independent claim they narrow, broadest narrowing first.
 
 ${buildClaimScopeStyleStrategyBlock(normalizedClaimScopeStyle)}
 
@@ -578,20 +664,22 @@ quality are analyzed separately after generation; spending output on them here i
       "text": "The ${primaryCategory} of claim 1, wherein..."
     },
     {
-      "number": 5,
+      "number": 3,
       "type": "independent",
       "category": "${secondaryCategory}",
       "text": "A ${secondaryCategory} comprising source-supported steps..."
     },
     {
-      "number": 6,
+      "number": 4,
       "type": "dependent",
-      "dependsOn": 5,
+      "dependsOn": 3,
       "category": "${secondaryCategory}",
-      "text": "The ${secondaryCategory} of claim 5, wherein..."
+      "text": "The ${secondaryCategory} of claim 3, wherein..."
     }
   ]
-}`
+}
+
+Number the claims consecutively starting at 1, with no gaps, and list every dependent claim after the claim it depends on. The example above shows the shape only; draft as many claims as the count control and the source support justify.`
 }
 
 function distinctiveTokens(value: string) {
@@ -614,23 +702,26 @@ export function entryMatchesClaim(claimText: string, entryValue: string) {
 export function supportEntriesFromContext(context: PreliminaryClaimContext): SupportEntry[] {
   const entries: SupportEntry[] = []
 
-  if (hasSupportDataSources(context)) {
-    buildSupportDataSourceEntries(context).forEach(entry => {
-      entries.push({
-        id: entry.id,
-        value: entry.value,
-        sourceField: entry.sourceField,
-      })
+  const supportSourceEntries = hasSupportDataSources(context) ? buildSupportDataSourceEntries(context) : []
+  supportSourceEntries.forEach(entry => {
+    entries.push({
+      id: entry.id,
+      value: entry.value,
+      sourceField: entry.sourceField,
     })
-  } else {
-    buildSourceFactLedgerEntries(context.sourceFactLedger).forEach(entry => {
-      entries.push({
-        id: entry.id,
-        value: entry.value,
-        sourceField: `sourceFactLedger.${entry.category}`,
-      })
+  })
+  // Same either/or fix as the prompt: the ledger is support even when
+  // support-data sources exist, minus the lines those sources already carry.
+  dedupeSourceFactLedgerEntries(
+    buildSourceFactLedgerEntries(context.sourceFactLedger),
+    supportSourceEntries.map(entry => entry.value)
+  ).forEach(entry => {
+    entries.push({
+      id: entry.id,
+      value: entry.value,
+      sourceField: `sourceFactLedger.${entry.category}`,
     })
-  }
+  })
 
   if (Array.isArray(context.components)) {
     context.components.forEach((component: any, index) => {

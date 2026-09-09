@@ -435,6 +435,30 @@ export default function SourceCoveragePanel({
       <p className="text-xs text-ai-graphite-500 px-1">
         Sentences that go beyond the source disclosure. Confirm each is intended, or edit the section.
       </p>
+      {Array.isArray(report?.claims) && report!.claims.length > 0 && (
+        <div className="rounded-xl border border-paper-200 bg-white overflow-hidden">
+          <div className="px-3 py-2 bg-paper-100/70 text-[11px] font-semibold text-ai-graphite-700">Claims</div>
+          <div className="divide-y divide-paper-100">
+            {report!.claims.map(row => (
+              <div key={row.claimNumber} className="px-3 py-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+                <span className="font-medium text-ai-graphite-800">Claim {row.claimNumber}</span>
+                <span className={`px-1.5 py-0.5 rounded border text-[10px] ${
+                  row.status === 'supported'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : row.status === 'partial'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-red-200 bg-red-50 text-red-700'
+                }`}>
+                  {row.status === 'supported' ? 'traces to source' : row.status === 'partial' ? 'partly traced' : 'not traced'}
+                </span>
+                {row.unmatchedTokens.map(term => (
+                  <span key={term} className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-[10px] text-amber-800">{term}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {additions.length === 0 && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           Every sentence traces back to your source material.

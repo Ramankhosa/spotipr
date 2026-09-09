@@ -1,0 +1,34 @@
+{
+  "id": "software-scheduler",
+  "title": "Thermal-aware job scheduler for a battery-powered edge gateway",
+  "allowRefine": true,
+  "patentTypePrimary": "SYSTEM",
+  "jurisdictions": ["IN", "US", "EP", "KR"],
+  "rawIdea": "We build small edge gateways that sit in unventilated metal cabinets on cell-tower sites and run inference jobs for camera feeds. The problem: the gateway's system-on-chip throttles when its junction temperature passes 85 C, and the throttling kicks in exactly when the queue is longest (midday), so frames get dropped. The battery pack also sags under sustained load, and a brown-out reboots the box.\n\nOur idea is a scheduler that admits jobs to the accelerator based on a predicted temperature rather than the measured one. A thermal model on the gateway takes the last 60 seconds of junction-temperature samples from the on-die sensor, the ambient temperature from a cabinet probe, and the energy estimate of each queued job (we tag every job with its measured joules from previous runs on the same chip), and predicts the junction temperature 20 seconds ahead. The admission controller only releases the next job to the accelerator when the predicted temperature stays below a setpoint of 80 C; otherwise it holds the job and runs a lighter downsampled variant of the model on the CPU instead (we call this the shadow path). Every job is tagged with a deadline; if holding a job would miss its deadline, the controller lowers the accelerator clock through the SoC's DVFS interface by one step instead of holding, which we found keeps the junction under the setpoint while still meeting most deadlines.\n\nThe battery side: a coulomb counter on the pack reports state of charge every second. When state of charge is below 20 percent the controller raises the temperature setpoint to 82 C and shrinks the prediction horizon to 10 seconds, because the pack then can't sustain the accelerator anyway and we prefer finishing queued jobs quickly on the CPU shadow path.\n\nMeasured on a 6-camera site over two weeks: frame drops fell from 11 percent to under 1 percent, and the chip never crossed 84 C. The thermal model is a small linear model with three coefficients that we fit per chip during the first hour of operation from the sensor samples; no cloud connection is needed. We also keep a ring buffer of the last 300 predictions and measured values so the coefficients can be refitted if the prediction error exceeds 3 C for more than a minute.",
+  "expect": {
+    "IN": {
+      "maxBlocking": 0,
+      "noCodes": ["USE_CLAIM", "PROGRAM_PER_SE", "CRM_NOT_NON_TRANSITORY"],
+      "textMustContain": ["as claimed in claim 1"],
+      "textMustNotContain": ["non-transitory", "computer program product"],
+      "categories": ["system", "method"]
+    },
+    "US": {
+      "maxBlocking": 0,
+      "noCodes": ["USE_CLAIM", "MULTIPLE_DEPENDENT_CHAIN"],
+      "textMustContain": ["of claim 1", "non-transitory"],
+      "categories": ["system", "method", "medium"]
+    },
+    "EP": {
+      "maxBlocking": 0,
+      "noCodes": ["INDEPENDENT_PER_CATEGORY_EXCEEDED", "PROGRAM_PER_SE"],
+      "textMustContain": ["according to claim 1"],
+      "categories": ["system", "method"]
+    },
+    "KR": {
+      "maxBlocking": 0,
+      "noCodes": ["PROGRAM_PER_SE", "MULTIPLE_DEPENDENT_CHAIN"],
+      "categories": ["system", "method"]
+    }
+  }
+}

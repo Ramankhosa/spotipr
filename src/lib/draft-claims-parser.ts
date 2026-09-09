@@ -3,7 +3,7 @@ export type DraftClaim = {
   type: 'independent' | 'dependent'
   dependsOn?: number
   text: string
-  category?: 'method' | 'system' | 'apparatus' | 'composition' | 'product'
+  category?: 'method' | 'system' | 'apparatus' | 'composition' | 'product' | 'medium' | 'program' | 'use' | 'kit' | 'compound'
 }
 
 export type DraftClaimSupportMatrixItem = {
@@ -26,7 +26,7 @@ export class DraftClaimsParseError extends Error {
   }
 }
 
-const CLAIM_CATEGORIES = ['method', 'system', 'apparatus', 'composition', 'product'] as const
+const CLAIM_CATEGORIES = ['method', 'system', 'apparatus', 'composition', 'product', 'medium', 'program', 'use', 'kit', 'compound'] as const
 
 export function normalizeDraftClaimType(value: unknown): DraftClaim['type'] | undefined {
   if (typeof value !== 'string') return undefined
@@ -191,6 +191,15 @@ function parseJsonCandidate(candidate: string) {
  * to whole-text vocabulary when there is no recognisable preamble.
  */
 const CATEGORY_NOUNS: Array<[RegExp, NonNullable<DraftClaim['category']>]> = [
+  // Specific statutory forms first. The earliest match in the preamble still
+  // wins, so "a method of using a compound" stays a method; these only decide
+  // ties the older five categories could not express (a medium claim used to
+  // be filed as a product, a use claim as whatever noun followed it).
+  [/\buse\s+of\b/, 'use'],
+  [/\b(?:computer|machine|processor)[- ]readable\b|\bstorage\s+medium\b|\bmemory\s+storing\b/, 'medium'],
+  [/\bcomputer\s+program(?:\s+product)?\b|\bsoftware\s+product\b/, 'program'],
+  [/\bkit\b/, 'kit'],
+  [/\b(?:compound|salt|polymorph|crystalline\s+form|solvate|hydrate)\b/, 'compound'],
   [/\b(method|process)\b/, 'method'],
   [/\bsystem\b/, 'system'],
   [/\b(apparatus|device|assembly|machine|module)\b/, 'apparatus'],
@@ -229,10 +238,17 @@ function inferCategory(text: string): DraftClaim['category'] {
 
   // No category noun in the preamble at all — fall back to whole-text vocabulary,
   // most specific first, with every alternation grouped so boundaries apply.
-  for (const [pattern, category] of [CATEGORY_NOUNS[3], CATEGORY_NOUNS[0], CATEGORY_NOUNS[1], CATEGORY_NOUNS[2], CATEGORY_NOUNS[4]]) {
-    if (pattern.test(lower)) return category
+  const fallbackOrder: NonNullable<DraftClaim['category']>[] = ['medium', 'program', 'kit', 'composition', 'compound', 'method', 'system', 'apparatus', 'product']
+  for (const category of fallbackOrder) {
+    const entry = CATEGORY_NOUNS.find(([, name]) => name === category)
+    if (entry && entry[0].test(lower)) return category
   }
   return undefined
+}
+
+/** Category of a claim from its own text (preamble first, then vocabulary). */
+export function inferClaimCategory(text: string): DraftClaim['category'] {
+  return inferCategory(text)
 }
 
 /**
