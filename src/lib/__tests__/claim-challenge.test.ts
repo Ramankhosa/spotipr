@@ -15,7 +15,8 @@ import {
   type ChallengeRemark,
 } from '@/lib/claim-challenge'
 import type { DraftClaim } from '@/lib/draft-claims-parser'
-import type { ChallengeLintFinding } from '@/lib/claim-challenge-lint'
+import { CLAIM_CHALLENGE_CHECKLIST, type ChallengeLintFinding } from '@/lib/claim-challenge-lint'
+import type { OfficeFormFinding } from '@/lib/claim-rules/types'
 
 const claim = (number: number, text: string, extra: Partial<DraftClaim> = {}): DraftClaim => ({
   number,
@@ -148,14 +149,51 @@ describe('expandChallengeRemarks', () => {
     expect(remarks[0].id).toBe('L1')
   })
 
-  it('drops a lint finding the model already raised for the same claim', () => {
+  it('keeps the deterministic finding and drops the model duplicate for the same claim', () => {
+    // A finding carrying a statutory basis outranks an opinion: previously the
+    // model's remark won, so a blocking office defect could be silenced by a
+    // same-category comment.
     const parsed = { remarks: [{ claims: [1], cat: 'DEFINITENESS' as const, sev: 'H' as const, obj: 'x', fix: 'y' }] }
     const lint: ChallengeLintFinding[] = [
       { code: 'INDEFINITE_MODIFIER', claimNumber: 1, excerpt: 'substantially', message: 'dupe' },
     ]
     const remarks = expandChallengeRemarks(parsed as any, lint)
     expect(remarks).toHaveLength(1)
-    expect(remarks[0].source).toBe('llm')
+    expect(remarks[0].source).toBe('lint')
+  })
+
+  it('grades a seeded finding by the office severity and caps the seeded set', () => {
+    const many: OfficeFormFinding[] = Array.from({ length: 12 }, (_, index) => ({
+      id: `F${index + 1}`, code: 'USE_CLAIM', severity: 'block', fix: 'llm',
+      claimNumber: index + 1, excerpt: 'Use of', message: 'not statutory',
+      basis: '35 USC 101', jurisdiction: 'US',
+    }))
+    const remarks = expandChallengeRemarks({ remarks: [] } as any, many)
+    expect(remarks).toHaveLength(8)
+    expect(remarks.every(entry => entry.sev === 'H')).toBe(true)
+    expect(remarks[0].cat).toBe('CLAIM_FORM')
+    expect(remarks[0].objection).toContain('35 USC 101')
+  })
+
+  it('leaves a set-level finding out of the remarks', () => {
+    const setLevel: OfficeFormFinding[] = [{
+      id: 'F1', code: 'UNITY_BREAK', severity: 'warn', fix: 'manual',
+      claimNumber: null, excerpt: '', message: 'no shared feature',
+      basis: 'Article 82 EPC', jurisdiction: 'EP',
+    }]
+    expect(expandChallengeRemarks({ remarks: [] } as any, setLevel)).toHaveLength(0)
+  })
+
+  it('maps every office code that can block onto a real category, never OTHER', () => {
+    const codes = ['ANTECEDENT_BASIS', 'USE_CLAIM', 'METHOD_OF_TREATMENT', 'PROGRAM_PER_SE',
+      'EXPERIMENTAL_PARAMETER', 'TAUTOLOGY', 'INDEPENDENT_PER_CATEGORY_EXCEEDED', 'UNITY_BREAK']
+    for (const code of codes) {
+      const remarks = expandChallengeRemarks({ remarks: [] } as any, [{
+        id: 'F1', code, severity: 'block', fix: 'llm', claimNumber: 1,
+        excerpt: 'x', message: 'm', basis: 'b', jurisdiction: 'US',
+      }] as OfficeFormFinding[])
+      expect(remarks[0]?.cat, code).not.toBe('OTHER')
+    }
   })
 
   it('marks every remark pending so nothing is accepted by default', () => {
@@ -216,13 +254,28 @@ describe('buildAcceptedRemarksBlock', () => {
   })
 })
 
+/** An office-form finding, the shape the challenger is now seeded from. */
+function finding(partial: Partial<OfficeFormFinding> & { code: string }): OfficeFormFinding {
+  return {
+    id: 'F1',
+    severity: 'warn',
+    fix: 'llm',
+    claimNumber: 1,
+    excerpt: 'x',
+    message: 'flagged thing',
+    basis: '35 USC 112(b)',
+    jurisdiction: 'US',
+    ...partial,
+  }
+}
+
 describe('buildClaimChallengePrompt', () => {
   const base = {
     ideaBasics: { title: 'A dryer' },
     componentList: '- tray',
     sourceFactLedgerBlock: '',
     claims: [claim(1, 'A dryer comprising a tray.')],
-    lintFindings: [] as ChallengeLintFinding[],
+    lintFindings: [] as OfficeFormFinding[],
     sourceFidelityMode: 'STRUCTURE_ONLY' as const,
   }
 
@@ -238,24 +291,56 @@ describe('buildClaimChallengePrompt', () => {
     expect(prompt).toContain('retain the inventor')
   })
 
-  it('seeds the screening results and the user focus', () => {
+  it('seeds the automated findings with their severity and basis, and the user focus', () => {
     const prompt = buildClaimChallengePrompt({
       ...base,
-      lintFindings: [{ code: 'INDEFINITE_MODIFIER', claimNumber: 1, excerpt: 'x', message: 'flagged thing' }],
+      lintFindings: [
+        finding({ code: 'USE_CLAIM', severity: 'block', message: 'not a statutory category', basis: '35 USC 101' }),
+        finding({ id: 'F2', code: 'INDEFINITE_MODIFIER' }),
+      ],
       focusText: 'attack claim 1 breadth',
     })
-    expect(prompt).toContain('AUTOMATED SCREENING RESULTS')
+    expect(prompt).toContain('AUTOMATED FINDINGS')
+    expect(prompt).toContain('Settled defects that must be amended')
+    expect(prompt).toContain('[BLOCK] USE_CLAIM claim 1 (35 USC 101)')
+    expect(prompt).toContain('Observations:')
     expect(prompt).toContain('flagged thing')
     expect(prompt).toContain('attack claim 1 breadth')
+  })
+
+  it('renders a set-level finding as "claim set", never "Claim null"', () => {
+    const prompt = buildClaimChallengePrompt({
+      ...base,
+      lintFindings: [finding({ code: 'UNITY_BREAK', claimNumber: null, message: 'no shared feature' })],
+    })
+    expect(prompt).toContain('UNITY_BREAK claim set')
+    expect(prompt).not.toContain('Claim null')
+  })
+
+  it('invites the model to report a false positive rather than a new objection', () => {
+    const prompt = buildClaimChallengePrompt({ ...base, lintFindings: [finding({ code: 'SOURCE_JARGON' })] })
+    expect(prompt).toContain('FALSE POSITIVE')
+    expect(prompt).toContain('standard in this art')
   })
 
   it('omits the focus block when no focus was given', () => {
     expect(buildClaimChallengePrompt(base)).not.toContain('USER FOCUS')
   })
 
-  it('names the governing jurisdiction when given, and stays silent otherwise', () => {
-    expect(buildClaimChallengePrompt({ ...base, jurisdiction: 'ep' })).toContain('JURISDICTION: EP')
-    expect(buildClaimChallengePrompt(base)).not.toContain('JURISDICTION:')
+  it('carries the office rules block and the strategy digest when supplied', () => {
+    // The old block named the office and asked the model to recall its practice;
+    // this one states the rules.
+    const withRules = buildClaimChallengePrompt({
+      ...base,
+      rulesBlock: 'JURISDICTION CLAIM RULES (EP — European Patent Office)\nFORM:\n- multiple dependency permitted',
+      strategyDigest: 'Inventive concept: a dryer that vents on humidity',
+    })
+    expect(withRules).toContain('JURISDICTION CLAIM RULES (EP')
+    expect(withRules).toContain('multiple dependency permitted')
+    expect(withRules).toContain('CLAIM STRATEGY (the approved plan')
+    expect(withRules).toContain('Inventive concept: a dryer')
+    expect(buildClaimChallengePrompt(base)).not.toContain('JURISDICTION CLAIM RULES')
+    expect(buildClaimChallengePrompt(base)).not.toContain('CLAIM STRATEGY (the approved plan')
   })
 
   it('carries the full drafting best-practice checklist', () => {
@@ -263,6 +348,13 @@ describe('buildClaimChallengePrompt', () => {
     for (const item of ['CLAIM_FORM', 'DEPENDENCY', 'FUNCTIONAL_CLAIMING', 'OPTIONAL_LANGUAGE', 'RANGES', 'CLAIM_SET_STRATEGY', 'REDUNDANCY', 'NEGATIVE_LIMITATION']) {
       expect(prompt).toContain(item)
     }
+  })
+
+  it('keeps the checklist short enough to leave room for prior-art references', () => {
+    // The checklist and the rules block trade directly against the reference
+    // budget in fitArtVocabularyBlock, so its size is asserted, not eyeballed.
+    expect(CLAIM_CHALLENGE_CHECKLIST.length).toBeLessThan(5000)
+    expect(CLAIM_CHALLENGE_CHECKLIST.split('\n').filter(line => /^\d+\./.test(line))).toHaveLength(12)
   })
 })
 
@@ -326,7 +418,7 @@ describe('art vocabulary references', () => {
     componentList: '- tray',
     sourceFactLedgerBlock: '',
     claims: [claim(1, 'A dryer comprising a tray.')],
-    lintFindings: [{ code: 'INDEFINITE_MODIFIER', claimNumber: 1, excerpt: 'x', message: 'flagged thing' }] as ChallengeLintFinding[],
+    lintFindings: [{ id: 'F1', code: 'INDEFINITE_MODIFIER', severity: 'warn', fix: 'llm', claimNumber: 1, excerpt: 'x', message: 'flagged thing', basis: '35 USC 112(b)', jurisdiction: 'US' }] as OfficeFormFinding[],
     sourceFidelityMode: 'STRUCTURE_ONLY' as const,
   }
   const block = 'ART VOCABULARY REFERENCE (read-only; 1 claim set)\nHARD RULES:\n1. Never import.'
@@ -382,7 +474,7 @@ describe('art vocabulary references', () => {
     const prompt = buildClaimChallengePrompt({ ...base, artVocabularyBlock: block })
     const checklistAt = prompt.indexOf('MANDATORY CHECKLIST')
     const blockAt = prompt.indexOf('ART VOCABULARY REFERENCE')
-    const lintAt = prompt.indexOf('AUTOMATED SCREENING RESULTS')
+    const lintAt = prompt.indexOf('AUTOMATED FINDINGS (deterministic screen')
     expect(checklistAt).toBeGreaterThan(-1)
     expect(blockAt).toBeGreaterThan(checklistAt)
     expect(lintAt).toBeGreaterThan(blockAt)

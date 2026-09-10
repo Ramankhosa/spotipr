@@ -34,6 +34,8 @@ import type { ClaimRuleProfile, OfficeFormFinding, OfficeFormFix, OfficeFormSeve
 
 export type OfficeFormLintContext = {
   components?: unknown
+  /** Inventor terms the strategy confirmed as coined; gates the jargon rule. */
+  confirmedJargon?: string[]
   /** Concatenated source text (raw idea + normalised fields); enables the number-support check. */
   sourceText?: string
   inventionType?: unknown
@@ -300,14 +302,23 @@ function reusedSeverity(code: string, rules: ClaimRuleProfile): { severity: Offi
   }
 }
 
-function fromChallengeLint(findings: ChallengeLintFinding[], rules: ClaimRuleProfile, claims: DraftClaim[] = []): Draft[] {
+function fromChallengeLint(
+  findings: ChallengeLintFinding[],
+  rules: ClaimRuleProfile,
+  claims: DraftClaim[] = [],
+  confirmedJargon: string[] = []
+): Draft[] {
   const out: Draft[] = []
   const independentNumbers = new Set(claims.filter(isIndependent).map(claim => Number(claim.number)))
   for (const finding of findings) {
     const mapped = reusedSeverity(finding.code, rules)
     if (!mapped) continue
-    if (finding.code === 'SOURCE_JARGON' && independentNumbers.has(Number(finding.claimNumber))) {
-      mapped.severity = 'block'
+    // Jargon blocks only when the strategy confirmed the term is the inventor's
+    // own coinage AND it sits in an independent claim. Shape alone (ABE8e,
+    // APOE4, DLin-MC3-DMA) is ordinary scientific nomenclature.
+    if (finding.code === 'SOURCE_JARGON') {
+      const confirmedHit = confirmedJargon.some(term => finding.excerpt.toLowerCase().includes(term) || finding.message.toLowerCase().includes(term))
+      mapped.severity = confirmedHit && independentNumbers.has(Number(finding.claimNumber)) ? 'block' : 'warn'
     }
     let message = finding.message
     if (finding.code === 'MULTIPLE_DEPENDENT_CHAIN') {
@@ -460,7 +471,14 @@ function checkAntecedentBasis(claims: DraftClaim[], rules: ClaimRuleProfile): Dr
         const singular = singularise(candidate).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         return new RegExp(`\\b(?:${escaped}|${singular})\\b`, 'i').test(prior)
       }
-      if (introduced(phrase) || introduced(head)) continue
+      // The capture may be a noun plus a following adverb or verb ("the peptide
+      // selectively binds"), so the first word must be tested as a noun in its
+      // own right; otherwise a properly introduced element reads as missing.
+      if (introduced(phrase) || introduced(head) || introduced(words[0])) continue
+      if (words.length > 1 && /(?:ly|s|ed|ing)$/.test(head) && !introduced(head)) {
+        // Two-word capture whose tail is an adverb or verb: judge the noun alone.
+        if (introduced(words[0])) continue
+      }
       if (reported.has(phrase)) continue
       reported.add(phrase)
       out.push({
@@ -727,6 +745,64 @@ function checkTautology(claims: DraftClaim[], rules: ClaimRuleProfile): Draft[] 
   return out
 }
 
+// A claim limitation stated as the conditions of an experiment rather than as
+// a property of the thing claimed. Each pattern names one shape of "lab
+// notebook" limitation: the cohort, the timepoint, the dosing protocol, and
+// the third-party tool that defines the measurement.
+const EXPERIMENTAL_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(?:a\s+)?(?:group|cohort|population|sample)\s+of\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|twenty)\b[^.;]{0,40}?\b(?:mice|mouse|rats?|rabbits?|dogs?|pigs?|primates?|monkeys?|subjects?|patients?|volunteers?|animals?|donors?)\b/i, 'a test cohort'],
+  [/\bn\s*=\s*\d+\b/i, 'a sample size'],
+  [/\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|twenty)\s+(?:transgenic|knockout|wild-type|humanized)\s+[^.;]{0,30}?\b(?:mice|mouse|rats?|animals?)\b/i, 'a test cohort'],
+  [/\bat\s+\d+\s*(?:hours?|hrs?|days?|weeks?|months?)\s+(?:after|post|following)\b/i, 'a measurement timepoint'],
+  [/\bupon\s+(?:intravenous|oral|subcutaneous|intraperitoneal|intramuscular|topical|inhaled)\s+(?:injection|administration|dosing|infusion)\b/i, 'an administration protocol'],
+  [/\bat\s+[\d.]+\s*(?:mg|µg|ug|mcg|g|ml|mL)\s*\/\s*kg\b/i, 'a dose level'],
+  [/\b(?:identified|determined|measured|assessed|quantified|detected|calculated)\s+(?:by|using|with)\s+(?:the\s+)?[A-Z][\w.-]{2,}\b/, 'a named measurement tool'],
+]
+
+/**
+ * Experimental parameters recited as claim limitations.
+ *
+ * A composition whose scope depends on the outcome of one animal study is
+ * indefinite and trivially designed around: a competitor changes the cohort
+ * size, the timepoint or the assay tool and reads outside the claim. The
+ * measured property may be claimable; the experiment that produced it is not.
+ */
+function checkExperimentalParameters(claims: DraftClaim[], rules: ClaimRuleProfile): Draft[] {
+  const out: Draft[] = []
+  const basisText = ({
+    US: '35 USC 112(b) (a claim must define the invention, not the experiment that measured it; MPEP 2173.05(g))',
+    EP: 'Article 84 EPC (claims define the matter in terms of technical features, not test conditions)',
+    IN: 'Section 10(4)(c) Patents Act 1970 (claims must define the scope of the invention)',
+  } as Record<string, string>)[rules.jurisdiction] || 'A claim defines the invention by its technical features, not by the experiment that measured it'
+
+  for (const claim of claims) {
+    const text = String(claim.text || '')
+    const category = claimCategory(claim)
+    // A method-of-testing claim may legitimately recite a protocol; a product,
+    // composition or apparatus claim may not.
+    if (category === 'method' || category === 'use') continue
+    const hits: string[] = []
+    let excerpt = ''
+    for (const [pattern, label] of EXPERIMENTAL_PATTERNS) {
+      const match = pattern.exec(text)
+      if (!match) continue
+      if (!hits.includes(label)) hits.push(label)
+      if (!excerpt) excerpt = excerptAround(text, match[0].slice(0, 40))
+    }
+    if (!hits.length) continue
+    out.push({
+      code: 'EXPERIMENTAL_PARAMETER',
+      severity: 'block',
+      fix: 'llm',
+      claimNumber: Number(claim.number),
+      excerpt,
+      message: `Claim ${claim.number} defines the ${category || 'claim'} by the conditions of an experiment (${hits.join(', ')}) rather than by a property of the thing claimed. A competitor avoids the claim by changing the protocol. Recite the measurable property itself, or move the data to the specification.`,
+      basis: basisText,
+    })
+  }
+  return out
+}
+
 function checkNumbersAgainstSource(claims: DraftClaim[], rules: ClaimRuleProfile, context: OfficeFormLintContext): Draft[] {
   const out: Draft[] = []
   const source = normaliseSource(String(context.sourceText || ''))
@@ -765,9 +841,13 @@ export function runOfficeFormLint(
   const { rules } = params
   const context = params.context || {}
 
+  const confirmedJargon = (context.confirmedJargon || [])
+    .map(term => String(term || '').trim().toLowerCase())
+    .filter(term => term.length > 2)
+
   const reused: ChallengeLintFinding[] = [
     ...findIndefiniteModifiers(list),
-    ...findSourceJargon(list, { components: context.components }),
+    ...findSourceJargon(list, { components: context.components, confirmedJargon: context.confirmedJargon }),
     ...findPictureClaim1(list),
     ...findSequenceConflation(list),
     ...findFunctionalResultStatic(list),
@@ -791,8 +871,9 @@ export function runOfficeFormLint(
     ...checkCategories(list, rules, context),
     ...checkNumbersAgainstSource(list, rules, context),
     ...checkCounts(list, rules),
-    ...fromChallengeLint(reused, rules, list),
+    ...fromChallengeLint(reused, rules, list, confirmedJargon),
     ...checkTautology(list, rules),
+    ...checkExperimentalParameters(list, rules),
   ]
 
   const seen = new Set<string>()

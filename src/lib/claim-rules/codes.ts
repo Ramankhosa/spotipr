@@ -41,6 +41,7 @@ export const OFFICE_FORM_CODES = [
   'CLAIM_COUNT_OVER_FREE',
   'INDEPENDENT_COUNT_OVER_FREE',
   'TAUTOLOGY',
+  'EXPERIMENTAL_PARAMETER',
   // Normalisation-only codes (never findings): terminology substitution from the strategy map.
   'TERMINOLOGY_MAP',
   'TERMINOLOGY_RETAINED',

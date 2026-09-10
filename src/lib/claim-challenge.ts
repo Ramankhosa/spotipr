@@ -13,10 +13,17 @@ import { z } from 'zod'
 import type { DraftClaim } from '@/lib/draft-claims-parser'
 import type { ChallengeLintFinding } from '@/lib/claim-challenge-lint'
 import { CLAIM_CHALLENGE_CHECKLIST } from '@/lib/claim-challenge-lint'
+import type { OfficeFormFinding } from '@/lib/claim-rules/types'
 import type { SourceFidelityMode } from '@/lib/source-fidelity'
 
 /** Remarks kept after severity ordering. Caps prompt size for the refine call. */
 export const MAX_CHALLENGE_REMARKS = 12
+
+/** Deterministic findings promoted to remark cards in one run. */
+export const MAX_SEEDED_REMARKS = 8
+
+/** Combined ceiling, so the panel cannot reach twenty cards. */
+export const MAX_TOTAL_REMARKS = 14
 
 export const CHALLENGE_CATEGORIES = [
   'DEFINITENESS',
@@ -46,6 +53,39 @@ export const CHALLENGE_CATEGORIES = [
 export type ChallengeCategory = (typeof CHALLENGE_CATEGORIES)[number]
 
 /** Lint codes map onto the checklist categories the challenger uses. */
+/**
+ * Office-form codes that can reach `block` severity, mapped to the challenge
+ * categories the panel renders. Only blocking findings are seeded as remarks,
+ * so a warn/info-only code needs no entry here. Anything unmapped falls through
+ * to OTHER, which is why ANTECEDENT_BASIS — the same string in both enums —
+ * has to be listed explicitly.
+ */
+const OFFICE_CODE_TO_CATEGORY: Record<string, ChallengeCategory> = {
+  ANTECEDENT_BASIS: 'ANTECEDENT_BASIS',
+  NUMBERING_GAP: 'CLAIM_FORM',
+  DEPENDENT_BEFORE_PARENT: 'DEPENDENCY',
+  DEPENDENT_PHRASE_FORM: 'CLAIM_FORM',
+  PREAMBLE_NOUN_MISMATCH: 'DEPENDENCY',
+  MULTIPLE_DEPENDENCY_FORM: 'DEPENDENCY',
+  FORBIDDEN_PHRASE: 'CLAIM_FORM',
+  MARKUSH_OPEN_GROUP: 'CLAIM_FORM',
+  CRM_NOT_NON_TRANSITORY: 'CLAIM_FORM',
+  USE_CLAIM: 'CLAIM_FORM',
+  METHOD_OF_TREATMENT: 'CLAIM_FORM',
+  SWISS_TYPE_FORM: 'CLAIM_FORM',
+  PROGRAM_PER_SE: 'CLAIM_FORM',
+  TWO_PART_FORM_MISSING: 'CLAIM_FORM',
+  CRM_FORM_NOT_RECOMMENDED: 'CLAIM_FORM',
+  INDEPENDENT_PER_CATEGORY_EXCEEDED: 'CLAIM_SET_STRATEGY',
+  UNITY_BREAK: 'CLAIM_SET_STRATEGY',
+  ELIGIBILITY_TECHNICAL_ANCHOR: 'CLAIM_SET_STRATEGY',
+  EXPERIMENTAL_PARAMETER: 'UNSUPPORTED_MATTER',
+  UNSUPPORTED_NUMBER: 'UNSUPPORTED_MATTER',
+  TAUTOLOGY: 'REDUNDANCY',
+  RESULT_ONLY_LIMITATION: 'FUNCTIONAL_CLAIMING',
+  CATEGORY_MIX: 'CATEGORY_MIX',
+}
+
 const LINT_CODE_TO_CATEGORY: Record<string, ChallengeCategory> = {
   INDEFINITE_MODIFIER: 'DEFINITENESS',
   SOURCE_JARGON: 'JARGON',
@@ -243,7 +283,7 @@ const SEVERITY_RANK: Record<'H' | 'M' | 'L', number> = { H: 0, M: 1, L: 2 }
  */
 export function expandChallengeRemarks(
   parsed: z.infer<typeof ChallengeOutputSchema>,
-  lintFindings: ChallengeLintFinding[] = [],
+  lintFindings: Array<ChallengeLintFinding | OfficeFormFinding> = [],
   validClaimNumbers?: number[] | null,
   /** Publication numbers of the references the prompt carried; citations are kept only for these. */
   referenceIds?: string[] | null,
@@ -276,29 +316,45 @@ export function expandChallengeRemarks(
       ...(citable ? { refs: filterRemarkRefs(remark.refs, citable) } : {}),
     }))
 
-  const covered = new Set(
-    llmRemarks.flatMap(remark => remark.claims.map(claimNumber => `${remark.cat}:${claimNumber}`)),
-  )
-
+  // A deterministic finding carrying a statutory basis is never suppressed by a
+  // model remark of the same category: the model's opinion is the weaker claim,
+  // so its duplicate is dropped instead. Findings are seeded first for that reason.
+  const seeded = new Set<string>()
   const lintRemarks: ChallengeRemark[] = []
   for (const finding of lintFindings) {
-    const cat = LINT_CODE_TO_CATEGORY[finding.code] || 'OTHER'
-    const key = `${cat}:${finding.claimNumber}`
-    if (covered.has(key)) continue
-    covered.add(key)
+    // Only a finding tied to a specific claim can become an amendable remark;
+    // set-level ones (numbering, counts, unity) stay prompt context.
+    const claimNumber = Number((finding as any).claimNumber)
+    if (!Number.isFinite(claimNumber) || claimNumber <= 0) continue
+    if (valid && !valid.has(claimNumber)) continue
+    const code = String(finding.code)
+    const cat = OFFICE_CODE_TO_CATEGORY[code] || LINT_CODE_TO_CATEGORY[code] || 'OTHER'
+    const key = `${cat}:${claimNumber}`
+    if (seeded.has(key)) continue
+    seeded.add(key)
+    const basis = String((finding as any).basis || '').trim()
+    const severity = String((finding as any).severity || '')
     lintRemarks.push({
       id: `L${lintRemarks.length + 1}`,
       source: 'lint',
-      claims: [finding.claimNumber],
+      claims: [claimNumber],
       cat,
-      sev: 'M',
-      objection: finding.message,
-      fix: `Amend claim ${finding.claimNumber} to remove this defect, using only limitations supported by the source context. Excerpt: "${finding.excerpt}"`,
+      // The validator already graded this; a hard-coded 'M' discarded that and
+      // kept the panel's accept-all-high control from ever reaching a blocker.
+      sev: severity === 'block' ? 'H' : severity === 'info' ? 'L' : 'M',
+      objection: basis ? `${finding.message} (${basis})` : finding.message,
+      fix: `Amend claim ${claimNumber} to remove this defect, using only limitations supported by the source context. Excerpt: "${finding.excerpt}"`,
       disposition: 'pending',
     })
+    if (lintRemarks.length >= MAX_SEEDED_REMARKS) break
   }
 
-  return [...llmRemarks, ...lintRemarks]
+  const seededKeys = new Set(lintRemarks.flatMap(remark => remark.claims.map(claimNumber => `${remark.cat}:${claimNumber}`)))
+  const keptLlmRemarks = llmRemarks.filter(remark =>
+    !remark.claims.every(claimNumber => seededKeys.has(`${remark.cat}:${claimNumber}`)),
+  )
+
+  return [...lintRemarks, ...keptLlmRemarks].slice(0, MAX_TOTAL_REMARKS)
 }
 
 /**
@@ -361,23 +417,23 @@ export type BuildChallengePromptParams = {
   componentList: string
   sourceFactLedgerBlock: string
   claims: DraftClaim[]
-  lintFindings: ChallengeLintFinding[]
+  /** Deterministic office-form findings; see runOfficeFormLint. */
+  lintFindings: OfficeFormFinding[]
   focusText?: string
   sourceFidelityMode: SourceFidelityMode
-  /** Office whose claim practice governs, e.g. "US", "EP", "IN". */
-  jurisdiction?: string
+  /**
+   * The rendered JURISDICTION CLAIM RULES block. Replaces the old bare
+   * "JURISDICTION: XX / apply this office's practice" line, which named the
+   * office but carried none of its actual rule values.
+   */
+  rulesBlock?: string
+  /** Six-line digest of the approved claim strategy; see buildClaimStrategyDigest. */
+  strategyDigest?: string
   /**
    * Rendered ART VOCABULARY REFERENCE block (see claim-challenge-references).
    * Empty or absent leaves the prompt byte-identical to a run without it.
    */
   artVocabularyBlock?: string
-}
-
-function jurisdictionBlock(jurisdiction?: string): string {
-  const code = String(jurisdiction || '').trim().toUpperCase()
-  if (!code) return ''
-  return `JURISDICTION: ${code}
-Apply this office's claim practice. Where practice differs between offices (multiple dependent claims depending on multiple dependent claims, omnibus claims, means-plus-function treatment, two-part form, reference numerals in parentheses, unity of invention), apply the rule of this jurisdiction and name it in the objection.`
 }
 
 /**
@@ -388,12 +444,23 @@ Apply this office's claim practice. Where practice differs between offices (mult
  * an objection is well founded.
  */
 export function buildClaimChallengePrompt(params: BuildChallengePromptParams): string {
-  const { ideaBasics, componentList, sourceFactLedgerBlock, claims, lintFindings, focusText, sourceFidelityMode, jurisdiction } = params
+  const { ideaBasics, componentList, sourceFactLedgerBlock, claims, lintFindings, focusText, sourceFidelityMode } = params
   const artVocabularyBlock = String(params.artVocabularyBlock || '').trim()
+  const rulesBlock = String(params.rulesBlock || '').trim()
+  const strategyDigest = String(params.strategyDigest || '').trim()
 
+  // A set-level finding has no claim number; "Claim null" read as a defect in a
+  // claim that does not exist. Severity and basis are carried through so the
+  // model can tell a settled statutory defect from a soft observation.
+  const findingLine = (finding: OfficeFormFinding) =>
+    `- [${finding.severity.toUpperCase()}] ${finding.code} ${finding.claimNumber === null ? 'claim set' : `claim ${finding.claimNumber}`} (${finding.basis}): ${finding.message}`
+
+  const blocking = lintFindings.filter(finding => finding.severity === 'block')
+  const other = lintFindings.filter(finding => finding.severity !== 'block')
   const lintBlock = lintFindings.length
-    ? `AUTOMATED SCREENING RESULTS (verify each against the claim text; confirm, sharpen, or discard it — do not merely repeat it):
-${lintFindings.map(finding => `- [${finding.code}] Claim ${finding.claimNumber}: ${finding.message}`).join('\n')}`
+    ? `AUTOMATED FINDINGS (deterministic screen, already reported to the attorney — do not restate them as your own remarks):
+${blocking.length ? `Settled defects that must be amended:\n${blocking.map(findingLine).join('\n')}\n` : ''}${other.length ? `Observations:\n${other.map(findingLine).join('\n')}` : ''}
+If one of these is WRONG — the screen misread the claim, or the term it objects to is standard in this art — say so: add a remark with category OTHER whose "obj" begins "FALSE POSITIVE <code> claim <n>:" and explains why. That is more useful than a new objection.`
     : ''
 
   const focusBlock = String(focusText || '').trim()
@@ -415,8 +482,8 @@ CLAIMS UNDER CHALLENGE:
 ${formatClaimLines(claims)}
 
 ${fidelityNote(sourceFidelityMode)}
-
-${jurisdictionBlock(jurisdiction)}
+${strategyDigest ? `\nCLAIM STRATEGY (the approved plan this set was drafted from):\n${strategyDigest}\n` : ''}
+${rulesBlock}
 
 ${CLAIM_CHALLENGE_CHECKLIST}
 ${artVocabularyBlock ? `\n${artVocabularyBlock}\n` : ''}
@@ -463,6 +530,13 @@ export type BuildChallengeRefinePromptParams = {
   fidelityBlock: string
   terminologyTranslationBlock: string
   nextClaimNumber: number
+  /**
+   * The office rules and the approved plan. This is the call that actually
+   * rewrites claims, so it is the one place where not knowing the office's
+   * dependency mode or medical claim form causes real damage.
+   */
+  rulesBlock?: string
+  strategyDigest?: string
 }
 
 /**
@@ -483,8 +557,11 @@ export function buildChallengeRefinePrompt(params: BuildChallengeRefinePromptPar
     terminologyTranslationBlock,
     nextClaimNumber,
   } = params
+  const rulesBlock = String(params.rulesBlock || '').trim()
+  const strategyDigest = String(params.strategyDigest || '').trim()
 
   return `You are an expert patent attorney amending claims to resolve examiner-style objections while preserving the broadest defensible scope. Amend ONLY what a remark requires.
+${rulesBlock ? `\n${rulesBlock}\n` : ''}${strategyDigest ? `\nCLAIM STRATEGY (the approved plan for this set):\n${strategyDigest}\n` : ''}
 
 INVENTION BASICS:
 ${ideaBasics.title ? `- Title: ${ideaBasics.title}` : ''}
@@ -506,6 +583,7 @@ Guidelines:
 - Maintain the existing numbering of current claims. Never renumber or delete a claim.
 - Maintain antecedent basis after every edit: any element you introduce must be introduced with "a"/"an" before it is later referenced with "the".
 - Keep one canonical term per element across the whole set after your edits.
+- Every amendment must comply with the JURISDICTION CLAIM RULES above: the office's dependent-claim phrasing, its multiple-dependency mode, and its permitted claim categories.
 - Cite the remark ids you resolved in remark_refs for each claim you touch.
 - If a remark cannot be resolved without unsupported matter, leave the claim unchanged and report the remark under "unresolved" with a reason.
 

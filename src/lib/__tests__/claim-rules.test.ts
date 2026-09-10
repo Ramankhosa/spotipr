@@ -389,8 +389,11 @@ describe('terminology map and jargon handling', () => {
     expect(changes.some(c => c.code === 'TERMINOLOGY_RETAINED')).toBe(true)
   })
 
-  test('jargon blocks in an independent claim, warns in a dependent; sequence conflation and indefinite modifiers block', () => {
-    const findings = runOfficeFormLint(jargon, { rules: rulesFor('US') })
+  test('confirmed jargon blocks in an independent claim, warns in a dependent; sequence conflation and indefinite modifiers block', () => {
+    // The strategy confirms which terms are the inventor's own; without that
+    // list the shape test alone never blocks (see the nomenclature suite).
+    const context = { confirmedJargon: ['Pep-B2'] }
+    const findings = runOfficeFormLint(jargon, { rules: rulesFor('US'), context })
     expect(findings.find(f => f.code === 'SOURCE_JARGON' && f.claimNumber === 1)?.severity).toBe('block')
     expect(findings.find(f => f.code === 'SOURCE_JARGON' && f.claimNumber === 2)?.severity).toBe('warn')
     expect(findings.find(f => f.code === 'SEQUENCE_CONFLATION')?.severity).toBe('block')
@@ -404,6 +407,93 @@ describe('terminology map and jargon handling', () => {
     expect(tautology?.message).toContain('to form the composition')
     const clean = [claim(1, 'A composition comprising a peptide and a carrier, wherein the peptide is bonded to the carrier.')]
     expect(codes(runOfficeFormLint(clean, { rules: rulesFor('US') }))).not.toContain('TAUTOLOGY')
+  })
+})
+
+describe('experimental parameters and nomenclature', () => {
+  const apoe = [
+    claim(1, 'A targeted lipid nanoparticle composition comprising: (i) a lipid nanoparticle having a PEG-lipid conjugated to a synthetic transferrin receptor 1-binding peptide; and (ii) mRNA encoding an adenine base editor ABE8e.'),
+    claim(2, 'The targeted lipid nanoparticle composition as claimed in claim 1, wherein the peptide selectively binds transferrin receptor 1 on brain endothelial cells.'),
+    claim(3, 'The targeted lipid nanoparticle composition as claimed in claim 1, wherein, upon intravenous injection at 1.5 mg/kg in a group of eight transgenic APOE4 mice, the composition has, at 14 days after injection, a biodistribution of 14.8% of an injected dose in brain tissue.'),
+    claim(4, 'The targeted lipid nanoparticle composition as claimed in claim 3, wherein the composition provides less than 0.1% off-target editing at five sites identified by Cas-OFFinder as top off-target sites.'),
+  ]
+
+  test('experimental protocol in a composition claim blocks, naming what it found', () => {
+    const findings = runOfficeFormLint(apoe, { rules: rulesFor('IN') })
+    const three = findings.find(f => f.code === 'EXPERIMENTAL_PARAMETER' && f.claimNumber === 3)
+    expect(three?.severity).toBe('block')
+    expect(three?.message).toContain('a test cohort')
+    expect(three?.message).toContain('a measurement timepoint')
+    expect(three?.message).toContain('an administration protocol')
+    expect(findings.find(f => f.code === 'EXPERIMENTAL_PARAMETER' && f.claimNumber === 4)?.message).toContain('a named measurement tool')
+    // Claims that state only structure are untouched.
+    expect(findings.filter(f => f.code === 'EXPERIMENTAL_PARAMETER').map(f => f.claimNumber)).toEqual([3, 4])
+  })
+
+  test('a method claim may recite its own protocol', () => {
+    const method = [claim(1, 'A method of assaying a composition, comprising injecting the composition at 1.5 mg/kg into a group of eight transgenic mice and measuring biodistribution at 14 days after injection.')]
+    expect(codes(runOfficeFormLint(method, { rules: rulesFor('US') }))).not.toContain('EXPERIMENTAL_PARAMETER')
+  })
+
+  test('scientific nomenclature is not treated as inventor jargon', () => {
+    // Without a confirmed list, shape-based hits never block.
+    const open = runOfficeFormLint(apoe, { rules: rulesFor('IN') })
+    expect(open.filter(f => f.code === 'SOURCE_JARGON' && f.severity === 'block')).toHaveLength(0)
+    // With one, only the inventor's own coinage is reported at all.
+    const confirmed = runOfficeFormLint(apoe, { rules: rulesFor('IN'), context: { confirmedJargon: ['Pep-B2'] } })
+    expect(codes(confirmed)).not.toContain('SOURCE_JARGON')
+    const coined = [claim(1, 'A composition comprising a Pep-B2 peptide and a carrier.')]
+    const hit = runOfficeFormLint(coined, { rules: rulesFor('IN'), context: { confirmedJargon: ['Pep-B2'] } }).find(f => f.code === 'SOURCE_JARGON')
+    expect(hit?.severity).toBe('block')
+  })
+
+  test('a properly introduced element is not reported as missing antecedent basis', () => {
+    const findings = runOfficeFormLint(apoe, { rules: rulesFor('IN') })
+    expect(findings.filter(f => f.code === 'ANTECEDENT_BASIS' && f.claimNumber === 2)).toHaveLength(0)
+    // A genuinely undefined element still is.
+    const missing = [claim(1, 'A dryer comprising a chamber.'), claim(2, 'The dryer as claimed in claim 1, wherein the chimney throat is narrowed.')]
+    expect(codes(runOfficeFormLint(missing, { rules: rulesFor('IN') }))).toContain('ANTECEDENT_BASIS')
+  })
+})
+
+describe('the shared persistence pipeline', () => {
+  // Guards the composition that prepareClaimSet runs for every claim write.
+  // Before it existed, an amendment applied from either refinement stage kept
+  // whatever the model produced and left the stored report describing the
+  // previous claims, so the office-form panel silently disappeared.
+  test('an amendment with a numbering gap and a forbidden dependency is repaired, and the report matches the result', () => {
+    const amended = [
+      claim(1, 'A dryer comprising a chamber and a flap.'),
+      claim(3, 'The dryer of claim 1, wherein the flap is hinged.'),
+      claim(5, 'The dryer of claims 1 and 3, wherein the chamber is insulated.'),
+    ]
+    const rules = rulesFor('US')
+    const { claims: normalised, changes } = normaliseClaimSet(amended, rules)
+    const findings = runOfficeFormLint(normalised, { rules })
+    const report = buildClaimFormReport({ claims: normalised, rules, findings, normalisation: changes })
+
+    expect(normalised.map(c => c.number)).toEqual([1, 2, 3])
+    expect(normalised[2].text).toBe('The dryer of claims 1 or 2, wherein the chamber is insulated.')
+    expect(summariseNormalisation(changes)).toContain('renumbered')
+    // The stored report must describe the claims that were actually written,
+    // or the panel hides itself.
+    expect(claimFormReportMatches(report, normalised)).toBe(true)
+    expect(claimFormReportMatches(report, amended)).toBe(false)
+    expect(report.normalisation.length).toBeGreaterThan(0)
+  })
+
+  test('a report-only refresh leaves approved text untouched', () => {
+    // The freeze path passes normalise:false for exactly this reason.
+    const approved = [
+      claim(1, 'A dryer comprising a chamber and a flap.'),
+      claim(3, 'The device of claim 1, wherein the flap is hinged.'),
+    ]
+    const rules = rulesFor('US')
+    const findings = runOfficeFormLint(approved, { rules })
+    const report = buildClaimFormReport({ claims: approved, rules, findings, normalisation: [] })
+    expect(claimFormReportMatches(report, approved)).toBe(true)
+    expect(codes(findings)).toContain('NUMBERING_GAP')
+    expect(codes(findings)).toContain('PREAMBLE_NOUN_MISMATCH')
   })
 })
 

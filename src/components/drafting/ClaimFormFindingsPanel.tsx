@@ -75,6 +75,7 @@ const CODE_LABELS: Record<string, string> = {
   DUPLICATE_CLAIM: 'Duplicate',
   SEQUENCE_CONFLATION: 'Sequence',
   TAUTOLOGY: 'Tautology',
+  EXPERIMENTAL_PARAMETER: 'Experimental parameter',
   PICTURE_CLAIM_1: 'Claim 1 scope',
 }
 

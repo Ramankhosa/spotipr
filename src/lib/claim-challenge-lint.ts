@@ -49,6 +49,14 @@ export type ChallengeLintFinding = {
 
 export type ClaimChallengeLintContext = {
   components?: unknown
+  /**
+   * Inventor terms the claim strategy confirmed as coined. When supplied, an
+   * alphanumeric token is reported as a code name ONLY if it matches one of
+   * these. Without it the raw shape test fires on ordinary scientific
+   * nomenclature (ABE8e, APOE4, DLin-MC3-DMA are all art-recognised), which
+   * is noise at best and, once the finding blocks, actively harmful.
+   */
+  confirmedJargon?: string[]
 }
 
 /**
@@ -56,23 +64,20 @@ export type ClaimChallengeLintContext = {
  * constant so the prompt text is unit-testable and reviewable in one place
  * rather than buried in a template literal inside the route.
  */
-export const CLAIM_CHALLENGE_CHECKLIST = `MANDATORY CHECKLIST - evaluate EVERY item against EVERY claim, and items 14 and 15 against the claim set as a whole:
-1. DEFINITENESS - subjective, relative, or qualitative modifiers with no concrete structural, compositional, or numeric anchor; terms of degree with no stated standard; a trademark used to identify a material or component. A word is only acceptable if the claim itself defines it by a measurable threshold.
-2. PICTURE_CLAIM - Claim 1 reciting a specific embodiment, named species, trade-specific grade, or the claim set's only numeric range, where the disclosure supports a broader class. A competitor must not escape Claim 1 by substituting a disclosed alternative.
-3. JARGON - internal project names, marketing monikers, arbitrary acronyms, and capitalised functional labels that carry no recognised meaning in the art.
-4. CATEGORY_MIX - active method steps, intended uses, or result statements inside a static claim (apparatus, system, product, composition), which draw no patentable weight; a single claim that mixes statutory classes, such as a system claim that requires a user to perform a step.
-5. SEQUENCE_CONFLATION - biological sequences fused with chemical modifications in a single string, or any conflation of distinct structural, chemical, or operational domains that should be recited as separate limitations plus an explicit linkage.
-6. ANTECEDENT_BASIS - "the"/"said" references with no prior introduction in the claim chain, elements introduced twice, and a singular introduced but later referenced as a plural or the reverse.
-7. TERMINOLOGY_DRIFT - the same element named differently across claims, or a narrow term introduced before the broad term it should have followed.
-8. UNSUPPORTED_MATTER - limitations, values, effects, or use cases with no support in the source context supplied above.
-9. CLAIM_FORM - a claim that is not one sentence with a preamble, a transition, and a body; an unintended or inconsistent transition ("consisting of" closing a claim that should stay open); omnibus references to the description or drawings ("as described herein", "as shown in the figures"); "and/or" where "at least one of" is meant; alternatives not recited in "selected from the group consisting of" form; product-by-process wording in a product claim.
-10. DEPENDENCY - a dependent claim that does not further limit the claim it references, that references a later or non-existent claim, that contradicts or broadens its parent, or that depends from a claim of another statutory category without the proper form; a multiple dependent claim that depends on another multiple dependent claim.
-11. FUNCTIONAL_CLAIMING - "means for"/"step for", or a generic placeholder ("module", "unit", "mechanism") plus a function, at the point of novelty, invoking means-plus-function treatment without corresponding structure in the disclosure; a purely functional recitation of the inventive feature that claims the result rather than the structure achieving it.
-12. OPTIONAL_LANGUAGE - "optionally", "preferably", "such as", "for example", "e.g.", "may", "can", "if desired" inside a claim; each leaves the scope of the limitation undecided.
-13. RANGES - numeric limitations without units; open-ended ranges with no support at the open end; "about" or "approximately" with no tolerance; a range nested inside another range in one claim; a numeric limitation in Claim 1 that a dependent claim should carry.
-14. CLAIM_SET_STRATEGY - no independent claim for a statutory category the disclosure supports (apparatus, method, system, composition, computer-readable medium as applicable); a flat dependent set in which every claim narrows Claim 1 the same way instead of a ladder of intermediate generalisations from broadest to narrowest; no fallback position for the feature most likely to be attacked; the broadest claim not first.
-15. REDUNDANCY - duplicate or near-duplicate claims, dependents that merely restate their parent, and limitations repeated across claims.
-16. NEGATIVE_LIMITATION - "not", "free of", "without", "excluding", "devoid of" where the disclosure gives no basis for the exclusion.`
+export const CLAIM_CHALLENGE_CHECKLIST = `MANDATORY CHECKLIST - evaluate EVERY item against EVERY claim, and items 11 and 12 against the claim set as a whole.
+Items 1-8 are your own judgement and are the reason you were called. Items 9-12 are already screened deterministically and reported to you under AUTOMATED FINDINGS: verify them against the claim text rather than restating them, and raise a remark only where the screen missed something or got it wrong.
+1. PICTURE_CLAIM - Claim 1 reciting a named species, a trade-specific grade, or a specific embodiment where the disclosure supports a broader class. Judge this against the disclosure, not against the claim alone: a competitor must not escape Claim 1 by substituting an alternative the source itself discloses. Where the source supports only the species, say so and raise nothing.
+2. UNSUPPORTED_MATTER - limitations, effects, mechanisms, use cases, or relationships with no support in the source context supplied above. Numeric values are screened automatically; your job is the non-numeric matter, especially a relationship between two elements that the source never connects.
+3. TERMINOLOGY_DRIFT - the same element named differently across claims, or a narrow term introduced before the broad term it should have followed. Nothing screens this; it is yours alone.
+4. DEPENDENCY - a dependent claim that does not further limit the claim it references, that contradicts or broadens its parent, or that depends from a claim of another statutory category without the proper form. Malformed and forbidden dependency FORM is screened; this item is about whether the dependency makes sense.
+5. RANGES - numeric limitations without units; an open-ended range with no support at the open end; a range nested inside another range in one claim.
+6. REDUNDANCY - near-duplicate claims and dependents that merely restate their parent. Word-for-word duplicates are screened; near-duplicates are yours.
+7. TRANSITION - an unintended or inconsistent transition: "consisting of" closing a claim that should stay open, "comprising" where the source requires a closed composition, or a transition inconsistent with the office's preferred wording.
+8. CLAIM_SET_STRATEGY - no independent claim for a statutory category the disclosure and the office both support; a flat dependent set that narrows Claim 1 the same way repeatedly instead of a ladder from broadest to narrowest; no fallback position for the feature most likely to be attacked; the broadest claim not first. Where a CLAIM STRATEGY block is supplied above, judge the set against its category plan.
+9. DEFINITENESS, JARGON - screened: subjective or relative modifiers, trademarks, internal project names and coined labels. Verify and add only what the screen missed.
+10. CLAIM_FORM, OPTIONAL_LANGUAGE, SEQUENCE_CONFLATION, NEGATIVE_LIMITATION - screened: single-sentence form, omnibus references, "and/or", optional wording, sequences fused with chemical modifications, and unsupported exclusions. Verify and add only what the screen missed.
+11. CATEGORY_MIX, FUNCTIONAL_CLAIMING - screened for the mechanical cases. Yours are the semantic ones: a claim that mixes statutory classes, and a purely functional recitation of the inventive feature that claims the result rather than the structure achieving it.
+12. ANTECEDENT_BASIS - screened across the whole claim chain. Raise one only where you can point to the specific term and the screen did not.`
 
 /** Subjective modifiers that render a limitation indefinite absent a numeric anchor. */
 const INDEFINITE_MODIFIERS = [
@@ -255,6 +260,11 @@ export function findSourceJargon(
     .map((component: any) => (typeof component?.name === 'string' ? component.name.trim() : ''))
     .filter(name => name.length > 2 && looksCoined(name))
 
+  const confirmedList = (context.confirmedJargon || [])
+    .map(term => String(term || '').trim().toLowerCase())
+    .filter(term => term.length > 2)
+  const confirmed = confirmedList.length ? confirmedList : null
+
   for (const claim of claims) {
     const text = String(claim?.text || '')
     if (!text) continue
@@ -273,6 +283,9 @@ export function findSourceJargon(
       if (reported.has(key)) continue
       // A bare unit quantity ("5 mm", "20 mg") is not a code name.
       if (/^\d+$/.test(token)) continue
+      // With a confirmed list, shape alone is not enough: gene alleles, enzyme
+      // variants and lipid names all look like code names and are not.
+      if (confirmed && !confirmed.some(term => term === key || key.includes(term) || term.includes(key))) continue
       reported.add(key)
       findings.push({
         code: 'SOURCE_JARGON',

@@ -128,6 +128,7 @@ import { computeDraftFidelityReport } from '@/lib/draft-fidelity-report';
 import { buildNoveltyFindingsBlock, buildNoveltyGuidanceBlock } from '@/lib/novelty-drafting-handoff';
 import {
   buildClaimFormReport,
+  canonicalClaimRuleCode,
   normaliseClaimSet,
   renderJurisdictionClaimRulesBlock,
   resolveClaimRuleProfile,
@@ -4998,48 +4999,118 @@ function resolveGeneratedClaimLimit(
  * stored report always describes the claims on screen. No LLM, no normaliser
  * rewrites (an attorney's edits are not second-guessed); only findings.
  */
-async function recomputeClaimFormReport(
-  session: any,
-  normalized: Record<string, any>,
+/**
+ * The office-form lint context for a session, assembled once.
+ *
+ * `sourceText` is lint input only and must never reach a prompt: it is the whole
+ * disclosure concatenated, and UNSUPPORTED_NUMBER silently no-ops without it.
+ * `confirmedJargon` is read straight off the stored strategy rather than through
+ * the fingerprint, because the inventor's own coinages do not change when the
+ * office or the scope does, and a slightly stale list still grades SOURCE_JARGON
+ * far better than shape alone.
+ */
+function buildOfficeFormContext(session: any, normalized: Record<string, any>) {
+  const idea = session?.ideaRecord || {}
+  const terminology = (normalized?.claimStrategy?.strategy?.terminology || []) as Array<{ inventorTerm?: string }>
+  return {
+    components: normalized.components || idea.components,
+    inventionType: normalized.inventionType,
+    patentTypePrimary: normalized.patentTypePrimary,
+    confirmedJargon: terminology
+      .map(entry => String(entry?.inventorTerm || '').trim())
+      .filter(term => term.length > 2),
+    sourceText: [
+      idea.rawInput, idea.title, normalized.problem, normalized.objectives, normalized.logic,
+      normalized.bestMethod, normalized.abstract, normalized.coreInventiveConcept,
+      JSON.stringify(normalized.claimableFeatures || ''), JSON.stringify(normalized.fallbackLimitations || ''),
+      JSON.stringify(normalized.sourceFactLedger || ''), JSON.stringify(normalized.supportDataSources || ''),
+      JSON.stringify(normalized.components || idea.components || ''),
+    ].filter(Boolean).join(' '),
+  }
+}
+
+export type PreparedClaimSet = {
   claims: any[]
-): Promise<Record<string, any> | null> {
+  report: Record<string, any> | null
+  /** Deterministic changes made, for the version note. Empty when normalise is false. */
+  normalisation: Array<{ claimNumber: number; code: string; before: string; after: string }>
+  note: string
+}
+
+/**
+ * The single path every claim write goes through.
+ *
+ * Generation used to be the only caller that normalised and re-linted, and only
+ * save_claims recomputed the report. So an LLM amendment applied from either
+ * refinement stage could reintroduce numbering gaps, the wrong dependent-claim
+ * phrasing or a multiple-dependent chain the office forbids, with nothing to
+ * catch it — and the stored report then described the previous claims, so its
+ * signature stopped matching and the office-form panel vanished from the UI at
+ * the moment the attorney most needed it.
+ *
+ * `normalise` is false for freezing: that path must not rewrite text an attorney
+ * has just approved, but it still needs a fresh report because it can re-derive
+ * the structured set from the HTML.
+ *
+ * The terminology map is deliberately NOT re-applied here. It ran at generation;
+ * running it again could append a second retention dependent claim.
+ *
+ * Never throws: a failure returns the claims untouched and a null report, which
+ * hides the panel rather than blocking the write.
+ */
+async function prepareClaimSet(params: {
+  session: any
+  normalized: Record<string, any>
+  claims: any[]
+  normalise: boolean
+}): Promise<PreparedClaimSet> {
+  const { session, normalized, claims, normalise } = params
+  const structured = Array.isArray(claims) ? claims.filter(claim => claim && String(claim?.text || '').trim()) : []
+  const untouched: PreparedClaimSet = { claims: structured, report: null, normalisation: [], note: '' }
+  if (!structured.length) return untouched
+
   try {
-    const structured = Array.isArray(claims) ? claims.filter(claim => claim && String(claim?.text || '').trim()) : []
-    if (!structured.length) return null
     const jurisdiction = String(normalized.claimsJurisdiction || session?.activeJurisdiction || 'US').toUpperCase()
     const [profile, rawRules] = await Promise.all([
       getCountryProfile(jurisdiction),
       getSectionRules(jurisdiction, 'claims'),
     ])
     const { rules } = resolveClaimRuleProfile(jurisdiction, rawRules, profile?.profileData?.meta)
-    const idea = session?.ideaRecord || {}
-    const findings = runOfficeFormLint(structured, {
-      rules,
-      context: {
-        components: normalized.components || idea.components,
-        inventionType: normalized.inventionType,
-        patentTypePrimary: normalized.patentTypePrimary,
-        sourceText: [
-          idea.rawInput, idea.title, normalized.problem, normalized.objectives, normalized.logic,
-          normalized.bestMethod, normalized.abstract, normalized.coreInventiveConcept,
-          JSON.stringify(normalized.claimableFeatures || ''), JSON.stringify(normalized.fallbackLimitations || ''),
-          JSON.stringify(normalized.sourceFactLedger || ''), JSON.stringify(normalized.supportDataSources || ''),
-          JSON.stringify(normalized.components || idea.components || ''),
-        ].filter(Boolean).join(' '),
-      },
-    })
+
+    let nextClaims = structured
+    let normalisation: PreparedClaimSet['normalisation'] = []
+    if (normalise) {
+      const pass = normaliseClaimSet(structured, rules)
+      nextClaims = pass.claims
+      normalisation = pass.changes
+    }
+
+    const findings = runOfficeFormLint(nextClaims, { rules, context: buildOfficeFormContext(session, normalized) })
     const previous = normalized.claimFormReport && typeof normalized.claimFormReport === 'object' ? normalized.claimFormReport : null
-    return buildClaimFormReport({
-      claims: structured,
+    const report = buildClaimFormReport({
+      claims: nextClaims,
       rules,
       findings,
-      normalisation: [],
+      normalisation,
+      // The repair record belongs to the generation that produced it; a later
+      // amendment neither re-runs nor invalidates it.
       repair: previous?.repair ?? null,
     })
+    return { claims: nextClaims, report, normalisation, note: summariseNormalisation(normalisation) }
   } catch (error) {
-    console.warn('[recomputeClaimFormReport] skipped:', error instanceof Error ? error.message : error)
-    return null
+    console.warn('[prepareClaimSet] skipped:', error instanceof Error ? error.message : error)
+    return untouched
   }
+}
+
+/** Report-only refresh, for paths that must not rewrite claim text. */
+async function recomputeClaimFormReport(
+  session: any,
+  normalized: Record<string, any>,
+  claims: any[]
+): Promise<Record<string, any> | null> {
+  const prepared = await prepareClaimSet({ session, normalized, claims, normalise: false })
+  return prepared.report
 }
 
 function applyGeneratedClaimLimit(params: {
@@ -5660,6 +5731,11 @@ async function handleGenerateClaims(
     onProgress?.({ type: 'stage', key: 'checking', label: `Checking claim form for ${officeRules.office}` })
     const officeFormContext = {
       components: context.components,
+      // The strategy decides what counts as the inventor's coinage; shape alone
+      // cannot tell ABE8e (a published base editor) from Pep-B2 (an internal label).
+      confirmedJargon: (claimStrategy?.terminology || [])
+        .map(entry => String(entry?.inventorTerm || '').trim())
+        .filter(term => term.length > 2),
       inventionType: context.inventionType,
       patentTypePrimary,
       sourceText: [
@@ -6093,10 +6169,18 @@ async function handleFreezeClaims(user: any, patentId: string, data: any, reques
     }
   }
 
+  // Report only: freezing must not rewrite text the attorney has just approved,
+  // but the structured set may have been re-derived from the HTML above, so the
+  // stored report would otherwise describe claims that no longer exist.
+  const frozenReport = Array.isArray(effectiveStructured) && effectiveStructured.length
+    ? await recomputeClaimFormReport(session, existingNormalized, effectiveStructured)
+    : null
+
   const updatedNormalized: Record<string, any> = {
     ...existingNormalized,
     claims: claimsContent,
     claimsStructured: effectiveStructured,
+    ...(frozenReport ? { claimFormReport: frozenReport } : {}),
     claimsJurisdiction: jurisdiction || existingNormalized.claimsJurisdiction || session.activeJurisdiction || 'US',
     // Usually identical to the working set (then nothing is recorded); when
     // the caller supplied different claims this is the set drafting will use.
@@ -6676,16 +6760,22 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
     return `Claim ${r.number}: ${reason}${refs ? ` [refs: ${refs}]` : ''}`
   }).join('\n')
 
-  const mergedHtml = structuredClaimsToHtml(merged)
+  // Same deterministic pass the generation stage runs: an amendment drafted by a
+  // model can reintroduce numbering gaps or office-invalid dependency form.
+  const prepared = await prepareClaimSet({ session, normalized, claims: merged, normalise: true })
+  const finalClaims = prepared.claims
+  const mergedHtml = structuredClaimsToHtml(finalClaims)
   const now = new Date().toISOString()
   const mode: 'AUTO' | 'MANUAL' | 'HYBRID' = preview.mode || (preview.usedManualPriorArt ? (preview.autoRunId ? 'HYBRID' : 'MANUAL') : 'AUTO')
+  const versionNote = [changeNotes, prepared.note].filter(Boolean).join('\n')
 
   const updatedNormalized: Record<string, any> = {
     ...normalized,
-    claimsStructured: merged,
+    claimsStructured: finalClaims,
     claims: mergedHtml,
     claimsLastSavedAt: now,
-    ...captureClaimsVersion(normalized, { source: 'refinement_apply', html: mergedHtml, structured: merged, note: changeNotes, now }),
+    ...(prepared.report ? { claimFormReport: prepared.report } : {}),
+    ...captureClaimsVersion(normalized, { source: 'refinement_apply', html: mergedHtml, structured: finalClaims, note: versionNote, now }),
     claimsRefinementNotes: changeNotes,
     claimsRefinementSource: {
       autoRunId: preview.autoRunId || null,
@@ -6864,7 +6954,26 @@ async function handleChallengeClaims(user: any, patentId: string, data: any, req
     buildChallengeContextBlocks(session, normalized)
   const sourceFidelityMode = resolveSourceFidelityMode(normalized)
 
-  const lintFindings = runClaimChallengeLint(structured, { components })
+  // One detection layer. runClaimChallengeLint calls the same fourteen find*
+  // functions with no jurisdiction and no confirmed-jargon list, so it objected
+  // to standard nomenclature and applied the wrong office's dependency rules.
+  const challengeJurisdiction = canonicalClaimRuleCode(
+    String(normalized.claimsJurisdiction || session.activeJurisdiction || 'US')
+  )
+  const [challengeProfile, challengeRawRules] = await Promise.all([
+    getCountryProfile(challengeJurisdiction),
+    getSectionRules(challengeJurisdiction, 'claims'),
+  ])
+  const { rules: challengeRules } = resolveClaimRuleProfile(challengeJurisdiction, challengeRawRules, challengeProfile?.profileData?.meta)
+  const challengeRulesBlock = renderJurisdictionClaimRulesBlock(challengeRules)
+  const challengeStrategyDigest = buildClaimStrategyDigest(
+    readyClaimStrategy(normalized, computeClaimStrategyFingerprint(normalized, session))
+      || (normalized?.claimStrategy?.strategy ?? null)
+  )
+  const lintFindings = runOfficeFormLint(structured, {
+    rules: challengeRules,
+    context: buildOfficeFormContext(session, normalized),
+  })
   const focus = typeof focusText === 'string' ? focusText.trim().slice(0, MAX_CHALLENGE_FOCUS_CHARS) : ''
   const claimsFingerprint = computeClaimsFingerprint(structured)
   const claimNumbers = structured
@@ -6937,7 +7046,8 @@ async function handleChallengeClaims(user: any, patentId: string, data: any, req
     lintFindings,
     focusText: focus,
     sourceFidelityMode,
-    jurisdiction: String(session.activeJurisdiction || normalized.claimsJurisdiction || 'US').toUpperCase(),
+    rulesBlock: challengeRulesBlock,
+    strategyDigest: challengeStrategyDigest,
   }
   // Measure the prompt without the block, then fit as many references as the
   // budget allows; a reference dropped here is reported, not silently lost.
@@ -7003,7 +7113,11 @@ async function handleChallengeClaims(user: any, patentId: string, data: any, req
 
   const remarks = expandChallengeRemarks(
     parsed.data,
-    lintFindings,
+    // Only a blocking finding becomes a remark card: it is a settled defect with
+    // a statutory basis and needs an amendment path. Warn and info findings are
+    // already shown, with the same basis, in the office-form panel, so seeding
+    // them here would duplicate that list card for card.
+    lintFindings.filter(finding => finding.severity === 'block'),
     claimNumbers,
     usedReferences.map(reference => reference.publicationNumber),
   )
@@ -7031,12 +7145,15 @@ async function handleChallengeClaims(user: any, patentId: string, data: any, req
   if (reloaded.error) return reloaded.error
 
   const challenge = {
-    version: 1,
+    // v2: findings carry office severity and a statutory basis.
+    version: 2,
     status: 'OPEN' as const,
     generatedAt: new Date().toISOString(),
     claimsFingerprint,
     focusText: focus || undefined,
-    lintFindings,
+    // v2: office-form findings (severity + statutory basis). v1 rows carried the
+    // jurisdiction-blind shape under `lintFindings`; the panel reads either.
+    officeFormFindings: lintFindings,
     remarks,
     useArtReferences: wantReferences,
     // Descriptors only: the panel needs provenance, not the claims text.
@@ -7190,6 +7307,21 @@ async function handleChallengeRefinePreview(user: any, patentId: string, data: a
   const sourceFidelityMode = resolveSourceFidelityMode(normalized)
   const nextClaimNumber = structured.reduce((max: number, claim: any) => Math.max(max, Number(claim?.number) || 0), 0) + 1
 
+  const refineJurisdiction = canonicalClaimRuleCode(
+    String(normalized.claimsJurisdiction || session.activeJurisdiction || 'US')
+  )
+  const [refineProfile, refineRawRules] = await Promise.all([
+    getCountryProfile(refineJurisdiction),
+    getSectionRules(refineJurisdiction, 'claims'),
+  ])
+  const refineRulesBlock = renderJurisdictionClaimRulesBlock(
+    resolveClaimRuleProfile(refineJurisdiction, refineRawRules, refineProfile?.profileData?.meta).rules
+  )
+  const refineStrategyDigest = buildClaimStrategyDigest(
+    readyClaimStrategy(normalized, computeClaimStrategyFingerprint(normalized, session))
+      || (normalized?.claimStrategy?.strategy ?? null)
+  )
+
   const prompt = buildChallengeRefinePrompt({
     ideaBasics,
     componentList,
@@ -7201,6 +7333,11 @@ async function handleChallengeRefinePreview(user: any, patentId: string, data: a
     // exists to cure defects that verbatim inventor wording introduced.
     terminologyTranslationBlock: buildInventorTerminologyTranslationBlock(sourceFidelityMode, components),
     nextClaimNumber,
+    // This call rewrites claims, so it needs the office rules more than the
+    // challenge prompt does: without them it can amend into a form the office
+    // rejects, such as a multiple-dependent chain in the US.
+    rulesBlock: refineRulesBlock,
+    strategyDigest: refineStrategyDigest,
   })
 
   const request = { headers: requestHeaders || {} }
@@ -7292,7 +7429,7 @@ async function handleChallengeRefineApply(user: any, patentId: string, data: any
   const { sessionId, acceptedClaimNumbers, acceptAll, acceptedAddedClaimNumbers } = data
   const loaded = await loadChallengeSession(user, patentId, sessionId)
   if (loaded.error) return loaded.error
-  const { normalized } = loaded as { session: any; normalized: Record<string, any> }
+  const { session, normalized } = loaded as { session: any; normalized: Record<string, any> }
 
   const preview = normalized.claimsChallengeRefinePreview
   if (!preview || !Array.isArray(preview.refinedClaims) || preview.refinedClaims.length === 0) {
@@ -7331,15 +7468,21 @@ async function handleChallengeRefineApply(user: any, patentId: string, data: any
     preview.addedClaims || [],
     result.addedClaimNumbers,
   )
-  const mergedHtml = structuredClaimsToHtml(result.merged)
+  // As with the prior-art refinement: normalise, re-lint and rebuild the report,
+  // so an accepted amendment cannot leave the set office-invalid or the panel stale.
+  const prepared = await prepareClaimSet({ session, normalized, claims: result.merged, normalise: true })
+  const finalClaims = prepared.claims
+  const mergedHtml = structuredClaimsToHtml(finalClaims)
   const now = new Date().toISOString()
+  const versionNote = [notes, prepared.note].filter(Boolean).join('\n')
 
   const updatedNormalized: Record<string, any> = {
     ...normalized,
-    claimsStructured: result.merged,
+    claimsStructured: finalClaims,
     claims: mergedHtml,
     claimsLastSavedAt: now,
-    ...captureClaimsVersion(normalized, { source: 'challenge_apply', html: mergedHtml, structured: result.merged, note: notes, now }),
+    ...(prepared.report ? { claimFormReport: prepared.report } : {}),
+    ...captureClaimsVersion(normalized, { source: 'challenge_apply', html: mergedHtml, structured: finalClaims, note: versionNote, now }),
     claimsChallenge: { ...(normalized.claimsChallenge || {}), status: 'APPLIED' },
     claimsChallengeResolution: {
       appliedAt: now,
@@ -7358,7 +7501,7 @@ async function handleChallengeRefineApply(user: any, patentId: string, data: any
   // leave that stage working on the pre-challenge claims and its refined text
   // would later be merged onto wording it was never drafted against.
   updatedNormalized.claimsProvisional = mergedHtml
-  updatedNormalized.claimsStructuredProvisional = result.merged
+  updatedNormalized.claimsStructuredProvisional = finalClaims
 
   await prisma.ideaRecord.update({
     where: { sessionId },

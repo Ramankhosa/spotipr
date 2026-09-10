@@ -177,6 +177,8 @@ function recipeFor(finding: OfficeFormFinding, rules: ClaimRuleProfile): string 
       return 'Delete the subjective modifier, or replace it with the concrete numeric or structural limitation the source states; where the source states none, delete it.'
     case 'SEQUENCE_CONFLATION':
       return 'Recite the biological sequence and the chemical conjugate as separate limitations joined by the stated linkage ("a peptide having the sequence X, conjugated to polyethylene glycol"), never as one hyphenated string.'
+    case 'EXPERIMENTAL_PARAMETER':
+      return 'Remove the experimental protocol from the claim: delete the cohort, the timepoint, the dose regimen and any named measurement tool. Keep only a measurable property of the claimed thing, stated as a property ("wherein the composition has a brain-tissue biodistribution of at least X% of an injected dose"), and only where the source states it as a property rather than as a single experimental reading. If nothing survives as a property, delete the claim\'s limitation entirely and let the parent stand.'
     case 'TAUTOLOGY':
       return 'Delete the clause that merely restates the preamble, or replace it with the actual structural relationship (which element contains, is bonded to, or is coupled to which).'
     default:
