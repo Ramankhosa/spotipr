@@ -73,6 +73,8 @@ export type RepairClaimFormParams = {
   jurisdiction: string
   patentId?: string
   strategyDigest?: string
+  /** Total claims this draft may hold. Null lifts the cap. */
+  claimBudget?: number | null
   onProgress?: (event: Record<string, any>) => void
 }
 
@@ -209,8 +211,16 @@ export function buildClaimFormRepairPrompt(params: {
   context: RepairClaimFormContext
   fidelityMode: SourceFidelityMode
   strategyDigest?: string
+  claimBudget?: number | null
 }): string {
-  const { claims, findings, rules, rulesBlock, context, fidelityMode, strategyDigest } = params
+  const { claims, findings, rules, rulesBlock, context, fidelityMode, strategyDigest, claimBudget } = params
+  // Repair is one of the two stages that can push a set past the budget the
+  // attorney asked for (terminology retention is the other). Tell it the ceiling
+  // rather than letting the post-repair truncation drop a claim it just cured.
+  const budget = Number(claimBudget)
+  const budgetLine = Number.isInteger(budget) && budget > 0
+    ? `\n- The set must not exceed ${budget} claims in total; it currently has ${claims.length}. Cure a defect in place wherever possible. Add a claim only when the cure genuinely requires one, and if curing every defect would exceed the budget, cure the blocking defects first and report the rest under "unresolved".`
+    : ''
   const supportBlock = buildSupportDataSourcePromptBlock(context, 'claims', 'SUPPORT DATA SOURCES FOR CLAIM AMENDMENT SUPPORT')
   const ledgerBlock = renderSourceFactLedgerEntriesBlock(
     dedupeSourceFactLedgerEntries(
@@ -253,7 +263,7 @@ Guidelines:
 - For each existing claim: keep_as_is unless a listed defect touches it. When it does, make the smallest edit that cures the defect.
 - Converting a claim's statutory form (use → method; treatment method → the office's medical form; program → the office's program or medium form; surplus independent → dependent) changes its form, not its substance: carry every source-stated element across.
 - Never add, drop, or alter a technical fact. Any narrowing must use limitations already present in the source context above.
-- Where a cure needs a NEW dependent claim (to retain an inventor's term, or to hold an optional feature removed from its parent), emit it under "added_claims", numbered sequentially from ${claims.reduce((max, claim) => Math.max(max, Number(claim.number) || 0), 0) + 1}, type "dependent", each with a dependsOn referring to an existing claim.
+- Where a cure needs a NEW dependent claim (to retain an inventor's term, or to hold an optional feature removed from its parent), emit it under "added_claims", numbered sequentially from ${claims.reduce((max, claim) => Math.max(max, Number(claim.number) || 0), 0) + 1}, type "dependent", each with a dependsOn referring to an existing claim.${budgetLine}
 - Maintain the existing numbering of current claims. Never renumber or delete a claim; to remove a claim's independent status, rewrite it as a dependent claim.
 - Maintain antecedent basis after every edit and keep one canonical term per element across the set.
 - Cite the defect ids you cured in remark_refs for each claim you touch.
@@ -355,6 +365,7 @@ export async function repairClaimFormIfNeeded(params: RepairClaimFormParams): Pr
     context: params.context,
     fidelityMode,
     strategyDigest: params.strategyDigest,
+    claimBudget: params.claimBudget,
   })
 
   const attempted = (refusalReason: string): RepairClaimFormResult => ({

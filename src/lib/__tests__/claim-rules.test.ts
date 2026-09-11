@@ -521,3 +521,60 @@ describe('claim category inference', () => {
     expect(inferClaimCategory('The system of claim 1, wherein the memory storing the data is volatile.')).toBe('system')
   })
 })
+
+describe('claim budget', () => {
+  // The attorney's own budget, separate from the office fee threshold. Generation
+  // truncates to it; every later path reports it instead of deleting claims.
+  function setOf(total: number): DraftClaim[] {
+    const out = [claim(1, 'A dryer comprising a chamber, a lid, and a vent coupled to the chamber.')]
+    for (let n = 2; n <= total; n++) {
+      out.push(claim(n, `The dryer of claim 1, wherein the vent defines ${n} apertures.`))
+    }
+    return out
+  }
+
+  test('reports a set that exceeds the requested budget', () => {
+    const rules = rulesFor('US')
+    const finding = runOfficeFormLint(setOf(13), { rules, context: { claimBudget: 10 } })
+      .find(f => f.code === 'CLAIM_COUNT_OVER_BUDGET')
+    expect(finding).toBeDefined()
+    expect(finding!.severity).toBe('warn')
+    expect(finding!.message).toContain('13 claims')
+    expect(finding!.message).toContain('Remove 3 claims')
+  })
+
+  test('never asks the repair model to fix it, so no claim is deleted to clear a warning', () => {
+    const finding = runOfficeFormLint(setOf(13), { rules: rulesFor('US'), context: { claimBudget: 10 } })
+      .find(f => f.code === 'CLAIM_COUNT_OVER_BUDGET')
+    expect(finding!.fix).toBe('manual')
+  })
+
+  test('stays quiet within budget, and when the attorney lifted the cap', () => {
+    const rules = rulesFor('US')
+    expect(codes(runOfficeFormLint(setOf(10), { rules, context: { claimBudget: 10 } })))
+      .not.toContain('CLAIM_COUNT_OVER_BUDGET')
+    expect(codes(runOfficeFormLint(setOf(40), { rules, context: { claimBudget: null } })))
+      .not.toContain('CLAIM_COUNT_OVER_BUDGET')
+    expect(codes(runOfficeFormLint(setOf(40), { rules })))
+      .not.toContain('CLAIM_COUNT_OVER_BUDGET')
+  })
+
+  test('is independent of the fee threshold in both directions', () => {
+    // US covers 20 claims free: 13 claims is under the threshold but over a
+    // budget of 10, and the two findings are reported separately.
+    const under = runOfficeFormLint(setOf(13), { rules: rulesFor('US'), context: { claimBudget: 10 } })
+    expect(codes(under)).toContain('CLAIM_COUNT_OVER_BUDGET')
+    expect(codes(under)).not.toContain('CLAIM_COUNT_OVER_FREE')
+
+    // India covers 10: a budget of 25 leaves the fee finding standing alone.
+    const over = runOfficeFormLint(setOf(13), { rules: rulesFor('IN'), context: { claimBudget: 25 } })
+    expect(codes(over)).toContain('CLAIM_COUNT_OVER_FREE')
+    expect(codes(over)).not.toContain('CLAIM_COUNT_OVER_BUDGET')
+  })
+
+  test('the office default budget differs by office, so a fixed 10 would be wrong', () => {
+    expect(rulesFor('IN').defaultClaimBudget).toBe(10)
+    expect(rulesFor('EP').defaultClaimBudget).toBeGreaterThan(10)
+    expect(rulesFor('US').defaultClaimBudget).toBeGreaterThan(10)
+  })
+})

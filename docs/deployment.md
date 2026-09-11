@@ -97,3 +97,31 @@ so the normal deploy applies; then, in this order:
 
 Rollback: the runtime tolerates the v1 prompt and an unregistered strategy
 stage, so reverting the code alone is safe; the two scripts are idempotent.
+
+## Claim Challenger: off by default
+
+The Claim Challenger (adversarial review of a drafted claim set, then attorney-gated
+amendment) is complete and tested but not in use. It is gated by a single constant in
+`src/lib/claim-challenge-flag.ts`, which reads `NEXT_PUBLIC_CLAIM_CHALLENGE_ENABLED`
+and is **false** unless that is set to `true`.
+
+While it is off:
+
+- `challenge_claims`, `challenge_refine_preview` and `challenge_refine_apply` return
+  503 `FEATURE_DISABLED`;
+- the Challenge button and its panel do not render in the preliminary-claims stage;
+- no claim-challenge code runs in any drafting path.
+
+Claim generation, the office-form validator, the normaliser and the auto-repair are
+unaffected; they are separate machinery.
+
+To bring it back, set `NEXT_PUBLIC_CLAIM_CHALLENGE_ENABLED=true` in `.env` and
+**rebuild**. The `NEXT_PUBLIC_` prefix is required because the same constant gates both
+the API handlers and the button, and Next.js only inlines prefixed variables into the
+client bundle, so a restart alone will not pick it up.
+
+`CLAIM_CHALLENGE_DISABLED=1` still works as a second kill switch for an environment that
+has enabled the feature and needs to stop it without a rebuild.
+
+Data written by earlier runs (`normalizedData.claimsChallenge`) is left in place and
+simply not read, so re-enabling resumes where it left off.

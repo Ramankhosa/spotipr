@@ -137,6 +137,7 @@ import {
   type ClaimRuleProfile,
 } from '@/lib/claim-rules';
 import { repairClaimFormIfNeeded } from '@/lib/claim-rules/repair';
+import { CLAIM_CHALLENGE_ENABLED } from '@/lib/claim-challenge-flag';
 import { buildClaimStrategyBlock, buildClaimStrategyDigest } from '@/lib/claim-rules/strategy';
 import { claimStrategyInFlight, computeClaimStrategyFingerprint, enqueueClaimStrategy, readyClaimStrategy, waitForClaimStrategy } from '@/lib/claim-strategy-job';
 import {
@@ -4971,7 +4972,15 @@ function resolveGeneratedClaimLimit(
   userInstructions: unknown,
   userClaimRemarks: unknown,
   rules?: ClaimRuleProfile | null
-): { limit: number; source: 'user_requested' | 'jurisdiction_default' | 'default' } {
+): { limit: number | null; source: 'user_requested' | 'jurisdiction_default' | 'default' | 'unlimited' } {
+  // The attorney can lift the cap entirely and let the draft run to whatever the
+  // disclosure supports. Only an explicit flag does this: a missing maxClaims
+  // still falls through to the office default below. The office-form report
+  // records the excess-claim fee exposure either way.
+  if (data?.claimBudgetEnforced === false) {
+    return { limit: null, source: 'unlimited' }
+  }
+
   const requested = Number(data?.maxClaims ?? data?.claimCount ?? data?.claimsCount)
   if (Number.isInteger(requested) && requested > 0 && requested <= 200) {
     return { limit: Math.min(requested, MAX_EXPLICIT_CLAIM_LIMIT), source: 'user_requested' }
@@ -5009,6 +5018,16 @@ function resolveGeneratedClaimLimit(
  * office or the scope does, and a slightly stale list still grades SOURCE_JARGON
  * far better than shape alone.
  */
+/**
+ * The claim budget the last generation resolved, or null when the attorney lifted
+ * the cap (generation stores `maxClaimsRequested: null` in that case). Read by every
+ * non-generation path so an amendment that pushes the set over budget is reported.
+ */
+function resolveStoredClaimBudget(normalized: Record<string, any>): number | null {
+  const stored = Number(normalized?.maxClaimsRequested)
+  return Number.isInteger(stored) && stored > 0 ? stored : null
+}
+
 function buildOfficeFormContext(session: any, normalized: Record<string, any>) {
   const idea = session?.ideaRecord || {}
   const terminology = (normalized?.claimStrategy?.strategy?.terminology || []) as Array<{ inventorTerm?: string }>
@@ -5019,6 +5038,10 @@ function buildOfficeFormContext(session: any, normalized: Record<string, any>) {
     confirmedJargon: terminology
       .map(entry => String(entry?.inventorTerm || '').trim())
       .filter(term => term.length > 2),
+    // The budget the last generation resolved. Refinement and challenge amendments
+    // can add claims and, unlike generation, must never silently drop one an
+    // attorney accepted; they report the overrun instead of trimming it.
+    claimBudget: resolveStoredClaimBudget(normalized),
     sourceText: [
       idea.rawInput, idea.title, normalized.problem, normalized.objectives, normalized.logic,
       normalized.bestMethod, normalized.abstract, normalized.coreInventiveConcept,
@@ -5518,7 +5541,7 @@ async function handleGenerateClaims(
     }
     const rulesBlock = renderJurisdictionClaimRulesBlock(officeRules)
 
-    if (claimCapSource !== 'user_requested') {
+    if (claimCapSource !== 'user_requested' && claimCapSource !== 'unlimited') {
       const resolvedLimit = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks, officeRules)
       maxClaims = resolvedLimit.limit
       claimCapSource = resolvedLimit.source
@@ -5738,6 +5761,7 @@ async function handleGenerateClaims(
         .filter(term => term.length > 2),
       inventionType: context.inventionType,
       patentTypePrimary,
+      claimBudget: maxClaims,
       sourceText: [
         context.rawIdea, context.title, context.problem, context.objectives, context.logic,
         context.bestMethod, context.abstract, context.coreInventiveConcept,
@@ -5759,6 +5783,7 @@ async function handleGenerateClaims(
       patentId,
       jurisdiction: activeJurisdiction,
       strategyDigest: buildClaimStrategyDigest(claimStrategy),
+      claimBudget: maxClaims,
       onProgress,
     })
     if (claimFormRepair.claims) {
@@ -5766,6 +5791,32 @@ async function handleGenerateClaims(
       normalisationChanges.push(...claimFormRepair.normalisation)
       officeFormFindings = runOfficeFormLint(generatedClaims, { rules: officeRules, context: officeFormContext })
     }
+
+    // Final budget enforcement. The cap above runs BEFORE terminology retention
+    // and office-form repair, and both can add claims, so the set that reaches
+    // this point may sit above the budget the attorney asked for. Enforce it on
+    // the set that is actually saved, renumber (tree truncation can leave gaps)
+    // and re-lint so the stored report describes the saved claims.
+    const finalLimited = applyGeneratedClaimLimit({
+      claims: generatedClaims,
+      supportMatrix: generatedSupportMatrix,
+      qualityWarnings: [],
+      maxClaims,
+    })
+    if (finalLimited.capped) {
+      const overBy = generatedClaims.length - finalLimited.claims.length
+      generatedClaims = finalLimited.claims
+      generatedSupportMatrix = finalLimited.supportMatrix
+      const renumber = normaliseClaimSet(generatedClaims, officeRules)
+      generatedClaims = renumber.claims
+      normalisationChanges.push(...renumber.changes)
+      officeFormFindings = runOfficeFormLint(generatedClaims, { rules: officeRules, context: officeFormContext })
+      generationWarnings.push({
+        code: 'CLAIM_BUDGET_TRIMMED_AFTER_CORRECTIONS',
+        message: `Office-form corrections and terminology retention added ${overBy} claim${overBy === 1 ? '' : 's'} beyond the ${maxClaims}-claim budget; the set was trimmed back to ${generatedClaims.length}. Raise the claim budget if those claims were wanted.`,
+      })
+    }
+
     const claimFormReport = buildClaimFormReport({
       claims: generatedClaims,
       rules: officeRules,
@@ -5786,7 +5837,7 @@ async function handleGenerateClaims(
       claimsStructuredProvisional: generatedClaims,
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaimsRequested: maxClaims,
-      claimsCappedToDefault: limitedClaimsPayload.capped,
+      claimsCappedToDefault: limitedClaimsPayload.capped || finalLimited.capped,
       claimCapSource,
       claimsJurisdiction: activeJurisdiction,
       claimsJurisdictionRequested: requestedJurisdiction,
@@ -5837,7 +5888,7 @@ async function handleGenerateClaims(
       jurisdiction: activeJurisdiction,
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaims,
-      claimsCappedToDefault: limitedClaimsPayload.capped,
+      claimsCappedToDefault: limitedClaimsPayload.capped || finalLimited.capped,
       claimCapSource,
       patentType: patentTypePrimary, // Return patent type for UI display
       patentTypeAssumed,
@@ -6853,7 +6904,10 @@ async function loadChallengeSession(user: any, patentId: string, sessionId: stri
 }
 
 function challengeFeatureDisabled() {
-  if (process.env.CLAIM_CHALLENGE_DISABLED === '1') {
+  // Off by default; see src/lib/claim-challenge-flag.ts. CLAIM_CHALLENGE_DISABLED
+  // is kept as a second kill switch for an environment that has enabled the
+  // feature and needs to stop it without a rebuild.
+  if (!CLAIM_CHALLENGE_ENABLED || process.env.CLAIM_CHALLENGE_DISABLED === '1') {
     return NextResponse.json({
       error: 'Claim challenge is currently unavailable.',
       code: 'FEATURE_DISABLED'

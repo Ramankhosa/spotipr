@@ -40,6 +40,14 @@ export type OfficeFormLintContext = {
   sourceText?: string
   inventionType?: unknown
   patentTypePrimary?: string
+  /**
+   * The claim budget resolved for this draft (the attorney's explicit request, or
+   * the office's default). Distinct from `rules.freeTotalClaims`, which is only the
+   * fee threshold: an attorney may deliberately budget above or below it. Null or
+   * absent means the attorney lifted the cap, and the count is not checked against
+   * anything but the fee threshold.
+   */
+  claimBudget?: number | null
 }
 
 type Draft = Omit<OfficeFormFinding, 'id' | 'jurisdiction'>
@@ -227,6 +235,7 @@ function basis(code: string, rules: ClaimRuleProfile): string {
     IMPROPER_DEPENDENCY: 'A dependent claim refers back to an earlier claim',
     CLAIM_COUNT_OVER_FREE: 'Excess-claim fees',
     INDEPENDENT_COUNT_OVER_FREE: 'Excess independent-claim fees',
+    CLAIM_COUNT_OVER_BUDGET: 'Claim budget requested for this draft',
   }
   return table[code]?.[j] || generic[code] || code
 }
@@ -816,9 +825,19 @@ function checkNumbersAgainstSource(claims: DraftClaim[], rules: ClaimRuleProfile
   return out
 }
 
-function checkCounts(claims: DraftClaim[], rules: ClaimRuleProfile): Draft[] {
+function checkCounts(claims: DraftClaim[], rules: ClaimRuleProfile, context: OfficeFormLintContext): Draft[] {
   const out: Draft[] = []
   const independents = claims.filter(isIndependent).length
+
+  // The attorney's own budget, separate from the fee threshold below. Generation
+  // truncates to this, so a finding here means a later stage added claims or the
+  // set was edited by hand; either way the count on screen is the one that counts.
+  // Never `fix: 'llm'` — the repair model must not delete claims to clear a warning.
+  const budget = Number(context.claimBudget)
+  if (Number.isInteger(budget) && budget > 0 && claims.length > budget) {
+    out.push({ code: 'CLAIM_COUNT_OVER_BUDGET', severity: 'warn', fix: 'manual', claimNumber: null, excerpt: `${claims.length} claims`, message: `The set has ${claims.length} claims; ${budget} ${budget === 1 ? 'was' : 'were'} requested for this draft. Remove ${claims.length - budget} claim${claims.length - budget === 1 ? '' : 's'} or raise the claim budget.`, basis: basis('CLAIM_COUNT_OVER_BUDGET', rules) })
+  }
+
   if (typeof rules.freeTotalClaims === 'number' && rules.freeTotalClaims > 0 && claims.length > rules.freeTotalClaims) {
     out.push({ code: 'CLAIM_COUNT_OVER_FREE', severity: 'info', fix: 'manual', claimNumber: null, excerpt: `${claims.length} claims`, message: `The set has ${claims.length} claims; ${rules.freeTotalClaims} are covered by the basic fee before the ${rules.office}, so ${claims.length - rules.freeTotalClaims} attract excess-claim fees.`, basis: basis('CLAIM_COUNT_OVER_FREE', rules) })
   }
@@ -870,7 +889,7 @@ export function runOfficeFormLint(
     ...checkOmnibusExpected(list, rules),
     ...checkCategories(list, rules, context),
     ...checkNumbersAgainstSource(list, rules, context),
-    ...checkCounts(list, rules),
+    ...checkCounts(list, rules, context),
     ...fromChallengeLint(reused, rules, list, confirmedJargon),
     ...checkTautology(list, rules),
     ...checkExperimentalParameters(list, rules),

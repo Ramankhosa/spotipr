@@ -37,6 +37,7 @@ import {
   stripTrailingClaimDependencyLabelsFromHtml
 } from '@/lib/draft-claims-parser'
 import ClaimChallengePanel from '@/components/drafting/ClaimChallengePanel'
+import { CLAIM_CHALLENGE_ENABLED } from '@/lib/claim-challenge-flag'
 import { ClaimFormFindingsPanel } from '@/components/drafting/ClaimFormFindingsPanel'
 import ClaimVersionsPanel from '@/components/drafting/ClaimVersionsPanel'
 
@@ -370,6 +371,15 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const [claimScopeStyle, setClaimScopeStyle] = useState<ClaimScopeStyle>('default')
   const [isSavingClaimScopeStyle, setIsSavingClaimScopeStyle] = useState(false)
 
+  // ---- Claim budget ----
+  // Empty string means "use the office default": the offices differ (IN and CN 10,
+  // EP 15, US 20), so the number is never hardcoded here. The server resolves it and
+  // returns it, which is what fills the field. Unchecking lets the draft run to
+  // whatever the disclosure supports; excess-claim fees are still reported.
+  const [claimBudget, setClaimBudget] = useState('')
+  const [claimBudgetEnforced, setClaimBudgetEnforced] = useState(true)
+  const [resolvedClaimBudget, setResolvedClaimBudget] = useState<number | null>(null)
+
   // ---- Persona / style state ----
   const [usePersonaStyle, setUsePersonaStyle] = useState(false)
   const [personaSelection, setPersonaSelection] = useState<PersonaSelection | undefined>(undefined)
@@ -460,6 +470,15 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     }
     setClaimScopeStyle(normalizeClaimScopeStyle(nd.claimScopeStyle))
 
+    // `maxClaimsRequested` is null exactly when the last run lifted the cap.
+    const storedBudget = Number(nd.maxClaimsRequested)
+    const budgetLifted = nd.claimCapSource === 'unlimited'
+    setClaimBudgetEnforced(!budgetLifted)
+    setResolvedClaimBudget(Number.isInteger(storedBudget) && storedBudget > 0 ? storedBudget : null)
+    // Only an explicit request stays in the box; an office default belongs in the
+    // placeholder, so switching jurisdiction re-resolves it instead of pinning it.
+    setClaimBudget(nd.claimCapSource === 'user_requested' && storedBudget > 0 ? String(storedBudget) : '')
+
     const savedPersonaSelection = (session as any)?.personaSelection as PersonaSelection | undefined
     const savedPersonaEnabled = Boolean((session as any)?.usePersonaStyle ?? (session as any)?.personaStyleEnabled)
     setPersonaSelection(savedPersonaSelection?.primaryPersonaId ? savedPersonaSelection : undefined)
@@ -514,7 +533,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   // Badge on the Challenge button: objections raised but not yet dealt with.
   // An applied challenge is finished; whatever it left pending was the
   // attorney's decision, not outstanding work.
-  const storedChallenge = (session?.ideaRecord?.normalizedData as any)?.claimsChallenge
+  const storedChallenge = CLAIM_CHALLENGE_ENABLED ? (session?.ideaRecord?.normalizedData as any)?.claimsChallenge : null
   const pendingChallengeRemarks = storedChallenge?.status !== 'APPLIED' && Array.isArray(storedChallenge?.remarks)
     ? (storedChallenge.remarks as any[])
         .filter((remark: any) => (remark?.disposition || 'pending') === 'pending').length
@@ -777,6 +796,10 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         // server, so clearing the box would silently reuse the previous generation's.
         userClaimRemarks: userClaimRemarks.trim(),
         claimScopeStyle,
+        // Omitted when the box is empty so the server falls back to the office
+        // default; `false` on the flag lifts the cap entirely.
+        claimBudgetEnforced,
+        ...(claimBudgetEnforced && Number(claimBudget) > 0 ? { maxClaims: Number(claimBudget) } : {}),
         usePersonaStyle,
         personaSelection,
         ideaContext
@@ -821,6 +844,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       if (response?.claimScopeStyle) {
         setClaimScopeStyle(normalizeClaimScopeStyle(response.claimScopeStyle))
       }
+      // The office default the server resolved; fills the placeholder so the
+      // attorney can see the budget without it being hardcoded client-side.
+      setResolvedClaimBudget(Number.isInteger(response?.maxClaims) && response.maxClaims > 0 ? response.maxClaims : null)
 
       await onRefresh()
       setRegenerateInstructions('')
@@ -1164,6 +1190,49 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
           <ToolbarDivider />
 
+          {/* Claim budget — how many claims the draft may hold in total */}
+          <ControlGroup label="Claims">
+            <Tooltip
+              content={
+                claimBudgetEnforced
+                  ? `Total claims this draft may hold. Leave blank to use the office default${resolvedClaimBudget ? ` (${resolvedClaimBudget})` : ''}. Corrections and refinements are trimmed back to this number.`
+                  : 'No claim limit. The draft runs to whatever the disclosure supports; claims beyond the office’s free allowance attract excess-claim fees.'
+              }
+              align="start"
+            >
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  id="claim-budget-enforced"
+                  checked={claimBudgetEnforced}
+                  onChange={(e) => setClaimBudgetEnforced(e.target.checked)}
+                  disabled={controlsLocked}
+                  className="h-3.5 w-3.5 cursor-pointer rounded border-paper-300 text-ai-blue-600 focus:ring-ai-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <label
+                  htmlFor="claim-budget-enforced"
+                  className={`cursor-pointer text-[11px] font-medium ${claimBudgetEnforced ? 'text-ai-graphite-900' : 'text-ai-graphite-500'}`}
+                >
+                  Limit to
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  step={1}
+                  value={claimBudget}
+                  onChange={(e) => setClaimBudget(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder={resolvedClaimBudget ? String(resolvedClaimBudget) : 'office'}
+                  aria-label="Maximum total claims"
+                  disabled={controlsLocked || !claimBudgetEnforced}
+                  className="w-14 rounded border border-paper-300 bg-white px-1.5 py-0.5 text-[11px] text-ai-graphite-900 placeholder:text-ai-graphite-400 focus:border-ai-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:bg-paper-100 disabled:opacity-60"
+                />
+              </div>
+            </Tooltip>
+          </ControlGroup>
+
+          <ToolbarDivider />
+
           {/* Writing style / persona */}
           <ControlGroup label="Style">
             <div className="flex items-center rounded-md border border-paper-300 bg-white">
@@ -1229,7 +1298,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                       : <><Edit2 className="mr-1 h-3 w-3" />Edit</>}
                   </Button>
                 )}
-                {hasClaims && !isGeneratingClaims && (
+                {CLAIM_CHALLENGE_ENABLED && hasClaims && !isGeneratingClaims && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1467,16 +1536,18 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         />
       )}
 
-      {/* ---- Claim challenge (opt-in adversarial review) ---- */}
-      <ClaimChallengePanel
-        session={session}
-        open={challengeOpen}
-        onClose={() => setChallengeOpen(false)}
-        claimsStructured={claims}
-        claimsFrozen={claimsFrozen}
-        onComplete={onComplete}
-        onRefresh={onRefresh}
-      />
+      {/* ---- Claim challenge (adversarial review; off by default, see claim-challenge-flag) ---- */}
+      {CLAIM_CHALLENGE_ENABLED && (
+        <ClaimChallengePanel
+          session={session}
+          open={challengeOpen}
+          onClose={() => setChallengeOpen(false)}
+          claimsStructured={claims}
+          claimsFrozen={claimsFrozen}
+          onComplete={onComplete}
+          onRefresh={onRefresh}
+        />
+      )}
 
       {/* ---- Claim version history ---- */}
       <ClaimVersionsPanel

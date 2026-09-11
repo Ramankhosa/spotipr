@@ -17,6 +17,7 @@ import {
 import type { DraftClaim } from '@/lib/draft-claims-parser'
 import { CLAIM_CHALLENGE_CHECKLIST, type ChallengeLintFinding } from '@/lib/claim-challenge-lint'
 import type { OfficeFormFinding } from '@/lib/claim-rules/types'
+import { CLAIM_CHALLENGE_ENABLED } from '@/lib/claim-challenge-flag'
 
 const claim = (number: number, text: string, extra: Partial<DraftClaim> = {}): DraftClaim => ({
   number,
@@ -268,6 +269,14 @@ function finding(partial: Partial<OfficeFormFinding> & { code: string }): Office
     ...partial,
   }
 }
+
+describe('feature flag', () => {
+  it('is off unless the environment turns it on', () => {
+    // The challenger is complete and kept, but out of the application flow:
+    // the API actions refuse and the button does not render while this is false.
+    expect(CLAIM_CHALLENGE_ENABLED).toBe(false)
+  })
+})
 
 describe('buildClaimChallengePrompt', () => {
   const base = {
