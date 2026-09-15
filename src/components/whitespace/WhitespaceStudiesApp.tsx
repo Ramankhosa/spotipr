@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Compass, Plus, Loader2, AlertCircle, Lightbulb, Map } from 'lucide-react'
+import { Compass, Plus, Loader2, AlertCircle, Lightbulb, Map, Pickaxe } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
@@ -19,7 +19,7 @@ interface StudySummary {
   _count: { runs: number; clusters: number; hypotheses: number }
 }
 
-type StudyKind = 'FIELD' | 'INVENTION'
+type StudyKind = 'FIELD' | 'INVENTION' | 'MINER'
 
 function formatWhen(iso: string) {
   const date = new Date(iso)
@@ -37,7 +37,7 @@ function authHeaders(): Record<string, string> {
     : { 'Content-Type': 'application/json' }
 }
 
-export function WhitespaceStudiesApp() {
+export function WhitespaceStudiesApp({ minerEnabled = false }: { minerEnabled?: boolean }) {
   const router = useRouter()
   const { toast } = useToast()
   const { user, isLoading: authLoading } = useAuth()
@@ -50,6 +50,8 @@ export function WhitespaceStudiesApp() {
   const [problem, setProblem] = useState('')
   const [approach, setApproach] = useState('')
   const [constraints, setConstraints] = useState('')
+  const [focusProblems, setFocusProblems] = useState('')
+  const [assigneeOfInterest, setAssigneeOfInterest] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -102,6 +104,10 @@ export function WhitespaceStudiesApp() {
       })
       return
     }
+    if (kind === 'MINER' && brief.trim().length < 20) {
+      toast({ variant: 'warning', title: 'Describe the field first', description: 'Give the Miner a sentence or two defining the exact field to inspect.' })
+      return
+    }
 
     setCreating(true)
     try {
@@ -115,7 +121,9 @@ export function WhitespaceStudiesApp() {
                 constraints: constraints.trim(),
               },
             }
-          : { kind, seedText: brief.trim() }
+          : kind === 'MINER'
+            ? { kind, invention: { field: brief.trim(), focusProblems: focusProblems.trim(), constraints: constraints.trim(), assigneeOfInterest: assigneeOfInterest.trim(), assessmentOffices: ['IN', 'US', 'EP'] } }
+            : { kind, seedText: brief.trim() }
       const response = await fetch('/api/whitespace/studies', {
         method: 'POST',
         headers: authHeaders(),
@@ -132,7 +140,7 @@ export function WhitespaceStudiesApp() {
       })
       setCreating(false)
     }
-  }, [approach, brief, constraints, kind, problem, router, toast, user])
+  }, [approach, assigneeOfInterest, brief, constraints, focusProblems, kind, problem, router, toast, user])
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-12">
@@ -152,7 +160,7 @@ export function WhitespaceStudiesApp() {
       </header>
 
       <section className="mb-12 rounded-lg border border-border bg-card p-5 sm:p-6">
-        <div className="mb-4 grid gap-2 sm:grid-cols-2">
+        <div className={`mb-4 grid gap-2 ${minerEnabled ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
           <KindOption
             active={kind === 'INVENTION'}
             onClick={() => setKind('INVENTION')}
@@ -161,6 +169,14 @@ export function WhitespaceStudiesApp() {
             description="Find the unclaimed directions next to something you are building."
             disabled={creating}
           />
+          {minerEnabled && <KindOption
+            active={kind === 'MINER'}
+            onClick={() => setKind('MINER')}
+            icon={<Pickaxe className="h-4 w-4" />}
+            title="Mine a field"
+            description="Read a bounded field, develop solution leads, assess them, and prepare a brief."
+            disabled={creating}
+          />}
           <KindOption
             active={kind === 'FIELD'}
             onClick={() => setKind('FIELD')}
@@ -204,6 +220,14 @@ export function WhitespaceStudiesApp() {
               disabled={creating}
             />
           </div>
+        ) : kind === 'MINER' ? (
+          <div className="space-y-4">
+            <BriefField id="miner-field" label="What exact field should be mined?" hint="The approved field remains fixed throughout the harvest." value={brief} onChange={setBrief} rows={4} placeholder="e.g. Low-power closed-loop irrigation control using soil and plant sensing." disabled={creating} />
+            <BriefField id="focus-problems" label="Problems to prioritize (optional)" hint="These change prioritization, not field membership." value={focusProblems} onChange={setFocusProblems} rows={2} placeholder="e.g. sensor drift, intermittent connectivity, and water pressure variation." disabled={creating} />
+            <BriefField id="miner-constraints" label="Solution constraints (optional)" hint="These are applied when proposals are developed." value={constraints} onChange={setConstraints} rows={2} placeholder="e.g. solar powered, serviceable without specialist tools." disabled={creating} />
+            <BriefField id="assignee-context" label="Assignee context (optional)" hint="Context only unless you later add it as a field filter." value={assigneeOfInterest} onChange={setAssigneeOfInterest} rows={1} placeholder="e.g. a client or competitor of interest." disabled={creating} />
+            <p className="text-xs text-muted-foreground">Assessments default to India, the United States, and the EPO.</p>
+          </div>
         ) : (
           <div>
             <label htmlFor="brief" className="mb-2 block text-sm font-semibold text-foreground">
@@ -234,7 +258,7 @@ export function WhitespaceStudiesApp() {
             ) : (
               <>
                 <Plus className="mr-2 h-4 w-4" />
-                {kind === 'INVENTION' ? 'Explore this invention' : 'Map this field'}
+                {kind === 'INVENTION' ? 'Explore this invention' : kind === 'MINER' ? 'Mine this field' : 'Map this field'}
               </>
             )}
           </Button>
@@ -293,6 +317,7 @@ export function WhitespaceStudiesApp() {
                           'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium',
                           study.kind === 'INVENTION'
                             ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                            : study.kind === 'MINER' ? 'border-amber-200 bg-amber-50 text-amber-800'
                             : 'border-border bg-muted text-muted-foreground',
                         ].join(' ')}
                       >
@@ -301,6 +326,8 @@ export function WhitespaceStudiesApp() {
                             <Lightbulb className="h-2.5 w-2.5" />
                             invention
                           </>
+                        ) : study.kind === 'MINER' ? (
+                          <><Pickaxe className="h-2.5 w-2.5" /> miner</>
                         ) : (
                           <>
                             <Map className="h-2.5 w-2.5" />

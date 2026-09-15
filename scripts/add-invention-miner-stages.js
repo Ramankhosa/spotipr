@@ -38,6 +38,30 @@ const STAGES = [
   {
     task: 'IM_EXTRACT',
     taskName: 'Invention Miner: Signal Extraction',
+    code: 'MINER_PROPOSE',
+    displayName: 'Invention Miner: Solution Proposals',
+    description: 'Develops up to three concrete, constraint-aware mechanisms for user review. Generated alternatives remain proposals until approved.',
+    tier: 'mid', maxTokensIn: 12000, maxTokensOut: 5000, sortOrder: 2,
+  },
+  {
+    task: 'IM_GATE',
+    taskName: 'Invention Miner: Grant-Worthiness Gate',
+    code: 'MINER_RETRIEVAL_PLAN',
+    displayName: 'Invention Miner: Retrieval Planning',
+    description: 'Plans up to four prior-art searches beyond the mined field while preserving the approved mechanism relationships.',
+    tier: 'mid', maxTokensIn: 10000, maxTokensOut: 2000, sortOrder: 3,
+  },
+  {
+    task: 'IM_GATE',
+    taskName: 'Invention Miner: Grant-Worthiness Gate',
+    code: 'MINER_EVIDENCE_MAP',
+    displayName: 'Invention Miner: Evidence Mapping',
+    description: 'Maps elements and relationships to bounded readable passages and produces a separate office assessment.',
+    tier: 'premium', maxTokensIn: 24000, maxTokensOut: 6000, sortOrder: 4,
+  },
+  {
+    task: 'IM_EXTRACT',
+    taskName: 'Invention Miner: Signal Extraction',
     code: 'MINER_EXTRACT',
     displayName: 'Invention Miner: Signal Extraction',
     description:
@@ -69,7 +93,7 @@ const STAGES = [
     tier: 'premium',
     maxTokensIn: 24000,
     maxTokensOut: 4000,
-    sortOrder: 2,
+    sortOrder: 5,
   },
   {
     task: 'IM_GATE',
@@ -81,7 +105,7 @@ const STAGES = [
     tier: 'mid',
     maxTokensIn: 8000,
     maxTokensOut: 2000,
-    sortOrder: 3,
+    sortOrder: 6,
   },
   {
     task: 'IM_BRIEF',
@@ -93,7 +117,7 @@ const STAGES = [
     tier: 'premium',
     maxTokensIn: 24000,
     maxTokensOut: 6000,
-    sortOrder: 4,
+    sortOrder: 7,
   },
 ]
 
@@ -193,8 +217,8 @@ async function main() {
   console.log('')
   console.log('Review in Super Admin > LLM Config. Intended routing:')
   console.log('  cheap   -> MINER_EXTRACT, MINER_LEAD_TITLES')
-  console.log('  mid     -> MINER_EXCLUSION_SCREEN')
-  console.log('  premium -> MINER_INVENTIVE_STEP, MINER_BRIEF')
+  console.log('  mid     -> MINER_PROPOSE, MINER_RETRIEVAL_PLAN, MINER_EXCLUSION_SCREEN')
+  console.log('  premium -> MINER_EVIDENCE_MAP, MINER_INVENTIVE_STEP, MINER_BRIEF')
   console.log('')
 
   // Print what is actually in the database, not what we intended to write. A row an

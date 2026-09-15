@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { appendTrail } from '@/lib/whitespace/service'
 import { emptyWhitespaceScope, parseStudyKind, WHITESPACE_STUDY_KINDS } from '@/lib/whitespace/types'
 import type { Prisma } from '@prisma/client'
+import { enforceServiceAccess } from '@/lib/service-access-middleware'
 
 export const runtime = 'nodejs'
 
@@ -65,6 +66,14 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     )
   }
+  if (kind === 'MINER' && process.env.INVENTION_MINER_ENABLED !== 'true') {
+    return NextResponse.json({ error: 'Invention Miner is not enabled on this installation.', code: 'MINER_DISABLED' }, { status: 503 })
+  }
+  if (kind === 'MINER') {
+    if (!auth.user.tenantId) return NextResponse.json({ error: 'Invention Miner requires an organisation account.', code: 'NO_TENANT' }, { status: 403 })
+    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'INVENTION_MINER')
+    if (!access.allowed) return access.response
+  }
 
   // Invention and miner studies both arrive as a structured brief, kept
   // verbatim for display and recompiles and flattened into seedText for the
@@ -119,7 +128,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const invention =
+  const invention: Record<string, unknown> | null =
     fields && rawInvention
       ? Object.fromEntries(
           fields.map(field => [
@@ -130,10 +139,15 @@ export async function POST(request: NextRequest) {
           ])
         )
       : null
+  if (kind === 'MINER' && invention) {
+    const supplied = Array.isArray(rawInvention?.assessmentOffices) ? rawInvention.assessmentOffices : ['IN', 'US', 'EP']
+    invention.assessmentOffices = Array.from(new Set(supplied.map(String).map(value => value.toUpperCase()).filter(value => ['IN', 'US', 'EP'].includes(value))))
+    if (!(invention.assessmentOffices as string[]).length) invention.assessmentOffices = ['IN', 'US', 'EP']
+  }
   const inventionText =
     invention && fields
       ? fields
-          .map(field => (invention[field.key] ? `${field.label}: ${invention[field.key]}` : null))
+          .map(field => (invention[field.key] ? `${field.label}: ${String(invention[field.key])}` : null))
           .filter(Boolean)
           .join('\n')
       : ''

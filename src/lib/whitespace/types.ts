@@ -18,15 +18,19 @@ export type WhitespaceRunStage =
   // ENGINES turns that into candidate leads; GATE tests one lead against the
   // closest art, inventive step and the statutory exclusions; BRIEF writes the
   // invention up with its claim set.
+  | 'MINER_PREFLIGHT'
   | 'MINER_HARVEST'
   | 'MINER_ENGINES'
+  | 'MINER_PROPOSE'
   | 'MINER_GATE'
   | 'MINER_BRIEF'
 
 /** The miner's stages, for the entitlement and kind guards that must not drift. */
 export const MINER_STAGES: readonly WhitespaceRunStage[] = [
+  'MINER_PREFLIGHT',
   'MINER_HARVEST',
   'MINER_ENGINES',
+  'MINER_PROPOSE',
   'MINER_GATE',
   'MINER_BRIEF',
 ] as const

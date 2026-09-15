@@ -527,7 +527,8 @@ export async function getTenantTeams(tenantId: string): Promise<any[]> {
 export async function checkServiceAccess(
   userId: string,
   tenantId: string,
-  serviceType: ServiceType
+  serviceType: ServiceType,
+  options: { paidRetry?: boolean } = {}
 ): Promise<ServiceAccessResult> {
   // ==========================================================================
   // SECURITY: Check tenant payment status first
@@ -600,6 +601,9 @@ export async function checkServiceAccess(
   if (userQuota) {
     if (!userQuota.isEnabled) {
       return { allowed: false, reason: `${serviceType} is disabled for this user` }
+    }
+    if (options.paidRetry) {
+      return { allowed: true, remainingQuota: { daily: null, monthly: null }, quotaSource: 'user' }
     }
     
     // Check user-level quotas
@@ -729,6 +733,14 @@ export async function checkServiceAccess(
       allowed: false,
       reason: `Your current plan does not include ${serviceType}. Please upgrade your plan.`
     }
+  }
+
+  // A logical operation that already owns a Miner reservation/result may
+  // resume even after the completion quota is exhausted. Payment status,
+  // account status, role, explicit user switches and plan entitlement were all
+  // checked above; only a second quota charge is skipped here.
+  if (options.paidRetry) {
+    return { allowed: true, remainingQuota: { daily: null, monthly: null }, quotaSource: 'tenant' }
   }
   
   // Check tenant-level usage using unified service usage tracker

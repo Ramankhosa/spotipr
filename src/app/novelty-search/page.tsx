@@ -16,6 +16,7 @@ function NoveltySearchContent() {
   const sessionId = searchParams?.get('sessionId');
   const ideaFrameId = searchParams?.get('ideaFrameId');
   const ideaId = searchParams?.get('ideaId');
+  const minerHandoff = searchParams?.get('minerHandoff');
   const sourceMetadata = source
     ? {
         source,
@@ -23,7 +24,7 @@ function NoveltySearchContent() {
         ...(ideaFrameId ? { ideaFrameId } : {}),
         ...(ideaId ? { ideaId } : {}),
       }
-    : undefined;
+    : minerHandoff ? { source: 'invention_miner', minerHandoff } : undefined;
 
   return (
     <NoveltySearchSubmission
@@ -31,6 +32,7 @@ function NoveltySearchContent() {
       initialTitle={title || undefined}
       initialDescription={description || undefined}
       sourceMetadata={sourceMetadata}
+      minerHandoffToken={minerHandoff || undefined}
     />
   );
 }

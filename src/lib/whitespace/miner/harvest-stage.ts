@@ -67,6 +67,7 @@ import {
   type ExtractionSubject,
 } from './prompts'
 import { createHash } from 'node:crypto'
+import { EXTRACTION_VERSION, EVIDENCE_CONTRACT, verifyEvidenceExtraction, type SourceEvidence } from './extraction-evidence'
 
 // ---------------------------------------------------------------------------
 // Budgets — every one of these is a real limit somewhere, not a preference
@@ -626,7 +627,7 @@ function percent(part: number, whole: number): number {
 // Internal row shapes
 // ---------------------------------------------------------------------------
 
-interface StagedFamily {
+export interface StagedFamily {
   familyKey: string
   publicationNumber: string
   country: string | null
@@ -660,6 +661,7 @@ export interface Reading {
 
 /** A verified extraction: everything here is supported by the source text. */
 export interface NormalisedExtraction {
+  sourceEvidence?: SourceEvidence[]
   problems: Array<{ statement: string; kind: string }>
   mechanisms: Array<{ statement: string; elements: string[] }>
   technicalEffects: string[]
@@ -685,6 +687,7 @@ interface BatchOutcome {
 // ---------------------------------------------------------------------------
 
 export interface MinerHarvestInput {
+  snapshotId?: string
   runId: string
   workerId: string
   reporter: RunReporter
@@ -697,7 +700,9 @@ export async function runMinerHarvestStage(input: MinerHarvestInput): Promise<Mi
   const { reporter } = input
   await reporter.plan(HARVEST_STEPS, HARVEST_COUNTERS)
   const coverageNotes: string[] = []
-  const fingerprint = scopeFingerprint(input.scope)
+  const fingerprint = input.snapshotId ?? scopeFingerprint(input.scope)
+  const snapshot = input.snapshotId ? await prisma.minerFieldSnapshot.findUnique({ where: { id: input.snapshotId } }) : null
+  if (input.snapshotId && (!snapshot?.approvedAt || snapshot.studyId !== input.studyId)) throw new WhitespacePermanentError('Approve this field snapshot before reading it.')
 
   // =========================================================================
   // Preconditions. All permanent, all before any spend.
@@ -726,7 +731,7 @@ export async function runMinerHarvestStage(input: MinerHarvestInput): Promise<Mi
   // path compares snapshots too, so a version check would pass here and then
   // find no persisted rule there — and the "consumer" would silently refit the
   // ladder, a walk budgeted at 300 seconds, inside this stage.
-  const census = await newestMatchingCensus(input.studyId, input.scope)
+  const census = snapshot ? { textCoverage: snapshot.coverage as unknown as TextCoverage } : await newestMatchingCensus(input.studyId, input.scope)
   if (!census) {
     throw new WhitespacePermanentError(
       'The Invention Miner reads the field the census defined, and no completed field census matches this study’s current scope. Run the field census again for this scope.'
@@ -763,7 +768,7 @@ export async function runMinerHarvestStage(input: MinerHarvestInput): Promise<Mi
     )
   }
 
-  const field = await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
+  const field = snapshot ? { coverageNotes: snapshot.limitations as string[], rule: snapshot.matchingRule as any, where: Prisma.sql`FALSE` } : await resolveFieldDefinition(input.scope, { studyId: input.studyId, reuse: true })
   const band = resolveFieldBand()
   coverageNotes.push(...field.coverageNotes)
 
@@ -772,7 +777,7 @@ export async function runMinerHarvestStage(input: MinerHarvestInput): Promise<Mi
   // table twice through the view's LEFT JOIN and cannot early-exit.
   // =========================================================================
   await reporter.step('stage', 'Staging the field and picking one publication per family')
-  const staged = await stageField(input.scope, field.where, field.rule, band.maxPublications)
+  const staged = snapshot ? (snapshot.members as unknown as StagedFamily[]).map(row => ({ ...row, publicationDate: row.publicationDate ? new Date(row.publicationDate) : null })) : await stageField(input.scope, field.where, field.rule, band.maxPublications)
   const familiesInField = staged.length
   reporter.count('families', familiesInField)
   reporter.event('count', `${familiesInField.toLocaleString()} families staged, one publication chosen for each`)
@@ -848,7 +853,7 @@ export async function runMinerHarvestStage(input: MinerHarvestInput): Promise<Mi
   // to be a join downstream, not a CPC guess.
   await reporter.heartbeat()
   const sampledKeys = new Set(sample.map(row => row.publicationNumber))
-  await persistStagedField(input.studyId, fingerprint, study.scopeVersion, staged, sampledKeys, reporter)
+  await persistStagedField(input.studyId, fingerprint, study.scopeVersion, staged, sampledKeys, reporter, input.snapshotId)
 
   // =========================================================================
   // Reading
@@ -1015,6 +1020,21 @@ export async function runMinerHarvestStage(input: MinerHarvestInput): Promise<Mi
   // =========================================================================
   // Indexing
   // =========================================================================
+  // Freeze the exact extraction chosen for every sampled publication. Engines
+  // join through this pointer; later corpus enrichment is historical until an
+  // explicit refresh creates another approved snapshot/run.
+  for (const batch of chunk(readings.filter(reading => reading.extractionId), DB_CHUNK)) {
+    const rows = batch.map(reading => Prisma.sql`(${reading.publicationNumber}, ${reading.extractionId as string})`)
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE "miner_field_publications" f
+      SET "extractionId" = v."extractionId", "snapshotId" = ${input.snapshotId ?? null}
+      FROM (VALUES ${Prisma.join(rows)}) AS v("publicationNumber", "extractionId")
+      WHERE f."studyId" = ${input.studyId}
+        AND f."scopeFingerprint" = ${fingerprint}
+        AND f."publicationNumber" = v."publicationNumber"
+    `)
+    await reporter.heartbeat()
+  }
   await reporter.step('index', 'Indexing the statements')
   const statementsIndexed = await indexStatements(readings, reporter)
   reporter.count('statements', statementsIndexed)
@@ -1114,7 +1134,7 @@ interface StagedRow {
  * budget it cannot be read in one either, and a retry would spend the same 90
  * seconds to reach the same answer.
  */
-async function stageField(
+export async function stageField(
   scope: WhitespaceScope,
   where: Prisma.Sql,
   rule: Parameters<typeof narrowingAdvice>[1],
@@ -1247,7 +1267,8 @@ async function persistStagedField(
   scopeVersion: number,
   staged: readonly StagedFamily[],
   sampled: ReadonlySet<string>,
-  reporter: RunReporter
+  reporter: RunReporter,
+  snapshotId?: string
 ): Promise<void> {
   // Replaced rather than merged: `sampled` is a property of THIS harvest, and a
   // skipDuplicates insert would leave a previous run's flags in place.
@@ -1269,6 +1290,7 @@ async function persistStagedField(
         // that were never readable.
         textTier: row.tier ?? 'none',
         sampled: sampled.has(row.publicationNumber),
+        snapshotId: snapshotId ?? null,
       })),
       skipDuplicates: true,
     })
@@ -1394,7 +1416,7 @@ export function buildReading(staged: StagedFamily, row: TextRow): Reading | null
   }
 
   if (!sections.length) return null
-  const sourceText = sections.map(section => `${section.label}: ${section.text}`).join('\n')
+  const sourceText = sections.map(section => `${section.label}: ${normaliseSourceText(section.text)}`).join('\n')
   if (looksUnreadable(sourceText)) return null
 
   return {
@@ -1403,7 +1425,7 @@ export function buildReading(staged: StagedFamily, row: TextRow): Reading | null
     title: (row.title ?? staged.publicationNumber).slice(0, 300),
     tier: staged.tier as TextTier,
     sourceText,
-    textHash: textHashFor(staged.tier as TextTier, sourceText),
+    textHash: textHashFor(staged.tier as TextTier, `v${EXTRACTION_VERSION}\u0000${sourceText}`),
     hasClaims: Boolean(claimsCut.text),
     translated,
     language,
@@ -1433,6 +1455,7 @@ async function loadCachedExtractions(
       where: {
         publicationNumber: { in: batch.map(reading => reading.publicationNumber) },
         supersededAt: null,
+        contractVersion: EXTRACTION_VERSION,
       },
       select: {
         id: true,
@@ -1443,6 +1466,7 @@ async function loadCachedExtractions(
         technicalEffects: true,
         teachingAway: true,
         claimedScope: true,
+        sourceEvidence: true,
       },
     })
     for (const row of rows) {
@@ -1456,6 +1480,7 @@ async function loadCachedExtractions(
           technicalEffects: Array.isArray(row.technicalEffects) ? (row.technicalEffects as string[]) : [],
           teachingAway: Array.isArray(row.teachingAway) ? (row.teachingAway as Array<{ quote: string }>) : [],
           claimedScope: (row.claimedScope as NormalisedExtraction['claimedScope']) ?? null,
+          sourceEvidence: Array.isArray(row.sourceEvidence) ? row.sourceEvidence as unknown as SourceEvidence[] : [],
         },
       })
     }
@@ -1510,7 +1535,7 @@ async function runExtractionBatch(
     const response = await runMinerLLM({
       taskCode: TaskCode.IM_EXTRACT,
       stageCode: MINER_EXTRACT_STAGE_CODE,
-      prompt: buildExtractionPrompt(subjects),
+      prompt: buildExtractionPrompt(subjects) + EVIDENCE_CONTRACT,
       context,
     })
     outcome.inputTokens = response.inputTokens
@@ -1522,11 +1547,11 @@ async function runExtractionBatch(
     for (const document of parsed.documents ?? []) {
       const reading = byPublication.get(String(document.publicationNumber ?? ''))
       if (!reading) continue
-      const verified = verifyExtraction(document, reading)
-      outcome.droppedProblems += verified.droppedProblems
-      outcome.droppedMechanisms += verified.droppedMechanisms
-      outcome.droppedQuotes += verified.droppedQuotes
-      outcome.results.push({ reading, extraction: verified.extraction })
+      const extraction = verifyEvidenceExtraction(document, reading.sourceText, reading.hasClaims)
+      outcome.droppedProblems += Math.max(0, (Array.isArray(document.problems) ? document.problems.length : 0) - extraction.problems.length)
+      outcome.droppedMechanisms += Math.max(0, (Array.isArray(document.mechanisms) ? document.mechanisms.length : 0) - extraction.mechanisms.length)
+      outcome.droppedQuotes += Math.max(0, (Array.isArray(document.teachingAway) ? document.teachingAway.length : 0) - extraction.teachingAway.length)
+      outcome.results.push({ reading, extraction })
       outcome.lines.push(`${reading.publicationNumber} — ${reading.title.slice(0, 70)}`)
     }
     outcome.ok = true
@@ -1661,6 +1686,16 @@ async function persistExtractions(readings: readonly Reading[], modelCode: strin
       familyKey: reading.familyKey,
       textTier: reading.tier,
       textHash: reading.textHash,
+      contractVersion: EXTRACTION_VERSION,
+      sourceText: reading.sourceText,
+      sourceEvidence: (reading.extraction?.sourceEvidence ?? []) as unknown as Prisma.InputJsonValue,
+      readCoverage: {
+        sourceHash: createHash('sha256').update(reading.sourceText).digest('hex'),
+        availableDepth: { tier: reading.tier, claimsAvailable: reading.hasClaims },
+        readDepth: { characters: reading.sourceText.length, tier: reading.tier, descriptionTruncatedAt: reading.truncatedAtChars,
+          claimsSupplied: reading.hasClaims, claimsCompleteness: 'UNVERIFIED',
+          description: reading.truncatedAtChars === null ? 'available excerpt' : 'truncated excerpt' },
+      },
       problems: (reading.extraction?.problems ?? []) as unknown as Prisma.InputJsonValue,
       mechanisms: (reading.extraction?.mechanisms ?? []) as unknown as Prisma.InputJsonValue,
       technicalEffects: (reading.extraction?.technicalEffects ?? []) as unknown as Prisma.InputJsonValue,

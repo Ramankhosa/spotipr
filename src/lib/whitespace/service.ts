@@ -38,6 +38,8 @@ import {
   type WhitespaceRunStage,
   type WhitespaceScope,
 } from './types'
+import { MinerError } from './miner/contracts'
+import { whitespaceWorkerMode } from './worker-health'
 
 /** A run still PROCESSING after this is treated as lost to a restart. */
 export const WHITESPACE_RUN_STALE_MS = 15 * 60 * 1000
@@ -481,9 +483,23 @@ export async function startWhitespaceRun(input: {
   scopeVersion: number
   requestHeaders: Record<string, string>
   params?: Prisma.InputJsonValue
+  operation?: {
+    tenantId: string
+    userId: string
+    operationKey: string
+    inputs: Prisma.InputJsonValue
+    quotaReservation?: { checkedAt: Date; remainingDaily: number | null; remainingMonthly: number | null; userScoped: boolean }
+  }
 }): Promise<{ runId: string; existing: boolean }> {
   const runnable = scopeIsRunnable(input.scope)
   if (!runnable.runnable) throw new Error(runnable.reason || 'Scope is not runnable.')
+
+  if (input.operation) {
+    const operation = await prisma.minerOperation.findUnique({
+      where: { tenantId_operationKey: { tenantId: input.operation.tenantId, operationKey: input.operation.operationKey } },
+    })
+    if (operation && operation.state !== 'RELEASED') return { runId: operation.runId, existing: true }
+  }
 
   // Dedupe live runs per stage AND per params: two deep dives on different
   // clusters are different work, two on the same cluster are the same run.
@@ -510,18 +526,47 @@ export async function startWhitespaceRun(input: {
     }
   }
 
-  const run = await prisma.whitespaceRun.create({
-    data: {
-      studyId: input.studyId,
-      stage: input.stage,
-      scopeVersion: input.scopeVersion,
-      scopeSnapshot: input.scope as unknown as Prisma.InputJsonValue,
-      params: input.params,
-      status: 'QUEUED',
-      nextAttemptAt: new Date(),
-      attemptCount: 0,
-    },
+  const run = !input.operation ? await prisma.whitespaceRun.create({ data: {
+    studyId: input.studyId, stage: input.stage, scopeVersion: input.scopeVersion,
+    scopeSnapshot: input.scope as unknown as Prisma.InputJsonValue, params: input.params,
+    status: 'QUEUED', nextAttemptAt: new Date(), attemptCount: 0,
+  } }) : await prisma.$transaction(async tx => {
+    if (input.operation?.quotaReservation) {
+      const reservation = input.operation.quotaReservation
+      const lockKey = reservation.userScoped ? `${input.operation.tenantId}:${input.operation.userId}` : input.operation.tenantId
+      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`)
+      const scope = reservation.userScoped ? { tenantId: input.operation.tenantId, userId: input.operation.userId } : { tenantId: input.operation.tenantId }
+      const [reserved, completedSinceCheck] = await Promise.all([
+        tx.minerOperation.count({ where: { ...scope, state: 'RESERVED' } }),
+        tx.minerOperation.count({ where: { ...scope, state: 'COMPLETED', completedAt: { gte: reservation.checkedAt } } }),
+      ])
+      const unavailable = reserved + completedSinceCheck
+      if ((reservation.remainingDaily !== null && unavailable >= reservation.remainingDaily) ||
+          (reservation.remainingMonthly !== null && unavailable >= reservation.remainingMonthly)) {
+        throw new MinerError('All remaining Invention Miner operations are already reserved by work in progress. Wait for it to finish or retry after the quota resets.', 403, 'MINER_QUOTA_RESERVED')
+      }
+    }
+    const created = await tx.whitespaceRun.create({ data: {
+        studyId: input.studyId, stage: input.stage, scopeVersion: input.scopeVersion,
+        scopeSnapshot: input.scope as unknown as Prisma.InputJsonValue, params: input.params,
+        status: 'QUEUED', nextAttemptAt: new Date(), attemptCount: 0,
+    } })
+    if (input.operation) {
+      const existing = await tx.minerOperation.findUnique({ where: { tenantId_operationKey: { tenantId: input.operation.tenantId, operationKey: input.operation.operationKey } } })
+      if (existing) {
+        if (existing.state !== 'RELEASED') throw new Error(`MINER_DUPLICATE:${existing.runId}`)
+        await tx.minerOperation.update({ where: { id: existing.id }, data: { runId: created.id, state: 'RESERVED', inputs: input.operation.inputs, completedAt: null } })
+      } else {
+        await tx.minerOperation.create({ data: { tenantId: input.operation.tenantId, userId: input.operation.userId, operationKey: input.operation.operationKey, inputs: input.operation.inputs, studyId: input.studyId, runId: created.id } })
+      }
+    }
+    return created
+  }).catch(error => {
+    const match = error instanceof Error ? error.message.match(/MINER_DUPLICATE:([^\s]+)/) : null
+    if (match) return { id: match[1], duplicate: true } as any
+    throw error
   })
+  if ((run as any).duplicate) return { runId: run.id, existing: true }
 
   // Drain in-process too, so an installation with no worker deployed behaves
   // exactly as it did before. It competes for the same lease as the worker, so
@@ -638,6 +683,7 @@ export async function drainWhitespaceRuns(
   batch = 1,
   fallback?: { studyId: string; headers: Record<string, string> }
 ): Promise<string[]> {
+  await reconcileMinerOperations()
   await sweepDeadRuns()
 
   const handled: string[] = []
@@ -685,6 +731,26 @@ export async function drainWhitespaceRuns(
     }
   }
   return handled
+}
+
+/** Completes accounting left RESERVED by a worker crash after result commit. */
+async function reconcileMinerOperations(): Promise<void> {
+  // Prisma has no declared relation for the additive compatibility tables, so
+  // select candidate ids with SQL and then use the ordinary service ledger.
+  const rows = await prisma.$queryRaw<Array<{ id: string; tenantId: string; userId: string; operationKey: string; runId: string; studyId: string; inputs: Prisma.JsonValue; stage: string }>>(Prisma.sql`
+    SELECT o."id", o."tenantId", o."userId", o."operationKey", o."runId", o."studyId", o."inputs", r."stage"
+    FROM "miner_operations" o JOIN "whitespace_runs" r ON r."id" = o."runId"
+    WHERE o."state" = 'RESERVED' AND r."status" = 'COMPLETED'
+    ORDER BY o."createdAt" ASC LIMIT 20
+  `)
+  if (!rows.length) return
+  const { recordServiceCompletion } = await import('@/lib/service-completion')
+  for (const row of rows) {
+    try {
+      await recordServiceCompletion({ tenantId: row.tenantId, userId: row.userId, serviceType: 'INVENTION_MINER', operationId: row.operationKey, operationType: row.stage, metadata: { studyId: row.studyId, runId: row.runId, inputs: row.inputs } })
+      await prisma.minerOperation.updateMany({ where: { id: row.id, state: 'RESERVED' }, data: { state: 'COMPLETED', completedAt: new Date() } })
+    } catch (error) { console.error('[Whitespace] Miner accounting reconciliation failed:', error) }
+  }
 }
 
 /**
@@ -748,6 +814,11 @@ async function finalizeRunFailure(
     await appendTrail(run.studyId, 'RUN', 'system', `${run.stage} failed: ${message.slice(0, 200)}`)
   } catch (finalizeError) {
     console.error('[Whitespace] Could not finalize run failure:', finalizeError)
+  }
+  try {
+    await (prisma as any).minerOperation?.updateMany({ where: { runId: run.id, state: 'RESERVED' }, data: { state: 'RELEASED', completedAt: new Date() } })
+  } catch (operationError) {
+    console.error('[Whitespace] Could not release Miner operation:', operationError)
   }
 }
 
@@ -831,6 +902,7 @@ export async function recordRunFailure(run: ClaimedRun, error: unknown, workerId
  */
 let inlineDrainRunning = false
 function kickInlineDrain(fallback?: { studyId: string; headers: Record<string, string> }): void {
+  if (whitespaceWorkerMode() === 'standalone') return
   if (inlineDrainRunning) return
   inlineDrainRunning = true
   // Host-qualified and salted: two web hosts with the same pid used to share a
@@ -1039,6 +1111,7 @@ async function executeRun(input: {
         studyId: input.studyId,
         scope: input.scope,
         llmContext: input.llmContext,
+        snapshotId: typeof params.snapshotId === 'string' ? params.snapshotId : undefined,
       })
       results = result as unknown as Prisma.InputJsonValue
       // Work done, with its denominators — never what was found. How many
@@ -1056,6 +1129,7 @@ async function executeRun(input: {
         studyId: input.studyId,
         scope: input.scope,
         llmContext: input.llmContext,
+        snapshotId: typeof params.snapshotId === 'string' ? params.snapshotId : undefined,
       })
       results = result as unknown as Prisma.InputJsonValue
       // Work done and its denominators, plus which engines did not run — never
@@ -1068,6 +1142,47 @@ async function executeRun(input: {
         `${result.graph.families.toLocaleString()} of ${result.coverage.familiesInField.toLocaleString()} families, ` +
         `${result.leadsWritten} lead${result.leadsWritten === 1 ? '' : 's'} saved` +
         (skipped.length ? ` (${skipped.join(', ')} did not run)` : '')
+      break
+    }
+    case 'MINER_PREFLIGHT': {
+      const { createFieldSnapshot } = await import('./miner/snapshots')
+      const result = await createFieldSnapshot({ runId: input.runId, studyId: input.studyId, scope: input.scope, reporter })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `Miner preflight complete — ${result.coverage.familiesTotal.toLocaleString()} families measured, ${result.workload.sampledFamilies.toLocaleString()} proposed for reading`
+      break
+    }
+    case 'MINER_PROPOSE': {
+      const { runMinerProposeStage } = await import('./miner/workflow-stages')
+      const result = await runMinerProposeStage({
+        ...input, reporter,
+        leadId: String(params.leadId || ''), snapshotId: String(params.snapshotId || ''),
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `Solution proposals prepared for review — ${result.proposals.length} alternative${result.proposals.length === 1 ? '' : 's'}`
+      break
+    }
+    case 'MINER_GATE': {
+      const { runMinerGateStage } = await import('./miner/workflow-stages')
+      const result = await runMinerGateStage({
+        ...input, reporter,
+        leadId: String(params.leadId || ''), snapshotId: String(params.snapshotId || ''),
+        proposalRevisionId: String(params.proposalRevisionId || ''), office: String(params.office || '') as 'IN' | 'US' | 'EP',
+        researchCutoff: typeof params.researchCutoff === 'string' ? params.researchCutoff : undefined,
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `${result.office} assessment complete — ${result.outcome}`
+      break
+    }
+    case 'MINER_BRIEF': {
+      const { runMinerBriefStage } = await import('./miner/workflow-stages')
+      const result = await runMinerBriefStage({
+        ...input, reporter,
+        leadId: String(params.leadId || ''), snapshotId: String(params.snapshotId || ''),
+        proposalRevisionId: String(params.proposalRevisionId || ''), assessmentRunId: String(params.assessmentRunId || ''),
+        office: String(params.office || '') as 'IN' | 'US' | 'EP',
+      })
+      results = result as unknown as Prisma.InputJsonValue
+      trailSummary = `${result.office} invention brief prepared from proposal revision ${result.proposalRevisionId}`
       break
     }
     default:
@@ -1103,6 +1218,52 @@ async function executeRun(input: {
       `[Whitespace] Run ${input.runId} finished after its lease was lost — result discarded, the current holder's attempt stands.`
     )
     return
+  }
+
+  // Publish current-result pointers only after the producing run won its lease
+  // fence, and only while the exact approved proposal is still current.
+  const resultObject = results as unknown as Record<string, unknown>
+  const leadId = typeof resultObject.leadId === 'string' ? resultObject.leadId : ''
+  const proposalRevisionId = typeof resultObject.proposalRevisionId === 'string' ? resultObject.proposalRevisionId : ''
+  const office = typeof resultObject.office === 'string' ? resultObject.office : ''
+  if (leadId && proposalRevisionId && ['IN', 'US', 'EP'].includes(office)) {
+    const pointer = JSON.stringify({ runId: input.runId, proposalRevisionId, snapshotId: resultObject.snapshotId, assessmentRunId: resultObject.assessmentRunId ?? null, outcome: resultObject.outcome ?? null, generatedAt: resultObject.generatedAt ?? resultObject.assessmentDate ?? new Date().toISOString() })
+    const column = input.stage === 'MINER_GATE' ? Prisma.raw('"currentAssessments"') : input.stage === 'MINER_BRIEF' ? Prisma.raw('"currentBriefs"') : null
+    if (column) {
+      if (input.stage === 'MINER_GATE') {
+        await prisma.$executeRaw(Prisma.sql`
+          UPDATE "invention_leads"
+          SET "currentAssessments" = jsonb_set(COALESCE("currentAssessments", '{}'::jsonb), ARRAY[${office}], ${pointer}::jsonb),
+              "currentBriefs" = COALESCE("currentBriefs", '{}'::jsonb) - ${office},
+              "updatedAt" = NOW()
+          WHERE "id" = ${leadId} AND "currentProposalId" = ${proposalRevisionId}
+        `)
+      } else {
+        await prisma.$executeRaw(Prisma.sql`
+          UPDATE "invention_leads"
+          SET ${column} = jsonb_set(COALESCE(${column}, '{}'::jsonb), ARRAY[${office}], ${pointer}::jsonb),
+              "updatedAt" = NOW()
+          WHERE "id" = ${leadId} AND "currentProposalId" = ${proposalRevisionId}
+        `)
+      }
+    }
+  }
+
+  const operation = await prisma.minerOperation.findUnique({ where: { runId: input.runId } })
+  if (operation && operation.state === 'RESERVED') {
+    try {
+      const { recordServiceCompletion } = await import('@/lib/service-completion')
+      await recordServiceCompletion({
+        tenantId: operation.tenantId, userId: operation.userId, serviceType: 'INVENTION_MINER',
+        operationId: operation.operationKey, operationType: input.stage,
+        metadata: { studyId: input.studyId, runId: input.runId, inputs: operation.inputs },
+      })
+      await prisma.minerOperation.updateMany({ where: { id: operation.id, state: 'RESERVED' }, data: { state: 'COMPLETED', completedAt: new Date() } })
+    } catch (accountingError) {
+      // The immutable result is already complete. Keep the reservation for a
+      // reconciliation pass; never rewrite successful research as a failed run.
+      console.error('[Whitespace] Miner operation accounting needs reconciliation:', accountingError)
+    }
   }
 
   try {

@@ -201,7 +201,7 @@ const ENGINE_STEPS = [
   { key: 'unsolved', label: 'Measuring how each problem is addressed' },
   { key: 'transfer', label: 'Reading outside the field' },
   { key: 'frontier', label: 'Reading the dependent-claim frontier' },
-  { key: 'expiry', label: 'Finding platforms nearing the end of protection' },
+  { key: 'expiry', label: 'Measuring age-based research signals' },
   { key: 'record', label: 'Saving the leads' },
 ]
 const ENGINE_COUNTERS = [
@@ -438,6 +438,7 @@ export interface LeadDraft {
 // ---------------------------------------------------------------------------
 
 export interface MinerEnginesInput {
+  snapshotId?: string
   runId: string
   workerId: string
   reporter: RunReporter
@@ -450,7 +451,7 @@ export async function runMinerEnginesStage(input: MinerEnginesInput): Promise<Mi
   const { reporter } = input
   await reporter.plan(ENGINE_STEPS, ENGINE_COUNTERS)
   const coverageNotes: string[] = []
-  const fingerprint = scopeFingerprint(input.scope)
+  const fingerprint = input.snapshotId ?? scopeFingerprint(input.scope)
 
   // =========================================================================
   // Preconditions. All permanent, all before any work.
@@ -459,7 +460,7 @@ export async function runMinerEnginesStage(input: MinerEnginesInput): Promise<Mi
 
   const study = await prisma.whitespaceStudy.findUnique({
     where: { id: input.studyId },
-    select: { id: true, kind: true, scopeVersion: true },
+    select: { id: true, kind: true, scopeVersion: true, inventionJson: true },
   })
   if (!study) throw new WhitespacePermanentError('That study no longer exists.')
 
@@ -775,7 +776,7 @@ export async function runMinerEnginesStage(input: MinerEnginesInput): Promise<Mi
   // =========================================================================
   // Engine (iv) — expiry frontier
   // =========================================================================
-  await reporter.step('expiry', 'Finding platforms nearing the end of protection')
+  await reporter.step('expiry', 'Measuring age-based research signals; legal status is not inferred')
   const expiryOutcome = runExpiryEngine({
     components,
     nodeById,
@@ -788,14 +789,34 @@ export async function runMinerEnginesStage(input: MinerEnginesInput): Promise<Mi
     inputs: expiryOutcome.inputs,
     skipReason: expiryOutcome.skipReason,
   })
-  if (expiryOutcome.skipReason) await reporter.skip('expiry', 'no platform in this field is near the end of its term')
+  if (expiryOutcome.skipReason) await reporter.skip('expiry', 'no age-based signal met the configured research threshold')
   drafts.push(...expiryOutcome.drafts)
 
   // =========================================================================
   // Record
   // =========================================================================
   await reporter.step('record', 'Saving the leads')
-  const selected = selectLeads(drafts, engines)
+  const inventionContext = study.inventionJson && typeof study.inventionJson === 'object'
+    ? study.inventionJson as Record<string, unknown>
+    : {}
+  const focusProblems = typeof inventionContext.focusProblems === 'string' ? inventionContext.focusProblems.trim() : ''
+  const focusTerms = new Set(focusProblems.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])
+  const engineOrder = new Map<LeadDraft['engine'], number>([['unsolved', 0], ['transfer', 1], ['frontier', 2], ['expiry', 3]])
+  const focusScore = (lead: LeadDraft) => {
+    if (!focusTerms.size) return 0
+    const words = new Set(`${lead.problemStatement} ${lead.proposedMechanism ?? ''}`.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])
+    let hits = 0
+    for (const term of Array.from(focusTerms)) if (words.has(term)) hits += 1
+    return hits / focusTerms.size
+  }
+  // Focus is a ranking preference only. It never changes field membership or
+  // an engine's coverage allocation.
+  const prioritised = [...drafts].sort((a, b) =>
+    (engineOrder.get(a.engine) ?? 99) - (engineOrder.get(b.engine) ?? 99) ||
+    focusScore(b) - focusScore(a) || b.rank - a.rank
+  )
+  if (focusProblems) coverageNotes.push(`Lead ordering prioritised the user-supplied focus problems: ${focusProblems.slice(0, 300)}.`)
+  const selected = selectLeads(prioritised, engines)
   const titled = await nameLeads(selected, input.llmContext, resolvedModels)
   tokensIn += titled.tokensUsed.input
   tokensOut += titled.tokensUsed.output
@@ -804,6 +825,7 @@ export async function runMinerEnginesStage(input: MinerEnginesInput): Promise<Mi
     studyId: input.studyId,
     runId: input.runId,
     fingerprint,
+    snapshotId: input.snapshotId,
     leads: titled.leads,
   })
   reporter.count('leads', written.written)
@@ -949,6 +971,7 @@ async function loadStatementNodes(
       FROM "patent_problem_statements" s
       JOIN "miner_field_publications" f
         ON f."publicationNumber" = s."publicationNumber"
+       AND f."extractionId" = s."extractionId"
        AND f."studyId" = ${studyId}
        AND f."scopeFingerprint" = ${fingerprint}
        AND f."sampled" = true
@@ -1049,7 +1072,7 @@ async function loadClaimScopes(
 ): Promise<Map<string, ClaimScope>> {
   const field = await prisma.minerFieldPublication.findMany({
     where: { studyId, scopeFingerprint: fingerprint, sampled: true },
-    select: { publicationNumber: true, familyKey: true, textTier: true },
+    select: { publicationNumber: true, familyKey: true, textTier: true, extractionId: true },
   })
   const byPublication = new Map(field.map(row => [row.publicationNumber, row]))
   const scopes = new Map<string, ClaimScope>()
@@ -1059,8 +1082,7 @@ async function loadClaimScopes(
     if (index > 0) await reporter.heartbeat()
     const rows = await prisma.patentTextExtraction.findMany({
       where: {
-        publicationNumber: { in: batches[index].map(row => row.publicationNumber) },
-        supersededAt: null,
+        id: { in: batches[index].map(row => row.extractionId).filter((id): id is string => !!id) },
       },
       select: { publicationNumber: true, familyKey: true, textTier: true, claimedScope: true },
     })
@@ -1109,6 +1131,8 @@ async function censusClassificationFacet(
   studyId: string,
   fingerprint: string
 ): Promise<{ classifications: LabelledCount[]; familyCount: number } | null> {
+  const pinned = await prisma.minerFieldSnapshot.findUnique({ where: { id: fingerprint }, select: { scope: true } })
+  const legacyFingerprint = pinned ? scopeFingerprint(pinned.scope as unknown as WhitespaceScope) : fingerprint
   const runs = await prisma.whitespaceRun.findMany({
     where: { studyId, stage: 'FIELD_MAP', status: 'COMPLETED' },
     orderBy: { completedAt: 'desc' },
@@ -1117,7 +1141,7 @@ async function censusClassificationFacet(
   })
   for (const run of runs) {
     const snapshot = run.scopeSnapshot as unknown as WhitespaceScope | null
-    if (!snapshot || scopeFingerprint(snapshot) !== fingerprint) continue
+    if (!snapshot || scopeFingerprint(snapshot) !== legacyFingerprint) continue
     const results = run.results as unknown as { classifications?: LabelledCount[]; familyCount?: number } | null
     if (!results?.classifications?.length) continue
     return { classifications: results.classifications, familyCount: Math.max(1, results.familyCount ?? 1) }
@@ -1631,6 +1655,7 @@ async function nearestMechanismPerFamily(
           FROM "patent_problem_statements" s
           JOIN "miner_field_publications" f
             ON f."publicationNumber" = s."publicationNumber"
+           AND f."extractionId" = s."extractionId"
            AND f."studyId" = ${studyId}
            AND f."scopeFingerprint" = ${fingerprint}
            AND f."sampled" = true
@@ -1987,6 +2012,7 @@ async function nearestFieldMechanismToTexts(
             FROM "patent_problem_statements" s
             JOIN "miner_field_publications" f
               ON f."publicationNumber" = s."publicationNumber"
+             AND f."extractionId" = s."extractionId"
              AND f."studyId" = ${studyId}
              AND f."scopeFingerprint" = ${fingerprint}
              AND f."sampled" = true
@@ -2476,6 +2502,7 @@ export async function writeLeads(input: {
   studyId: string
   runId: string
   fingerprint: string
+  snapshotId?: string
   leads: ReadonlyArray<LeadDraft & { title: string }>
 }): Promise<{ written: number; stale: number }> {
   const fingerprints = input.leads.map(lead => lead.fingerprint)
@@ -2487,6 +2514,7 @@ export async function writeLeads(input: {
         const measured = {
           runId: input.runId,
           scopeFingerprint: input.fingerprint,
+          snapshotId: input.snapshotId ?? null,
           origin: lead.origin,
           title: lead.title,
           problemStatement: lead.problemStatement,
@@ -2500,7 +2528,7 @@ export async function writeLeads(input: {
         }
         const row = await tx.inventionLead.upsert({
           where: { studyId_fingerprint: { studyId: input.studyId, fingerprint: lead.fingerprint } },
-          // The update deliberately omits humanReview, gate, brief and status.
+          // Proposal revisions and their evidence are immutable, independent records.
           update: measured,
           create: {
             studyId: input.studyId,
@@ -2508,14 +2536,20 @@ export async function writeLeads(input: {
             status: 'CANDIDATE',
             ...measured,
           },
-          select: { id: true },
+          select: { id: true, currentProposalId: true },
         })
         written += 1
 
+        if (row.currentProposalId && input.snapshotId) {
+          const approved = await tx.minerProposalRevision.findUnique({ where: { id: row.currentProposalId }, select: { snapshotId: true } })
+          if (approved && approved.snapshotId !== input.snapshotId) {
+            await tx.inventionLead.update({ where: { id: row.id }, data: { currentProposalId: null, currentAssessments: {}, currentBriefs: {}, status: 'CANDIDATE' } })
+          }
+        }
+
         // Machine-produced evidence is replaced; USER evidence is never touched.
-        await tx.whitespaceEvidence.deleteMany({
-          where: { leadId: row.id, kind: { in: ['STATISTIC', 'PATENT_PASSAGE'] } },
-        })
+        // Keep evidence used by previous reviews. Its producing run identifies
+        // which measurement it belongs to; replacing findings never deletes it.
         if (lead.evidence.length) {
           await tx.whitespaceEvidence.createMany({
             data: lead.evidence.map(entry => ({
@@ -2525,7 +2559,7 @@ export async function writeLeads(input: {
               refId: entry.refId,
               passage: entry.passage,
               stance: entry.stance,
-              data: (entry.data ?? {}) as unknown as Prisma.InputJsonValue,
+              data: { ...(entry.data ?? {}), producingRunId: input.runId, purpose: 'MINER_ENGINE' } as unknown as Prisma.InputJsonValue,
             })),
           })
         }

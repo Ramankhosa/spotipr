@@ -6,6 +6,8 @@ import { getOwnedStudy, readScope } from '@/lib/whitespace/service'
 import { buildWhitespaceReportModel } from '@/lib/whitespace/report-model'
 import { buildWhitespaceReportDocx } from '@/lib/whitespace/report-docx'
 import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
+import { studyKindOf } from '@/lib/whitespace/types'
+import { buildMinerReportDocx, buildMinerReportModel } from '@/lib/whitespace/miner/report'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -42,6 +44,28 @@ export async function GET(request: NextRequest, { params }: { params: { studyId:
 
     const study = await getOwnedStudy(params.studyId, auth.user.id, auth.user.tenantId)
     if (!study) return NextResponse.json({ error: 'Study not found' }, { status: 404 })
+
+    if (studyKindOf(study.kind) === 'MINER') {
+      const leadId = request.nextUrl.searchParams.get('leadId') || ''
+      const office = (request.nextUrl.searchParams.get('office') || '').toUpperCase()
+      if (!leadId || !['IN', 'US', 'EP'].includes(office)) return NextResponse.json({ error: 'Choose a lead and office brief to export.' }, { status: 422 })
+      const lead = await prisma.inventionLead.findFirst({ where: { id: leadId, studyId: study.id } })
+      const briefPointer = ((lead?.currentBriefs ?? {}) as Record<string, any>)[office]
+      const assessmentPointer = ((lead?.currentAssessments ?? {}) as Record<string, any>)[office]
+      if (!lead?.currentProposalId || !briefPointer || !assessmentPointer || briefPointer.assessmentRunId !== assessmentPointer.runId) return NextResponse.json({ error: 'Prepare a brief from the current office assessment before exporting it.' }, { status: 422 })
+      const [proposal, assessmentRun, briefRun] = await Promise.all([
+        prisma.minerProposalRevision.findUnique({ where: { id: lead.currentProposalId } }),
+        prisma.whitespaceRun.findUnique({ where: { id: assessmentPointer.runId } }),
+        prisma.whitespaceRun.findUnique({ where: { id: briefPointer.runId } }),
+      ])
+      if (!proposal || !assessmentRun?.results || !briefRun?.results) return NextResponse.json({ error: 'The selected report snapshot is unavailable.' }, { status: 409 })
+      const model = buildMinerReportModel({ lead, proposal, assessment: assessmentRun.results, brief: briefRun.results, office, assessmentRunId: assessmentRun.id, briefRunId: briefRun.id })
+      const buffer = await buildMinerReportDocx(model)
+      return new NextResponse(new Uint8Array(buffer), { headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'Content-Disposition': `attachment; filename="Invention-Miner_${lead.id.slice(-6)}_${office}_r${proposal.revision}.docx"`,
+      } })
+    }
 
     const [runs, clusters, areas, hypotheses, concepts, trail, firm, latestResults] = await Promise.all([
       prisma.whitespaceRun.findMany({

@@ -284,8 +284,8 @@ const MATERIAL_TERMS = [
 
 export function normalizePreliminaryClaimScopeStyle(value: unknown): PreliminaryClaimScopeStyle {
   const style = String(value || '').trim().toLowerCase()
-  if (style === 'broad' || style === 'narrow') return style
-  return 'default'
+  if (style === 'default' || style === 'narrow') return style
+  return 'broad'
 }
 
 function normalizeText(value: unknown) {
@@ -387,12 +387,12 @@ function buildClaimScopeStyleStrategyBlock(style: PreliminaryClaimScopeStyle) {
   const normalizedStyle = normalizePreliminaryClaimScopeStyle(style)
   if (normalizedStyle === 'broad') {
     return `CLAIM SCOPE STYLE STRATEGY
-Selected style: Broad Style
+Selected style: Standard Style
 - Draft Claim 1 at the broadest reasonable level that is still source-supported, enabled, and consistent with the disclosure.
 - Claim 1 should recite the minimum source-supported inventive combination needed for patentable distinction and statutory category clarity.
 - Do not add optional embodiments, examples, ranges, materials, use cases, performance results, or fallback details to Claim 1 unless they are required for source support or enablement.
 - Put concrete embodiments, numeric values, materials, examples, alternatives, and fallback limitations into dependent claims when source-supported.
-- Broad does not mean generic: avoid unsupported processor/module/results-only language and map every broad element to source support.`
+- Standard does not mean generic: avoid unsupported processor/module/results-only language and map every broad element to source support.`
   }
   if (normalizedStyle === 'narrow') {
     return `CLAIM SCOPE STYLE STRATEGY

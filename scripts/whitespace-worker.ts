@@ -16,6 +16,7 @@
  */
 
 import { drainWhitespaceRuns } from '../src/lib/whitespace/service'
+import { recordWhitespaceWorkerHeartbeat, whitespaceWorkerMode } from '../src/lib/whitespace/worker-health'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -32,6 +33,7 @@ async function main() {
   const idleMs = envInt(process.env.WHITESPACE_WORKER_IDLE_MS, 5000, 1000)
 
   console.log(`[WhitespaceWorker] ${workerId} starting (batch ${batch}${once ? ', single pass' : ''})`)
+  await recordWhitespaceWorkerHeartbeat(workerId, 'ACTIVE', { mode: whitespaceWorkerMode(), batch, idleMs, once })
 
   let stopping = false
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
@@ -46,6 +48,7 @@ async function main() {
   do {
     let handled: string[] = []
     try {
+      await recordWhitespaceWorkerHeartbeat(workerId, 'ACTIVE', { mode: whitespaceWorkerMode(), batch, idleMs, once })
       handled = await drainWhitespaceRuns(workerId, batch)
       if (handled.length) console.log(`[WhitespaceWorker] handled ${handled.length} run(s): ${handled.join(', ')}`)
     } catch (error) {
@@ -64,6 +67,7 @@ async function main() {
     }
   } while (true)
 
+  await recordWhitespaceWorkerHeartbeat(workerId, 'STOPPED', { mode: whitespaceWorkerMode(), batch, idleMs, once }).catch(() => undefined)
   console.log('[WhitespaceWorker] stopped.')
   process.exit(0)
 }

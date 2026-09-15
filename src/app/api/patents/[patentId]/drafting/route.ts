@@ -5176,7 +5176,7 @@ function applyGeneratedClaimLimit(params: {
 type ClaimGenerationProgressSink = (event: Record<string, any>) => void
 
 const CLAIM_SCOPE_STYLE_LABELS: Record<string, string> = {
-  broad: 'Broad',
+  broad: 'Standard',
   default: 'Balanced',
   narrow: 'Narrow',
 }

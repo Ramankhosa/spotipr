@@ -19,10 +19,9 @@
  *     make the remaining ones look complete. It is a coverage fact and travels
  *     with the conclusion it failed to support.
  *
- * `near` exists because models re-wrap, re-hyphenate and de-duplicate whitespace
- * when copying, and rejecting those would make the grade a formatting test rather
- * than a truthfulness one. It is deliberately tight: a paraphrase that changes a
- * tenth of the words is a paraphrase, and grades `dropped`.
+ * Whitespace and case differences are accepted. Any changed token, order,
+ * number, condition or negation is dropped; a similarity score can never
+ * support a decisive finding.
  */
 
 /**
@@ -42,8 +41,8 @@ export function normaliseForQuote(s: string): string {
 
 /**
  * exact   — the quote appears verbatim in the source (modulo whitespace and case)
- * near    — ≥ NEAR_THRESHOLD token-level Jaccard against the best same-length
- *           window of the source: the model copied it, with cosmetic slippage
+ * near    — retained in the historical type only; current verification never
+ *           returns it as supporting evidence
  * dropped — neither, or the publication was never shown to the model at all
  */
 export type CitationGrade = 'exact' | 'near' | 'dropped'
@@ -136,7 +135,10 @@ export function gradeQuote(quote: string, sourceText: string): CitationGrade {
   // generous 'near'. The rule only ever bites in the weakening direction.
   if (quoteTokens.length < MIN_QUOTE_TOKENS) return 'dropped'
 
-  return bestWindowJaccard(quoteTokens, tokenise(normalisedSource)) >= NEAR_THRESHOLD ? 'near' : 'dropped'
+  // Word-set overlap loses order, negation and numerical distinctions. Even a
+  // 99% match can reverse a technical assertion. Only whitespace/case changes
+  // are accepted above; paraphrases must be presented separately from quotes.
+  return 'dropped'
 }
 
 export interface GradedCitation<T> {

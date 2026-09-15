@@ -129,6 +129,7 @@ function NewPatentDraftPageContent() {
   const searchParams = useSearchParams()
   const initialProjectId = searchParams?.get('projectId') || ''
   const ideaId = searchParams?.get('ideaId') || ''
+  const minerHandoffToken = searchParams?.get('minerHandoff') || ''
   const [projects, setProjects] = useState<Project[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [selectedProject, setSelectedProject] = useState<string>(initialProjectId)
@@ -144,6 +145,19 @@ function NewPatentDraftPageContent() {
     if (urlTitle) setPatentTitle(urlTitle)
     if (urlRawIdea) setRawIdea(urlRawIdea)
   }, [searchParams])
+  useEffect(() => {
+    if (!minerHandoffToken) return
+    void authFetch(`/api/whitespace/miner-handoffs/${encodeURIComponent(minerHandoffToken)}`)
+      .then(async response => {
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(body.error || 'Could not open the Miner handoff.')
+        setPatentTitle(String(body.payload?.title || ''))
+        setRawIdea(String(body.payload?.description || ''))
+        const office = String(body.office || '')
+        if (office) setSelectedCodes([office])
+      })
+      .catch(cause => setError(cause instanceof Error ? cause.message : 'Could not open the Miner handoff.'))
+  }, [authFetch, minerHandoffToken])
   const [isCreating, setIsCreating] = useState(false)
   const [stage0OverlayStatus, setStage0OverlayStatus] = useState<Stage0PatentIntelligenceStatus | null>(null)
   const [stage0StartedAt, setStage0StartedAt] = useState<number | null>(null)
@@ -784,6 +798,13 @@ function NewPatentDraftPageContent() {
         throw new Error('Draft session was not initialized correctly')
       }
       await attachSelectedExtractedImages(patentId, sessionId)
+
+      if (minerHandoffToken) {
+        const consumed = await authFetch(`/api/whitespace/miner-handoffs/${encodeURIComponent(minerHandoffToken)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patentId, sessionId }),
+        })
+        if (!consumed.ok) throw new Error((await consumed.json().catch(() => ({}))).error || 'The draft was created, but its Miner handoff could not be recorded.')
+      }
 
       setStage0OverlayStatus('success')
       setDraftCreationContext(null)

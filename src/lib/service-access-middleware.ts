@@ -22,10 +22,11 @@ import type { ServiceType } from '@prisma/client'
 export async function enforceServiceAccess(
   userId: string,
   tenantId: string,
-  serviceType: ServiceType
+  serviceType: ServiceType,
+  options: { paidRetry?: boolean } = {}
 ): Promise<{ allowed: true; result: ServiceAccessResult } | { allowed: false; response: NextResponse }> {
   try {
-    const result = await checkServiceAccess(userId, tenantId, serviceType)
+    const result = await checkServiceAccess(userId, tenantId, serviceType, options)
     
     if (!result.allowed) {
       // Provide user-friendly error messages based on the reason

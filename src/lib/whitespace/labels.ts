@@ -57,9 +57,11 @@ export const STAGE_LABEL: Record<string, string> = {
   DEEP_DIVE: 'Reading the claims',
   VALIDATE: 'Attacking a hypothesis',
   DIMENSION_MAP: 'Finding the viewpoints',
+  MINER_PREFLIGHT: 'Checking the field and workload',
   MINER_HARVEST: 'Reading the field',
   MINER_ENGINES: 'Finding the openings',
-  MINER_GATE: 'Testing grantability',
+  MINER_PROPOSE: 'Developing solution proposals',
+  MINER_GATE: 'Assessing the reviewed solution',
   MINER_BRIEF: 'Writing the invention brief',
 }
 
@@ -68,7 +70,7 @@ export const LEAD_ORIGIN_LABEL: Record<string, string> = {
   UNSOLVED_PROBLEM: 'Problem the field admits but does not solve',
   CROSS_DOMAIN_TRANSFER: 'Mechanism borrowed from another field',
   CLAIM_FRONTIER: 'Combination nobody has claimed together',
-  EXPIRY_FRONTIER: 'Platform nearing the end of protection',
+  EXPIRY_FRONTIER: 'Age-based research signal — legal status not confirmed',
 }
 
 /**

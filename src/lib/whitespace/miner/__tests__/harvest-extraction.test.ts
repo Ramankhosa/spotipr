@@ -222,7 +222,7 @@ describe('buildReading', () => {
 
   it('hashes the reading with its TIER inside, so a richer reading is a new row', () => {
     const result = buildReading(stagedRow(), textRow())!
-    expect(result.textHash).toBe(textHashFor('description-5k', result.sourceText))
+    expect(result.textHash).toBe(textHashFor('description-5k', `v2\u0000${result.sourceText}`))
     expect(result.textHash).not.toBe(textHashFor('description-full', result.sourceText))
   })
 

@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 }
 
 export default function WhitespacePage() {
-  return <WhitespaceStudiesApp />
+  return <WhitespaceStudiesApp minerEnabled={process.env.INVENTION_MINER_ENABLED === 'true'} />
 }

@@ -5,9 +5,11 @@ import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { appendTrail, getOwnedStudy, readScope, startWhitespaceRun } from '@/lib/whitespace/service'
 import { scopeIsRunnable } from '@/lib/whitespace/scope-schema'
 import { isMinerStage, studyKindOf, type WhitespaceRunStage } from '@/lib/whitespace/types'
-import { scopeFingerprint } from '@/lib/whitespace/miner/scope-fingerprint'
+import { minerRetrievalIdentity } from '@/lib/whitespace/miner/retrieval-identity'
 import type { Prisma } from '@prisma/client'
 import { whitespaceErrorResponse } from '@/app/api/whitespace/route-errors'
+import { MinerError, requireMinerEnabled } from '@/lib/whitespace/miner/contracts'
+import { minerApiError } from '@/lib/whitespace/miner/api'
 
 export const runtime = 'nodejs'
 
@@ -18,8 +20,12 @@ const STAGES: WhitespaceRunStage[] = [
   'DEEP_DIVE',
   'VALIDATE',
   'DIMENSION_MAP',
+  'MINER_PREFLIGHT',
   'MINER_HARVEST',
   'MINER_ENGINES',
+  'MINER_PROPOSE',
+  'MINER_GATE',
+  'MINER_BRIEF',
 ]
 
 /**
@@ -40,6 +46,9 @@ const METERED_STAGES = new Set<WhitespaceRunStage>([
   'DIMENSION_MAP',
   'MINER_HARVEST',
   'MINER_ENGINES',
+  'MINER_PROPOSE',
+  'MINER_GATE',
+  'MINER_BRIEF',
 ])
 
 /**
@@ -115,6 +124,35 @@ function sanitiseParams(stage: WhitespaceRunStage, raw: unknown): Record<string,
       .filter(dimension => dimension.label && dimension.values.length >= 2)
     return dimensions.length ? { registry: { dimensions } } : undefined
   }
+  if (stage === 'MINER_HARVEST' || stage === 'MINER_ENGINES') {
+    const snapshotId = text(source.snapshotId, 64)
+    return snapshotId ? { snapshotId } : undefined
+  }
+  if (stage === 'MINER_PROPOSE') {
+    const leadId = text(source.leadId, 64)
+    const snapshotId = text(source.snapshotId, 64)
+    return leadId && snapshotId ? { leadId, snapshotId } : undefined
+  }
+  if (stage === 'MINER_GATE') {
+    const leadId = text(source.leadId, 64)
+    const snapshotId = text(source.snapshotId, 64)
+    const proposalRevisionId = text(source.proposalRevisionId, 64)
+    const office = text(source.office, 2).toUpperCase()
+    const researchCutoff = text(source.researchCutoff, 10)
+    return leadId && snapshotId && proposalRevisionId && ['IN', 'US', 'EP'].includes(office)
+      ? { leadId, snapshotId, proposalRevisionId, office, ...(researchCutoff ? { researchCutoff } : {}) }
+      : undefined
+  }
+  if (stage === 'MINER_BRIEF') {
+    const leadId = text(source.leadId, 64)
+    const snapshotId = text(source.snapshotId, 64)
+    const proposalRevisionId = text(source.proposalRevisionId, 64)
+    const assessmentRunId = text(source.assessmentRunId, 64)
+    const office = text(source.office, 2).toUpperCase()
+    return leadId && snapshotId && proposalRevisionId && assessmentRunId && ['IN', 'US', 'EP'].includes(office)
+      ? { leadId, snapshotId, proposalRevisionId, assessmentRunId, office }
+      : undefined
+  }
   return undefined
 }
 
@@ -152,6 +190,17 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
         { status: 400 }
       )
     }
+    if (isMinerStage(stage)) requireMinerEnabled()
+    if (['MINER_HARVEST', 'MINER_ENGINES', 'MINER_PROPOSE', 'MINER_GATE', 'MINER_BRIEF'].includes(stage) && !runParams) {
+      return NextResponse.json({ error: 'This Miner action is missing its approved field, lead, proposal, office, or assessment input.', code: 'MINER_INPUT_REQUIRED' }, { status: 422 })
+    }
+    // A refresh is deliberately a new paid logical operation. Generate its
+    // identity server-side so a client cannot accidentally collide with (or
+    // choose) another user's refresh. Normal retries omit this marker and keep
+    // returning the already paid result.
+    if (body?.refresh === true && isMinerStage(stage) && METERED_STAGES.has(stage) && runParams) {
+      runParams.refreshId = crypto.randomUUID()
+    }
 
     // Same rule, for the study kind: a miner stage on a landscape study used to
     // enqueue, wait for a worker, stage a whole field and only then refuse. The
@@ -166,6 +215,20 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
         { status: 400 }
       )
     }
+
+    const scope = readScope(study.scope)
+    const runnable = scopeIsRunnable(scope)
+    if (!runnable.runnable) {
+      return NextResponse.json({ error: runnable.reason, code: 'SCOPE_NOT_RUNNABLE' }, { status: 400 })
+    }
+
+    const operationKey = isMinerStage(stage) && METERED_STAGES.has(stage)
+      ? `${stage}:${minerRetrievalIdentity(scope)}:${JSON.stringify(runParams ?? {})}`
+      : null
+    const priorOperation = operationKey && auth.user.tenantId
+      ? await prisma.minerOperation.findUnique({ where: { tenantId_operationKey: { tenantId: auth.user.tenantId, operationKey } } })
+      : null
+    let quotaCheck: { checkedAt: Date; result: { remainingQuota?: { daily: number | null; monthly: number | null }; quotaSource?: string } } | undefined
 
     // Entitlement is checked for every metered stage, tenant or not. Guarding
     // the check on `auth.user.tenantId` meant an account with no tenant — a
@@ -183,14 +246,10 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
           { status: 403 }
         )
       }
-      const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, entitlementFor(stage))
+      const quotaCheckedAt = new Date()
+      const check = await enforceServiceAccess(auth.user.id, auth.user.tenantId, entitlementFor(stage), { paidRetry: !!priorOperation && priorOperation.state !== 'RELEASED' })
       if (!check.allowed) return check.response
-    }
-
-    const scope = readScope(study.scope)
-    const runnable = scopeIsRunnable(scope)
-    if (!runnable.runnable) {
-      return NextResponse.json({ error: runnable.reason, code: 'SCOPE_NOT_RUNNABLE' }, { status: 400 })
+      quotaCheck = { checkedAt: quotaCheckedAt, result: check.result }
     }
 
     // Cheap guard against a client retry loop hammering the corpus. Studio uses
@@ -208,6 +267,17 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       )
     }
 
+    const minerOperation = isMinerStage(stage) && METERED_STAGES.has(stage) && auth.user.tenantId && operationKey
+      ? { tenantId: auth.user.tenantId, userId: auth.user.id,
+          operationKey,
+          inputs: (runParams ?? {}) as Prisma.InputJsonValue,
+          ...(!priorOperation && quotaCheck ? { quotaReservation: {
+            checkedAt: quotaCheck.checkedAt,
+            remainingDaily: quotaCheck.result.remainingQuota?.daily ?? null,
+            remainingMonthly: quotaCheck.result.remainingQuota?.monthly ?? null,
+            userScoped: quotaCheck.result.quotaSource === 'user',
+          } } : {}) }
+      : undefined
     const { runId, existing } = await startWhitespaceRun({
       studyId: study.id,
       stage,
@@ -215,6 +285,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       scopeVersion: study.scopeVersion,
       requestHeaders: headersToRecord(request),
       params: runParams as Prisma.InputJsonValue | undefined,
+      operation: minerOperation,
     })
 
     if (!existing) {
@@ -226,29 +297,17 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
     // that never records one can never be blocked — the quota would read as
     // configured in the admin UI and do nothing.
     //
-    // The operationId is keyed on the SCOPE FINGERPRINT, not the run id or the
-    // scope version: recording the same id twice counts once, so re-running the
+    // The operationId is keyed on the Miner retrieval identity and exact stage
+    // inputs, not the run id or display-only scope metadata: recording the same id twice counts once, so re-running the
     // harvest for a field that has already been charged — after a provider
     // outage, or after a Save that changed nothing — is free, while a genuinely
     // different scope is a genuinely different unit of work.
     //
-    // MINER_ENGINES is recorded on the same rule with its own key, so re-running
+    // MINER_ENGINES and the downstream proposal/office stages use the same rule
+    // with their own exact input keys, so re-running
     // the engines over an already-charged field — after a scope Save that
     // changed nothing, or a retry — is free, while a genuinely different scope
     // is a genuinely different unit of work.
-    if (!existing && isMinerStage(stage) && METERED_STAGES.has(stage) && auth.user.tenantId) {
-      const { recordServiceCompletion } = await import('@/lib/service-completion')
-      const unit = stage === 'MINER_ENGINES' ? 'engines' : 'harvest'
-      await recordServiceCompletion({
-        tenantId: auth.user.tenantId,
-        userId: auth.user.id,
-        serviceType: 'INVENTION_MINER',
-        operationId: `${study.id}:${unit}:${scopeFingerprint(scope)}`,
-        operationType: stage,
-        metadata: { studyId: study.id, runId, scopeVersion: study.scopeVersion },
-      })
-    }
-
     return NextResponse.json(
       existing
         ? { runId, stage, status: 'PROCESSING', error: 'This stage is already running for the study.' }
@@ -256,6 +315,7 @@ export async function POST(request: NextRequest, { params }: { params: { studyId
       { status: existing ? 409 : 202 }
     )
   } catch (error) {
+    if (error instanceof MinerError) return minerApiError(error)
     return whitespaceErrorResponse(error, 'Run start')
   }
 }

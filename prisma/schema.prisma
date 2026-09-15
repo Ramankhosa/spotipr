@@ -5952,6 +5952,10 @@ model PatentTextExtraction {
   /// sha256(tier + NUL + text). The tier is inside the hash, so an upgrade is a
   /// new row rather than a silent overwrite.
   textHash String
+  contractVersion Int @default(1)
+  sourceText String? @db.Text
+  readCoverage Json?
+  sourceEvidence Json?
 
   /// [{ statement, kind: 'admitted_drawback' | 'stated_need' | 'objective' }]
   /// Paraphrases of what the text says about the problem - never the model's
@@ -6068,6 +6072,8 @@ model MinerFieldPublication {
   textTier          String
   /// False for a family in the field that the harvest cap left unread.
   sampled           Boolean @default(false)
+  snapshotId        String?
+  extractionId      String?
 
   createdAt DateTime @default(now())
 
@@ -6084,6 +6090,11 @@ model InventionLead {
   id      String  @id @default(cuid())
   studyId String
   runId   String?
+  snapshotId String?
+  proposalVersion Int @default(0)
+  currentProposalId String?
+  currentAssessments Json?
+  currentBriefs Json?
 
   /// UNSOLVED_PROBLEM | CROSS_DOMAIN_TRANSFER | CLAIM_FRONTIER | EXPIRY_FRONTIER
   origin           String
@@ -6164,6 +6175,11 @@ model MinerHandoff {
   leadId  String
   userId  String
   payload Json
+  tenantId String?
+  target String?
+  proposalRevisionId String?
+  office String?
+  destination Json?
 
   expiresAt  DateTime
   consumedAt DateTime?
@@ -6174,6 +6190,68 @@ model MinerHandoff {
   @@index([leadId])
   @@index([userId, expiresAt])
   @@map("miner_handoffs")
+}
+
+model MinerFieldSnapshot {
+  id String @id @default(cuid())
+  studyId String
+  runId String @unique
+  retrievalIdentity String
+  scope Json
+  matchingRule Json
+  membershipHash String
+  members Json
+  coverage Json
+  workload Json
+  eligible Boolean
+  limitations Json
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([studyId, createdAt])
+  @@map("miner_field_snapshots")
+}
+
+model MinerProposalRevision {
+  id String @id @default(cuid())
+  leadId String
+  snapshotId String
+  revision Int
+  content Json
+  evidence Json
+  createdBy String
+  approvedBy String?
+  approvedAt DateTime?
+  reviews Json @default("[]")
+  createdAt DateTime @default(now())
+  @@unique([leadId, revision])
+  @@map("miner_proposal_revisions")
+}
+
+model MinerOperation {
+  id String @id @default(cuid())
+  tenantId String
+  userId String
+  studyId String
+  operationKey String
+  runId String @unique
+  state String @default("RESERVED")
+  inputs Json
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+  @@unique([tenantId, operationKey])
+  @@index([tenantId, state, createdAt])
+  @@map("miner_operations")
+}
+
+model WhitespaceWorkerHealth {
+  id String @id
+  status String @default("ACTIVE")
+  startedAt DateTime @default(now())
+  heartbeatAt DateTime @default(now())
+  details Json?
+  @@index([status, heartbeatAt])
+  @@map("whitespace_worker_health")
 }
 
 // ============================================================================

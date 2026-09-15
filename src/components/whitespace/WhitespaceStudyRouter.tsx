@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth-context'
 import { wsApi } from './api'
 import { WhitespaceStudyApp } from './WhitespaceStudyApp'
 import { InventionStudyApp } from './invention/InventionStudyApp'
+import { MinerStudyApp } from './miner/MinerStudyApp'
 
 /**
  * Picks the layout for a study by its kind.
@@ -32,7 +33,11 @@ export function WhitespaceStudyRouter({ studyId }: { studyId: string }) {
     setFailed(null)
     void wsApi<{ study: { kind?: string } }>(`/api/whitespace/studies/${studyId}`)
       .then(data => {
-        if (!cancelled) setKind(data.study?.kind === 'INVENTION' ? 'INVENTION' : 'FIELD')
+        if (!cancelled) {
+          const value = data.study?.kind
+          if (value === 'FIELD' || value === 'INVENTION' || value === 'MINER') setKind(value)
+          else setFailed(`This study has an unsupported kind: ${String(value || 'missing')}.`)
+        }
       })
       .catch(error => {
         if (!cancelled) setFailed(error instanceof Error ? error.message : 'Could not load the study.')
@@ -70,5 +75,5 @@ export function WhitespaceStudyRouter({ studyId }: { studyId: string }) {
     )
   }
 
-  return kind === 'INVENTION' ? <InventionStudyApp studyId={studyId} /> : <WhitespaceStudyApp studyId={studyId} />
+  return kind === 'INVENTION' ? <InventionStudyApp studyId={studyId} /> : kind === 'MINER' ? <MinerStudyApp studyId={studyId} /> : <WhitespaceStudyApp studyId={studyId} />
 }

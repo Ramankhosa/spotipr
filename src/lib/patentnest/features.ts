@@ -545,7 +545,7 @@ export const FEATURES: Feature[] = [
     how: [
       {
         title: 'Choose your scope',
-        body: 'Broad, balanced, or narrow — broad keeps independent claims minimal and pushes embodiments into dependents; narrow pulls concrete differentiators up. Claim style follows your invention type and jurisdiction.',
+        body: 'Standard, balanced, or narrow — Standard keeps independent claims minimal and pushes embodiments into dependents; narrow pulls concrete differentiators up. Claim style follows your invention type and jurisdiction.',
       },
       {
         title: 'Structural validation',
@@ -567,7 +567,7 @@ export const FEATURES: Feature[] = [
     details: [
       {
         title: 'Scope is a dial, not an accident',
-        body: 'The broad/balanced/narrow control makes claim strategy an explicit, repeatable choice instead of a prompt-roulette outcome.',
+        body: 'The Standard/balanced/narrow control makes claim strategy an explicit, repeatable choice instead of a prompt-roulette outcome.',
       },
       {
         title: 'Grounded in your facts',
@@ -583,7 +583,7 @@ export const FEATURES: Feature[] = [
       },
     ],
     stats: [
-      { n: '3', l: 'scope styles · broad balanced narrow' },
+      { n: '3', l: 'scope styles · Standard balanced narrow' },
       { n: '§ 112', l: 'antecedent defects caught before filing' },
       { n: '1', l: 'frozen anchor the whole draft obeys' },
     ],

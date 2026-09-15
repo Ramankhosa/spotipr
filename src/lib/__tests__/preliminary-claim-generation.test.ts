@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
+  normalizePreliminaryClaimScopeStyle,
   resetPreliminaryClaimFields,
   shouldBlockPreliminaryClaimReset,
 } from '@/lib/preliminary-claim-generation'
@@ -46,7 +47,13 @@ describe('preliminary claim generation helper', () => {
     expect(prompt).not.toContain('PRELIMINARY CLAIM DRAFTING RULES')
     expect(prompt).toContain('SF-numericValuesAndUnits-1')
     expect(prompt).toContain('CLAIM SCOPE STYLE STRATEGY')
-    expect(prompt).toContain('Selected style: Default Style')
+    expect(prompt).toContain('Selected style: Standard Style')
+  })
+
+  test('uses Standard as the initial claim scope while preserving explicit Balanced selections', () => {
+    expect(normalizePreliminaryClaimScopeStyle(undefined)).toBe('broad')
+    expect(normalizePreliminaryClaimScopeStyle('broad')).toBe('broad')
+    expect(normalizePreliminaryClaimScopeStyle('default')).toBe('default')
   })
 
   test('renders the source fact ledger alongside support data sources, minus duplicates', () => {
@@ -119,10 +126,10 @@ describe('preliminary claim generation helper', () => {
       claimScopeStyle: 'broad',
     })
 
-    expect(prompt).toContain('Selected style: Broad Style')
+    expect(prompt).toContain('Selected style: Standard Style')
     expect(prompt).toContain('minimum source-supported inventive combination')
     expect(prompt).toContain('Put concrete embodiments, numeric values, materials, examples, alternatives, and fallback limitations into dependent claims')
-    expect(prompt).toContain('Broad does not mean generic')
+    expect(prompt).toContain('Standard does not mean generic')
     expect(prompt).toContain('Return ONLY one JSON object')
   })
 

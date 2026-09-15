@@ -27,12 +27,21 @@ describe('gradeQuote', () => {
     expect(gradeQuote(rewrapped, SOURCE)).toBe('exact')
   })
 
-  it('grades a copy with one word slipped near', () => {
+  it('drops a copy with a changed word', () => {
     const slipped =
       'Known solar dryers rely on natural convection, and the resulting airflow across the tray stack '
       + 'is uneven, so the trays nearest the inlet dry much faster than those at the rear, which forces the '
       + 'operator to rotate the trays by hand several times during a single drying cycle.'
-    expect(gradeQuote(slipped, SOURCE)).toBe('near')
+    expect(gradeQuote(slipped, SOURCE)).toBe('dropped')
+  })
+
+  it('rejects changed negation, numbers, units, conditions and word order', () => {
+    const source = 'The apparatus is not suitable above 5 degrees Celsius because the polymer housing deforms under prolonged thermal exposure and mechanical load.'
+    for (const altered of [
+      source.replace('not ', ''), source.replace('5', '50'),
+      source.replace('Celsius', 'Fahrenheit'), source.replace('above', 'below'),
+      source.replace('polymer housing', 'housing polymer'),
+    ]) expect(gradeQuote(altered, source)).toBe('dropped')
   })
 
   it('grades a paraphrase dropped, however faithful its meaning', () => {

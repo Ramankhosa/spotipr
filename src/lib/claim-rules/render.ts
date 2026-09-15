@@ -112,7 +112,7 @@ function twoPartLine(rules: ClaimRuleProfile): string {
   }
 }
 
-function useClaimLine(rules: ClaimRuleProfile): string {
+function renderUseClaimLine(rules: ClaimRuleProfile): string {
   switch (rules.useClaims) {
     case 'not_allowed':
       return '- Use claims ("Use of X for Y") are not a permitted claim category; claim a method (with steps) or a product instead.'
@@ -228,7 +228,7 @@ export function renderJurisdictionClaimRulesBlock(rules: ClaimRuleProfile): stri
   }
 
   const eligibility: string[] = [
-    useClaimLine(rules),
+    renderUseClaimLine(rules),
     medicalLine(rules),
     ...crmLines(rules),
   ]

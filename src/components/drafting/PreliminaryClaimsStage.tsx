@@ -71,7 +71,7 @@ type PatentType = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
 const CLAIM_SCOPE_STYLES: Array<{ value: ClaimScopeStyle; label: string; help: string }> = [
   {
     value: 'broad',
-    label: 'Broad',
+    label: 'Standard',
     help: 'Claim 1 recites the minimum source-supported inventive combination. Embodiments, ranges and fallbacks move into dependent claims.',
   },
   {
@@ -128,8 +128,8 @@ function visibleGenerationSteps(activeStep: string | null, completedSteps: strin
 
 const normalizeClaimScopeStyle = (value: unknown): ClaimScopeStyle => {
   const style = String(value || '').trim().toLowerCase()
-  if (style === 'broad' || style === 'narrow') return style
-  return 'default'
+  if (style === 'default' || style === 'narrow') return style
+  return 'broad'
 }
 
 const parseClaimsFromHtml = (html: string): Claim[] => {
@@ -368,7 +368,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
   // ---- User claim remarks ----
   const [userClaimRemarks, setUserClaimRemarks] = useState('')
-  const [claimScopeStyle, setClaimScopeStyle] = useState<ClaimScopeStyle>('default')
+  const [claimScopeStyle, setClaimScopeStyle] = useState<ClaimScopeStyle>('broad')
   const [isSavingClaimScopeStyle, setIsSavingClaimScopeStyle] = useState(false)
 
   // ---- Claim budget ----

@@ -195,6 +195,7 @@ export default function NoveltySearchSubmission(props: {
     [key: string]: unknown
   }
   onQueued?: (searchId: string) => void | Promise<void>
+  minerHandoffToken?: string
 }) {
   const router = useRouter()
   const { authFetch } = useAuth()
@@ -203,6 +204,18 @@ export default function NoveltySearchSubmission(props: {
   const [description, setDescription] = useState(props.initialDescription || '')
   const [projectId, setProjectId] = useState(props.initialProjectId || '')
   const [groupId, setGroupId] = useState('')
+  useEffect(() => {
+    if (!props.minerHandoffToken) return
+    void authFetch(`/api/whitespace/miner-handoffs/${encodeURIComponent(props.minerHandoffToken)}`)
+      .then(async response => {
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(body.error || 'Could not open the Miner handoff.')
+        setTitle(String(body.payload?.title || ''))
+        setDescription(String(body.payload?.description || ''))
+        if (body.office) setSelectedCountries([String(body.office)])
+      })
+      .catch(error => setError(error instanceof Error ? error.message : 'Could not open the Miner handoff.'))
+  }, [authFetch, props.minerHandoffToken])
   const jurisdiction = 'IN'
   const [searchPath, setSearchPath] = useState<SearchPath>('automatic')
   // Two-step automatic flow: describe the invention, then review the plan on a
@@ -506,6 +519,12 @@ export default function NoveltySearchSubmission(props: {
       if (!response.ok) throw new Error(body.error || 'Failed to queue novelty search.')
       if (body.searchId && props.onQueued) {
         await props.onQueued(String(body.searchId))
+      }
+      if (body.searchId && props.minerHandoffToken) {
+        const consumed = await authFetch(`/api/whitespace/miner-handoffs/${encodeURIComponent(props.minerHandoffToken)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ searchId: String(body.searchId) }),
+        })
+        if (!consumed.ok) throw new Error((await consumed.json().catch(() => ({}))).error || 'The search was created, but its Miner handoff could not be recorded.')
       }
       router.push(`/novelty-search/history?highlight=${encodeURIComponent(body.searchId)}`)
     } catch (cause) {

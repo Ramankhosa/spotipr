@@ -272,7 +272,7 @@ describe('writeLeads', () => {
     expect(Object.keys(scores)).not.toContain('grantability')
   })
 
-  it('replaces machine evidence and leaves USER evidence alone', async () => {
+  it('appends immutable machine evidence and identifies its producing run', async () => {
     await writeLeads({
       studyId: 's1',
       runId: 'r1',
@@ -284,15 +284,13 @@ describe('writeLeads', () => {
         },
       ],
     })
-    expect(evidenceDeleteMany.mock.calls[0][0].where).toEqual({
-      leadId: 'lead-1',
-      kind: { in: ['STATISTIC', 'PATENT_PASSAGE'] },
-    })
+    expect(evidenceDeleteMany).not.toHaveBeenCalled()
     expect(evidenceCreateMany.mock.calls[0][0].data[0]).toMatchObject({
       studyId: 's1',
       leadId: 'lead-1',
       kind: 'STATISTIC',
       stance: 'CONTEXT',
+      data: { producingRunId: 'r1', purpose: 'MINER_ENGINE' },
     })
   })
 
